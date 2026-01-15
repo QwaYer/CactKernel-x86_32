@@ -6,6 +6,7 @@ _start:
     mov ds, ax
     mov es, ax
 
+
     call clear_screen   
     mov si, msg_real_mode
     call print_string
@@ -44,26 +45,10 @@ clear_screen:
     int 0x10
     ret
 
+; --- 32-битный режим ---
 [bits 32]
 
-global port_byte_out
-global port_byte_in
-extern init
-
-kernel_entry:
-    call init
-    jmp $
-
-port_byte_out:
-    mov dx, [esp + 4]  
-    mov al, [esp + 8]   
-    out dx, al          
-    ret
-
-port_byte_in:
-    mov dx, [esp + 4]   
-    in al, dx            
-    ret
+extern init 
 
 init_pm:
     mov ax, DATA_SEG
@@ -76,7 +61,6 @@ init_pm:
     mov ebp, 0x90000
     mov esp, ebp
 
-    [extern init] 
     call init
 
 halt:
