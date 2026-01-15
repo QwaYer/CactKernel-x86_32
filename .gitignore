@@ -1,0 +1,14 @@
+*.o
+*.obj
+
+*.bin
+*.elf
+
+build/
+
+.vscode/
+*.swp
+*~
+
+*.log
+qemu.dmp
