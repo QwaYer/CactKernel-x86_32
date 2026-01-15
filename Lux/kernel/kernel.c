@@ -6,9 +6,6 @@
 int cursor_x = 0;
 int cursor_y = 0;
 
-// Импорт функций из ассемблера
-extern void port_byte_out(unsigned short port, unsigned char data);
-extern unsigned char port_byte_in(unsigned short port);
 extern void port_byte_out(unsigned short port, unsigned char data);
 extern unsigned char port_byte_in(unsigned short port);
 extern void port_long_out(unsigned short port, unsigned int data); 
@@ -21,7 +18,6 @@ unsigned char keyboard_map[128] = {
     '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
 };
 
-// --- НИЗКОУРОВНЕВЫЕ ФУНКЦИИ ГРАФИКИ ---
 
 void update_hardware_cursor(int x, int y) {
     unsigned short position = y * MAX_COLS + x;
@@ -87,7 +83,15 @@ void kprint_at(char* message, int x, int y) {
     kprint(message);
 }
 
-// --- ФУНКЦИИ ДРАЙВЕРОВ И СИСТЕМ ---
+
+int init_timer() {
+    unsigned int frequency = 100;
+    unsigned int divisor = 1193180 / frequency;
+    port_byte_out(0x43, 0x36);
+    port_byte_out(0x40, (unsigned char)(divisor & 0xFF));
+    port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF));
+    return 0;
+}
 
 char get_key_char() {
     if (port_byte_in(0x64) & 0x01) {
@@ -108,11 +112,6 @@ int init_vga() {
     if (video_memory[0] != test_val) return 1;
     video_memory[0] = old_val;
     return 0;
-}
-
-int init_global_state() {
-    if (cursor_x == 0 && cursor_y == 0) return 0;
-    return 1;
 }
 
 int init_keyboard() {
@@ -140,23 +139,54 @@ int detect_memory() {
 int search_pci() {
     port_long_out(0xCF8, 0x80000000);
     unsigned int res = port_long_in(0xCF8);
-
     if (res == 0x80000000) return 0; 
     return 1; 
 }
 
 int init_scheduler() {
-    // Здесь будет инициализация очередей процессов
-    // На данный момент просто подтверждаем готовность структуры ядра
     return 0;
 }
 
-// --- ГЛАВНАЯ ФУНКЦИЯ ЯДРА ---
+int strcmp(char* s1, char* s2) {
+    int i;
+    for (i = 0; s1[i] == s2[i]; i++) {
+        if (s1[i] == '\0') return 0;
+    }
+    return s1[i] - s2[i];
+}
+
+char key_buffer[256];
+int buffer_idx = 0;
+
+void execute_command(char* input) {
+    if (strcmp(input, "clear") == 0) {
+        clear_screen();
+        kprint("LuxOS Kernel 0.0.3 (Experimental)\n");
+        kprint("---------------------------------\n");
+        kprint("\nLuxOS Terminal is ready.\n");
+        kprint("Type 'help' for commands!\n");
+        kprint("> ");
+    } 
+    else if (strcmp(input, "help") == 0) {
+        kprint("\nAvailable commands:\n");
+        kprint("clear  - Clear the screen\n");
+        kprint("help   - Show this message\n");
+        kprint("reboot - Not implemented yet\n> ");
+    } 
+    else if (input[0] == '\0') {
+        kprint("\n> ");
+    }
+    else {
+        kprint("\nUnknown command: ");
+        kprint(input);
+        kprint("\n> ");
+    }
+}
 
 void init() {
     clear_screen();
 
-    kprint("LuxOS Kernel 0.0.2 (Experimental)\n");
+    kprint("LuxOS Kernel 0.0.3 (Experimental)\n");
     kprint("---------------------------------\n");
 
     int current_row = 2;
@@ -201,16 +231,16 @@ void init() {
 
     kprint_at("Searching for PCI Devices.........", 0, current_row);
     if (search_pci() == 0) {
-        kprint_at("[OK]", 35, current_row++);
+        kprint_at("[ OK ]", 35, current_row++);
     } else {
-        kprint_at("[FAIL]", 35, current_row++);
+        kprint_at("[ FAIL ]", 35, current_row++);
     }
 
     kprint_at("Initializing Scheduler............", 0, current_row);
     if (init_scheduler() == 0) {
-        kprint_at("[OK]", 35, current_row++);
+        kprint_at("[ OK ]", 35, current_row++);
     } else {
-        kprint_at("[FAIL]", 35, current_row++);
+        kprint_at("[ FAIL ]", 35, current_row++);
     }
 
     cursor_y = current_row + 1;
@@ -225,17 +255,25 @@ void init() {
         char key = get_key_char(); 
         if (key != 0) {
             if (key == '\n') {
-                kprint("\n> ");
-            } else if (key == '\b') {
-                if (cursor_x > 2) { 
+                key_buffer[buffer_idx] = '\0';
+                execute_command(key_buffer);
+                buffer_idx = 0; 
+            } 
+            else if (key == '\b') {
+                if (buffer_idx > 0) {
+                    buffer_idx--;
                     cursor_x--;
                     kprint(" "); 
                     cursor_x--; 
                     update_hardware_cursor(cursor_x, cursor_y);
                 }
-            } else {
-                char temp_str[2] = {key, 0};
-                kprint(temp_str);
+            } 
+            else {
+                if (buffer_idx < 255) {
+                    key_buffer[buffer_idx++] = key;
+                    char temp_str[2] = {key, 0};
+                    kprint(temp_str);
+                }
             }
         }
     }
