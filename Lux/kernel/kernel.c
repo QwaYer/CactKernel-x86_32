@@ -1,15 +1,24 @@
-#define VIDEO_ADDRESS 0xb8000
-#define MAX_ROWS 25
-#define MAX_COLS 80
-#define WHITE_ON_BLACK 0x0f
+#include "kernel.h"
 
 int cursor_x = 0;
-int cursor_y = 0;
+int cursor_y = 0;  
 
-extern void port_byte_out(unsigned short port, unsigned char data);
-extern unsigned char port_byte_in(unsigned short port);
-extern void port_long_out(unsigned short port, unsigned int data); 
-extern unsigned int port_long_in(unsigned short port);          
+struct idt_entry {
+    unsigned short low_offset;  
+    unsigned short sel;          
+    unsigned char always0;
+    unsigned char flags;        
+    unsigned short high_offset; 
+} __attribute__((packed));
+
+struct idt_ptr {
+    unsigned short limit;      
+    unsigned int base;           
+} __attribute__((packed));
+
+struct idt_entry idt[256];
+struct idt_ptr idtp;
+
 
 unsigned char keyboard_map[128] = {
     0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -17,6 +26,13 @@ unsigned char keyboard_map[128] = {
     0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,
     '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
 };
+
+
+char key_buffer[256];
+int buffer_idx = 0;
+
+volatile char last_char = 0;
+volatile int key_event_happened = 0;
 
 
 void update_hardware_cursor(int x, int y) {
@@ -83,26 +99,49 @@ void kprint_at(char* message, int x, int y) {
     kprint(message);
 }
 
+int strcmp(char* s1, char* s2) {
+    int i;
+    for (i = 0; s1[i] == s2[i]; i++) {
+        if (s1[i] == '\0') return 0;
+    }
+    return s1[i] - s2[i];
+}
 
-int init_timer() {
-    unsigned int frequency = 100;
-    unsigned int divisor = 1193180 / frequency;
-    port_byte_out(0x43, 0x36);
-    port_byte_out(0x40, (unsigned char)(divisor & 0xFF));
-    port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF));
+
+void set_idt_gate(int n, unsigned int handler) {
+    idt[n].low_offset = (unsigned short)(handler & 0xFFFF);
+    idt[n].sel = 0x08;
+    idt[n].always0 = 0;
+    idt[n].flags = 0x8E; 
+    idt[n].high_offset = (unsigned short)((handler >> 16) & 0xFFFF);
+}
+
+void init_pic() {
+    port_byte_out(0x20, 0x11);
+    port_byte_out(0xA0, 0x11);
+    port_byte_out(0x21, 0x20);
+    port_byte_out(0xA1, 0x28);
+    port_byte_out(0x21, 0x04);
+    port_byte_out(0xA1, 0x02);
+    port_byte_out(0x21, 0x01);
+    port_byte_out(0xA1, 0x01);
+    port_byte_out(0x21, 0xFD); 
+    port_byte_out(0xA1, 0xFF);
+}
+
+int init_idt() {
+    idtp.limit = (unsigned short)(sizeof(struct idt_entry) * 256) - 1;
+    idtp.base = (unsigned int)&idt;
+
+    for (int i = 0; i < 256; i++) {
+        set_idt_gate(i, 0);
+    }
+
+    init_pic();
+    __asm__ __volatile__("lidt (%0)" : : "r" (&idtp));
     return 0;
 }
 
-char get_key_char() {
-    if (port_byte_in(0x64) & 0x01) {
-        unsigned char scancode = port_byte_in(0x60);
-        if (scancode & 0x80) return 0;
-        if (scancode > 0 && scancode < 58) { 
-            return keyboard_map[scancode];
-        }
-    }
-    return 0; 
-}
 
 int init_vga() {
     unsigned char* video_memory = (unsigned char*) VIDEO_ADDRESS;
@@ -115,7 +154,9 @@ int init_vga() {
 }
 
 int init_keyboard() {
-    while (port_byte_in(0x64) & 0x01) {
+    while(port_byte_in(0x64) & 0x02);
+    port_byte_out(0x64, 0xAE);
+    while(port_byte_in(0x64) & 0x01) {
         port_byte_in(0x60);
     }
     return 0;
@@ -128,65 +169,69 @@ int probe_io_ports() {
 }
 
 int detect_memory() {
-    volatile unsigned int* mem_ptr = (volatile unsigned int*)0x100000;
-    unsigned int old_val = *mem_ptr;
-    *mem_ptr = 0xABCDEF12;
-    if (*mem_ptr != 0xABCDEF12) return 1;
-    *mem_ptr = old_val;
-    return 0;
+    port_byte_out(0x70, 0x17);
+    unsigned char low = port_byte_in(0x71);
+    port_byte_out(0x70, 0x18);
+    unsigned char high = port_byte_in(0x71);
+    unsigned short total = (high << 8) | low;
+    if (total > 0) return 0;
+    return 1;
 }
 
 int search_pci() {
     port_long_out(0xCF8, 0x80000000);
-    unsigned int res = port_long_in(0xCF8);
-    if (res == 0x80000000) return 0; 
-    return 1; 
+    if (port_long_in(0xCF8) == 0x80000000) return 0;
+    return 1;
 }
 
 int init_scheduler() {
     return 0;
 }
 
-int strcmp(char* s1, char* s2) {
-    int i;
-    for (i = 0; s1[i] == s2[i]; i++) {
-        if (s1[i] == '\0') return 0;
+
+void keyboard_handler() {
+    unsigned char scancode = port_byte_in(0x60);
+
+    if (!(scancode & 0x80)) {
+        if (scancode < 128) {
+            char c = keyboard_map[scancode];
+            if (c != 0) {
+                last_char = c;
+                key_event_happened = 1; 
+            }
+        }
     }
-    return s1[i] - s2[i];
+
+    port_byte_out(0x20, 0x20);
 }
 
-char key_buffer[256];
-int buffer_idx = 0;
 
 void execute_command(char* input) {
     if (strcmp(input, "clear") == 0) {
         clear_screen();
-        kprint("LuxOS Kernel 0.0.3 (Experimental)\n");
+        kprint("LuxOS Kernel 0.0.4 (Experimental)\n");
         kprint("---------------------------------\n");
         kprint("\nLuxOS Terminal is ready.\n");
         kprint("Type 'help' for commands!\n");
         kprint("> ");
     } 
     else if (strcmp(input, "help") == 0) {
-        kprint("\nAvailable commands:\n");
-        kprint("clear  - Clear the screen\n");
-        kprint("help   - Show this message\n");
-        kprint("reboot - Not implemented yet\n> ");
+        kprint("\nAvailable: clear, help\n> ");
     } 
-    else if (input[0] == '\0') {
-        kprint("\n> ");
-    }
-    else {
-        kprint("\nUnknown command: ");
+    else if (input[0] != '\0') {
+        kprint("\nUnknown: ");
         kprint(input);
+        kprint("\n> ");
+    } else {
         kprint("\n> ");
     }
 }
 
+
 void init() {
     clear_screen();
 
-    kprint("LuxOS Kernel 0.0.3 (Experimental)\n");
+    kprint("LuxOS Kernel 0.0.4 (Experimental)\n");
     kprint("---------------------------------\n");
 
     int current_row = 2;
@@ -199,6 +244,16 @@ void init() {
 
     kprint_at("Setting up Kernel Stack...........", 0, current_row);
     kprint_at("[DONE]", 35, current_row++);
+
+    kprint_at("Initializing IDT & PIC............", 0, current_row);
+    if (init_idt() == 0) {
+        extern void keyboard_isr();
+        set_idt_gate(33, (unsigned int)keyboard_isr);
+        kprint_at("[ OK ]", 35, current_row++);
+    } else {
+        kprint_at("[FAIL]", 35, current_row++);
+        while(1); 
+    }
 
     kprint_at("Initializing VGA driver...........", 0, current_row);
     if (init_vga() == 0) {
@@ -249,11 +304,13 @@ void init() {
     kprint("Type 'help' for commands!\n");
     kprint("> ");
 
-    port_byte_in(0x60); 
+    __asm__ __volatile__("sti");
 
     while (1) {
-        char key = get_key_char(); 
-        if (key != 0) {
+        if (key_event_happened) {
+            key_event_happened = 0; 
+            char key = last_char;
+
             if (key == '\n') {
                 key_buffer[buffer_idx] = '\0';
                 execute_command(key_buffer);
@@ -268,13 +325,12 @@ void init() {
                     update_hardware_cursor(cursor_x, cursor_y);
                 }
             } 
-            else {
-                if (buffer_idx < 255) {
-                    key_buffer[buffer_idx++] = key;
-                    char temp_str[2] = {key, 0};
-                    kprint(temp_str);
-                }
+            else if (buffer_idx < 255) {
+                key_buffer[buffer_idx++] = key;
+                char temp_str[2] = {key, 0};
+                kprint(temp_str);
             }
         }
+        __asm__ __volatile__("hlt");
     }
 }
