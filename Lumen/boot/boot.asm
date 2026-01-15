@@ -17,7 +17,6 @@ boot:
 
     jmp 0x7e00
 
-
 print_string:
     mov ah, 0x0e
 .loop:
@@ -30,16 +29,24 @@ print_string:
     ret
 
 load_kernel:
+    mov ah, 0x00
+    int 0x13
+
     mov ah, 0x02       
-    mov al, 15       
-    mov ch, 0            
-    mov dh, 0            
-    mov cl, 2            
+    mov al, 35          
+    mov ch, 0        
+    mov dh, 0          
+    mov cl, 2              
     mov dl, [BOOT_DRIVE] 
     mov bx, 0x7e00        
+    
     int 0x13           
 
-    jc disk_error          
+    jc disk_error
+
+    cmp al, 35
+    jne disk_error
+    
     ret
 
 disk_error:
@@ -47,9 +54,8 @@ disk_error:
     call print_string
     jmp $                   
 
-
 msg db 'Lumen Bootloader: Loading OS...', 13, 10, 0
-err_msg db 'Disk Read Error!', 0
+err_msg db 'Disk Error!', 0
 BOOT_DRIVE db 0
 
 times 510-($-$$) db 0

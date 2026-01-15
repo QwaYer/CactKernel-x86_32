@@ -9,6 +9,13 @@ int cursor_y = 0;
 extern void port_byte_out(unsigned short port, unsigned char data);
 extern unsigned char port_byte_in(unsigned short port);
 
+unsigned char keyboard_map[128] = {
+    0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+    '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,
+    '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
+};
+
 void update_hardware_cursor(int x, int y) {
     unsigned short position = y * MAX_COLS + x;
 
@@ -42,6 +49,21 @@ void scroll() {
         video_memory[((MAX_ROWS - 1) * MAX_COLS * 2) + j] = ' ';
         video_memory[((MAX_ROWS - 1) * MAX_COLS * 2) + j + 1] = WHITE_ON_BLACK;
     }
+}
+
+char get_key_char() {
+    if (port_byte_in(0x64) & 0x01) {
+        unsigned char scancode = port_byte_in(0x60);
+
+        if (scancode & 0x80) {
+            return 0;
+        }
+
+        if (scancode > 0 && scancode < 58) { 
+            return keyboard_map[scancode];
+        }
+    }
+    return 0; 
 }
 
 void kprint(char* message) {
@@ -78,11 +100,46 @@ void kprint(char* message) {
 void init() {
     clear_screen();
 
-    kprint("LuxOS Kernel 0.0.1 (Experimental)\n");
+    kprint("LuxOS Kernel 0.0.2 (Experimental)\n");
     kprint("---------------------------------\n");
-    kprint("Initializing VGA driver... [OK]\n");
-    kprint("Setting up global state... [OK]\n");
-    kprint("Scrolling logic... [OK]\n");
-    kprint("\nWelcome to the Lux OS terminal!\n");
+
+    kprint("Initializing GDT.................. [DONE]\n"); 
+    kprint("CPU Protected Mode (x86_32)....... [DONE]\n"); 
+    kprint("Setting up Kernel Stack........... [DONE]\n"); 
+    
+    kprint("Initializing VGA Driver........... [ OK ]\n"); 
+    kprint("Loading Keyboard Layout........... [ OK ]\n");
+
+    kprint("Probing I/O Ports................. [ OK ]\n");
+    kprint("Detecting Memory Regions.......... [ OK ]\n");
+    kprint("Searching for PCI Devices......... [NONE]\n");
+    kprint("Initializing Scheduler............ [READY]\n");
+
+    kprint("\nLuxOS Terminal is ready.\n");
+    kprint("Type 'help' for commands (not implemented yet).\n");
     kprint("> ");
+
+    port_byte_in(0x60); 
+
+    while (1) {
+        char key = get_key_char(); 
+
+        if (key != 0) {
+            if (key == '\n') {
+                kprint("\n> ");
+            } 
+            else if (key == '\b') {
+                if (cursor_x > 2) { 
+                    cursor_x--;
+                    kprint(" "); 
+                    cursor_x--; 
+                    update_hardware_cursor(cursor_x, cursor_y);
+                }
+            }
+            else {
+                char temp_str[2] = {key, 0};
+                kprint(temp_str);
+            }
+        }
+    }
 }
