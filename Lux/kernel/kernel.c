@@ -28,6 +28,14 @@ unsigned char keyboard_map[128] = {
 };
 
 
+unsigned char keyboard_map_shift[128] = {
+    0,  27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
+    '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
+    0, 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0,
+    '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0, '*', 0, ' '
+};
+
+int shift_pressed = 0;
 char key_buffer[256];
 int buffer_idx = 0;
 
@@ -188,13 +196,30 @@ int init_scheduler() {
     return 0;
 }
 
+void exception_handler() {
+    clear_screen();
+    kprint("KERNEL PANIC: CPU Exception!");
+    __asm__ __volatile__ ("cli; hlt");
+}
 
 void keyboard_handler() {
     unsigned char scancode = port_byte_in(0x60);
 
-    if (!(scancode & 0x80)) {
+    if (scancode == 0x2A || scancode == 0x36) {
+        shift_pressed = 1;
+    } 
+    else if (scancode == 0xAA || scancode == 0xB6) {
+        shift_pressed = 0;
+    } 
+    else if (!(scancode & 0x80)) {
         if (scancode < 128) {
-            char c = keyboard_map[scancode];
+            char c;
+            if (shift_pressed) {
+                c = keyboard_map_shift[scancode];
+            } else {
+                c = keyboard_map[scancode];
+            }
+            
             if (c != 0) {
                 last_char = c;
                 key_event_happened = 1; 
@@ -202,36 +227,90 @@ void keyboard_handler() {
         }
     }
 
-    port_byte_out(0x20, 0x20);
+    port_byte_out(0x20, 0x20); 
 }
 
+void itoa(int n, char str[]) {
+    int i, sign;
+    if ((sign = n) < 0) n = -n;
+    i = 0;
+    do {
+        str[i++] = n % 10 + '0';
+    } while ((n /= 10) > 0);
+
+    if (sign < 0) str[i++] = '-';
+    str[i] = '\0';
+
+    for (int j = 0, k = i-1; j < k; j++, k--) {
+        char temp = str[j];
+        str[j] = str[k];
+        str[k] = temp;
+    }
+}
+
+int atoi(char* str) {
+    int res = 0;
+    int sign = 1;
+    int i = 0;
+    if (str[0] == '-') {
+        sign = -1;
+        i++;
+    }
+    for (; str[i] != '\0'; ++i) {
+        if (str[i] < '0' || str[i] > '9') break;
+        res = res * 10 + str[i] - '0';
+    }
+    return sign * res;
+}
 
 void execute_command(char* input) {
     if (strcmp(input, "clear") == 0) {
         clear_screen();
-        kprint("LuxOS Kernel 0.0.4 (Experimental)\n");
-        kprint("---------------------------------\n");
-        kprint("\nLuxOS Terminal is ready.\n");
-        kprint("Type 'help' for commands!\n");
-        kprint("> ");
+        kprint("LuxOS Kernel 0.0.5\n> ");
     } 
+else if (input[0] == 'c' && input[1] == 'a' && input[2] == 'l' && input[3] == 'c') {
+        char* ptr = input + 5; 
+        
+        int num1 = atoi(ptr);
+
+        while (*ptr != '+' && *ptr != '-' && *ptr != '*' && *ptr != '/' && *ptr != '\0') ptr++;
+        char op = *ptr;
+
+        ptr++; 
+
+        while (*ptr == ' ') ptr++;
+        
+        int num2 = atoi(ptr);
+        int result = 0;
+
+        if (op == '+') result = num1 + num2;
+        else if (op == '-') result = num1 - num2; 
+        else if (op == '*') result = num1 * num2;
+        else if (op == '/') {
+            if (num2 != 0) result = num1 / num2;
+            else { kprint("\nError: Div by zero"); result = 0; }
+        }
+
+        char res_str[16];
+        itoa(result, res_str);
+        kprint("\nResult: ");
+        kprint(res_str);
+        kprint("\n> ");
+    }
     else if (strcmp(input, "help") == 0) {
-        kprint("\nAvailable: clear, help\n> ");
+        kprint("\nCommands: clear, help, calc\n> ");
     } 
     else if (input[0] != '\0') {
-        kprint("\nUnknown: ");
-        kprint(input);
-        kprint("\n> ");
+        kprint("\nUnknown command.\n> ");
     } else {
         kprint("\n> ");
     }
 }
 
-
 void init() {
     clear_screen();
 
-    kprint("LuxOS Kernel 0.0.4 (Experimental)\n");
+    kprint("LuxOS Kernel 0.0.5 (Experimental)\n");
     kprint("---------------------------------\n");
 
     int current_row = 2;
@@ -251,7 +330,7 @@ void init() {
         set_idt_gate(33, (unsigned int)keyboard_isr);
         kprint_at("[ OK ]", 35, current_row++);
     } else {
-        kprint_at("[FAIL]", 35, current_row++);
+        kprint_at("[ FAIL ]", 35, current_row++);
         while(1); 
     }
 
@@ -259,7 +338,7 @@ void init() {
     if (init_vga() == 0) {
         kprint_at("[ OK ]", 35, current_row++);
     } else {
-        kprint_at("[FAIL]", 35, current_row++);
+        kprint_at("[ FAIL ]", 35, current_row++);
         while(1); 
     }
 
@@ -267,21 +346,21 @@ void init() {
     if (init_keyboard() == 0) {
         kprint_at("[ OK ]", 35, current_row++);
     } else {
-        kprint_at("[FAIL]", 35, current_row++);
+        kprint_at("[ FAIL ]", 35, current_row++);
     }
 
     kprint_at("Probing I/O Ports.................", 0, current_row);
     if (probe_io_ports() == 0) {
         kprint_at("[ OK ]", 35, current_row++);
     } else {
-        kprint_at("[FAIL]", 35, current_row++);
+        kprint_at("[ FAIL ]", 35, current_row++);
     }
 
     kprint_at("Detecting Memory Regions..........", 0, current_row);
     if (detect_memory() == 0) {
         kprint_at("[ OK ]", 35, current_row++);
     } else {
-        kprint_at("[FAIL]", 35, current_row++);
+        kprint_at("[ FAIL ]", 35, current_row++);
     }
 
     kprint_at("Searching for PCI Devices.........", 0, current_row);
