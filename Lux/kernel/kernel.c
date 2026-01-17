@@ -19,14 +19,12 @@ struct idt_ptr {
 struct idt_entry idt[256];
 struct idt_ptr idtp;
 
-
 unsigned char keyboard_map[128] = {
     0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
     '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
     0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,
     '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
 };
-
 
 unsigned char keyboard_map_shift[128] = {
     0,  27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
@@ -36,12 +34,13 @@ unsigned char keyboard_map_shift[128] = {
 };
 
 int shift_pressed = 0;
+int caps_lock_active = 0;
+
 char key_buffer[256];
 int buffer_idx = 0;
 
 volatile char last_char = 0;
 volatile int key_event_happened = 0;
-
 
 void update_hardware_cursor(int x, int y) {
     unsigned short position = y * MAX_COLS + x;
@@ -107,6 +106,7 @@ void kprint_at(char* message, int x, int y) {
     kprint(message);
 }
 
+
 int strcmp(char* s1, char* s2) {
     int i;
     for (i = 0; s1[i] == s2[i]; i++) {
@@ -114,7 +114,6 @@ int strcmp(char* s1, char* s2) {
     }
     return s1[i] - s2[i];
 }
-
 
 void set_idt_gate(int n, unsigned int handler) {
     idt[n].low_offset = (unsigned short)(handler & 0xFFFF);
@@ -140,11 +139,7 @@ void init_pic() {
 int init_idt() {
     idtp.limit = (unsigned short)(sizeof(struct idt_entry) * 256) - 1;
     idtp.base = (unsigned int)&idt;
-
-    for (int i = 0; i < 256; i++) {
-        set_idt_gate(i, 0);
-    }
-
+    for (int i = 0; i < 256; i++) set_idt_gate(i, 0);
     init_pic();
     __asm__ __volatile__("lidt (%0)" : : "r" (&idtp));
     return 0;
@@ -164,15 +159,12 @@ int init_vga() {
 int init_keyboard() {
     while(port_byte_in(0x64) & 0x02);
     port_byte_out(0x64, 0xAE);
-    while(port_byte_in(0x64) & 0x01) {
-        port_byte_in(0x60);
-    }
+    while(port_byte_in(0x64) & 0x01) port_byte_in(0x60);
     return 0;
 }
 
 int probe_io_ports() {
-    unsigned char status = port_byte_in(0x64);
-    if (status == 0xFF) return 1;
+    if (port_byte_in(0x64) == 0xFF) return 1;
     return 0;
 }
 
@@ -181,26 +173,22 @@ int detect_memory() {
     unsigned char low = port_byte_in(0x71);
     port_byte_out(0x70, 0x18);
     unsigned char high = port_byte_in(0x71);
-    unsigned short total = (high << 8) | low;
-    if (total > 0) return 0;
-    return 1;
+    return ((high << 8) | low) > 0 ? 0 : 1;
 }
 
 int search_pci() {
     port_long_out(0xCF8, 0x80000000);
-    if (port_long_in(0xCF8) == 0x80000000) return 0;
-    return 1;
+    return (port_long_in(0xCF8) == 0x80000000) ? 0 : 1;
 }
 
-int init_scheduler() {
-    return 0;
-}
+int init_scheduler() { return 0; }
 
 void exception_handler() {
     clear_screen();
     kprint("KERNEL PANIC: CPU Exception!");
     __asm__ __volatile__ ("cli; hlt");
 }
+
 
 void keyboard_handler() {
     unsigned char scancode = port_byte_in(0x60);
@@ -211,13 +199,19 @@ void keyboard_handler() {
     else if (scancode == 0xAA || scancode == 0xB6) {
         shift_pressed = 0;
     } 
+    else if (scancode == 0x3A) { 
+        caps_lock_active = !caps_lock_active;
+    }
     else if (!(scancode & 0x80)) {
         if (scancode < 128) {
-            char c;
-            if (shift_pressed) {
+            char c = keyboard_map[scancode];
+
+            if (c >= 'a' && c <= 'z') {
+                if (shift_pressed != caps_lock_active) {
+                    c = keyboard_map_shift[scancode];
+                }
+            } else if (shift_pressed) {
                 c = keyboard_map_shift[scancode];
-            } else {
-                c = keyboard_map[scancode];
             }
             
             if (c != 0) {
@@ -226,36 +220,25 @@ void keyboard_handler() {
             }
         }
     }
-
     port_byte_out(0x20, 0x20); 
 }
+
 
 void itoa(int n, char str[]) {
     int i, sign;
     if ((sign = n) < 0) n = -n;
     i = 0;
-    do {
-        str[i++] = n % 10 + '0';
-    } while ((n /= 10) > 0);
-
+    do { str[i++] = n % 10 + '0'; } while ((n /= 10) > 0);
     if (sign < 0) str[i++] = '-';
     str[i] = '\0';
-
     for (int j = 0, k = i-1; j < k; j++, k--) {
-        char temp = str[j];
-        str[j] = str[k];
-        str[k] = temp;
+        char temp = str[j]; str[j] = str[k]; str[k] = temp;
     }
 }
 
 int atoi(char* str) {
-    int res = 0;
-    int sign = 1;
-    int i = 0;
-    if (str[0] == '-') {
-        sign = -1;
-        i++;
-    }
+    int res = 0, sign = 1, i = 0;
+    if (str[0] == '-') { sign = -1; i++; }
     for (; str[i] != '\0'; ++i) {
         if (str[i] < '0' || str[i] > '9') break;
         res = res * 10 + str[i] - '0';
@@ -266,20 +249,15 @@ int atoi(char* str) {
 void execute_command(char* input) {
     if (strcmp(input, "clear") == 0) {
         clear_screen();
-        kprint("LuxOS Kernel 0.0.5\n> ");
+        kprint("LuxOS Kernel 0.0.6\n> ");
     } 
-else if (input[0] == 'c' && input[1] == 'a' && input[2] == 'l' && input[3] == 'c') {
+    else if (input[0] == 'c' && input[1] == 'a' && input[2] == 'l' && input[3] == 'c') {
         char* ptr = input + 5; 
-        
         int num1 = atoi(ptr);
-
         while (*ptr != '+' && *ptr != '-' && *ptr != '*' && *ptr != '/' && *ptr != '\0') ptr++;
         char op = *ptr;
-
         ptr++; 
-
         while (*ptr == ' ') ptr++;
-        
         int num2 = atoi(ptr);
         int result = 0;
 
@@ -307,81 +285,46 @@ else if (input[0] == 'c' && input[1] == 'a' && input[2] == 'l' && input[3] == 'c
     }
 }
 
+
 void init() {
     clear_screen();
-
-    kprint("LuxOS Kernel 0.0.5 (Experimental)\n");
+    kprint("LuxOS Kernel 0.0.6 (Experimental)\n");
     kprint("---------------------------------\n");
 
     int current_row = 2;
 
-    kprint_at("Initializing GDT..................", 0, current_row);
-    kprint_at("[DONE]", 35, current_row++);
-
-    kprint_at("CPU Protected Mode (x86_32).......", 0, current_row);
-    kprint_at("[DONE]", 35, current_row++);
-
-    kprint_at("Setting up Kernel Stack...........", 0, current_row);
-    kprint_at("[DONE]", 35, current_row++);
+    kprint_at("Initializing GDT..................", 0, current_row++);
+    kprint_at("CPU Protected Mode (x86_32).......", 0, current_row++);
+    kprint_at("Setting up Kernel Stack...........", 0, current_row++);
 
     kprint_at("Initializing IDT & PIC............", 0, current_row);
     if (init_idt() == 0) {
         extern void keyboard_isr();
         set_idt_gate(33, (unsigned int)keyboard_isr);
         kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[ FAIL ]", 35, current_row++);
-        while(1); 
     }
 
     kprint_at("Initializing VGA driver...........", 0, current_row);
-    if (init_vga() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[ FAIL ]", 35, current_row++);
-        while(1); 
-    }
+    if (init_vga() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     kprint_at("Loading keyboard driver...........", 0, current_row);
-    if (init_keyboard() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[ FAIL ]", 35, current_row++);
-    }
+    if (init_keyboard() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     kprint_at("Probing I/O Ports.................", 0, current_row);
-    if (probe_io_ports() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[ FAIL ]", 35, current_row++);
-    }
+    if (probe_io_ports() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     kprint_at("Detecting Memory Regions..........", 0, current_row);
-    if (detect_memory() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[ FAIL ]", 35, current_row++);
-    }
+    if (detect_memory() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     kprint_at("Searching for PCI Devices.........", 0, current_row);
-    if (search_pci() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[ FAIL ]", 35, current_row++);
-    }
+    if (search_pci() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     kprint_at("Initializing Scheduler............", 0, current_row);
-    if (init_scheduler() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[ FAIL ]", 35, current_row++);
-    }
+    if (init_scheduler() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     cursor_y = current_row + 1;
     cursor_x = 0;
-    kprint("\nLuxOS Terminal is ready.\n");
-    kprint("Type 'help' for commands!\n");
-    kprint("> ");
+    kprint("\nLuxOS Terminal is ready.\nType 'help' for commands!\n> ");
 
     __asm__ __volatile__("sti");
 
