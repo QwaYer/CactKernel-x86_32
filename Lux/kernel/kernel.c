@@ -1,5 +1,6 @@
 #include "kernel.h"
 #include "memory.h"
+#include "vfs.h"
 
 int cursor_x = 0;
 int cursor_y = 0;  
@@ -248,6 +249,36 @@ void execute_command(char* input) {
         clear_screen();
         kprint("LuxOS Kernel 0.0.6\n> ");
     } 
+    else if (strcmp(input, "cat") == 0) {
+        if (vfs_root == 0) {
+            kprint("\nError: Disk not initialized.");
+        } else {
+            char buf[513];
+            for(int i = 0; i < 513; i++) buf[i] = 0;
+
+            read_vfs(vfs_root, 10240, 512, buf);
+            buf[512] = '\0';
+            kprint("\nData: ");
+            kprint(buf);
+        }
+        kprint("\n> ");
+    }
+    else if (input[0] == 'w' && input[1] == 'r' && input[2] == 'i' && input[3] == 't' && input[4] == 'e') {
+        if (vfs_root == 0) {
+            kprint("\nError: Disk not initialized.");
+        } else {
+
+            char* data_to_write = input + 6;
+            
+            if (*data_to_write == '\0') {
+                kprint("\nUsage: write <message>");
+            } else {
+                write_vfs(vfs_root, 10240, 512, data_to_write);
+                kprint("\nDisk write successful.");
+            }
+        }
+        kprint("\n> ");
+    }
     else if (input[0] == 'c' && input[1] == 'a' && input[2] == 'l' && input[3] == 'c') {
         char* ptr = input + 5; 
         int num1 = atoi(ptr);
@@ -274,10 +305,12 @@ void execute_command(char* input) {
         kprint("\n> ");
     }
     else if (strcmp(input, "help") == 0) {
-        kprint("\nCommands: clear, help, calc\n> ");
+        kprint("\nCommands: clear, help, calc, cat, write <msg>\n> ");
     } 
     else if (input[0] != '\0') {
-        kprint("\nUnknown command.\n> ");
+        kprint("\nUnknown command: ");
+        kprint(input);
+        kprint("\n> ");
     } else {
         kprint("\n> ");
     }
@@ -285,7 +318,7 @@ void execute_command(char* input) {
 
 void init() {
     clear_screen();
-    kprint("LuxOS Kernel 0.0.6 (Experemental)\n");
+    kprint("LuxOS Kernel 0.0.6 (Experimental)\n");
     kprint("-----------------------------------------\n");
 
     int current_row = 2;
@@ -299,60 +332,36 @@ void init() {
     }
 
     kprint_at("Initializing GDT..................", 0, current_row++);
-
     kprint_at("CPU Protected Mode (x86_32).......", 0, current_row++);
-
     kprint_at("Setting up Kernel Stack...........", 0, current_row++);
 
-
-
     kprint_at("Initializing IDT & PIC............", 0, current_row);
-
     if (init_idt() == 0) {
-
         extern void keyboard_isr();
-
         set_idt_gate(33, (unsigned int)keyboard_isr);
-
         kprint_at("[ OK ]", 35, current_row++);
-
     }
+
+    kprint_at("Initializing ATA/VFS..............", 0, current_row);
+    vfs_root = init_ata_device(); 
+    if (vfs_root != 0) kprint_at("[ OK ]", 35, current_row++);
 
     kprint_at("Detecting Memory Regions..........", 0, current_row);
     if (detect_memory() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     kprint_at("Initializing VGA driver...........", 0, current_row);
-
     if (init_vga() == 0) kprint_at("[ OK ]", 35, current_row++);
 
-
-
     kprint_at("Loading keyboard driver...........", 0, current_row);
-
     if (init_keyboard() == 0) kprint_at("[ OK ]", 35, current_row++);
 
-
-
     kprint_at("Probing I/O Ports.................", 0, current_row);
-
     if (probe_io_ports() == 0) kprint_at("[ OK ]", 35, current_row++);
 
-
-
-    kprint_at("Detecting Memory Regions..........", 0, current_row);
-
-    if (detect_memory() == 0) kprint_at("[ OK ]", 35, current_row++);
-
-
-
     kprint_at("Searching for PCI Devices.........", 0, current_row);
-
     if (search_pci() == 0) kprint_at("[ OK ]", 35, current_row++);
 
-
-
     kprint_at("Initializing Scheduler............", 0, current_row);
-
     if (init_scheduler() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     cursor_y = current_row + 1;

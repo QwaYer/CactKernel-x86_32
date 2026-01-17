@@ -45,7 +45,6 @@ clear_screen:
     int 0x10
     ret
 
-; --- 32-битный режим ---
 [bits 32]
 
 extern init 
