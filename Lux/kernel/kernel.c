@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "memory.h"
 
 int cursor_x = 0;
 int cursor_y = 0;  
@@ -36,7 +37,7 @@ unsigned char keyboard_map_shift[128] = {
 int shift_pressed = 0;
 int caps_lock_active = 0;
 
-char key_buffer[256];
+char* key_buffer; 
 int buffer_idx = 0;
 
 volatile char last_char = 0;
@@ -106,7 +107,6 @@ void kprint_at(char* message, int x, int y) {
     kprint(message);
 }
 
-
 int strcmp(char* s1, char* s2) {
     int i;
     for (i = 0; s1[i] == s2[i]; i++) {
@@ -144,7 +144,6 @@ int init_idt() {
     __asm__ __volatile__("lidt (%0)" : : "r" (&idtp));
     return 0;
 }
-
 
 int init_vga() {
     unsigned char* video_memory = (unsigned char*) VIDEO_ADDRESS;
@@ -189,7 +188,6 @@ void exception_handler() {
     __asm__ __volatile__ ("cli; hlt");
 }
 
-
 void keyboard_handler() {
     unsigned char scancode = port_byte_in(0x60);
 
@@ -223,7 +221,6 @@ void keyboard_handler() {
     port_byte_out(0x20, 0x20); 
 }
 
-
 void itoa(int n, char str[]) {
     int i, sign;
     if ((sign = n) < 0) n = -n;
@@ -254,7 +251,8 @@ void execute_command(char* input) {
     else if (input[0] == 'c' && input[1] == 'a' && input[2] == 'l' && input[3] == 'c') {
         char* ptr = input + 5; 
         int num1 = atoi(ptr);
-        while (*ptr != '+' && *ptr != '-' && *ptr != '*' && *ptr != '/' && *ptr != '\0') ptr++;
+        while (*ptr != '+' && *ptr != '-' && *ptr != '*' && *ptr != '/' && *ptr != '\0' && *ptr != ' ') ptr++;
+        if (*ptr == ' ') while (*ptr == ' ') ptr++;
         char op = *ptr;
         ptr++; 
         while (*ptr == ' ') ptr++;
@@ -285,46 +283,81 @@ void execute_command(char* input) {
     }
 }
 
-
 void init() {
     clear_screen();
-    kprint("LuxOS Kernel 0.0.6 (Experimental)\n");
-    kprint("---------------------------------\n");
+    kprint("LuxOS Kernel 0.0.6 (Experemental)\n");
+    kprint("-----------------------------------------\n");
 
     int current_row = 2;
 
-    kprint_at("Initializing GDT..................", 0, current_row++);
-    kprint_at("CPU Protected Mode (x86_32).......", 0, current_row++);
-    kprint_at("Setting up Kernel Stack...........", 0, current_row++);
+    init_memory_manager();
 
-    kprint_at("Initializing IDT & PIC............", 0, current_row);
-    if (init_idt() == 0) {
-        extern void keyboard_isr();
-        set_idt_gate(33, (unsigned int)keyboard_isr);
-        kprint_at("[ OK ]", 35, current_row++);
+    key_buffer = (char*)kalloc();
+    if (key_buffer == 0) {
+        kprint("CRITICAL ERROR: Memory allocation failed!\n");
+        while(1);
     }
 
-    kprint_at("Initializing VGA driver...........", 0, current_row);
-    if (init_vga() == 0) kprint_at("[ OK ]", 35, current_row++);
+    kprint_at("Initializing GDT..................", 0, current_row++);
 
-    kprint_at("Loading keyboard driver...........", 0, current_row);
-    if (init_keyboard() == 0) kprint_at("[ OK ]", 35, current_row++);
+    kprint_at("CPU Protected Mode (x86_32).......", 0, current_row++);
 
-    kprint_at("Probing I/O Ports.................", 0, current_row);
-    if (probe_io_ports() == 0) kprint_at("[ OK ]", 35, current_row++);
+    kprint_at("Setting up Kernel Stack...........", 0, current_row++);
+
+
+
+    kprint_at("Initializing IDT & PIC............", 0, current_row);
+
+    if (init_idt() == 0) {
+
+        extern void keyboard_isr();
+
+        set_idt_gate(33, (unsigned int)keyboard_isr);
+
+        kprint_at("[ OK ]", 35, current_row++);
+
+    }
 
     kprint_at("Detecting Memory Regions..........", 0, current_row);
     if (detect_memory() == 0) kprint_at("[ OK ]", 35, current_row++);
 
+    kprint_at("Initializing VGA driver...........", 0, current_row);
+
+    if (init_vga() == 0) kprint_at("[ OK ]", 35, current_row++);
+
+
+
+    kprint_at("Loading keyboard driver...........", 0, current_row);
+
+    if (init_keyboard() == 0) kprint_at("[ OK ]", 35, current_row++);
+
+
+
+    kprint_at("Probing I/O Ports.................", 0, current_row);
+
+    if (probe_io_ports() == 0) kprint_at("[ OK ]", 35, current_row++);
+
+
+
+    kprint_at("Detecting Memory Regions..........", 0, current_row);
+
+    if (detect_memory() == 0) kprint_at("[ OK ]", 35, current_row++);
+
+
+
     kprint_at("Searching for PCI Devices.........", 0, current_row);
+
     if (search_pci() == 0) kprint_at("[ OK ]", 35, current_row++);
 
+
+
     kprint_at("Initializing Scheduler............", 0, current_row);
+
     if (init_scheduler() == 0) kprint_at("[ OK ]", 35, current_row++);
 
     cursor_y = current_row + 1;
     cursor_x = 0;
-    kprint("\nLuxOS Terminal is ready.\nType 'help' for commands!\n> ");
+    kprint("\nLuxOS Terminal is ready.\n> ");
 
     __asm__ __volatile__("sti");
 
@@ -347,7 +380,7 @@ void init() {
                     update_hardware_cursor(cursor_x, cursor_y);
                 }
             } 
-            else if (buffer_idx < 255) {
+            else if (buffer_idx < PAGE_SIZE - 1) { 
                 key_buffer[buffer_idx++] = key;
                 char temp_str[2] = {key, 0};
                 kprint(temp_str);
