@@ -8,14 +8,10 @@
 
 extern void port_byte_out(unsigned short port, unsigned char data);
 extern unsigned char port_byte_in(unsigned short port);
+extern void port_word_out(unsigned short port, unsigned short data);
+extern unsigned short port_word_in(unsigned short port);
 extern void port_long_out(unsigned short port, unsigned int data);
 extern unsigned int port_long_in(unsigned short port);
-unsigned short port_word_in(unsigned short port);
-extern void port_word_out(unsigned short port, unsigned short data);
-extern struct vfs_node* init_ata_device();
-int read_vfs(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
-int write_vfs(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
-
 
 void kprint(char* message);
 void kprint_at(char* message, int x, int y);
@@ -23,10 +19,15 @@ void clear_screen();
 void scroll();
 void update_hardware_cursor(int x, int y);
 
+void itoa(int n, char str[]);
+int atoi(char* str);
+int strcmp(char* s1, char* s2);
+
 void init_pic();
 int init_idt();
 void set_idt_gate(int n, unsigned int handler);
 void keyboard_handler(); 
+void exception_handler();
 
 int init_vga();
 int init_keyboard();
@@ -35,9 +36,19 @@ int detect_memory();
 int search_pci();
 int init_scheduler();
 
-int strcmp(char* s1, char* s2);
-void execute_command(char* input);
 
-extern unsigned char keyboard_map[128];
+extern void ata_init();
+extern void ata_read_sector(unsigned int lba, unsigned char* buffer);
+extern void ata_write_sector(unsigned int lba, unsigned char* buffer);
+
+extern void fat16_init();
+extern struct vfs_node* fat16_finddir(struct vfs_node* node, char* name);
+extern void fat16_list_root();
+extern int fat16_create_file(char* name);
+extern int fat16_delete_file(char* name);
+extern unsigned short fat16_get_next_cluster(unsigned short current_cluster);
+extern void fat16_set_cluster(unsigned short cluster, unsigned short value);
+
+void execute_command(char* input);
 
 #endif

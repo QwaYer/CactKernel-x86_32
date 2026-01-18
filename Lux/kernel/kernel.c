@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "memory.h"
 #include "vfs.h"
+#include "fat16.h"
 
 int cursor_x = 0;
 int cursor_y = 0;  
@@ -116,6 +117,33 @@ int strcmp(char* s1, char* s2) {
     return s1[i] - s2[i];
 }
 
+void itoa(int n, char str[]) {
+    int i, sign;
+    if ((sign = n) < 0) n = -n;
+    i = 0;
+    do {
+        str[i++] = n % 10 + '0';
+    } while ((n /= 10) > 0);
+    if (sign < 0) str[i++] = '-';
+    str[i] = '\0';
+
+    for (int j = 0, k = i - 1; j < k; j++, k--) {
+        char temp = str[j];
+        str[j] = str[k];
+        str[k] = temp;
+    }
+}
+
+int atoi(char* str) {
+    int res = 0, sign = 1, i = 0;
+    if (str[0] == '-') { sign = -1; i++; }
+    for (; str[i] != '\0'; ++i) {
+        if (str[i] < '0' || str[i] > '9') break;
+        res = res * 10 + str[i] - '0';
+    }
+    return sign * res;
+}
+
 void set_idt_gate(int n, unsigned int handler) {
     idt[n].low_offset = (unsigned short)(handler & 0xFFFF);
     idt[n].sel = 0x08;
@@ -222,103 +250,70 @@ void keyboard_handler() {
     port_byte_out(0x20, 0x20); 
 }
 
-void itoa(int n, char str[]) {
-    int i, sign;
-    if ((sign = n) < 0) n = -n;
-    i = 0;
-    do { str[i++] = n % 10 + '0'; } while ((n /= 10) > 0);
-    if (sign < 0) str[i++] = '-';
-    str[i] = '\0';
-    for (int j = 0, k = i-1; j < k; j++, k--) {
-        char temp = str[j]; str[j] = str[k]; str[k] = temp;
-    }
-}
-
-int atoi(char* str) {
-    int res = 0, sign = 1, i = 0;
-    if (str[0] == '-') { sign = -1; i++; }
-    for (; str[i] != '\0'; ++i) {
-        if (str[i] < '0' || str[i] > '9') break;
-        res = res * 10 + str[i] - '0';
-    }
-    return sign * res;
-}
-
 void execute_command(char* input) {
     if (strcmp(input, "clear") == 0) {
         clear_screen();
-        kprint("LuxOS Kernel 0.0.6\n> ");
     } 
-    else if (strcmp(input, "cat") == 0) {
-        if (vfs_root == 0) {
-            kprint("\nError: Disk not initialized.");
-        } else {
-            char buf[513];
-            for(int i = 0; i < 513; i++) buf[i] = 0;
-
-            read_vfs(vfs_root, 10240, 512, buf);
-            buf[512] = '\0';
-            kprint("\nData: ");
-            kprint(buf);
-        }
-        kprint("\n> ");
-    }
-    else if (input[0] == 'w' && input[1] == 'r' && input[2] == 'i' && input[3] == 't' && input[4] == 'e') {
-        if (vfs_root == 0) {
-            kprint("\nError: Disk not initialized.");
-        } else {
-
-            char* data_to_write = input + 6;
-            
-            if (*data_to_write == '\0') {
-                kprint("\nUsage: write <message>");
-            } else {
-                write_vfs(vfs_root, 10240, 512, data_to_write);
-                kprint("\nDisk write successful.");
-            }
-        }
-        kprint("\n> ");
-    }
-    else if (input[0] == 'c' && input[1] == 'a' && input[2] == 'l' && input[3] == 'c') {
-        char* ptr = input + 5; 
-        int num1 = atoi(ptr);
-        while (*ptr != '+' && *ptr != '-' && *ptr != '*' && *ptr != '/' && *ptr != '\0' && *ptr != ' ') ptr++;
-        if (*ptr == ' ') while (*ptr == ' ') ptr++;
-        char op = *ptr;
-        ptr++; 
-        while (*ptr == ' ') ptr++;
-        int num2 = atoi(ptr);
-        int result = 0;
-
-        if (op == '+') result = num1 + num2;
-        else if (op == '-') result = num1 - num2; 
-        else if (op == '*') result = num1 * num2;
-        else if (op == '/') {
-            if (num2 != 0) result = num1 / num2;
-            else { kprint("\nError: Div by zero"); result = 0; }
-        }
-
-        char res_str[16];
-        itoa(result, res_str);
-        kprint("\nResult: ");
-        kprint(res_str);
-        kprint("\n> ");
-    }
     else if (strcmp(input, "help") == 0) {
-        kprint("\nCommands: clear, help, calc, cat, write <msg>\n> ");
-    } 
-    else if (input[0] != '\0') {
-        kprint("\nUnknown command: ");
-        kprint(input);
-        kprint("\n> ");
-    } else {
-        kprint("\n> ");
+        kprint("\nLuxOS Commands:\n");
+        kprint("clear - Clear screen\n");
+        kprint("ls    - List files\n");
+        kprint("af    - Add file (af <name>)\n");
+        kprint("wf    - Write to file (wf <name> <text>)\n");
+        kprint("cat   - Read file (cat <name>)\n");
+        kprint("df    - Delete file (df <name>)\n");
     }
+    else if (strcmp(input, "ls") == 0) {
+        kprint("\nRoot Directory:");
+        fat16_list_root();
+    }
+    else if (input[0] == 'a' && input[1] == 'f' && input[2] == ' ') {
+        if (fat16_create_file(input + 3) == 0) kprint("\nFile created.");
+        else kprint("\nError: Could not create.");
+    }
+    else if (input[0] == 'd' && input[1] == 'f' && input[2] == ' ') {
+        if (fat16_delete_file(input + 3) == 0) kprint("\nFile deleted.");
+        else kprint("\nError: File not found.");
+    }
+    else if (input[0] == 'w' && input[1] == 'f' && input[2] == ' ') {
+        char* filename = input + 3;
+        char* text = 0;
+        for (char* p = filename; *p; p++) { 
+            if (*p == ' ') { 
+                *p = '\0'; 
+                text = p + 1; 
+                break; 
+            } 
+        }
+        if (text) {
+            struct vfs_node* file = fat16_finddir(vfs_root, filename);
+            if (file) {
+                int len = 0; while(text[len]) len++;
+                file->write(file, 0, len, text);
+                kprint("\nSaved.");
+                kfree(file);
+            } else kprint("\nFile not found.");
+        }
+    }
+    else if (input[0] == 'c' && input[1] == 'a' && input[2] == 't' && input[3] == ' ') {
+        struct vfs_node* file = fat16_finddir(vfs_root, input + 4);
+        if (file) {
+            char* buf = (char*)kalloc();
+            int read = file->read(file, 0, file->size, buf);
+            buf[read] = '\0';
+            kprint("\n"); kprint(buf);
+            kfree(buf); kfree(file);
+        } else kprint("\nFile not found.");
+    }
+    else {
+        kprint("\nUnknown: "); kprint(input);
+    }
+    kprint("\n> ");
 }
 
 void init() {
     clear_screen();
-    kprint("LuxOS Kernel 0.0.6 (Experimental)\n");
+    kprint("LuxOS Kernel 0.0.7\n");
     kprint("-----------------------------------------\n");
 
     int current_row = 2;
@@ -340,29 +335,79 @@ void init() {
         extern void keyboard_isr();
         set_idt_gate(33, (unsigned int)keyboard_isr);
         kprint_at("[ OK ]", 35, current_row++);
+    } else {
+        kprint_at("[FAIL]", 35, current_row++);
+        while(1);
     }
 
-    kprint_at("Initializing ATA/VFS..............", 0, current_row);
-    vfs_root = init_ata_device(); 
-    if (vfs_root != 0) kprint_at("[ OK ]", 35, current_row++);
-
     kprint_at("Detecting Memory Regions..........", 0, current_row);
-    if (detect_memory() == 0) kprint_at("[ OK ]", 35, current_row++);
+    if (detect_memory() == 0) {
+        kprint_at("[ OK ]", 35, current_row++);
+    } else {
+        kprint_at("[FAIL]", 35, current_row++);
+    }
 
     kprint_at("Initializing VGA driver...........", 0, current_row);
-    if (init_vga() == 0) kprint_at("[ OK ]", 35, current_row++);
+    if (init_vga() == 0) {
+        kprint_at("[ OK ]", 35, current_row++);
+    } else {
+        kprint_at("[FAIL]", 35, current_row++);
+    }
 
     kprint_at("Loading keyboard driver...........", 0, current_row);
-    if (init_keyboard() == 0) kprint_at("[ OK ]", 35, current_row++);
+    if (init_keyboard() == 0) {
+        kprint_at("[ OK ]", 35, current_row++);
+    } else {
+        kprint_at("[FAIL]", 35, current_row++);
+    }
 
     kprint_at("Probing I/O Ports.................", 0, current_row);
-    if (probe_io_ports() == 0) kprint_at("[ OK ]", 35, current_row++);
+    if (probe_io_ports() == 0) {
+        kprint_at("[ OK ]", 35, current_row++);
+    } else {
+        kprint_at("[FAIL]", 35, current_row++);
+    }
 
     kprint_at("Searching for PCI Devices.........", 0, current_row);
-    if (search_pci() == 0) kprint_at("[ OK ]", 35, current_row++);
+    if (search_pci() == 0) {
+        kprint_at("[ OK ]", 35, current_row++);
+    } else {
+        kprint_at("[WARN]", 35, current_row++);
+    }
 
     kprint_at("Initializing Scheduler............", 0, current_row);
-    if (init_scheduler() == 0) kprint_at("[ OK ]", 35, current_row++);
+    if (init_scheduler() == 0) {
+        kprint_at("[ OK ]", 35, current_row++);
+    } else {
+        kprint_at("[FAIL]", 35, current_row++);
+    }
+
+    cursor_y = current_row;
+    cursor_x = 0;
+    kprint("\n");
+    
+    kprint_at("Initializing Disk Controller......", 0, current_row);
+    extern void ata_init();
+    ata_init();
+    kprint_at("[ OK ]", 35, current_row++);
+
+    kprint_at("Initializing FAT16 File System....", 0, current_row);
+    cursor_y = current_row + 2;
+    cursor_x = 0;
+    kprint("\n");
+    
+    fat16_init(); 
+    
+    if (vfs_root != 0) {
+        kprint_at("[ OK ]", 35, current_row);
+        kprint("\n");
+        current_row += 2;
+    } else {
+        kprint_at("[FAIL]", 35, current_row);
+        kprint("\nERROR: Failed to initialize FAT16!\n");
+        kprint("System halted.\n");
+        while(1);
+    }
 
     cursor_y = current_row + 1;
     cursor_x = 0;
@@ -383,10 +428,14 @@ void init() {
             else if (key == '\b') {
                 if (buffer_idx > 0) {
                     buffer_idx--;
-                    cursor_x--;
-                    kprint(" "); 
-                    cursor_x--; 
-                    update_hardware_cursor(cursor_x, cursor_y);
+                    if (cursor_x > 2) { 
+                        cursor_x--;
+                        unsigned char* video_memory = (unsigned char*) VIDEO_ADDRESS;
+                        int offset = (cursor_y * MAX_COLS + cursor_x) * 2;
+                        video_memory[offset] = ' '; 
+                        video_memory[offset + 1] = WHITE_ON_BLACK;
+                        update_hardware_cursor(cursor_x, cursor_y);
+                    }
                 }
             } 
             else if (buffer_idx < PAGE_SIZE - 1) { 

@@ -6,8 +6,6 @@ void init_memory_manager() {
     for (int i = 0; i < BITMAP_SIZE; i++) {
         memory_bitmap[i] = 0;
     }
-    
-    // В будущем здесь можно пометить первые страницы как занятые
 }
 
 void bitmap_set(int page_idx) {
@@ -29,7 +27,6 @@ void* kalloc() {
                 if (!(memory_bitmap[i] & (1 << j))) {
                     int page_idx = i * 8 + j;
                     bitmap_set(page_idx);
-
                     return (void*)(MEM_START + (page_idx * PAGE_SIZE));
                 }
             }
@@ -40,9 +37,33 @@ void* kalloc() {
 
 void kfree(void* ptr) {
     unsigned int addr = (unsigned int)ptr;
-
     if (addr < MEM_START || addr >= (MEM_START + MEM_SIZE)) return;
-
     int page_idx = (addr - MEM_START) / PAGE_SIZE;
     bitmap_unset(page_idx);
+}
+
+void memory_copy(void* source, void* dest, int n) {
+    char* src = (char*)source;
+    char* dst = (char*)dest;
+    for (int i = 0; i < n; i++) {
+        dst[i] = src[i];
+    }
+}
+
+void memory_set(void* dest, unsigned char val, int n) {
+    unsigned char* dst = (unsigned char*)dest;
+    for (int i = 0; i < n; i++) {
+        dst[i] = val;
+    }
+}
+
+int memory_compare(void* s1, void* s2, int n) {
+    unsigned char* p1 = (unsigned char*)s1;
+    unsigned char* p2 = (unsigned char*)s2;
+    for (int i = 0; i < n; i++) {
+        if (p1[i] != p2[i]) {
+            return (p1[i] < p2[i]) ? -1 : 1;
+        }
+    }
+    return 0;
 }

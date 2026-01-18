@@ -10,7 +10,10 @@
 void init_memory_manager();
 
 void* kalloc();
-
 void kfree(void* ptr);
+
+void memory_copy(void* source, void* dest, int n);
+void memory_set(void* dest, unsigned char val, int n);
+int memory_compare(void* s1, void* s2, int n);
 
 #endif
