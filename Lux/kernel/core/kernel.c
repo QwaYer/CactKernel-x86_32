@@ -291,18 +291,18 @@ void execute_command(char* input) {
                 int len = 0; while(text[len]) len++;
                 file->write(file, 0, len, text);
                 kprint("\nSaved.");
-                kfree(file);
+                kfree_heap(file);
             } else kprint("\nFile not found.");
         }
     }
     else if (input[0] == 'c' && input[1] == 'a' && input[2] == 't' && input[3] == ' ') {
         struct vfs_node* file = fat16_finddir(vfs_root, input + 4);
         if (file) {
-            char* buf = (char*)kalloc();
+            char* buf = (char*)kmalloc(2048);
             int read = file->read(file, 0, file->size, buf);
             buf[read] = '\0';
             kprint("\n"); kprint(buf);
-            kfree(buf); kfree(file);
+            kfree_heap(buf); kfree_heap(file);
         } else kprint("\nFile not found.");
     }
     else {
@@ -319,8 +319,9 @@ void init() {
     int current_row = 2;
 
     init_memory_manager();
+    init_heap();
 
-    key_buffer = (char*)kalloc();
+    key_buffer = (char*)kmalloc(2048);
     if (key_buffer == 0) {
         kprint("CRITICAL ERROR: Memory allocation failed!\n");
         while(1);
