@@ -1,7 +1,8 @@
 #include "kernel.h"
 #include "memory.h"
 #include "vfs.h"
-#include "fat16.h"
+#include "libc.h"
+#include "task.h"
 
 int cursor_x = 0;
 int cursor_y = 0;  
@@ -109,41 +110,6 @@ void kprint_at(char* message, int x, int y) {
     kprint(message);
 }
 
-int strcmp(char* s1, char* s2) {
-    int i;
-    for (i = 0; s1[i] == s2[i]; i++) {
-        if (s1[i] == '\0') return 0;
-    }
-    return s1[i] - s2[i];
-}
-
-void itoa(int n, char str[]) {
-    int i, sign;
-    if ((sign = n) < 0) n = -n;
-    i = 0;
-    do {
-        str[i++] = n % 10 + '0';
-    } while ((n /= 10) > 0);
-    if (sign < 0) str[i++] = '-';
-    str[i] = '\0';
-
-    for (int j = 0, k = i - 1; j < k; j++, k--) {
-        char temp = str[j];
-        str[j] = str[k];
-        str[k] = temp;
-    }
-}
-
-int atoi(char* str) {
-    int res = 0, sign = 1, i = 0;
-    if (str[0] == '-') { sign = -1; i++; }
-    for (; str[i] != '\0'; ++i) {
-        if (str[i] < '0' || str[i] > '9') break;
-        res = res * 10 + str[i] - '0';
-    }
-    return sign * res;
-}
-
 void set_idt_gate(int n, unsigned int handler) {
     idt[n].low_offset = (unsigned short)(handler & 0xFFFF);
     idt[n].sel = 0x08;
@@ -155,21 +121,34 @@ void set_idt_gate(int n, unsigned int handler) {
 void init_pic() {
     port_byte_out(0x20, 0x11);
     port_byte_out(0xA0, 0x11);
-    port_byte_out(0x21, 0x20);
-    port_byte_out(0xA1, 0x28);
+    port_byte_out(0x21, 0x20); 
+    port_byte_out(0xA1, 0x28); 
     port_byte_out(0x21, 0x04);
     port_byte_out(0xA1, 0x02);
     port_byte_out(0x21, 0x01);
     port_byte_out(0xA1, 0x01);
-    port_byte_out(0x21, 0xFD); 
+    port_byte_out(0x21, 0xFC); 
     port_byte_out(0xA1, 0xFF);
 }
 
 int init_idt() {
-    idtp.limit = (unsigned short)(sizeof(struct idt_entry) * 256) - 1;
+    idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
     idtp.base = (unsigned int)&idt;
-    for (int i = 0; i < 256; i++) set_idt_gate(i, 0);
-    init_pic();
+    memory_set(&idt, 0, sizeof(struct idt_entry) * 256);
+
+    set_idt_gate(0, (unsigned int)isr0);
+    set_idt_gate(13, (unsigned int)isr13);
+    set_idt_gate(14, (unsigned int)isr14);
+
+    for (int i = 1; i < 32; i++) {
+        if (i != 13 && i != 14) set_idt_gate(i, (unsigned int)isr_common_stub);
+    }
+
+    set_idt_gate(32, (unsigned int)timer_isr);
+    set_idt_gate(33, (unsigned int)keyboard_isr);
+
+    set_idt_gate(128, (unsigned int)syscall_isr);
+
     __asm__ __volatile__("lidt (%0)" : : "r" (&idtp));
     return 0;
 }
@@ -217,85 +196,46 @@ void exception_handler() {
     __asm__ __volatile__ ("cli; hlt");
 }
 
+void init_timer(unsigned int frequency) {
+    unsigned int divisor = 1193180 / frequency;
+    port_byte_out(0x43, 0x36);
+    port_byte_out(0x40, (unsigned char)(divisor & 0xFF));
+    port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF));
+}
+
 void keyboard_handler() {
     unsigned char scancode = port_byte_in(0x60);
-
-    if (scancode == 0x2A || scancode == 0x36) {
-        shift_pressed = 1;
-    } 
-    else if (scancode == 0xAA || scancode == 0xB6) {
-        shift_pressed = 0;
-    } 
-    else if (scancode == 0x3A) { 
-        caps_lock_active = !caps_lock_active;
-    }
+    if (scancode == 0x2A || scancode == 0x36) shift_pressed = 1;
+    else if (scancode == 0xAA || scancode == 0xB6) shift_pressed = 0;
+    else if (scancode == 0x3A) caps_lock_active = !caps_lock_active;
     else if (!(scancode & 0x80)) {
-        if (scancode < 128) {
-            char c = keyboard_map[scancode];
-
-            if (c >= 'a' && c <= 'z') {
-                if (shift_pressed != caps_lock_active) {
-                    c = keyboard_map_shift[scancode];
-                }
-            } else if (shift_pressed) {
-                c = keyboard_map_shift[scancode];
-            }
-            
-            if (c != 0) {
-                last_char = c;
-                key_event_happened = 1; 
-            }
+        char c = keyboard_map[scancode];
+        if (c >= 'a' && c <= 'z' && (shift_pressed != caps_lock_active)) c = keyboard_map_shift[scancode];
+        else if (shift_pressed && !(c >= 'a' && c <= 'z')) c = keyboard_map_shift[scancode];
+        
+        if (c != 0) {
+            last_char = c;
+            key_event_happened = 1; 
         }
     }
     port_byte_out(0x20, 0x20); 
 }
 
 void execute_command(char* input) {
-    if (strcmp(input, "clear") == 0) {
+    if (compare_string(input, "clear") == 0) {
         clear_screen();
     } 
-    else if (strcmp(input, "help") == 0) {
-        kprint("\nLuxOS Commands:\n");
-        kprint("clear - Clear screen\n");
-        kprint("ls    - List files\n");
-        kprint("af    - Add file (af <name>)\n");
-        kprint("wf    - Write to file (wf <name> <text>)\n");
-        kprint("cat   - Read file (cat <name>)\n");
-        kprint("df    - Delete file (df <name>)\n");
+    else if (compare_string(input, "help") == 0) {
+        kprint("\nLuxOS Commands: help, clear, ls, cpu, mem, af, cat, df\n");
     }
-    else if (strcmp(input, "ls") == 0) {
+    else if (compare_string(input, "cpu") == 0) {
+        kprint("\nCPU: x86 32-bit Protected Mode\nMultitasking: ENABLED\n");
+    }
+    else if (compare_string(input, "ls") == 0) {
         kprint("\nRoot Directory:");
         fat16_list_root();
     }
-    else if (input[0] == 'a' && input[1] == 'f' && input[2] == ' ') {
-        if (fat16_create_file(input + 3) == 0) kprint("\nFile created.");
-        else kprint("\nError: Could not create.");
-    }
-    else if (input[0] == 'd' && input[1] == 'f' && input[2] == ' ') {
-        if (fat16_delete_file(input + 3) == 0) kprint("\nFile deleted.");
-        else kprint("\nError: File not found.");
-    }
-    else if (input[0] == 'w' && input[1] == 'f' && input[2] == ' ') {
-        char* filename = input + 3;
-        char* text = 0;
-        for (char* p = filename; *p; p++) { 
-            if (*p == ' ') { 
-                *p = '\0'; 
-                text = p + 1; 
-                break; 
-            } 
-        }
-        if (text) {
-            struct vfs_node* file = fat16_finddir(vfs_root, filename);
-            if (file) {
-                int len = 0; while(text[len]) len++;
-                file->write(file, 0, len, text);
-                kprint("\nSaved.");
-                kfree_heap(file);
-            } else kprint("\nFile not found.");
-        }
-    }
-    else if (input[0] == 'c' && input[1] == 'a' && input[2] == 't' && input[3] == ' ') {
+    else if (input[0] == 'c' && input[1] == 'a' && input[2] == 't') {
         struct vfs_node* file = fat16_finddir(vfs_root, input + 4);
         if (file) {
             char* buf = (char*)kmalloc(2048);
@@ -306,116 +246,14 @@ void execute_command(char* input) {
         } else kprint("\nFile not found.");
     }
     else {
-        kprint("\nUnknown: "); kprint(input);
+        kprint("\nUnknown command: "); kprint(input);
     }
     kprint("\n> ");
 }
 
-void init() {
-    clear_screen();
-    kprint("LuxOS Kernel 0.0.7\n");
-    kprint("-----------------------------------------\n");
 
-    int current_row = 2;
-
-    init_memory_manager();
-    init_heap();
-
-    key_buffer = (char*)kmalloc(2048);
-    if (key_buffer == 0) {
-        kprint("CRITICAL ERROR: Memory allocation failed!\n");
-        while(1);
-    }
-
-    kprint_at("Initializing GDT..................", 0, current_row++);
-    kprint_at("CPU Protected Mode (x86_32).......", 0, current_row++);
-    kprint_at("Setting up Kernel Stack...........", 0, current_row++);
-
-    kprint_at("Initializing IDT & PIC............", 0, current_row);
-    if (init_idt() == 0) {
-        extern void keyboard_isr();
-        set_idt_gate(33, (unsigned int)keyboard_isr);
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[FAIL]", 35, current_row++);
-        while(1);
-    }
-
-    kprint_at("Detecting Memory Regions..........", 0, current_row);
-    if (detect_memory() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[FAIL]", 35, current_row++);
-    }
-
-    kprint_at("Initializing VGA driver...........", 0, current_row);
-    if (init_vga() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[FAIL]", 35, current_row++);
-    }
-
-    kprint_at("Loading keyboard driver...........", 0, current_row);
-    if (init_keyboard() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[FAIL]", 35, current_row++);
-    }
-
-    kprint_at("Probing I/O Ports.................", 0, current_row);
-    if (probe_io_ports() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[FAIL]", 35, current_row++);
-    }
-
-    kprint_at("Searching for PCI Devices.........", 0, current_row);
-    if (search_pci() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[WARN]", 35, current_row++);
-    }
-
-    kprint_at("Initializing Scheduler............", 0, current_row);
-    if (init_scheduler() == 0) {
-        kprint_at("[ OK ]", 35, current_row++);
-    } else {
-        kprint_at("[FAIL]", 35, current_row++);
-    }
-
-    cursor_y = current_row;
-    cursor_x = 0;
-    kprint("\n");
-    
-    kprint_at("Initializing Disk Controller......", 0, current_row);
-    extern void ata_init();
-    ata_init();
-    kprint_at("[ OK ]", 35, current_row++);
-
-    kprint_at("Initializing FAT16 File System....", 0, current_row);
-    cursor_y = current_row + 2;
-    cursor_x = 0;
-    kprint("\n");
-    
-    fat16_init(); 
-    
-    if (vfs_root != 0) {
-        kprint_at("[ OK ]", 35, current_row);
-        kprint("\n");
-        current_row += 2;
-    } else {
-        kprint_at("[FAIL]", 35, current_row);
-        kprint("\nERROR: Failed to initialize FAT16!\n");
-        kprint("System halted.\n");
-        while(1);
-    }
-
-    cursor_y = current_row + 1;
-    cursor_x = 0;
+void terminal_task() {
     kprint("\nLuxOS Terminal is ready.\n> ");
-
-    __asm__ __volatile__("sti");
-
     while (1) {
         if (key_event_happened) {
             key_event_happened = 0; 
@@ -434,17 +272,47 @@ void init() {
                         unsigned char* video_memory = (unsigned char*) VIDEO_ADDRESS;
                         int offset = (cursor_y * MAX_COLS + cursor_x) * 2;
                         video_memory[offset] = ' '; 
-                        video_memory[offset + 1] = WHITE_ON_BLACK;
                         update_hardware_cursor(cursor_x, cursor_y);
                     }
                 }
             } 
-            else if (buffer_idx < PAGE_SIZE - 1) { 
+            else if (buffer_idx < 2048 - 1) { 
                 key_buffer[buffer_idx++] = key;
                 char temp_str[2] = {key, 0};
                 kprint(temp_str);
             }
         }
+        __asm__ __volatile__("hlt");
+    }
+}
+
+
+void init() {
+    clear_screen();
+    kprint("LuxOS Kernel 0.0.7 Initializing...\n");
+
+    init_memory_manager();
+    init_heap();
+    key_buffer = (char*)kmalloc(2048);
+
+    init_pic(); 
+    init_idt(); 
+    
+    detect_memory();
+    init_vga();
+    init_keyboard();
+    ata_init();
+    fat16_init();
+
+    init_scheduler();
+    init_timer(100); 
+
+    current_task = create_task(terminal_task); 
+
+    kprint("System ready. Enabling interrupts...\n");
+    __asm__ __volatile__("sti");
+
+    while (1) {
         __asm__ __volatile__("hlt");
     }
 }

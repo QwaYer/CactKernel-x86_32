@@ -1,9 +1,9 @@
 #include "memory.h"
+#include "libc.h" 
 
 unsigned char memory_bitmap[BITMAP_SIZE];
 struct heap_block* heap_start = (struct heap_block*)HEAP_START;
 
-// ==================== BITMAP UTILS ====================
 
 void bitmap_set(int page_idx) {
     int byte_idx = page_idx / 8;
@@ -17,50 +17,30 @@ void bitmap_unset(int page_idx) {
     memory_bitmap[byte_idx] &= ~(1 << bit_idx);
 }
 
-// ==================== MANAGER INIT ====================
-
 void init_memory_manager() {
-    // 1. Полная очистка битмапа страниц
-    for (int i = 0; i < BITMAP_SIZE; i++) {
-        memory_bitmap[i] = 0;
-    }
+    memory_set(memory_bitmap, 0, BITMAP_SIZE);
 
-    // 2. Резервирование страниц кучи в битмапе, чтобы kalloc их не выдавал
     int heap_start_page = (HEAP_START - MEM_START) / PAGE_SIZE;
     int heap_pages = HEAP_SIZE / PAGE_SIZE;
     for (int i = 0; i < heap_pages; i++) {
         bitmap_set(heap_start_page + i);
     }
 
-    // 3. Инициализация структуры кучи внутри зарезервированной области
     init_heap();
 }
 
-// ==================== PAGE ALLOCATOR ====================
-
 void* kalloc() {
-    for (int i = 0; i < BITMAP_SIZE; i++) {
-        if (memory_bitmap[i] != 0xFF) {
-            for (int j = 0; j < 8; j++) {
-                if (!(memory_bitmap[i] & (1 << j))) {
-                    int page_idx = i * 8 + j;
-                    bitmap_set(page_idx);
-                    return (void*)(MEM_START + (page_idx * PAGE_SIZE));
-                }
-            }
+    for (int i = 0; i < TOTAL_PAGES; i++) {
+        int byte_idx = i / 8;
+        int bit_idx = i % 8;
+        if (!(memory_bitmap[byte_idx] & (1 << bit_idx))) {
+            bitmap_set(i);
+            return (void*)(MEM_START + (i * PAGE_SIZE));
         }
     }
     return 0; 
 }
 
-void kfree(void* ptr) {
-    unsigned int addr = (unsigned int)ptr;
-    if (addr < MEM_START || addr >= (MEM_START + MEM_SIZE)) return;
-    int page_idx = (addr - MEM_START) / PAGE_SIZE;
-    bitmap_unset(page_idx);
-}
-
-// ==================== HEAP ALLOCATOR (kmalloc) ====================
 
 void init_heap() {
     heap_start->magic = HEAP_MAGIC;
@@ -70,102 +50,42 @@ void init_heap() {
 }
 
 void* kmalloc(unsigned int size) {
-    if (size == 0) return 0;
-    
-    // Выравнивание запроса до 4 байт для производительности
-    if (size % 4 != 0) {
-        size += 4 - (size % 4);
-    }
-    
     struct heap_block* current = heap_start;
-    
     while (current) {
         if (current->is_free && current->size >= size) {
-            // Разделение блока, если он значительно больше запроса
             if (current->size > size + sizeof(struct heap_block) + 16) {
-                struct heap_block* new_block = (struct heap_block*)((unsigned char*)current + sizeof(struct heap_block) + size);
-                new_block->magic = HEAP_MAGIC;
-                new_block->size = current->size - size - sizeof(struct heap_block);
-                new_block->is_free = 1;
-                new_block->next = current->next;
-                
+                struct heap_block* next_block = (struct heap_block*)((unsigned char*)current + sizeof(struct heap_block) + size);
+                next_block->magic = HEAP_MAGIC;
+                next_block->size = current->size - size - sizeof(struct heap_block);
+                next_block->is_free = 1;
+                next_block->next = current->next;
+
                 current->size = size;
-                current->next = new_block;
+                current->next = next_block;
             }
-            
             current->is_free = 0;
             return (void*)((unsigned char*)current + sizeof(struct heap_block));
         }
         current = current->next;
     }
-    
-    return 0; 
+    return 0;
 }
 
 void kfree_heap(void* ptr) {
     if (!ptr) return;
-    
-    // Проверка границ: адрес должен быть внутри области кучи
-    unsigned int addr = (unsigned int)ptr;
-    if (addr < HEAP_START || addr >= (HEAP_START + HEAP_SIZE)) return;
-
     struct heap_block* block = (struct heap_block*)((unsigned char*)ptr - sizeof(struct heap_block));
     
-    // Проверка магического числа для предотвращения повреждения структуры
-    if (block->magic != HEAP_MAGIC) return;
+    if (block->magic != HEAP_MAGIC) return; 
 
     block->is_free = 1;
-    
-    // Coalescing: объединение идущих подряд свободных блоков
-    struct heap_block* current = heap_start;
-    while (current && current->next) {
-        if (current->is_free && current->next->is_free) {
-            current->size += sizeof(struct heap_block) + current->next->size;
-            current->next = current->next->next;
+
+    struct heap_block* curr = heap_start;
+    while (curr && curr->next) {
+        if (curr->is_free && curr->next->is_free) {
+            curr->size += sizeof(struct heap_block) + curr->next->size;
+            curr->next = curr->next->next;
         } else {
-            current = current->next;
+            curr = curr->next;
         }
     }
-}
-
-unsigned int get_free_memory() {
-    unsigned int free_mem = 0;
-    struct heap_block* current = heap_start;
-    
-    while (current) {
-        if (current->is_free) {
-            free_mem += current->size;
-        }
-        current = current->next;
-    }
-    
-    return free_mem;
-}
-
-// ==================== UTILITIES ====================
-
-void memory_copy(void* source, void* dest, int n) {
-    char* src = (char*)source;
-    char* dst = (char*)dest;
-    for (int i = 0; i < n; i++) {
-        dst[i] = src[i];
-    }
-}
-
-void memory_set(void* dest, unsigned char val, int n) {
-    unsigned char* dst = (unsigned char*)dest;
-    for (int i = 0; i < n; i++) {
-        dst[i] = val;
-    }
-}
-
-int memory_compare(void* s1, void* s2, int n) {
-    unsigned char* p1 = (unsigned char*)s1;
-    unsigned char* p2 = (unsigned char*)s2;
-    for (int i = 0; i < n; i++) {
-        if (p1[i] != p2[i]) {
-            return (p1[i] < p2[i]) ? -1 : 1;
-        }
-    }
-    return 0;
 }

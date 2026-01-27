@@ -13,6 +13,15 @@ extern unsigned short port_word_in(unsigned short port);
 extern void port_long_out(unsigned short port, unsigned int data);
 extern unsigned int port_long_in(unsigned short port);
 
+extern void timer_isr();
+extern void keyboard_isr();
+extern void syscall_isr();
+extern void isr0();
+extern void isr13();
+extern void isr14();
+extern void isr_common_stub();
+extern struct task_struct* current_task;
+
 void kprint(char* message);
 void kprint_at(char* message, int x, int y);
 void clear_screen();
@@ -22,6 +31,7 @@ void update_hardware_cursor(int x, int y);
 void itoa(int n, char str[]);
 int atoi(char* str);
 int strcmp(char* s1, char* s2);
+int compare_string(char* s1, char* s2);
 
 void init_pic();
 int init_idt();
@@ -34,14 +44,18 @@ int init_keyboard();
 int probe_io_ports();
 int detect_memory();
 int search_pci();
-int init_scheduler();
+void init_timer(unsigned int frequency);
 
+int init_scheduler();
+struct task_struct; 
+extern struct task_struct* create_task(void (*entry_point)());
 
 extern void ata_init();
 extern void ata_read_sector(unsigned int lba, unsigned char* buffer);
 extern void ata_write_sector(unsigned int lba, unsigned char* buffer);
 
 extern void fat16_init();
+struct vfs_node; 
 extern struct vfs_node* fat16_finddir(struct vfs_node* node, char* name);
 extern void fat16_list_root();
 extern int fat16_create_file(char* name);

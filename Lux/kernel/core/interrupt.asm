@@ -1,52 +1,74 @@
 [bits 32]
 
-; Экспорт функций для использования в C
 global keyboard_isr
 global timer_isr
+global syscall_isr
 global isr_common_stub
+global isr0
+global isr13
+global isr14
 
-; Импорт переменных и функций из ядра
 extern keyboard_handler
 extern exception_handler
+extern syscall_handler
 extern current_task
 extern schedule
 
-; --- Обработчик прерывания Таймера (IRQ 0) ---
-timer_isr:
-    pusha                ; Сохраняем все регистры текущей задачи
+isr0:
+    push 0      
+    push 0     
+    jmp isr_common_stub
 
-    ; Загружаем сегмент данных ядра
+isr13:
+    push 13    
+    jmp isr_common_stub
+
+isr14:
+    push 14     
+    jmp isr_common_stub
+
+isr_common_stub:
+    pusha      
+    mov ax, ds
+    push eax   
+    mov ax, 0x10 
+    mov ds, ax
+    mov es, ax
+
+    call exception_handler
+
+    pop eax
+    mov ds, ax
+    mov es, ax
+    popa
+    add esp, 8  
+    iretd
+
+timer_isr:
+    pusha
     mov ax, 0x10
     mov ds, ax
     mov es, ax
 
-    ; Проверяем, существует ли текущая задача (current_task != 0)
     mov eax, [current_task]
-    test eax, eax        ; Аналог cmp eax, 0, но быстрее
-    jz .skip_save        ; Если 0 (задач еще нет), пропускаем сохранение ESP
-
-    ; Сохраняем текущий указатель стека (ESP) в структуру task_struct
-    ; Предполагается, что 'unsigned int esp' — первое поле в структуре (offset 0)
-    mov [eax], esp       
+    test eax, eax     
+    jz .skip_save
+    mov [eax], esp      
 
 .skip_save:
-    call schedule        ; Вызываем планировщик, он обновит current_task
+    call schedule       
 
-    ; Загружаем ESP новой задачи, которую выбрал планировщик
     mov eax, [current_task]
     test eax, eax
-    jz .do_eoi           ; Если задач нет, просто выходим
-    mov esp, [eax]       ; Переключаем стек на стек новой задачи
+    jz .do_eoi
+    mov esp, [eax]       
 
 .do_eoi:
-    ; Отправляем EOI (End of Interrupt) контроллеру прерываний (PIC)
-    mov al, 0x20
+    mov al, 0x20        
     out 0x20, al
+    popa
+    iretd
 
-    popa                 ; Восстанавливаем регистры новой задачи
-    iretd                ; Прыгаем в код новой задачи
-
-; --- Обработчик клавиатуры (IRQ 1) ---
 keyboard_isr:
     pusha
     mov ax, 0x10
@@ -60,26 +82,15 @@ keyboard_isr:
     popa
     iretd
 
-; --- Общий обработчик исключений (Exceptions) ---
-isr_common_stub:
-    pusha        
-    
-    mov ax, ds    
-    push eax            
-
-    mov ax, 0x10        
+syscall_isr:
+    pusha
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
 
-    call exception_handler
+    push esp             
+    call syscall_handler
+    add esp, 4
 
-    pop eax             
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
-    popa           
+    popa
     iretd

@@ -2,6 +2,7 @@
 #define FAT16_H
 
 #include "vfs.h"
+#include "libc.h"
 
 struct fat16_bpb {
     unsigned char jmp[3];
