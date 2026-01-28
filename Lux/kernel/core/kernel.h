@@ -6,27 +6,7 @@
 #define MAX_COLS 80
 #define WHITE_ON_BLACK 0x0f
 
-typedef void (*command_handler_t)(char* args);
-
-void cmd_help(char* args);
-void cmd_clear(char* args);
-void cmd_cpu(char* args);
-void cmd_ls(char* args);
-void cmd_cat(char* args);
-void cmd_touch(char* args);
-void cmd_mem(char* args);
-void cmd_uptime(char* args);
-void cmd_reboot(char* args);
-
-struct shell_command {
-    char* name;
-    char* description;
-    command_handler_t handler;
-};
-
-extern struct shell_command commands[];
-extern const int COMMAND_COUNT;
-
+// --- Низкоуровневый ввод-вывод (порты) ---
 extern void port_byte_out(unsigned short port, unsigned char data);
 extern unsigned char port_byte_in(unsigned short port);
 extern void port_word_out(unsigned short port, unsigned short data);
@@ -34,6 +14,7 @@ extern unsigned short port_word_in(unsigned short port);
 extern void port_long_out(unsigned short port, unsigned int data);
 extern unsigned int port_long_in(unsigned short port);
 
+// --- Обработчики прерываний (ASM стабы) ---
 extern void timer_isr();
 extern void keyboard_isr();
 extern void syscall_isr();
@@ -77,10 +58,8 @@ extern void ata_write_sector(unsigned int lba, unsigned char* buffer);
 
 extern void fat16_init();
 struct vfs_node; 
-extern struct vfs_node* fat16_finddir(struct vfs_node* node, char* name);
 extern void fat16_list_root();
 
-void execute_command(char* input);
 void kernel_setup_hardware();
 
 #endif

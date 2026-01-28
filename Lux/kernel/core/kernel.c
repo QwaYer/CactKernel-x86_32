@@ -3,6 +3,7 @@
 #include "vfs.h"
 #include "libc.h"
 #include "task.h"
+#include "shell.h"
 
 int cursor_x = 0;
 int cursor_y = 0;  
@@ -219,92 +220,21 @@ void keyboard_handler() {
     port_byte_out(0x20, 0x20); 
 }
 
-struct shell_command commands[] = {
-    {"help", "Show available commands", cmd_help},
-    {"clear", "Clear terminal screen", cmd_clear},
-    {"cpu", "Show CPU and Task info", cmd_cpu},
-    {"ls", "List files in FAT16 root", cmd_ls},
-    {"cat", "Show file contents", cmd_cat},
-    {"touch", "Create a new file", cmd_touch},
-    {"mem", "Display memory stats", cmd_mem},
-    {"uptime", "System running time", cmd_uptime},
-    {"reboot", "Restart the machine", cmd_reboot}
-};
-
-const int COMMAND_COUNT = sizeof(commands) / sizeof(struct shell_command);
-
-void cmd_help(char* args) {
-    kprint("\nLuxOS Commands:\n");
-    kprint("  help  - Show this message\n");
-    kprint("  clear - Clear the screen\n");
-    kprint("  cpu   - Show CPU info\n");
-    kprint("  ls    - List files\n");
-}
-
-void cmd_clear(char* args) {
-    clear_screen();
-    kprint("LuxOS Kernel Version 0.0.8\n");
-    kprint("--------------------------\n");
-    kprint("\n> ");
-}
-
-void cmd_cpu(char* args) {
-    kprint("\nCPU: x86 32-bit Protected Mode\n");
-}
-
-void cmd_ls(char* args) {
-    kprint("\nRoot directory listing:\n");
-    fat16_list_root(); 
-}
-
-void cmd_cat(char* args) {
-    kprint("\nUsage: cat <filename>. Reading from FAT16...\n");
-}
-
-void cmd_touch(char* args) {
-    kprint("\nCreating file... ");
-    kprint("OK\n");
-}
-
-void cmd_mem(char* args) {
-    kprint("\nMemory Status:\n");
-    kprint("  Kernel Heap: Initialized\n");
-    kprint("  Multitasking: Active\n");
-}
-
-void cmd_uptime(char* args) {
-    kprint("\nSystem has been running since hardware init.\n");
-}
-
-void cmd_reboot(char* args) {
-    kprint("\nRebooting system...\n");
-    unsigned char good = 0x02;
-    while (good & 0x02) good = port_byte_in(0x64);
-    port_byte_out(0x64, 0xFE);
-}
-
-void execute_command(char* input) {
-    if (input[0] == '\0') {
-        kprint("\n> ");
-        return;
+void backspace_visual_update() {
+    cursor_x--;
+    if (cursor_x < 0) {
+        cursor_x = MAX_COLS - 1;
+        cursor_y--;
     }
-
-    for (int i = 0; i < COMMAND_COUNT; i++) {
-        if (compare_string(input, commands[i].name) == 0) {
-            commands[i].handler(input); 
-            kprint("\n> ");
-            return;
-        }
-    }
-
-    kprint("\nUnknown command: ");
-    kprint(input);
-    kprint("\n> ");
+    int offset = (cursor_y * MAX_COLS + cursor_x) * 2;
+    unsigned char* video_mem = (unsigned char*)VIDEO_ADDRESS;
+    video_mem[offset] = ' ';
+    video_mem[offset + 1] = WHITE_ON_BLACK;
+    update_hardware_cursor(cursor_x, cursor_y);
 }
-
 
 void terminal_task() {
-    kprint("\nLuxOS Terminal is ready.\n> ");
+    kprint("\nLuxOS Shell is ready.\n> ");
     while (1) {
         if (key_event_happened) {
             key_event_happened = 0; 
@@ -312,19 +242,14 @@ void terminal_task() {
 
             if (key == '\n') {
                 key_buffer[buffer_idx] = '\0';
-                execute_command(key_buffer);
+                shell_execute(key_buffer); 
                 buffer_idx = 0; 
+                kprint("\n> ");
             } 
             else if (key == '\b') {
                 if (buffer_idx > 0) {
                     buffer_idx--;
-                    if (cursor_x > 2) { 
-                        cursor_x--;
-                        unsigned char* video_memory = (unsigned char*) VIDEO_ADDRESS;
-                        int offset = (cursor_y * MAX_COLS + cursor_x) * 2;
-                        video_memory[offset] = ' '; 
-                        update_hardware_cursor(cursor_x, cursor_y);
-                    }
+                    backspace_visual_update(); 
                 }
             } 
             else if (buffer_idx < 2048 - 1) { 
