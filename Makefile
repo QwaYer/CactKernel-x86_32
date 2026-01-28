@@ -4,6 +4,7 @@
 
 BOOT_DIR         = Lumen/boot
 KERN_CORE_DIR    = Lux/kernel/core
+KERN_GDT_DIR     = Lux/kernel/gdt
 KERN_SHELL_DIR   = Lux/kernel/shell
 KERN_MEM_DIR     = Lux/kernel/memory
 KERN_PROC_DIR    = Lux/kernel/proc
@@ -16,6 +17,7 @@ BUILD_DIR        = build
 
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
+         -I$(KERN_GDT_DIR) \
          -I$(KERN_SHELL_DIR) \
          -I$(KERN_MEM_DIR) \
          -I$(KERN_PROC_DIR) \
@@ -29,6 +31,9 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
 LDFLAGS = -m elf_i386 -Ttext 0x7e00 --oformat binary
 
 OBJ = $(BUILD_DIR)/kernel_entry.o \
+      $(BUILD_DIR)/gdt_asm.o \
+      $(BUILD_DIR)/task_asm.o \
+      $(BUILD_DIR)/gdt.o \
       $(BUILD_DIR)/kernel.o \
       $(BUILD_DIR)/shell.o \
       $(BUILD_DIR)/libc.o \
@@ -60,8 +65,17 @@ $(BUILD_DIR)/boot.bin: $(BOOT_DIR)/boot.asm
 $(BUILD_DIR)/kernel.bin: $(OBJ)
 	ld $(LDFLAGS) -o $@ $^
 
+# --- ASM RULES ---
 
 $(BUILD_DIR)/kernel_entry.o: $(KERN_CORE_DIR)/kernel.asm
+	@mkdir -p $(BUILD_DIR)
+	nasm -f elf32 $< -o $@
+
+$(BUILD_DIR)/gdt_asm.o: $(KERN_GDT_DIR)/gdt.asm
+	@mkdir -p $(BUILD_DIR)
+	nasm -f elf32 $< -o $@
+
+$(BUILD_DIR)/task_asm.o: $(KERN_PROC_DIR)/task.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
 
@@ -77,6 +91,11 @@ $(BUILD_DIR)/mm.o: $(KERN_MEM_DIR)/mm.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
 
+# --- C RULES ---
+
+$(BUILD_DIR)/gdt.o: $(KERN_GDT_DIR)/gdt.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c
 	@mkdir -p $(BUILD_DIR)

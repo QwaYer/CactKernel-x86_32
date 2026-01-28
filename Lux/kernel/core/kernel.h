@@ -13,8 +13,6 @@
 #define PD_INDEX(vaddr) ((vaddr >> 22) & 0x3FF)
 #define PT_INDEX(vaddr) ((vaddr >> 12) & 0x3FF)
 
-void vmm_map(unsigned int virtual_addr, unsigned int physical_addr, int flags);
-
 extern void port_byte_out(unsigned short port, unsigned char data);
 extern unsigned char port_byte_in(unsigned short port);
 extern void port_word_out(unsigned short port, unsigned short data);
@@ -41,12 +39,21 @@ void itoa(int n, char str[]);
 int atoi(char* str);
 int strcmp(char* s1, char* s2);
 int compare_string(char* s1, char* s2);
+void hex_to_ascii(unsigned int n, char str[]);
 
 void init_pic();
 int init_idt();
 void set_idt_gate(int n, unsigned int handler);
 void keyboard_handler(); 
-void exception_handler();
+
+struct context_frame; 
+void exception_handler(struct context_frame* regs);
+
+static inline unsigned int read_cr2() {
+    unsigned int val;
+    __asm__ __volatile__("mov %%cr2, %0" : "=r"(val));
+    return val;
+}
 
 int init_vga();
 int init_keyboard();
@@ -55,16 +62,24 @@ int detect_memory();
 int search_pci();
 void init_timer(unsigned int frequency);
 
-int init_scheduler();
 struct task_struct; 
-extern struct task_struct* create_task(void (*entry_point)());
+int init_scheduler();
+void task_init();
+void schedule();
+void list_tasks();
+struct task_struct* create_task(void (*entry_point)());
+extern void switch_to(unsigned int* old_esp, unsigned int new_esp);
+
+void init_paging();
+void switch_paging(unsigned int* pd);
+void vmm_map(unsigned int virtual_addr, unsigned int physical_addr, int flags);
+unsigned int* vmm_create_address_space();
+unsigned int get_free_heap_memory();
 
 extern void ata_init();
 extern void ata_read_sector(unsigned int lba, unsigned char* buffer);
 extern void ata_write_sector(unsigned int lba, unsigned char* buffer);
-
 extern void fat16_init();
-struct vfs_node; 
 extern void fat16_list_root();
 
 void kernel_setup_hardware();

@@ -149,6 +149,7 @@ int init_idt() {
     set_idt_gate(33, (unsigned int)keyboard_isr);
 
     set_idt_gate(128, (unsigned int)syscall_isr);
+    idt[128].flags = 0xEE;
 
     __asm__ __volatile__("lidt (%0)" : : "r" (&idtp));
     return 0;
@@ -190,18 +191,33 @@ int search_pci() {
 }
 
 void exception_handler(struct context_frame* regs) {
-    if (regs->eip == 14) { // Page Fault
+    char buf[32];
+    clear_screen();
+    kprint("!!! KERNEL PANIC !!!\n");
+    
+    kprint("Exception ID: ");
+    itoa(regs->int_no, buf);
+    kprint(buf);
+    
+    kprint("\nError Code: ");
+    itoa(regs->err_code, buf);
+    kprint(buf);
+
+    kprint("\nEIP (Address): 0x");
+    hex_to_ascii(regs->eip, buf);
+    kprint(buf);
+
+    // Если это Page Fault (14), выводим виновный адрес
+    if (regs->int_no == 14) {
         unsigned int fault_addr = read_cr2();
-        kprint("\n!!! PAGE FAULT at: ");
-        char buf[20];
-        itoa(fault_addr, buf); 
+        kprint("\nPage Fault at: 0x");
+        hex_to_ascii(fault_addr, buf);
         kprint(buf);
-        while(1);
     }
-    kprint("\nKERNEL PANIC: Exception occurred");
+
+    kprint("\nSystem Halted.");
     while(1);
 }
-
 void init_timer(unsigned int frequency) {
     unsigned int divisor = 1193180 / frequency;
     port_byte_out(0x43, 0x36);

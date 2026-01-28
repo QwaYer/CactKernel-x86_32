@@ -5,8 +5,8 @@ void sys_print(char* msg) {
     kprint(msg);
 }
 
-void sys_get_pid() {
-    kprint("[Syscall] Requested PID\n"); // Заглушка пида нет
+int sys_get_pid() {
+    return current_task->pid;
 }
 
 static void* syscall_table[] = {
@@ -19,15 +19,14 @@ static void* syscall_table[] = {
 void syscall_handler(struct context_frame* regs) {
     unsigned int syscall_num = regs->eax;
 
-    if (syscall_num > MAX_SYSCALL) {
-        return;
-    }
+    if (syscall_num > MAX_SYSCALL) return;
 
     void* location = syscall_table[syscall_num];
+    if (!location) return; 
 
     if (syscall_num == 0) { 
         void (*handler)(char*) = (void (*)(char*))location;
-        handler((char*)regs->ebx);
+        handler((char*)regs->ebx); 
     } else {
         void (*handler)() = (void (*)())location;
         handler();

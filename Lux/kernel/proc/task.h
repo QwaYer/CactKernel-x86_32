@@ -1,6 +1,9 @@
 #ifndef TASK_H
 #define TASK_H
 
+#define USER_CODE_SEL 0x1B
+#define USER_DATA_SEL 0x23
+
 typedef enum {
     TASK_READY,
     TASK_RUNNING,
@@ -10,7 +13,11 @@ typedef enum {
 
 struct context_frame {
     unsigned int edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax; 
-    unsigned int eip, cs, eflags; 
+
+    unsigned int int_no; 
+    unsigned int err_code; 
+
+    unsigned int eip, cs, eflags, useresp, ss; 
 };
 
 struct task_struct {
@@ -21,6 +28,8 @@ struct task_struct {
     unsigned int* page_directory; 
     struct task_struct* next;    
 };
+
+extern struct tss_entry_struct tss_entry;
 
 void task_init();
 struct task_struct* create_task(void (*entry_point)());
