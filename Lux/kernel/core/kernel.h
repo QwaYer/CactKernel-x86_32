@@ -6,7 +6,15 @@
 #define MAX_COLS 80
 #define WHITE_ON_BLACK 0x0f
 
-// --- Низкоуровневый ввод-вывод (порты) ---
+#define PAGE_PRESENT 0x1
+#define PAGE_RW      0x2
+#define PAGE_USER    0x4
+
+#define PD_INDEX(vaddr) ((vaddr >> 22) & 0x3FF)
+#define PT_INDEX(vaddr) ((vaddr >> 12) & 0x3FF)
+
+void vmm_map(unsigned int virtual_addr, unsigned int physical_addr, int flags);
+
 extern void port_byte_out(unsigned short port, unsigned char data);
 extern unsigned char port_byte_in(unsigned short port);
 extern void port_word_out(unsigned short port, unsigned short data);
@@ -14,7 +22,6 @@ extern unsigned short port_word_in(unsigned short port);
 extern void port_long_out(unsigned short port, unsigned int data);
 extern unsigned int port_long_in(unsigned short port);
 
-// --- Обработчики прерываний (ASM стабы) ---
 extern void timer_isr();
 extern void keyboard_isr();
 extern void syscall_isr();

@@ -39,7 +39,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/syscall.o \
       $(BUILD_DIR)/interrupt.o \
-      $(BUILD_DIR)/io.o
+      $(BUILD_DIR)/io.o \
+      $(BUILD_DIR)/mm.o
 
 all: $(BUILD_DIR)/luxos.img
 	@echo "--------------------------------------------------"
@@ -69,6 +70,10 @@ $(BUILD_DIR)/interrupt.o: $(KERN_CORE_DIR)/interrupt.asm
 	nasm -f elf32 $< -o $@
 
 $(BUILD_DIR)/io.o: $(DRIVER_INPUT_DIR)/io.asm
+	@mkdir -p $(BUILD_DIR)
+	nasm -f elf32 $< -o $@
+
+$(BUILD_DIR)/mm.o: $(KERN_MEM_DIR)/mm.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
 
@@ -109,7 +114,6 @@ $(BUILD_DIR)/ata.o: $(DRIVER_BLOCK_DIR)/ata.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-# Очистка
 clean:
 	rm -rf $(BUILD_DIR)
 

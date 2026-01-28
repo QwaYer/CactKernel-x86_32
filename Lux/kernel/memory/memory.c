@@ -1,20 +1,30 @@
 #include "memory.h"
 #include "libc.h" 
+#include "kernel.h"
 
 unsigned char memory_bitmap[BITMAP_SIZE];
 struct heap_block* heap_start = (struct heap_block*)HEAP_START;
 
+unsigned int page_directory[1024] __attribute__((aligned(4096)));
+unsigned int page_tables[8][1024] __attribute__((aligned(4096)));
+
 
 void bitmap_set(int page_idx) {
-    int byte_idx = page_idx / 8;
-    int bit_idx = page_idx % 8;
-    memory_bitmap[byte_idx] |= (1 << bit_idx);
+    memory_bitmap[page_idx / 8] |= (1 << (page_idx % 8));
 }
 
 void bitmap_unset(int page_idx) {
-    int byte_idx = page_idx / 8;
-    int bit_idx = page_idx % 8;
-    memory_bitmap[byte_idx] &= ~(1 << bit_idx);
+    memory_bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+}
+
+void* kalloc() {
+    for (int i = 0; i < TOTAL_PAGES; i++) {
+        if (!(memory_bitmap[i / 8] & (1 << (i % 8)))) {
+            bitmap_set(i);
+            return (void*)(MEM_START + (i * PAGE_SIZE));
+        }
+    }
+    return 0; 
 }
 
 void init_memory_manager() {
@@ -25,20 +35,41 @@ void init_memory_manager() {
     for (int i = 0; i < heap_pages; i++) {
         bitmap_set(heap_start_page + i);
     }
-
     init_heap();
 }
 
-void* kalloc() {
-    for (int i = 0; i < TOTAL_PAGES; i++) {
-        int byte_idx = i / 8;
-        int bit_idx = i % 8;
-        if (!(memory_bitmap[byte_idx] & (1 << bit_idx))) {
-            bitmap_set(i);
-            return (void*)(MEM_START + (i * PAGE_SIZE));
-        }
+void vmm_map(unsigned int virtual_addr, unsigned int physical_addr, int flags) {
+    unsigned int pd_idx = PD_INDEX(virtual_addr);
+    unsigned int pt_idx = PT_INDEX(virtual_addr);
+    unsigned int* table;
+
+    if (page_directory[pd_idx] & PAGE_PRESENT) {
+        table = (unsigned int*)(page_directory[pd_idx] & 0xFFFFF000);
+    } else {
+        table = (unsigned int*)kalloc();
+        memory_set(table, 0, PAGE_SIZE);
+        page_directory[pd_idx] = ((unsigned int)table) | flags | PAGE_PRESENT;
     }
-    return 0; 
+
+    table[pt_idx] = (physical_addr & 0xFFFFF000) | flags | PAGE_PRESENT;
+    __asm__ volatile("invlpg (%0)" :: "r" (virtual_addr) : "memory");
+}
+
+void init_paging() {
+    for (int i = 0; i < 1024; i++) {
+        page_directory[i] = PAGE_RW; 
+    }
+
+    for (int t = 0; t < 8; t++) {
+        for (int i = 0; i < 1024; i++) {
+            unsigned int phys = (t * 1024 * 4096) + (i * 4096);
+            page_tables[t][i] = phys | PAGE_PRESENT | PAGE_RW;
+        }
+        page_directory[t] = ((unsigned int)page_tables[t]) | PAGE_PRESENT | PAGE_RW;
+    }
+
+    load_page_directory(page_directory);
+    enable_paging();
 }
 
 
@@ -74,11 +105,9 @@ void* kmalloc(unsigned int size) {
 void kfree_heap(void* ptr) {
     if (!ptr) return;
     struct heap_block* block = (struct heap_block*)((unsigned char*)ptr - sizeof(struct heap_block));
-    
     if (block->magic != HEAP_MAGIC) return; 
 
     block->is_free = 1;
-
     struct heap_block* curr = heap_start;
     while (curr && curr->next) {
         if (curr->is_free && curr->next->is_free) {

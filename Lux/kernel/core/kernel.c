@@ -189,10 +189,17 @@ int search_pci() {
     return (port_long_in(0xCF8) == 0x80000000) ? 0 : 1;
 }
 
-void exception_handler() {
-    clear_screen();
-    kprint("KERNEL PANIC: CPU Exception!");
-    __asm__ __volatile__ ("cli; hlt");
+void exception_handler(struct context_frame* regs) {
+    if (regs->eip == 14) { // Page Fault
+        unsigned int fault_addr = read_cr2();
+        kprint("\n!!! PAGE FAULT at: ");
+        char buf[20];
+        itoa(fault_addr, buf); 
+        kprint(buf);
+        while(1);
+    }
+    kprint("\nKERNEL PANIC: Exception occurred");
+    while(1);
 }
 
 void init_timer(unsigned int frequency) {
@@ -292,7 +299,9 @@ void boot_log(char* component, int status) {
 void kernel_setup_hardware() {
     init_memory_manager();
     init_heap();
+    init_paging();
     boot_log("Memory Manager & Heap", 0);
+
 
     init_pic(); 
     init_idt(); 
