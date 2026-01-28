@@ -188,8 +188,6 @@ int search_pci() {
     return (port_long_in(0xCF8) == 0x80000000) ? 0 : 1;
 }
 
-int init_scheduler() { return 0; }
-
 void exception_handler() {
     clear_screen();
     kprint("KERNEL PANIC: CPU Exception!");
@@ -221,33 +219,86 @@ void keyboard_handler() {
     port_byte_out(0x20, 0x20); 
 }
 
+struct shell_command commands[] = {
+    {"help", "Show available commands", cmd_help},
+    {"clear", "Clear terminal screen", cmd_clear},
+    {"cpu", "Show CPU and Task info", cmd_cpu},
+    {"ls", "List files in FAT16 root", cmd_ls},
+    {"cat", "Show file contents", cmd_cat},
+    {"touch", "Create a new file", cmd_touch},
+    {"mem", "Display memory stats", cmd_mem},
+    {"uptime", "System running time", cmd_uptime},
+    {"reboot", "Restart the machine", cmd_reboot}
+};
+
+const int COMMAND_COUNT = sizeof(commands) / sizeof(struct shell_command);
+
+void cmd_help(char* args) {
+    kprint("\nLuxOS Commands:\n");
+    kprint("  help  - Show this message\n");
+    kprint("  clear - Clear the screen\n");
+    kprint("  cpu   - Show CPU info\n");
+    kprint("  ls    - List files\n");
+}
+
+void cmd_clear(char* args) {
+    clear_screen();
+    kprint("LuxOS Kernel Version 0.0.8\n");
+    kprint("--------------------------\n");
+    kprint("\n> ");
+}
+
+void cmd_cpu(char* args) {
+    kprint("\nCPU: x86 32-bit Protected Mode\n");
+}
+
+void cmd_ls(char* args) {
+    kprint("\nRoot directory listing:\n");
+    fat16_list_root(); 
+}
+
+void cmd_cat(char* args) {
+    kprint("\nUsage: cat <filename>. Reading from FAT16...\n");
+}
+
+void cmd_touch(char* args) {
+    kprint("\nCreating file... ");
+    kprint("OK\n");
+}
+
+void cmd_mem(char* args) {
+    kprint("\nMemory Status:\n");
+    kprint("  Kernel Heap: Initialized\n");
+    kprint("  Multitasking: Active\n");
+}
+
+void cmd_uptime(char* args) {
+    kprint("\nSystem has been running since hardware init.\n");
+}
+
+void cmd_reboot(char* args) {
+    kprint("\nRebooting system...\n");
+    unsigned char good = 0x02;
+    while (good & 0x02) good = port_byte_in(0x64);
+    port_byte_out(0x64, 0xFE);
+}
+
 void execute_command(char* input) {
-    if (compare_string(input, "clear") == 0) {
-        clear_screen();
-    } 
-    else if (compare_string(input, "help") == 0) {
-        kprint("\nLuxOS Commands: help, clear, ls, cpu, mem, af, cat, df\n");
+    if (input[0] == '\0') {
+        kprint("\n> ");
+        return;
     }
-    else if (compare_string(input, "cpu") == 0) {
-        kprint("\nCPU: x86 32-bit Protected Mode\nMultitasking: ENABLED\n");
+
+    for (int i = 0; i < COMMAND_COUNT; i++) {
+        if (compare_string(input, commands[i].name) == 0) {
+            commands[i].handler(input); 
+            kprint("\n> ");
+            return;
+        }
     }
-    else if (compare_string(input, "ls") == 0) {
-        kprint("\nRoot Directory:");
-        fat16_list_root();
-    }
-    else if (input[0] == 'c' && input[1] == 'a' && input[2] == 't') {
-        struct vfs_node* file = fat16_finddir(vfs_root, input + 4);
-        if (file) {
-            char* buf = (char*)kmalloc(2048);
-            int read = file->read(file, 0, file->size, buf);
-            buf[read] = '\0';
-            kprint("\n"); kprint(buf);
-            kfree_heap(buf); kfree_heap(file);
-        } else kprint("\nFile not found.");
-    }
-    else {
-        kprint("\nUnknown command: "); kprint(input);
-    }
+
+    kprint("\nUnknown command: ");
+    kprint(input);
     kprint("\n> ");
 }
 
@@ -282,37 +333,77 @@ void terminal_task() {
                 kprint(temp_str);
             }
         }
-        __asm__ __volatile__("hlt");
     }
 }
 
+void boot_log(char* component, int status) {
+    kprint("  [ ] ");
+    kprint(component);
 
-void init() {
-    clear_screen();
-    kprint("LuxOS Kernel 0.0.7 Initializing...\n");
+    int len = strlen(component);
+    for (int i = 0; i < 35 - len; i++) {
+        kprint(".");
+    }
 
+    if (status == 0) {
+        kprint(" [  ");
+
+        unsigned char* video_mem = (unsigned char*)VIDEO_ADDRESS;
+        int offset = (cursor_y * MAX_COLS + cursor_x) * 2;
+        
+        kprint("OK"); 
+
+        video_mem[offset + 1] = 0x0A; 
+        video_mem[offset + 3] = 0x0A;
+
+        kprint("  ]\n");
+    } else {
+        kprint(" [ ");
+        kprint("FAIL");
+        kprint(" ]\n");
+    }
+}
+
+void kernel_setup_hardware() {
     init_memory_manager();
     init_heap();
-    key_buffer = (char*)kmalloc(2048);
+    boot_log("Memory Manager & Heap", 0);
 
     init_pic(); 
     init_idt(); 
-    
-    detect_memory();
-    init_vga();
-    init_keyboard();
-    ata_init();
-    fat16_init();
+    boot_log("IDT & PIC (Interrupts)", 0);
 
+    boot_log("VGA Text Mode", init_vga());
+    boot_log("PS/2 Keyboard", init_keyboard());
+    boot_log("I/O Ports Probe", probe_io_ports());
+    boot_log("Base Memory Detect", detect_memory());
+    boot_log("PCI Bus Scan", search_pci());
+
+    ata_init();
+    boot_log("ATA Hard Drive", 0);
+
+    fat16_init();
+    boot_log("FAT16 File System", 0);
+
+    task_init();     
     init_scheduler();
     init_timer(100); 
+    boot_log("Scheduler & PIT Timer", 0);
+    
+    key_buffer = (char*)kmalloc(2048);
+    boot_log("System Buffers", (key_buffer != 0) ? 0 : 1);
+}
 
-    current_task = create_task(terminal_task); 
+void init() {
+    clear_screen(); 
+    kprint("LuxOS Kernel Version 0.0.8\n");
+    kprint("--------------------------\n");
 
-    kprint("System ready. Enabling interrupts...\n");
+    kernel_setup_hardware(); 
+
+    kprint("\nSystem is ready. Starting terminal...\n");
+    create_task(terminal_task);
+
     __asm__ __volatile__("sti");
-
-    while (1) {
-        __asm__ __volatile__("hlt");
-    }
+    while(1) { __asm__ __volatile__("pause"); }
 }

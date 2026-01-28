@@ -34,9 +34,7 @@ isr_common_stub:
     mov ax, 0x10 
     mov ds, ax
     mov es, ax
-
     call exception_handler
-
     pop eax
     mov ds, ax
     mov es, ax
@@ -45,7 +43,7 @@ isr_common_stub:
     iretd
 
 timer_isr:
-    pusha
+    pusha              
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -53,10 +51,10 @@ timer_isr:
     mov eax, [current_task]
     test eax, eax     
     jz .skip_save
-    mov [eax], esp      
+    mov [eax], esp       
 
 .skip_save:
-    call schedule       
+    call schedule        
 
     mov eax, [current_task]
     test eax, eax
@@ -66,7 +64,7 @@ timer_isr:
 .do_eoi:
     mov al, 0x20        
     out 0x20, al
-    popa
+    popa                 
     iretd
 
 keyboard_isr:
@@ -74,9 +72,7 @@ keyboard_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-
     call keyboard_handler
-
     mov al, 0x20
     out 0x20, al
     popa
@@ -87,10 +83,8 @@ syscall_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-
     push esp             
     call syscall_handler
     add esp, 4
-
     popa
     iretd

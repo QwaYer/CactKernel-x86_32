@@ -6,6 +6,27 @@
 #define MAX_COLS 80
 #define WHITE_ON_BLACK 0x0f
 
+typedef void (*command_handler_t)(char* args);
+
+void cmd_help(char* args);
+void cmd_clear(char* args);
+void cmd_cpu(char* args);
+void cmd_ls(char* args);
+void cmd_cat(char* args);
+void cmd_touch(char* args);
+void cmd_mem(char* args);
+void cmd_uptime(char* args);
+void cmd_reboot(char* args);
+
+struct shell_command {
+    char* name;
+    char* description;
+    command_handler_t handler;
+};
+
+extern struct shell_command commands[];
+extern const int COMMAND_COUNT;
+
 extern void port_byte_out(unsigned short port, unsigned char data);
 extern unsigned char port_byte_in(unsigned short port);
 extern void port_word_out(unsigned short port, unsigned short data);
@@ -20,13 +41,13 @@ extern void isr0();
 extern void isr13();
 extern void isr14();
 extern void isr_common_stub();
-extern struct task_struct* current_task;
 
 void kprint(char* message);
 void kprint_at(char* message, int x, int y);
 void clear_screen();
 void scroll();
 void update_hardware_cursor(int x, int y);
+void boot_log(char* component, int status);
 
 void itoa(int n, char str[]);
 int atoi(char* str);
@@ -58,11 +79,8 @@ extern void fat16_init();
 struct vfs_node; 
 extern struct vfs_node* fat16_finddir(struct vfs_node* node, char* name);
 extern void fat16_list_root();
-extern int fat16_create_file(char* name);
-extern int fat16_delete_file(char* name);
-extern unsigned short fat16_get_next_cluster(unsigned short current_cluster);
-extern void fat16_set_cluster(unsigned short cluster, unsigned short value);
 
 void execute_command(char* input);
+void kernel_setup_hardware();
 
 #endif

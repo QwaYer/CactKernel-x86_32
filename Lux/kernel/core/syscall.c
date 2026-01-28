@@ -6,7 +6,7 @@ void sys_print(char* msg) {
 }
 
 void sys_get_pid() {
-    kprint("[Syscall] Requested PID\n"); //заглушка
+    kprint("[Syscall] Requested PID\n"); // Заглушка пида нет
 }
 
 static void* syscall_table[] = {
@@ -26,10 +26,10 @@ void syscall_handler(struct context_frame* regs) {
     void* location = syscall_table[syscall_num];
 
     if (syscall_num == 0) { 
-        void (*handler)(char*) = location;
+        void (*handler)(char*) = (void (*)(char*))location;
         handler((char*)regs->ebx);
     } else {
-        void (*handler)() = location;
+        void (*handler)() = (void (*)())location;
         handler();
     }
 }
