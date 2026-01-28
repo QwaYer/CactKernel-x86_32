@@ -241,31 +241,36 @@ void backspace_visual_update() {
 }
 
 void terminal_task() {
-    kprint("\nLuxOS Shell is ready.\n> ");
+    char* cmd_buffer = (char*)kmalloc(1024); 
+    int idx = 0;
+
+    kprint("\nLuxOS Shell ready! \n> ");
+
     while (1) {
         if (key_event_happened) {
-            key_event_happened = 0; 
+            key_event_happened = 0;
             char key = last_char;
 
             if (key == '\n') {
-                key_buffer[buffer_idx] = '\0';
-                shell_execute(key_buffer); 
-                buffer_idx = 0; 
+                cmd_buffer[idx] = '\0';
+
+                shell_execute(cmd_buffer); 
+                
+                idx = 0; 
                 kprint("\n> ");
             } 
-            else if (key == '\b') {
-                if (buffer_idx > 0) {
-                    buffer_idx--;
-                    backspace_visual_update(); 
-                }
+            else if (key == '\b' && idx > 0) {
+                idx--;
+                backspace_visual_update();
             } 
-            else if (buffer_idx < 2048 - 1) { 
-                key_buffer[buffer_idx++] = key;
-                char temp_str[2] = {key, 0};
-                kprint(temp_str);
+            else if (idx < 1024 - 1 && key >= 32) { 
+                cmd_buffer[idx++] = key;
+                char temp[2] = {key, 0};
+                kprint(temp);
             }
         }
     }
+    kfree_heap(cmd_buffer);
 }
 
 void boot_log(char* component, int status) {
@@ -336,7 +341,6 @@ void init() {
     kernel_setup_hardware(); 
 
     kprint("\nSystem is ready. Starting terminal...\n");
-    create_task(terminal_task);
 
     __asm__ __volatile__("sti");
     while(1) { __asm__ __volatile__("pause"); }

@@ -38,6 +38,33 @@ void init_memory_manager() {
     init_heap();
 }
 
+unsigned int get_free_heap_memory() {
+    unsigned int free_size = 0;
+    struct heap_block* current = heap_start;
+    while (current) {
+        if (current->is_free) {
+            free_size += current->size;
+        }
+        current = current->next;
+    }
+    return free_size;
+}
+
+unsigned int* vmm_create_address_space() {
+    unsigned int* new_pd = (unsigned int*)kalloc();
+    if (!new_pd) return 0;
+
+    for (int i = 0; i < 1024; i++) {
+        new_pd[i] = PAGE_RW; 
+    }
+
+    for (int i = 0; i < 8; i++) {
+        new_pd[i] = page_directory[i];
+    }
+
+    return new_pd;
+}
+
 void vmm_map(unsigned int virtual_addr, unsigned int physical_addr, int flags) {
     unsigned int pd_idx = PD_INDEX(virtual_addr);
     unsigned int pt_idx = PT_INDEX(virtual_addr);
@@ -52,6 +79,7 @@ void vmm_map(unsigned int virtual_addr, unsigned int physical_addr, int flags) {
     }
 
     table[pt_idx] = (physical_addr & 0xFFFFF000) | flags | PAGE_PRESENT;
+
     __asm__ volatile("invlpg (%0)" :: "r" (virtual_addr) : "memory");
 }
 
@@ -108,6 +136,7 @@ void kfree_heap(void* ptr) {
     if (block->magic != HEAP_MAGIC) return; 
 
     block->is_free = 1;
+
     struct heap_block* curr = heap_start;
     while (curr && curr->next) {
         if (curr->is_free && curr->next->is_free) {

@@ -9,6 +9,7 @@ int strlen(const char* s);
 
 void itoa(int n, char str[]);
 int atoi(char* str);
+void hex_to_ascii(unsigned int n, char str[]);
 
 void* memory_set(void* dest, int val, int len);
 void* memory_copy(void* dest, const void* src, int len);

@@ -9,9 +9,13 @@ void sh_reboot(char* args) {
     port_byte_out(0x64, 0xFE);
 }
 
+void sh_list_tasks(char* args) {
+    list_tasks(); 
+}
+
 void sh_help(char* args) {
     kprint("\nLuxOS Shell v0.1\n");
-    kprint("Available commands: help, clear, fetch, ls, reboot\n");
+    kprint("Available commands: help, clear, fetch, ls, reboot, ps\n");
 }
 
 void sh_ls(char* args) {
@@ -35,7 +39,8 @@ struct shell_command sh_tab[] = {
     {"ls",      "List files",   sh_ls},
     {"fetch",   "System info",  sh_fetch},
     {"clear",   "Clear screen", clear_screen},
-    {"reboot",  "Restart",      sh_reboot}
+    {"reboot",  "Restart",      sh_reboot},
+    {"ps", "Task manager",      sh_list_tasks},
 };
 
 #define SH_TAB_COUNT (sizeof(sh_tab) / sizeof(struct shell_command))

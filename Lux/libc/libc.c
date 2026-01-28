@@ -45,6 +45,20 @@ int atoi(char* str) {
     return sign * res;
 }
 
+void hex_to_ascii(unsigned int n, char str[]) {
+    str[0] = '0';
+    str[1] = 'x';
+    int i;
+    for (i = 7; i >= 0; i--) {
+        unsigned int nibble = (n >> (i * 4)) & 0x0F;
+        if (nibble < 10)
+            str[9 - i] = nibble + '0';
+        else
+            str[9 - i] = nibble - 10 + 'A';
+    }
+    str[10] = '\0';
+}
+
 void* memory_set(void* dest, int val, int len) {
     unsigned char* ptr = (unsigned char*)dest;
     while (len-- > 0) *ptr++ = (unsigned char)val;
