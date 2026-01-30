@@ -11,7 +11,8 @@ void sh_help(char* args);
 void sh_ls(char* args);
 void sh_fetch(char* args);
 void sh_reboot(char* args);
-
+void sh_kbd(char* args);
+void sh_pic(char* args);
 void shell_execute(char* input);
 
 #endif

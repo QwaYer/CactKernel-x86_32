@@ -194,39 +194,51 @@ void exception_handler(struct context_frame* regs) {
     char buf[32];
     clear_screen();
     kprint("!!! KERNEL PANIC !!!\n");
-    
+
     kprint("Exception ID: ");
     itoa(regs->int_no, buf);
     kprint(buf);
-    
-    kprint("\nError Code: ");
-    itoa(regs->err_code, buf);
+
+    kprint("\nError Code: 0x");
+    hex_to_ascii(regs->err_code, buf);
     kprint(buf);
 
     kprint("\nEIP (Address): 0x");
     hex_to_ascii(regs->eip, buf);
     kprint(buf);
 
-    // Если это Page Fault (14), выводим виновный адрес
-    if (regs->int_no == 14) {
-        unsigned int fault_addr = read_cr2();
-        kprint("\nPage Fault at: 0x");
-        hex_to_ascii(fault_addr, buf);
-        kprint(buf);
-    }
+    /* Печатаем основные регистры для диагностики */
+    kprint("\nEAX: 0x"); hex_to_ascii(regs->eax, buf); kprint(buf);
+    kprint("  EBX: 0x"); hex_to_ascii(regs->ebx, buf); kprint(buf);
+    kprint("\nECX: 0x"); hex_to_ascii(regs->ecx, buf); kprint(buf);
+    kprint("  EDX: 0x"); hex_to_ascii(regs->edx, buf); kprint(buf);
+    kprint("\nESI: 0x"); hex_to_ascii(regs->esi, buf); kprint(buf);
+    kprint("  EDI: 0x"); hex_to_ascii(regs->edi, buf); kprint(buf);
+    kprint("\nEBP: 0x"); hex_to_ascii(regs->ebp, buf); kprint(buf);
+
+    kprint("\nEFLAGS: 0x");
+    hex_to_ascii(regs->eflags, buf); kprint(buf);
 
     kprint("\nSystem Halted.");
     while(1);
 }
+
 void init_timer(unsigned int frequency) {
     unsigned int divisor = 1193180 / frequency;
     port_byte_out(0x43, 0x36);
     port_byte_out(0x40, (unsigned char)(divisor & 0xFF));
     port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF));
 }
+volatile int keyboard_irq_count = 0;
+volatile unsigned char last_scancode_raw = 0;
 
 void keyboard_handler() {
     unsigned char scancode = port_byte_in(0x60);
+
+    /* Сохраняем для отладки (не печатаем внутри ISR) */
+    last_scancode_raw = scancode;
+    keyboard_irq_count++;
+
     if (scancode == 0x2A || scancode == 0x36) shift_pressed = 1;
     else if (scancode == 0xAA || scancode == 0xB6) shift_pressed = 0;
     else if (scancode == 0x3A) caps_lock_active = !caps_lock_active;
@@ -234,13 +246,13 @@ void keyboard_handler() {
         char c = keyboard_map[scancode];
         if (c >= 'a' && c <= 'z' && (shift_pressed != caps_lock_active)) c = keyboard_map_shift[scancode];
         else if (shift_pressed && !(c >= 'a' && c <= 'z')) c = keyboard_map_shift[scancode];
-        
+
         if (c != 0) {
             last_char = c;
-            key_event_happened = 1; 
+            key_event_happened = 1;
         }
     }
-    port_byte_out(0x20, 0x20); 
+    /* EOI отправляет ISR в interrupt.asm */
 }
 
 void backspace_visual_update() {
@@ -320,6 +332,33 @@ void boot_log(char* component, int status) {
 void kernel_setup_hardware() {
     init_memory_manager();
     init_heap();
+        /* --- diagnostic kmalloc tests (вставить сразу после init_heap()) --- */
+    kprint("\n[diag] After init_heap()\n");
+
+    char buf[32];
+
+    /* Попробуем выделить несколько маленьких блоков */
+    void* t1 = kmalloc(16);
+    kprint("[diag] kmalloc(16) -> ");
+    if (t1) { hex_to_ascii((unsigned int)t1, buf); kprint(buf); kprint("\n"); }
+    else   { kprint("NULL\n"); }
+
+    void* t2 = kmalloc(32);
+    kprint("[diag] kmalloc(32) -> ");
+    if (t2) { hex_to_ascii((unsigned int)t2, buf); kprint(buf); kprint("\n"); }
+    else   { kprint("NULL\n"); }
+
+    /* Попробуем выделить побольше */
+    void* t3 = kmalloc(1024);
+    kprint("[diag] kmalloc(1024) -> ");
+    if (t3) { hex_to_ascii((unsigned int)t3, buf); kprint(buf); kprint("\n"); }
+    else   { kprint("NULL\n"); }
+
+    /* Если есть kfree, можно освободить t2/t3 чтобы не засорять heap (необязательно) */
+    /* kfree(t1); kfree(t2); kfree(t3); */
+
+    kprint("[diag] end kmalloc tests\n");
+    /* --- конец diagnostic блока --- */
     init_paging();
     boot_log("Memory Manager & Heap", 0);
 
@@ -345,8 +384,22 @@ void kernel_setup_hardware() {
     init_timer(100); 
     boot_log("Scheduler & PIT Timer", 0);
     
+    /* В kernel_setup_hardware() замените / дополните участок с выделением key_buffer */
+
     key_buffer = (char*)kmalloc(2048);
-    boot_log("System Buffers", (key_buffer != 0) ? 0 : 1);
+    if (key_buffer != 0) {
+        boot_log("System Buffers", 0);
+    } else {
+        /* FALLBACK: если kmalloc не сработал — используем статический буфер,
+           чтобы проверить остальную логику ввода/терминала.
+           Это временная мера для диагностики. */
+        static char key_buffer_fallback[2048];
+        key_buffer = key_buffer_fallback;
+
+        boot_log("System Buffers (kmalloc failed, fallback)", 1);
+        /* Небольшая подсказка в консоль, чтобы увидеть, что мы в fallback-е */
+        kprint("\n[WARN] kmalloc for key_buffer failed, using fallback buffer\n");
+    }
 }
 
 void init() {

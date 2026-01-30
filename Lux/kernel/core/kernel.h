@@ -84,4 +84,8 @@ extern void fat16_list_root();
 
 void kernel_setup_hardware();
 
+extern volatile int keyboard_irq_count;
+extern volatile unsigned char last_scancode_raw;
+extern volatile char last_char;
+extern volatile int key_event_happened;
 #endif
