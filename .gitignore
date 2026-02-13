@@ -2,6 +2,7 @@
 *.obj
 
 *.bin
+*.img
 *.elf
 
 build/
