@@ -45,7 +45,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/syscall.o \
       $(BUILD_DIR)/interrupt.o \
       $(BUILD_DIR)/io.o \
-      $(BUILD_DIR)/mm.o
+      $(BUILD_DIR)/mm.o \
+      $(BUILD_DIR)/keyboard.o
 
 all: $(BUILD_DIR)/luxos.img
 	@echo "--------------------------------------------------"
@@ -130,6 +131,10 @@ $(BUILD_DIR)/fat16.o: $(FS_FAT16_DIR)/fat16.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ata.o: $(DRIVER_BLOCK_DIR)/ata.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/keyboard.o: $(DRIVER_INPUT_DIR)/keyboard.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

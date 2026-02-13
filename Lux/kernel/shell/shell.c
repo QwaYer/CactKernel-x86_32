@@ -1,5 +1,6 @@
 #include "shell.h"
 #include "kernel.h"
+#include "keyboard.h"
 #include "libc.h"
 
 void sh_reboot(char* args) {
