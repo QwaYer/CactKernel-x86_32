@@ -1,149 +1,124 @@
 #include "memory.h"
-#include "libc.h" 
+#include "libc.h"
 #include "kernel.h"
 
 unsigned char memory_bitmap[BITMAP_SIZE];
 struct heap_block* heap_start = (struct heap_block*)HEAP_START;
 
 unsigned int page_directory[1024] __attribute__((aligned(4096)));
-unsigned int page_tables[8][1024] __attribute__((aligned(4096)));
+unsigned int page_tables[32][1024] __attribute__((aligned(4096)));
 
+static int first_available_page = 0;
 
 void bitmap_set(int page_idx) {
     memory_bitmap[page_idx / 8] |= (1 << (page_idx % 8));
 }
 
-void bitmap_unset(int page_idx) {
-    memory_bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
-}
-
-void* kalloc() {
-    for (int i = 0; i < TOTAL_PAGES; i++) {
-        if (!(memory_bitmap[i / 8] & (1 << (i % 8)))) {
-            bitmap_set(i);
-            return (void*)(MEM_START + (i * PAGE_SIZE));
-        }
-    }
-    return 0; 
-}
-
 void init_memory_manager() {
-    memory_set(memory_bitmap, 0, BITMAP_SIZE);
-
-    int heap_start_page = (HEAP_START - MEM_START) / PAGE_SIZE;
-    int heap_pages = HEAP_SIZE / PAGE_SIZE;
-    for (int i = 0; i < heap_pages; i++) {
-        bitmap_set(heap_start_page + i);
+    for (int i = 0; i < BITMAP_SIZE; i++) memory_bitmap[i] = 0;
+    
+    unsigned int reserved_end = HEAP_START + HEAP_SIZE;
+    int reserved_pages = (reserved_end - MEM_START + PAGE_SIZE - 1) / PAGE_SIZE;
+    
+    for (int i = 0; i < reserved_pages; i++) {
+        bitmap_set(i);
     }
-    init_heap();
+    first_available_page = reserved_pages;
 }
-
-unsigned int get_free_heap_memory() {
-    unsigned int free_size = 0;
-    struct heap_block* current = heap_start;
-    while (current) {
-        if (current->is_free) {
-            free_size += current->size;
-        }
-        current = current->next;
-    }
-    return free_size;
-}
-
-unsigned int* vmm_create_address_space() {
-    unsigned int* new_pd = (unsigned int*)kalloc();
-    if (!new_pd) return 0;
-
-    for (int i = 0; i < 1024; i++) {
-        new_pd[i] = PAGE_RW; 
-    }
-
-    for (int i = 0; i < 8; i++) {
-        new_pd[i] = page_directory[i];
-    }
-
-    return new_pd;
-}
-
-void vmm_map(unsigned int virtual_addr, unsigned int physical_addr, int flags) {
-    unsigned int pd_idx = PD_INDEX(virtual_addr);
-    unsigned int pt_idx = PT_INDEX(virtual_addr);
-    unsigned int* table;
-
-    if (page_directory[pd_idx] & PAGE_PRESENT) {
-        table = (unsigned int*)(page_directory[pd_idx] & 0xFFFFF000);
-    } else {
-        table = (unsigned int*)kalloc();
-        memory_set(table, 0, PAGE_SIZE);
-        page_directory[pd_idx] = ((unsigned int)table) | flags | PAGE_PRESENT;
-    }
-
-    table[pt_idx] = (physical_addr & 0xFFFFF000) | flags | PAGE_PRESENT;
-
-    __asm__ volatile("invlpg (%0)" :: "r" (virtual_addr) : "memory");
-}
-
-void init_paging() {
-    for (int i = 0; i < 1024; i++) {
-        page_directory[i] = PAGE_RW; 
-    }
-
-    for (int t = 0; t < 8; t++) {
-        for (int i = 0; i < 1024; i++) {
-            unsigned int phys = (t * 1024 * 4096) + (i * 4096);
-            page_tables[t][i] = phys | PAGE_PRESENT | PAGE_RW;
-        }
-        page_directory[t] = ((unsigned int)page_tables[t]) | PAGE_PRESENT | PAGE_RW;
-    }
-
-    load_page_directory(page_directory);
-    enable_paging();
-}
-
 
 void init_heap() {
+    heap_start = (struct heap_block*)HEAP_START;
+    
     heap_start->magic = HEAP_MAGIC;
     heap_start->size = HEAP_SIZE - sizeof(struct heap_block);
     heap_start->is_free = 1;
     heap_start->next = 0;
 }
 
+void init_paging() {
+    for(int i = 0; i < 1024; i++) {
+        page_directory[i] = 0x00000002; 
+    }
+
+    for(int j = 0; j < 32; j++) {
+        for(int i = 0; i < 1024; i++) {
+            page_tables[j][i] = ((j * 1024 + i) * 4096) | 3;
+        }
+        page_directory[j] = ((unsigned int)page_tables[j]) | 3;
+    }
+
+    load_page_directory(page_directory);
+    enable_paging();
+}
+
+void* kalloc() {
+    for (int i = first_available_page; i < TOTAL_PAGES; i++) {
+        if (!(memory_bitmap[i / 8] & (1 << (i % 8)))) {
+            bitmap_set(i);
+            return (void*)(MEM_START + i * PAGE_SIZE);
+        }
+    }
+    return 0;
+}
+
 void* kmalloc(unsigned int size) {
+    if (size == 0) return 0;
+
+    size = (size + 7) & ~7;
+
+    __asm__ __volatile__("cli");
+
     struct heap_block* current = heap_start;
-    while (current) {
+    while (current != 0) {
+        if (current->magic != HEAP_MAGIC) {
+            kprint("[FATAL] Heap corruption detected!\n");
+            __asm__ __volatile__("sti");
+            return 0;
+        }
+
         if (current->is_free && current->size >= size) {
-            if (current->size > size + sizeof(struct heap_block) + 16) {
+            if (current->size > (size + sizeof(struct heap_block) + 16)) {
                 struct heap_block* next_block = (struct heap_block*)((unsigned char*)current + sizeof(struct heap_block) + size);
+                
                 next_block->magic = HEAP_MAGIC;
                 next_block->size = current->size - size - sizeof(struct heap_block);
                 next_block->is_free = 1;
                 next_block->next = current->next;
-
+                
                 current->size = size;
                 current->next = next_block;
             }
+            
             current->is_free = 0;
+            __asm__ __volatile__("sti");
             return (void*)((unsigned char*)current + sizeof(struct heap_block));
         }
         current = current->next;
     }
+
+    __asm__ __volatile__("sti");
+    kprint("[ERR] kmalloc: Out of heap memory\n");
     return 0;
 }
 
 void kfree_heap(void* ptr) {
     if (!ptr) return;
+
+    __asm__ __volatile__("cli");
+
     struct heap_block* block = (struct heap_block*)((unsigned char*)ptr - sizeof(struct heap_block));
-    if (block->magic != HEAP_MAGIC) return; 
+    if (block->magic == HEAP_MAGIC) {
+        block->is_free = 1;
 
-    block->is_free = 1;
-
-    struct heap_block* curr = heap_start;
-    while (curr && curr->next) {
-        if (curr->is_free && curr->next->is_free) {
-            curr->size += sizeof(struct heap_block) + curr->next->size;
-            curr->next = curr->next->next;
-        } else {
-            curr = curr->next;
+        struct heap_block* curr = heap_start;
+        while (curr && curr->next) {
+            if (curr->is_free && curr->next->is_free) {
+                curr->size += curr->next->size + sizeof(struct heap_block);
+                curr->next = curr->next->next;
+            } else {
+                curr = curr->next;
+            }
         }
     }
+    __asm__ __volatile__("sti");
 }

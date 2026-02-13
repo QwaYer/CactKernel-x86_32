@@ -33,7 +33,7 @@ load_kernel:
     int 0x13
 
     mov ah, 0x02       
-    mov al, 35         
+    mov al, 60         
     mov ch, 0        
     mov dh, 0          
     mov cl, 2              
@@ -44,7 +44,7 @@ load_kernel:
 
     jc disk_error
 
-    cmp al, 35
+    cmp al, 60
     jne disk_error
     
     ret

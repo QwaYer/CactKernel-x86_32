@@ -1,5 +1,7 @@
 #include "kernel.h"
+#include "keyboard.h"
 #include "memory.h"
+#include "gdt.h"
 #include "vfs.h"
 #include "libc.h"
 #include "task.h"
@@ -24,28 +26,9 @@ struct idt_ptr {
 struct idt_entry idt[256];
 struct idt_ptr idtp;
 
-unsigned char keyboard_map[128] = {
-    0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
-    '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
-    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,
-    '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
-};
-
-unsigned char keyboard_map_shift[128] = {
-    0,  27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
-    '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
-    0, 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0,
-    '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0, '*', 0, ' '
-};
-
-int shift_pressed = 0;
-int caps_lock_active = 0;
-
-char* key_buffer; 
+char* key_buffer;
 int buffer_idx = 0;
-
-volatile char last_char = 0;
-volatile int key_event_happened = 0;
+volatile int system_ready = 0;
 
 void update_hardware_cursor(int x, int y) {
     unsigned short position = y * MAX_COLS + x;
@@ -165,13 +148,6 @@ int init_vga() {
     return 0;
 }
 
-int init_keyboard() {
-    while(port_byte_in(0x64) & 0x02);
-    port_byte_out(0x64, 0xAE);
-    while(port_byte_in(0x64) & 0x01) port_byte_in(0x60);
-    return 0;
-}
-
 int probe_io_ports() {
     if (port_byte_in(0x64) == 0xFF) return 1;
     return 0;
@@ -207,7 +183,6 @@ void exception_handler(struct context_frame* regs) {
     hex_to_ascii(regs->eip, buf);
     kprint(buf);
 
-    /* Печатаем основные регистры для диагностики */
     kprint("\nEAX: 0x"); hex_to_ascii(regs->eax, buf); kprint(buf);
     kprint("  EBX: 0x"); hex_to_ascii(regs->ebx, buf); kprint(buf);
     kprint("\nECX: 0x"); hex_to_ascii(regs->ecx, buf); kprint(buf);
@@ -229,50 +204,15 @@ void init_timer(unsigned int frequency) {
     port_byte_out(0x40, (unsigned char)(divisor & 0xFF));
     port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF));
 }
-volatile int keyboard_irq_count = 0;
-volatile unsigned char last_scancode_raw = 0;
 
-void keyboard_handler() {
-    unsigned char scancode = port_byte_in(0x60);
-
-    /* Сохраняем для отладки (не печатаем внутри ISR) */
-    last_scancode_raw = scancode;
-    keyboard_irq_count++;
-
-    if (scancode == 0x2A || scancode == 0x36) shift_pressed = 1;
-    else if (scancode == 0xAA || scancode == 0xB6) shift_pressed = 0;
-    else if (scancode == 0x3A) caps_lock_active = !caps_lock_active;
-    else if (!(scancode & 0x80)) {
-        char c = keyboard_map[scancode];
-        if (c >= 'a' && c <= 'z' && (shift_pressed != caps_lock_active)) c = keyboard_map_shift[scancode];
-        else if (shift_pressed && !(c >= 'a' && c <= 'z')) c = keyboard_map_shift[scancode];
-
-        if (c != 0) {
-            last_char = c;
-            key_event_happened = 1;
-        }
-    }
-    /* EOI отправляет ISR в interrupt.asm */
-}
-
-void backspace_visual_update() {
-    cursor_x--;
-    if (cursor_x < 0) {
-        cursor_x = MAX_COLS - 1;
-        cursor_y--;
-    }
-    int offset = (cursor_y * MAX_COLS + cursor_x) * 2;
-    unsigned char* video_mem = (unsigned char*)VIDEO_ADDRESS;
-    video_mem[offset] = ' ';
-    video_mem[offset + 1] = WHITE_ON_BLACK;
-    update_hardware_cursor(cursor_x, cursor_y);
-}
 
 void terminal_task() {
-    char* cmd_buffer = (char*)kmalloc(1024); 
+    char* cmd_buffer = (char*)kmalloc(1024);
     int idx = 0;
 
-    kprint("\nLuxOS Shell ready! \n> ");
+    while (!system_ready);
+
+    kprint("\nLuxOS Shell ready!\n> ");
 
     while (1) {
         if (key_event_happened) {
@@ -330,35 +270,9 @@ void boot_log(char* component, int status) {
 }
 
 void kernel_setup_hardware() {
+    init_gdt();
     init_memory_manager();
     init_heap();
-        /* --- diagnostic kmalloc tests (вставить сразу после init_heap()) --- */
-    kprint("\n[diag] After init_heap()\n");
-
-    char buf[32];
-
-    /* Попробуем выделить несколько маленьких блоков */
-    void* t1 = kmalloc(16);
-    kprint("[diag] kmalloc(16) -> ");
-    if (t1) { hex_to_ascii((unsigned int)t1, buf); kprint(buf); kprint("\n"); }
-    else   { kprint("NULL\n"); }
-
-    void* t2 = kmalloc(32);
-    kprint("[diag] kmalloc(32) -> ");
-    if (t2) { hex_to_ascii((unsigned int)t2, buf); kprint(buf); kprint("\n"); }
-    else   { kprint("NULL\n"); }
-
-    /* Попробуем выделить побольше */
-    void* t3 = kmalloc(1024);
-    kprint("[diag] kmalloc(1024) -> ");
-    if (t3) { hex_to_ascii((unsigned int)t3, buf); kprint(buf); kprint("\n"); }
-    else   { kprint("NULL\n"); }
-
-    /* Если есть kfree, можно освободить t2/t3 чтобы не засорять heap (необязательно) */
-    /* kfree(t1); kfree(t2); kfree(t3); */
-
-    kprint("[diag] end kmalloc tests\n");
-    /* --- конец diagnostic блока --- */
     init_paging();
     boot_log("Memory Manager & Heap", 0);
 
@@ -384,33 +298,26 @@ void kernel_setup_hardware() {
     init_timer(100); 
     boot_log("Scheduler & PIT Timer", 0);
     
-    /* В kernel_setup_hardware() замените / дополните участок с выделением key_buffer */
-
     key_buffer = (char*)kmalloc(2048);
     if (key_buffer != 0) {
         boot_log("System Buffers", 0);
     } else {
-        /* FALLBACK: если kmalloc не сработал — используем статический буфер,
-           чтобы проверить остальную логику ввода/терминала.
-           Это временная мера для диагностики. */
         static char key_buffer_fallback[2048];
         key_buffer = key_buffer_fallback;
-
-        boot_log("System Buffers (kmalloc failed, fallback)", 1);
-        /* Небольшая подсказка в консоль, чтобы увидеть, что мы в fallback-е */
-        kprint("\n[WARN] kmalloc for key_buffer failed, using fallback buffer\n");
+        boot_log("System Buffers (fallback)", 1);
     }
 }
 
 void init() {
-    clear_screen(); 
+    clear_screen();
     kprint("LuxOS Kernel Version 0.0.8\n");
     kprint("--------------------------\n");
 
-    kernel_setup_hardware(); 
+    kernel_setup_hardware();
 
     kprint("\nSystem is ready. Starting terminal...\n");
 
+    system_ready = 1;
     __asm__ __volatile__("sti");
-    while(1) { __asm__ __volatile__("pause"); }
+    while (1) { __asm__ __volatile__("pause"); }
 }

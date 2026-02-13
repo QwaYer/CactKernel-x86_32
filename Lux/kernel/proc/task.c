@@ -26,25 +26,38 @@ struct task_struct* create_task(void (*entry_point)()) {
 
     unsigned int* esp = (unsigned int*)((unsigned int)stack + 4096);
 
-    *(--esp) = (unsigned int)entry_point; 
-    *(--esp) = 0; 
-    *(--esp) = 0; 
-    *(--esp) = 0; 
-    *(--esp) = 0; 
+    /* iretd frame — то что CPU восстановит */
+    *(--esp) = 0x10;                        /* SS (kernel data) — не используется в ring0 */
+    *(--esp) = 0;                           /* useresp — не используется в ring0 */
+    *(--esp) = 0x00000202;                  /* EFLAGS: IF=1, резервный бит=1 */
+    *(--esp) = 0x08;                        /* CS (kernel code) */
+    *(--esp) = (unsigned int)entry_point;   /* EIP */
+
+    /* pusha frame */
+    *(--esp) = 0; /* eax */
+    *(--esp) = 0; /* ecx */
+    *(--esp) = 0; /* edx */
+    *(--esp) = 0; /* ebx */
+    *(--esp) = 0; /* esp_dummy */
+    *(--esp) = 0; /* ebp */
+    *(--esp) = 0; /* esi */
+    *(--esp) = 0; /* edi */
+
+    /* push ds, push es */
+    *(--esp) = 0x10; /* es */
+    *(--esp) = 0x10; /* ds */
 
     new_task->esp = (unsigned int)esp;
     new_task->stack_base = (void*)stack;
     new_task->pid = next_pid++;
-    new_task->state = 1; 
+    new_task->state = TASK_READY;
 
     if (!task_list_head) {
         task_list_head = new_task;
         new_task->next = new_task;
     } else {
         struct task_struct* last = task_list_head;
-        while (last->next != task_list_head) {
-            last = last->next;
-        }
+        while (last->next != task_list_head) last = last->next;
         last->next = new_task;
         new_task->next = task_list_head;
     }
@@ -54,26 +67,35 @@ struct task_struct* create_task(void (*entry_point)()) {
 
 int init_scheduler() {
     current_task = (struct task_struct*)kmalloc(sizeof(struct task_struct));
+    if (!current_task) return -1;
     current_task->pid = 0;
-    current_task->stack_base = 0; 
-    current_task->state = 2;     
+    current_task->stack_base = 0;
+    current_task->state = TASK_RUNNING;
     current_task->next = current_task;
     task_list_head = current_task;
 
     create_task(terminal_task);
-    
+
     return 0;
 }
 
 void schedule() {
     if (!task_list_head || !current_task) return;
 
-    struct task_struct* prev = current_task;
-    current_task = current_task->next;
+    struct task_struct* next = current_task->next;
+    int checked = 0;
+    while (next->state != TASK_READY && next->state != TASK_RUNNING) {
+        next = next->next;
+        if (++checked > 64) return; /* защита от зависания */
+    }
+
+    if (next == current_task) return; /* только одна задача */
+
+    current_task->state = TASK_READY;
+    current_task = next;
+    current_task->state = TASK_RUNNING;
 
     tss_entry.esp0 = (unsigned int)current_task->stack_base + 4096;
-
-    switch_to(&(prev->esp), current_task->esp);
 }
 
 void list_tasks() {
@@ -84,7 +106,7 @@ void list_tasks() {
         char buf[16];
         itoa(tmp->pid, buf);
         kprint(buf);
-        kprint(tmp->state == 2 ? "  RUNNING\n" : "  READY\n");
+        kprint(tmp->state == TASK_RUNNING ? "  RUNNING\n" : "  READY\n");
         tmp = tmp->next;
     } while (tmp != task_list_head);
 }
