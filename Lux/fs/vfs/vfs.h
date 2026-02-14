@@ -23,6 +23,7 @@ struct vfs_node {
 
     int (*create) (struct vfs_node* node, char* name);
     int (*delete) (struct vfs_node* node, char* name);
+    int (*mkdir)  (struct vfs_node* node, char* name);
 
     struct vfs_node* ptr;
 };
@@ -42,5 +43,6 @@ struct vfs_dirent* readdir_vfs(struct vfs_node* node, unsigned int index);
 struct vfs_node*   finddir_vfs(struct vfs_node* node, char* name);
 int              create_vfs (struct vfs_node* node, char* name);
 int              delete_vfs (struct vfs_node* node, char* name);
+int              mkdir_vfs  (struct vfs_node* node, char* name);
 
 #endif

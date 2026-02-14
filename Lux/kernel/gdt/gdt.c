@@ -5,10 +5,7 @@ struct gdt_entry gdt[6];
 struct gdt_ptr   gp;
 struct tss_entry_struct tss_entry;
 
-extern void gdt_flush(unsigned int);
-extern void tss_flush();
-
-void set_gdt_gate(int num, unsigned int base, unsigned int limit, unsigned char access, unsigned char gran) {
+void set_gdt_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
     gdt[num].base_low    = (base & 0xFFFF);
     gdt[num].base_middle = (base >> 16) & 0xFF;
     gdt[num].base_high   = (base >> 24) & 0xFF;
@@ -18,9 +15,9 @@ void set_gdt_gate(int num, unsigned int base, unsigned int limit, unsigned char 
     gdt[num].access      = access;
 }
 
-void write_tss(int num, unsigned short ss0, unsigned int esp0) {
-    unsigned int base = (unsigned int)&tss_entry;
-    unsigned int limit = sizeof(tss_entry) - 1;
+void write_tss(int num, uint16_t ss0, uint32_t esp0) {
+    uint32_t base = (uint32_t)&tss_entry;
+    uint32_t limit = sizeof(tss_entry) - 1;
 
     set_gdt_gate(num, base, limit, 0xE9, 0x00);
     memory_set(&tss_entry, 0, sizeof(tss_entry));
@@ -32,7 +29,7 @@ void write_tss(int num, unsigned short ss0, unsigned int esp0) {
 
 void init_gdt() {
     gp.limit = (sizeof(struct gdt_entry) * 6) - 1;
-    gp.base  = (unsigned int)&gdt;
+    gp.base  = (uint32_t)&gdt;
 
     set_gdt_gate(0, 0, 0, 0, 0);                // Null segment (0x00)
     set_gdt_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF); // Kernel Code (0x08)
@@ -41,6 +38,6 @@ void init_gdt() {
     set_gdt_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF); // User Data (0x23)
     write_tss(5, 0x10, 0);                      // TSS (0x28)
 
-    gdt_flush((unsigned int)&gp);
+    gdt_flush((uint32_t)&gp);
     tss_flush();
 }

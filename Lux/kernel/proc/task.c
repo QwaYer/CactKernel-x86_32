@@ -4,13 +4,9 @@
 #include "libc.h"
 #include "gdt.h"
 
-extern void terminal_task();
-extern void switch_to(unsigned int* old_esp, unsigned int new_esp);
-extern struct tss_entry_struct tss_entry;
-
 struct task_struct* volatile current_task = 0;
 struct task_struct* volatile task_list_head = 0;
-unsigned int next_pid = 1;
+uint32_t next_pid = 1;
 
 void task_init() {
     current_task = 0;
@@ -22,10 +18,10 @@ struct task_struct* create_task(void (*entry_point)()) {
     struct task_struct* new_task = (struct task_struct*)kmalloc(sizeof(struct task_struct));
     if (!new_task) return 0;
 
-    unsigned int* stack = (unsigned int*)kalloc();
+    uint32_t* stack = (uint32_t*)kalloc();
     if (!stack) return 0;
 
-    unsigned int* esp = (unsigned int*)((unsigned int)stack + 4096);
+    uint32_t* esp = (uint32_t*)((uint32_t)stack + 4096);
 
     /* Порядок на стеке (от меньшего адреса к большему):
        es, ds, edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax,  <- pusha
@@ -37,7 +33,7 @@ struct task_struct* create_task(void (*entry_point)()) {
     *(--esp) = 0;                           /* useresp — не используется в ring0 */
     *(--esp) = 0x00000202;                  /* EFLAGS: IF=1, резервный бит=1 */
     *(--esp) = 0x08;                        /* CS (kernel code) */
-    *(--esp) = (unsigned int)entry_point;   /* EIP */
+    *(--esp) = (uint32_t)entry_point;   /* EIP */
 
     /* pusha frame */
     *(--esp) = 0; /* eax */
@@ -53,7 +49,7 @@ struct task_struct* create_task(void (*entry_point)()) {
     *(--esp) = 0x10; /* es */
     *(--esp) = 0x10; /* ds */
 
-    new_task->esp = (unsigned int)esp;
+    new_task->esp = (uint32_t)esp;
     new_task->stack_base = (void*)stack;
     new_task->pid = next_pid++;
     new_task->state = TASK_READY;
@@ -69,6 +65,23 @@ struct task_struct* create_task(void (*entry_point)()) {
     }
 
     return new_task;
+}
+
+struct task_struct* create_elf_task(char* path) {
+    uint32_t* pd = vmm_create_address_space();
+    if (!pd) return 0;
+
+    void* entry_point = load_elf(path, pd);
+    if (!entry_point) {
+        /* Здесь нужно освободить pd, но пока упростим */
+        return 0;
+    }
+
+    struct task_struct* t = create_task((void (*)())entry_point);
+    if (t) {
+        t->page_directory = pd;
+    }
+    return t;
 }
 
 int init_scheduler() {
@@ -101,7 +114,11 @@ void schedule() {
     current_task = next;
     current_task->state = TASK_RUNNING;
 
-    tss_entry.esp0 = (unsigned int)current_task->stack_base + 4096;
+    if (current_task->page_directory) {
+        switch_paging(current_task->page_directory);
+    }
+
+    tss_entry.esp0 = (uint32_t)current_task->stack_base + 4096;
 }
 
 void list_tasks() {

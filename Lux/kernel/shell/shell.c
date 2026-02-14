@@ -2,8 +2,13 @@
 #include "kernel.h"
 #include "keyboard.h"
 #include "vfs.h"
+#include "fat16.h"
+#include "memory.h"
 #include "libc.h"
 
+
+struct vfs_node* current_dir = 0;
+char current_path[256] = "/";
 
 static char* skip_token(char* s) {
     if (!s) return 0;
@@ -14,26 +19,125 @@ static char* skip_token(char* s) {
 }
 
 void sh_help(char* args) {
-    kprint("\nLuxOS Shell v0.2\n");
-    kprint("Commands: help, clear, fetch, ls, ps, reboot\n");
-    kprint("          cat <file>, wrt <file> <text>\n");
-    kprint("          tch <file>, rm <file>, echo <text>\n");
+    kprint("\n");
+    kprint_color("LuxOS Shell v0.2 (Enhanced)\n", COLOR_LIGHT_CYAN);
+    kprint_color("Available commands:\n", COLOR_LIGHT_GREY);
+    kprint("  help, clear, fetch, ls, ps, reboot, uptime, free, date\n");
+    kprint("  cd <dir>, pwd, mkdir <dir>, rmdir <dir>\n");
+    kprint("  cat <file>, write <file> <text>\n");
+    kprint("  touch <file>, rm <file>, echo <text>\n");
 }
 
 void sh_ls(char* args) {
-    kprint("\nContents of /:\n");
-    fat16_list_root();
+    if (!current_dir) current_dir = vfs_root;
+    kprint("\n");
+    kprint_color("Contents of directory:\n", COLOR_LIGHT_MAGENTA);
+    fat16_list_dir(current_dir);
+}
+
+void sh_cd(char* args) {
+    char* name = skip_token(args);
+    if (!current_dir) current_dir = vfs_root;
+
+    if (!name || compare_string(name, "/") == 0) {
+        current_dir = vfs_root;
+        return;
+    }
+
+    if (compare_string(name, "..") == 0) {
+        /* Для простоты пока возвращаемся в корень,
+           так как у vfs_node нет ссылки на parent */
+        current_dir = vfs_root;
+        return;
+    }
+
+    struct vfs_node* next = finddir_vfs(current_dir, name);
+    if (next && next->type == VFS_DIRECTORY) {
+        current_dir = next;
+        /* Обновляем путь (упрощенно) */
+        if (compare_string(current_path, "/") != 0) {
+            int len = strlen(current_path);
+            current_path[len] = '/';
+            current_path[len+1] = '\0';
+            strcat(current_path, name);
+        } else {
+            strcat(current_path, name);
+        }
+    } else {
+        kprint("\nDirectory not found.\n");
+    }
+}
+
+void sh_pwd(char* args) {
+    kprint("\n");
+    kprint(current_path);
+    kprint("\n");
+}
+
+void sh_mkdir(char* args) {
+    char* name = skip_token(args);
+    if (!name) { kprint("\nUsage: mkdir <name>\n"); return; }
+    if (!current_dir) current_dir = vfs_root;
+
+    if (mkdir_vfs(current_dir, name) == 0)
+        kprint("\nDirectory created.\n");
+    else
+        kprint("\nError: could not create directory.\n");
+}
+
+void sh_free(char* args) {
+    char buf[32];
+    unsigned int free_mem = get_free_heap_memory();
+    kprint("\nFree heap memory: ");
+    itoa(free_mem, buf); kprint(buf);
+    kprint(" bytes\n");
+}
+
+static unsigned char bcd_to_bin(unsigned char bcd) {
+    return ((bcd >> 4) * 10) + (bcd & 0x0F);
+}
+
+void sh_date(char* args) {
+    port_byte_out(0x70, 0x00); unsigned char sec = bcd_to_bin(port_byte_in(0x71));
+    port_byte_out(0x70, 0x02); unsigned char min = bcd_to_bin(port_byte_in(0x71));
+    port_byte_out(0x70, 0x04); unsigned char hour = bcd_to_bin(port_byte_in(0x71));
+    port_byte_out(0x70, 0x07); unsigned char day = bcd_to_bin(port_byte_in(0x71));
+    port_byte_out(0x70, 0x08); unsigned char month = bcd_to_bin(port_byte_in(0x71));
+    port_byte_out(0x70, 0x09); unsigned char year = bcd_to_bin(port_byte_in(0x71));
+
+    char buf[16];
+    kprint("\nDate: ");
+    itoa(day, buf); kprint(buf); kprint(".");
+    itoa(month, buf); kprint(buf); kprint(".20");
+    itoa(year, buf); kprint(buf); kprint(" ");
+    itoa(hour, buf); kprint(buf); kprint(":");
+    if (min < 10) kprint("0");
+    itoa(min, buf); kprint(buf); kprint(":");
+    if (sec < 10) kprint("0");
+    itoa(sec, buf); kprint(buf); kprint("\n");
+}
+
+void sh_uptime(char* args) {
+    /* Так как у нас нет счетчика тиков в C,
+       выведем заглушку или информацию о готовности системы */
+    kprint("\nSystem is up and running.\n");
 }
 
 void sh_fetch(char* args) {
     kprint("\n");
-    kprint("  _                ___  ____  \n");
-    kprint(" | |   _   ___  __/ _ \\/ ___| \n");
-    kprint(" | |  | | | \\ \\/ / | | \\___ \\ \n");
-    kprint(" | |__| |_| |>  <| |_| |___) |\n");
-    kprint(" |_____\\__,_/_/\\_\\\\___/|____/ \n");
-    kprint("\n OS: LuxOS 0.0.8\n");
-    kprint(" Kernel: x86_32 Standard\n");
+    kprint_color("  _                ___  ____  \n", COLOR_LIGHT_CYAN);
+    kprint_color(" | |   _   ___  __/ _ \\/ ___| \n", COLOR_LIGHT_CYAN);
+    kprint_color(" | |  | | | \\ \\/ / | | \\___ \\ \n", COLOR_LIGHT_CYAN);
+    kprint_color(" | |__| |_| |>  <| |_| |___) |\n", COLOR_LIGHT_CYAN);
+    kprint_color(" |_____\\__,_/_/\\_\\\\___/|____/ \n", COLOR_LIGHT_CYAN);
+    kprint("\n");
+    kprint_color(" OS: ", COLOR_LIGHT_BROWN); kprint("LuxOS 0.0.8\n");
+    kprint_color(" Kernel: ", COLOR_LIGHT_BROWN); kprint("x86_32 Standard\n");
+    kprint_color(" Shell: ", COLOR_LIGHT_BROWN); kprint("v0.2 (Enhanced)\n");
+    
+    char buf[32];
+    unsigned int free_mem = get_free_heap_memory();
+    kprint_color(" Memory: ", COLOR_LIGHT_BROWN); itoa(free_mem, buf); kprint(buf); kprint(" bytes free\n");
 }
 
 void sh_reboot(char* args) {
@@ -96,6 +200,16 @@ void sh_rm(char* args) {
         kprint("\nError: file not found.\n");
 }
 
+void sh_rmdir(char* args) {
+    char* name = skip_token(args);
+    if (!name) { kprint("\nUsage: rmdir <dir>\n"); return; }
+    /* В FAT16 удаление директории и файла идентично */
+    if (delete_vfs(vfs_root, name) == 0)
+        kprint("\nDirectory deleted.\n");
+    else
+        kprint("\nError: directory not found.\n");
+}
+
 void sh_cat(char* args) {
     char* name = skip_token(args);
     if (!name) { kprint("\nUsage: cat <file>\n"); return; }
@@ -129,9 +243,22 @@ void sh_wrt(char* args) {
 }
 
 
+void sh_run(char* args) {
+    char* name = skip_token(args);
+    if (!name) { kprint("\nUsage: run <file>\n"); return; }
+
+    if (create_elf_task(name)) {
+        kprint("\nTask created and scheduled.\n");
+    } else {
+        kprint("\nError: could not load ELF.\n");
+    }
+}
+
 static struct shell_command sh_tab[] = {
     {"help",   "Show help",      sh_help},
+    {"run",    "Run ELF file",   sh_run},
     {"ls",     "List files",     sh_ls},
+    {"cd",     "Change dir",     sh_cd},
     {"fetch",  "System info",    sh_fetch},
     {"clear",  "Clear screen",   (void(*)(char*))clear_screen},
     {"reboot", "Restart",        sh_reboot},
@@ -139,10 +266,16 @@ static struct shell_command sh_tab[] = {
     {"kbd",    "Keyboard stats", sh_kbd},
     {"pic",    "PIC masks",      sh_pic},
     {"echo",   "Print text",     sh_echo},
-    {"tch",  "Create file",      sh_tch},
+    {"tch",    "Create file",    sh_tch},
+    {"mkdir",  "Create dir",     sh_mkdir},
+    {"rmdir",  "Delete dir",     sh_rmdir},
     {"rm",     "Delete file",    sh_rm},
     {"cat",    "Print file",     sh_cat},
-    {"wrt",  "Write to file",    sh_wrt},
+    {"wrt",    "Write to file",  sh_wrt},
+    {"pwd",    "Show path",      sh_pwd},
+    {"free",   "Memory info",    sh_free},
+    {"date",   "Show date",      sh_date},
+    {"uptime", "System uptime",  sh_uptime},
 };
 
 #define SH_TAB_COUNT (sizeof(sh_tab) / sizeof(struct shell_command))

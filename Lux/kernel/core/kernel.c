@@ -47,30 +47,34 @@ void scroll() {
     }
 }
 
-void kprint(char* message) {
-    unsigned char* video_memory = (unsigned char*) VIDEO_ADDRESS;
-    int i = 0;
-    while (message[i] != 0) {
+void kprint_color(char* message, uint8_t color) {
+    uint8_t* video_memory = (uint8_t*) VIDEO_ADDRESS;
+    for (int i = 0; message[i] != '\0'; i++) {
         if (message[i] == '\n') {
             cursor_x = 0;
             cursor_y++;
         } else {
             int offset = (cursor_y * MAX_COLS + cursor_x) * 2;
             video_memory[offset] = message[i];
-            video_memory[offset + 1] = WHITE_ON_BLACK;
+            video_memory[offset + 1] = color;
             cursor_x++;
         }
+
         if (cursor_x >= MAX_COLS) {
             cursor_x = 0;
             cursor_y++;
         }
+
         if (cursor_y >= MAX_ROWS) {
             scroll();
             cursor_y = MAX_ROWS - 1;
         }
-        i++;
     }
     update_hardware_cursor(cursor_x, cursor_y);
+}
+
+void kprint(char* message) {
+    kprint_color(message, WHITE_ON_BLACK);
 }
 
 void kprint_at(char* message, int x, int y) {
@@ -111,19 +115,19 @@ int search_pci() {
 void exception_handler(struct context_frame* regs) {
     char buf[32];
     clear_screen();
-    kprint("!!! KERNEL PANIC !!!\n");
+    kprint_color("!!! KERNEL PANIC !!!\n", COLOR_LIGHT_RED);
 
     kprint("Exception ID: ");
     itoa(regs->int_no, buf);
-    kprint(buf);
+    kprint_color(buf, COLOR_LIGHT_RED);
 
     kprint("\nError Code: 0x");
     hex_to_ascii(regs->err_code, buf);
-    kprint(buf);
+    kprint_color(buf, COLOR_LIGHT_RED);
 
     kprint("\nEIP (Address): 0x");
     hex_to_ascii(regs->eip, buf);
-    kprint(buf);
+    kprint_color(buf, COLOR_LIGHT_RED);
 
     /* Печатаем основные регистры для диагностики */
     kprint("\nEAX: 0x"); hex_to_ascii(regs->eax, buf); kprint(buf);
@@ -137,7 +141,7 @@ void exception_handler(struct context_frame* regs) {
     kprint("\nEFLAGS: 0x");
     hex_to_ascii(regs->eflags, buf); kprint(buf);
 
-    kprint("\nSystem Halted.");
+    kprint_color("\nSystem Halted.", COLOR_LIGHT_RED);
     while(1);
 }
 
@@ -156,7 +160,15 @@ void terminal_task() {
     /* Ждём завершения инициализации ядра */
     while (!system_ready);
 
-    kprint("\nLuxOS Shell ready!\n> ");
+    kprint("\n");
+    kprint_color("LuxOS Shell", COLOR_LIGHT_CYAN);
+    kprint(" ready!\n");
+    kprint_color("qwayer", COLOR_LIGHT_GREEN);
+    kprint("@");
+    kprint_color("luxos", COLOR_LIGHT_RED);
+    kprint(":");
+    kprint_color("~", COLOR_LIGHT_BLUE);
+    kprint("$ ");
 
     while (1) {
         if (key_event_happened) {
@@ -169,7 +181,13 @@ void terminal_task() {
                 shell_execute(cmd_buffer); 
                 
                 idx = 0; 
-                kprint("\n> ");
+                kprint("\n");
+                kprint_color("qwayer", COLOR_LIGHT_GREEN);
+                kprint("@");
+                kprint_color("luxos", COLOR_LIGHT_RED);
+                kprint(":");
+                kprint_color("~", COLOR_LIGHT_BLUE);
+                kprint("$ ");
             } 
             else if (key == '\b' && idx > 0) {
                 idx--;
@@ -196,19 +214,11 @@ void boot_log(char* component, int status) {
 
     if (status == 0) {
         kprint(" [  ");
-
-        unsigned char* video_mem = (unsigned char*)VIDEO_ADDRESS;
-        int offset = (cursor_y * MAX_COLS + cursor_x) * 2;
-        
-        kprint("OK"); 
-
-        video_mem[offset + 1] = 0x0A; 
-        video_mem[offset + 3] = 0x0A;
-
+        kprint_color("OK", COLOR_LIGHT_GREEN); 
         kprint("  ]\n");
     } else {
         kprint(" [ ");
-        kprint("FAIL");
+        kprint_color("FAIL", COLOR_LIGHT_RED);
         kprint(" ]\n");
     }
 }
@@ -254,8 +264,8 @@ void kernel_setup_hardware() {
 
 void init() {
     clear_screen();
-    kprint("LuxOS Kernel Version 0.0.8\n");
-    kprint("--------------------------\n");
+    kprint_color("LuxOS Kernel Version 0.0.8\n", COLOR_LIGHT_BROWN);
+    kprint_color("--------------------------\n", COLOR_DARK_GREY);
 
     kernel_setup_hardware();
 

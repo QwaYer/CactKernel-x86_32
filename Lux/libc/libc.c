@@ -18,6 +18,20 @@ int strlen(const char* s) {
     return len;
 }
 
+char* strcat(char* dest, const char* src) {
+    char* ptr = dest + strlen(dest);
+    while (*src != '\0') *ptr++ = *src++;
+    *ptr = '\0';
+    return dest;
+}
+
+char* strcpy(char* dest, const char* src) {
+    char* ptr = dest;
+    while (*src != '\0') *ptr++ = *src++;
+    *ptr = '\0';
+    return dest;
+}
+
 void itoa(int n, char str[]) {
     int i, sign;
     if ((sign = n) < 0) n = -n;

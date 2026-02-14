@@ -6,6 +6,8 @@
 int strcmp(char* s1, char* s2);
 int compare_string(char* s1, char* s2);
 int strlen(const char* s);
+char* strcat(char* dest, const char* src);
+char* strcpy(char* dest, const char* src);
 
 void itoa(int n, char str[]);
 int atoi(char* str);
