@@ -1,6 +1,5 @@
 #include "keyboard.h"
 #include "kernel.h"
------------------------------------------------------------------ */
 
 static unsigned char keyboard_map[128] = {
     0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -23,7 +22,6 @@ volatile char          last_char         = 0;
 volatile int           key_event_happened = 0;
 volatile int           keyboard_irq_count = 0;
 volatile unsigned char last_scancode_raw  = 0;
-
 
 int init_keyboard() {
     while (port_byte_in(0x64) & 0x02);

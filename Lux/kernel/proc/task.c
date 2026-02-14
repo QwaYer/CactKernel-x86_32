@@ -1,4 +1,5 @@
 #include "task.h"
+#include "kernel.h"
 #include "memory.h"
 #include "libc.h"
 #include "gdt.h"
@@ -25,6 +26,11 @@ struct task_struct* create_task(void (*entry_point)()) {
     if (!stack) return 0;
 
     unsigned int* esp = (unsigned int*)((unsigned int)stack + 4096);
+
+    /* Порядок на стеке (от меньшего адреса к большему):
+       es, ds, edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax,  <- pusha
+       eip, cs, eflags                                          <- CPU (без ss/useresp т.к. ring0)
+    */
 
     /* iretd frame — то что CPU восстановит */
     *(--esp) = 0x10;                        /* SS (kernel data) — не используется в ring0 */

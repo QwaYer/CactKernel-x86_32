@@ -8,6 +8,7 @@ KERN_GDT_DIR     = Lux/kernel/gdt
 KERN_SHELL_DIR   = Lux/kernel/shell
 KERN_MEM_DIR     = Lux/kernel/memory
 KERN_PROC_DIR    = Lux/kernel/proc
+KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR = Lux/drivers/input
 DRIVER_BLOCK_DIR = Lux/drivers/block
@@ -21,6 +22,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_SHELL_DIR) \
          -I$(KERN_MEM_DIR) \
          -I$(KERN_PROC_DIR) \
+         -I$(KERN_IDT_DIR) \
          -I$(KERN_LIBC_DIR) \
          -I$(DRIVER_INPUT_DIR) \
          -I$(DRIVER_BLOCK_DIR) \
@@ -46,7 +48,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/interrupt.o \
       $(BUILD_DIR)/io.o \
       $(BUILD_DIR)/mm.o \
-      $(BUILD_DIR)/keyboard.o
+      $(BUILD_DIR)/keyboard.o \
+      $(BUILD_DIR)/idt.o
 
 all: $(BUILD_DIR)/luxos.img
 	@echo "--------------------------------------------------"
@@ -131,6 +134,10 @@ $(BUILD_DIR)/fat16.o: $(FS_FAT16_DIR)/fat16.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ata.o: $(DRIVER_BLOCK_DIR)/ata.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
