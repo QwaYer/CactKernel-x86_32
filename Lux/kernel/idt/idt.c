@@ -1,22 +1,20 @@
 #include "idt.h"
-#include "kernel.h"  
-#include "memory.h"  
+#include "kernel.h"
+#include "memory.h"
+#include "libc.h"
 
 static struct idt_entry idt[256];
 static struct idt_ptr   idtp;
 
-void set_idt_gate(int n, unsigned int handler) {
-    idt[n].low_offset  = (unsigned short)(handler & 0xFFFF);
+void set_idt_gate(int n, uint32_t handler) {
+    idt[n].low_offset  = (uint16_t)(handler & 0xFFFF);
     idt[n].sel         = 0x08;
     idt[n].always0     = 0;
     idt[n].flags       = 0x8E;
-    idt[n].high_offset = (unsigned short)((handler >> 16) & 0xFFFF);
+    idt[n].high_offset = (uint16_t)((handler >> 16) & 0xFFFF);
 }
 
-/* 8259 PIC:
-   IRQ0-7  -> INT 0x20-0x27  (master)
-   IRQ8-15 -> INT 0x28-0x2F  (slave)
-   Маска: открыты IRQ0 (таймер) и IRQ1 (клавиатура). */
+/* 8259 PIC: */
 void init_pic() {
     /* ICW1: начало инициализации */
     port_byte_out(0x20, 0x11);
@@ -37,23 +35,23 @@ void init_pic() {
 
 int init_idt() {
     idtp.limit = (sizeof(struct idt_entry) * 256) - 1;
-    idtp.base  = (unsigned int)&idt;
+    idtp.base  = (uint32_t)&idt;
     memory_set(&idt, 0, sizeof(struct idt_entry) * 256);
 
     /* Исключения CPU */
-    set_idt_gate(0,  (unsigned int)isr0);
-    set_idt_gate(13, (unsigned int)isr13);
-    set_idt_gate(14, (unsigned int)isr14);
+    set_idt_gate(0,  (uint32_t)isr0);
+    set_idt_gate(13, (uint32_t)isr13);
+    set_idt_gate(14, (uint32_t)isr14);
     for (int i = 1; i < 32; i++)
         if (i != 13 && i != 14)
-            set_idt_gate(i, (unsigned int)isr_common_stub);
+            set_idt_gate(i, (uint32_t)isr_common_stub);
 
     /* IRQ */
-    set_idt_gate(32, (unsigned int)timer_isr);
-    set_idt_gate(33, (unsigned int)keyboard_isr);
+    set_idt_gate(32, (uint32_t)timer_isr);
+    set_idt_gate(33, (uint32_t)keyboard_isr);
 
     /* Системный вызов (int 0x80) — DPL=3 чтобы вызывать из userspace */
-    set_idt_gate(128, (unsigned int)syscall_isr);
+    set_idt_gate(128, (uint32_t)syscall_isr);
     idt[128].flags = 0xEE;
 
     __asm__ __volatile__("lidt (%0)" : : "r"(&idtp));

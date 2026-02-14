@@ -45,6 +45,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/fat16.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/syscall.o \
+      $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/interrupt.o \
       $(BUILD_DIR)/io.o \
       $(BUILD_DIR)/mm.o \
@@ -110,6 +111,10 @@ $(BUILD_DIR)/shell.o: $(KERN_SHELL_DIR)/shell.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/syscall.o: $(KERN_CORE_DIR)/syscall.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/elf_loader.o: $(KERN_CORE_DIR)/elf_loader.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

@@ -1,6 +1,9 @@
 #ifndef MEMORY_H
 #define MEMORY_H
 
+#include <stdint.h>
+#include <stddef.h>
+
 #define PAGE_SIZE 4096                
 #define MEM_START 0x100000             
 #define MEM_SIZE  (128 * 1024 * 1024)   
@@ -19,23 +22,23 @@
 #define PT_INDEX(vaddr) ((vaddr >> 12) & 0x3FF)
 
 struct heap_block {
-    unsigned int magic;     
-    unsigned int size;
-    unsigned int is_free;
+    uint32_t magic;     
+    uint32_t size;
+    uint32_t is_free;
     struct heap_block* next;
 };
 
 void init_memory_manager();
 void* kalloc();
 void init_paging();
-unsigned int get_free_heap_memory();
-unsigned int* vmm_create_address_space(); 
-void vmm_map(unsigned int virtual_addr, unsigned int physical_addr, int flags);
-extern void load_page_directory(unsigned int* directory); 
+uint32_t get_free_heap_memory();
+uint32_t* vmm_create_address_space(); 
+void vmm_map(uint32_t virtual_addr, uint32_t physical_addr, int flags);
+extern void load_page_directory(uint32_t* directory); 
 extern void enable_paging(); 
 
 void init_heap();
-void* kmalloc(unsigned int size);
+void* kmalloc(uint32_t size);
 void kfree_heap(void* ptr);
 
 #endif

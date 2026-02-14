@@ -1,34 +1,40 @@
 #ifndef GDT_H
 #define GDT_H
 
+#include <stdint.h>
+
 struct gdt_entry {
-    unsigned short limit_low;
-    unsigned short base_low;
-    unsigned char  base_middle;
-    unsigned char  access;
-    unsigned char  granularity;
-    unsigned char  base_high;
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t  base_middle;
+    uint8_t  access;
+    uint8_t  granularity;
+    uint8_t  base_high;
 } __attribute__((packed));
 
 struct gdt_ptr {
-    unsigned short limit;
-    unsigned int   base;
+    uint16_t limit;
+    uint32_t base;
 } __attribute__((packed));
 
 struct tss_entry_struct {
-    unsigned int prev_tss;
-    unsigned int esp0;    
-    unsigned int ss0;    
-    unsigned int esp1, ss1, esp2, ss2;
-    unsigned int cr3;
-    unsigned int eip, eflags, eax, ecx, edx, ebx, esp, ebp, esi, edi;
-    unsigned int es, cs, ss, ds, fs, gs;
-    unsigned int ldt;
-    unsigned short trap, iomap_base;
+    uint32_t prev_tss;
+    uint32_t esp0;    
+    uint32_t ss0;    
+    uint32_t esp1, ss1, esp2, ss2;
+    uint32_t cr3;
+    uint32_t eip, eflags, eax, ecx, edx, ebx, esp, ebp, esi, edi;
+    uint32_t es, cs, ss, ds, fs, gs;
+    uint32_t ldt;
+    uint16_t trap, iomap_base;
 } __attribute__((packed));
 
 void init_gdt();
-void set_gdt_gate(int num, unsigned int base, unsigned int limit, unsigned char access, unsigned char gran);
-void write_tss(int num, unsigned short ss0, unsigned int esp0);
+void set_gdt_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
+void write_tss(int num, uint16_t ss0, uint32_t esp0);
+
+extern struct tss_entry_struct tss_entry;
+extern void gdt_flush(uint32_t);
+extern void tss_flush();
 
 #endif
