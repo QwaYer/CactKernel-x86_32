@@ -50,10 +50,18 @@ void fat16_init() {
         return;
     }
     
-    vfs_root->inode = 0;
-    vfs_root->size = 0;
-    vfs_root->read = fat16_read_file;
-    vfs_root->write = fat16_write_file;
+    vfs_root->inode   = 0;
+    vfs_root->size    = 0;
+    vfs_root->type    = VFS_DIRECTORY;
+    vfs_root->read    = fat16_read_file;
+    vfs_root->write   = fat16_write_file;
+    vfs_root->finddir = fat16_finddir;
+    vfs_root->create  = fat16_vfs_create;
+    vfs_root->delete  = fat16_vfs_delete;
+    vfs_root->open    = 0;
+    vfs_root->close   = 0;
+    vfs_root->readdir = 0;
+    vfs_root->ptr     = 0;
 }
 
 unsigned short fat16_get_next_cluster(unsigned short current_cluster) {
@@ -250,4 +258,13 @@ void fat16_list_root() {
             kprint(" bytes)\n");
         }
     }
+}
+int fat16_vfs_create(struct vfs_node* node, char* name) {
+    (void)node;
+    return fat16_create_file(name);
+}
+
+int fat16_vfs_delete(struct vfs_node* node, char* name) {
+    (void)node;
+    return fat16_delete_file(name);
 }

@@ -51,6 +51,8 @@ int fat16_create_file(char* name);
 int fat16_delete_file(char* name);
 
 unsigned short fat16_find_free_cluster();
+int fat16_vfs_create(struct vfs_node* node, char* name);
+int fat16_vfs_delete(struct vfs_node* node, char* name);
 void fat16_set_cluster(unsigned short cluster, unsigned short value);
 
 #endif
