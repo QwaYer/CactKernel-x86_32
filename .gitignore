@@ -13,3 +13,4 @@ build/
 
 *.log
 qemu.dmp
+qemu.txt

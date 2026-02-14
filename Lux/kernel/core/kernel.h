@@ -41,9 +41,7 @@ int strcmp(char* s1, char* s2);
 int compare_string(char* s1, char* s2);
 void hex_to_ascii(unsigned int n, char str[]);
 
-void init_pic();
-int init_idt();
-void set_idt_gate(int n, unsigned int handler);
+
 struct context_frame; 
 void exception_handler(struct context_frame* regs);
 
@@ -54,6 +52,7 @@ static inline unsigned int read_cr2() {
 }
 
 int init_vga();
+int init_keyboard();
 int probe_io_ports();
 int detect_memory();
 int search_pci();
@@ -81,4 +80,8 @@ extern void fat16_list_root();
 
 void kernel_setup_hardware();
 
+extern volatile int keyboard_irq_count;
+extern volatile unsigned char last_scancode_raw;
+extern volatile char last_char;
+extern volatile int key_event_happened;
 #endif
