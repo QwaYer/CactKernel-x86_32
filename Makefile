@@ -5,6 +5,7 @@
 BOOT_DIR         = Lumen/boot
 KERN_CORE_DIR    = Lux/kernel/core
 KERN_GDT_DIR     = Lux/kernel/gdt
+KERN_ELF_DIR     = Lux/kernel/elf
 KERN_SHELL_DIR   = Lux/kernel/shell
 KERN_MEM_DIR     = Lux/kernel/memory
 KERN_PROC_DIR    = Lux/kernel/proc
@@ -19,6 +20,7 @@ BUILD_DIR        = build
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
          -I$(KERN_GDT_DIR) \
+		 -I$(KERN_ELF_DIR) \
          -I$(KERN_SHELL_DIR) \
          -I$(KERN_MEM_DIR) \
          -I$(KERN_PROC_DIR) \
@@ -114,7 +116,7 @@ $(BUILD_DIR)/syscall.o: $(KERN_CORE_DIR)/syscall.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/elf_loader.o: $(KERN_CORE_DIR)/elf_loader.c
+$(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
