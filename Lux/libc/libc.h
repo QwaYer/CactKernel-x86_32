@@ -17,4 +17,8 @@ void* memory_set(void* dest, int val, int len);
 void* memory_copy(void* dest, const void* src, int len);
 int memory_compare(const void* s1, const void* s2, int n);
 
+/* Стандартные алиасы — нужны для elf_loader и совместимости */
+void* memset(void* dest, int val, unsigned int len);
+void* memcpy(void* dest, const void* src, unsigned int len);
+
 #endif

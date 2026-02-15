@@ -14,7 +14,6 @@ extern syscall_handler
 extern current_task
 extern schedule
 
-; Exception stubs
 isr0:
     push 0
     push 0
@@ -28,27 +27,22 @@ isr14:
     push 14
     jmp isr_common_stub
 
-; Common exception handler stub
 isr_common_stub:
     pusha
     push ds
     push es
-
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-
     push esp
     call exception_handler
     add esp, 4
-
     pop es
     pop ds
     popa
     add esp, 8
     iretd
 
-; Timer IRQ handler (IRQ0 -> IDT entry 32)
 timer_isr:
     pusha
     push ds
@@ -79,7 +73,6 @@ timer_isr:
     popa
     iretd
 
-; Keyboard IRQ handler (IRQ1 -> IDT entry 33)
 keyboard_isr:
     pusha
     push ds
@@ -87,18 +80,14 @@ keyboard_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-
     call keyboard_handler
-
     mov al, 0x20
     out 0x20, al
-
     pop es
     pop ds
     popa
     iretd
 
-; Syscall ISR
 syscall_isr:
     pusha
     push ds
@@ -111,6 +100,24 @@ syscall_isr:
     call syscall_handler
     add esp, 4
 
+    ; После syscall_handler проверяем — вдруг задача стала ZOMBIE
+    ; Если да — делаем принудительное переключение как timer_isr
+    mov eax, [current_task]
+    test eax, eax
+    jz .no_switch
+
+    ; Проверяем state (offset 8 в task_struct: esp=0, pid=4, state=8)
+    mov ecx, [eax + 8]
+    cmp ecx, 3          ; TASK_ZOMBIE = 3
+    jne .no_switch
+
+    ; Задача ZOMBIE — сохраняем esp и переключаемся
+    mov [eax], esp
+    call schedule
+    mov eax, [current_task]
+    mov esp, [eax]
+
+.no_switch:
     pop es
     pop ds
     popa

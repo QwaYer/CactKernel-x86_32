@@ -14,57 +14,84 @@ void task_init() {
     next_pid = 1;
 }
 
-struct task_struct* create_task(void (*entry_point)()) {
-    struct task_struct* new_task = (struct task_struct*)kmalloc(sizeof(struct task_struct));
-    if (!new_task) return 0;
-
-    uint32_t* stack = (uint32_t*)kalloc();
-    if (!stack) return 0;
-
-    uint32_t* esp = (uint32_t*)((uint32_t)stack + 4096);
-
-    /* Порядок на стеке (от меньшего адреса к большему):
-       es, ds, edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax,  <- pusha
-       eip, cs, eflags                                          <- CPU (без ss/useresp т.к. ring0)
-    */
-
-    /* iretd frame — то что CPU восстановит */
-    *(--esp) = 0x10;                        /* SS (kernel data) — не используется в ring0 */
-    *(--esp) = 0;                           /* useresp — не используется в ring0 */
-    *(--esp) = 0x00000202;                  /* EFLAGS: IF=1, резервный бит=1 */
-    *(--esp) = 0x08;                        /* CS (kernel code) */
-    *(--esp) = (uint32_t)entry_point;   /* EIP */
-
-    /* pusha frame */
-    *(--esp) = 0; /* eax */
-    *(--esp) = 0; /* ecx */
-    *(--esp) = 0; /* edx */
-    *(--esp) = 0; /* ebx */
-    *(--esp) = 0; /* esp_dummy */
-    *(--esp) = 0; /* ebp */
-    *(--esp) = 0; /* esi */
-    *(--esp) = 0; /* edi */
-
-    /* push ds, push es */
-    *(--esp) = 0x10; /* es */
-    *(--esp) = 0x10; /* ds */
-
-    new_task->esp = (uint32_t)esp;
-    new_task->stack_base = (void*)stack;
-    new_task->pid = next_pid++;
-    new_task->state = TASK_READY;
-
+static void task_list_add(struct task_struct* t) {
     if (!task_list_head) {
-        task_list_head = new_task;
-        new_task->next = new_task;
+        task_list_head = t;
+        t->next = t;
     } else {
         struct task_struct* last = task_list_head;
         while (last->next != task_list_head) last = last->next;
-        last->next = new_task;
-        new_task->next = task_list_head;
+        last->next = t;
+        t->next = task_list_head;
     }
+}
 
-    return new_task;
+struct task_struct* create_task(void (*entry_point)()) {
+    struct task_struct* t = (struct task_struct*)kmalloc(sizeof(struct task_struct));
+    if (!t) return 0;
+
+    uint32_t* stack = (uint32_t*)kalloc();
+    if (!stack) { kfree_heap(t); return 0; }
+
+    uint32_t* esp = (uint32_t*)((uint32_t)stack + 4096);
+
+    *(--esp) = 0x00000202;
+    *(--esp) = 0x08;
+    *(--esp) = (uint32_t)entry_point;
+    *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
+    *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
+    *(--esp) = 0x10;
+    *(--esp) = 0x10;
+
+    t->esp = (uint32_t)esp;
+    t->stack_base = (void*)stack;
+    t->pid = next_pid++;
+    t->state = TASK_READY;
+    t->is_kernel = 1;
+    t->page_directory = 0;
+    t->ustack_phys = 0;
+    t->ustack_virt = 0;
+
+    task_list_add(t);
+    return t;
+}
+
+struct task_struct* create_user_task(void* entry_point) {
+    struct task_struct* t = (struct task_struct*)kmalloc(sizeof(struct task_struct));
+    if (!t) return 0;
+
+    uint32_t* kstack = (uint32_t*)kalloc();
+    if (!kstack) { kfree_heap(t); return 0; }
+
+    uint32_t* ustack_phys = (uint32_t*)kalloc();
+    if (!ustack_phys) { kfree_heap(t); return 0; }
+
+    uint32_t ustack_virt = 0xBFFFF000;
+
+    t->ustack_phys = ustack_phys;
+    t->ustack_virt = ustack_virt;
+
+    uint32_t* esp = (uint32_t*)((uint32_t)kstack + 4096);
+
+    *(--esp) = 0x23;
+    *(--esp) = ustack_virt + 4096 - 4;
+    *(--esp) = 0x00000202;
+    *(--esp) = 0x1B;
+    *(--esp) = (uint32_t)entry_point;
+    *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
+    *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
+    *(--esp) = 0x23;
+    *(--esp) = 0x23;
+
+    t->esp = (uint32_t)esp;
+    t->stack_base = (void*)kstack;
+    t->pid = next_pid++;
+    t->state = TASK_READY;
+    t->is_kernel = 0;
+    t->page_directory = 0;
+
+    task_list_add(t);
+    return t;
 }
 
 struct task_struct* create_elf_task(char* path) {
@@ -73,14 +100,22 @@ struct task_struct* create_elf_task(char* path) {
 
     void* entry_point = load_elf(path, pd);
     if (!entry_point) {
-        /* Здесь нужно освободить pd, но пока упростим */
+        kprint("ELF: load failed\n");
         return 0;
     }
 
-    struct task_struct* t = create_task((void (*)())entry_point);
-    if (t) {
-        t->page_directory = pd;
-    }
+    struct task_struct* t = create_user_task(entry_point);
+    if (!t) return 0;
+
+    t->page_directory = pd;
+
+    vmm_map(pd,
+            t->ustack_virt,
+            (uint32_t)t->ustack_phys,
+            PAGE_USER | PAGE_RW | PAGE_PRESENT);
+
+    tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
+
     return t;
 }
 
@@ -90,11 +125,14 @@ int init_scheduler() {
     current_task->pid = 0;
     current_task->stack_base = 0;
     current_task->state = TASK_RUNNING;
+    current_task->is_kernel = 1;
+    current_task->page_directory = 0;
+    current_task->ustack_phys = 0;
+    current_task->ustack_virt = 0;
     current_task->next = current_task;
     task_list_head = current_task;
 
     create_task(terminal_task);
-
     return 0;
 }
 
@@ -105,18 +143,17 @@ void schedule() {
     int checked = 0;
     while (next->state != TASK_READY && next->state != TASK_RUNNING) {
         next = next->next;
-        if (++checked > 64) return; /* защита от зависания */
+        if (++checked > 64) return;
     }
 
-    if (next == current_task) return; /* только одна задача */
+    if (next == current_task) return;
 
     current_task->state = TASK_READY;
     current_task = next;
     current_task->state = TASK_RUNNING;
 
-    if (current_task->page_directory) {
+    if (current_task->page_directory)
         switch_paging(current_task->page_directory);
-    }
 
     tss_entry.esp0 = (uint32_t)current_task->stack_base + 4096;
 }
@@ -129,7 +166,10 @@ void list_tasks() {
         char buf[16];
         itoa(tmp->pid, buf);
         kprint(buf);
-        kprint(tmp->state == TASK_RUNNING ? "  RUNNING\n" : "  READY\n");
+        if      (tmp->state == TASK_RUNNING) kprint("  RUNNING\n");
+        else if (tmp->state == TASK_READY)   kprint("  READY\n");
+        else if (tmp->state == TASK_ZOMBIE)  kprint("  ZOMBIE\n");
+        else                                 kprint("  SLEEPING\n");
         tmp = tmp->next;
     } while (tmp != task_list_head);
 }

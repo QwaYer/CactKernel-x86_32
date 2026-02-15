@@ -33,7 +33,7 @@ void* kalloc();
 void init_paging();
 uint32_t get_free_heap_memory();
 uint32_t* vmm_create_address_space(); 
-void vmm_map(uint32_t virtual_addr, uint32_t physical_addr, int flags);
+void vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int flags);
 extern void load_page_directory(uint32_t* directory); 
 extern void enable_paging(); 
 
