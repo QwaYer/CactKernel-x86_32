@@ -51,9 +51,6 @@ void init_paging() {
     enable_paging();
 }
 
-void switch_paging(uint32_t* pd) {
-    load_page_directory(pd);
-}
 
 void vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int flags) {
     uint32_t pd_idx = PD_INDEX(virtual_addr);

@@ -94,3 +94,16 @@ int memory_compare(const void* s1, const void* s2, int n) {
     }
     return 0;
 }
+
+void* memset(void* dest, int val, unsigned int len) {
+    unsigned char* ptr = (unsigned char*)dest;
+    while (len-- > 0) *ptr++ = (unsigned char)val;
+    return dest;
+}
+
+void* memcpy(void* dest, const void* src, unsigned int len) {
+    unsigned char* d = (unsigned char*)dest;
+    const unsigned char* s = (const unsigned char*)src;
+    while (len-- > 0) *d++ = *s++;
+    return dest;
+}

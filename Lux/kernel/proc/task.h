@@ -15,25 +15,27 @@ typedef enum {
 } task_state;
 
 struct context_frame {
-    uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax; 
-
-    uint32_t int_no; 
-    uint32_t err_code; 
-
-    uint32_t eip, cs, eflags, useresp, ss; 
+    uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
+    uint32_t int_no;
+    uint32_t err_code;
+    uint32_t eip, cs, eflags, useresp, ss;
 };
 
 struct task_struct {
-    uint32_t esp;           
-    uint32_t pid;     
-    task_state state;       
-    void* stack_base;     
-    uint32_t* page_directory; 
-    struct task_struct* next;    
+    uint32_t esp;               /* Поле ПЕРВОЕ — timer_isr делает mov [eax], esp */
+    uint32_t pid;
+    task_state state;
+    uint8_t  is_kernel;         /* 1 = ядровая задача, не удалять */
+    void* stack_base;           /* Ядровый стек */
+    void* ustack_phys;          /* Физический адрес пользовательского стека */
+    uint32_t ustack_virt;       /* Виртуальный адрес пользовательского стека */
+    uint32_t* page_directory;
+    struct task_struct* next;
 };
 
 void task_init();
 struct task_struct* create_task(void (*entry_point)());
+struct task_struct* create_user_task(void* entry_point);
 struct task_struct* create_elf_task(char* path);
 void schedule();
 int init_scheduler();

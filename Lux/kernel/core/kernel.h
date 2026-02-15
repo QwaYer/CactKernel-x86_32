@@ -82,6 +82,12 @@ static inline uint32_t read_cr2() {
     return val;
 }
 
+static inline uint32_t* get_current_pd() {
+    uint32_t val;
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(val));
+    return (uint32_t*)val;
+}
+
 /* Hardware Initialization */
 int init_vga();
 int init_keyboard();
@@ -102,7 +108,7 @@ extern void switch_to(uint32_t* old_esp, uint32_t new_esp);
 /* Memory Management */
 void init_paging();
 void switch_paging(uint32_t* pd);
-void vmm_map(uint32_t virtual_addr, uint32_t physical_addr, int flags);
+void vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int flags);
 uint32_t* vmm_create_address_space();
 uint32_t get_free_heap_memory();
 
