@@ -12,8 +12,6 @@ uint32_t root_lba;
 uint32_t data_lba;
 uint32_t root_sectors;
 
-/* fat16_vfs_mkdir уже объявлен в fat16.h */
-
 uint32_t cluster_to_lba(uint16_t cluster) {
     return data_lba + (cluster - 2) * bpb.sectors_per_cluster;
 }
@@ -69,6 +67,7 @@ void fat16_init() {
     vfs_root->read    = fat16_read_file;
     vfs_root->write   = fat16_write_file;
     vfs_root->finddir = fat16_finddir;
+    vfs_root->listdir = fat16_list_dir;
     vfs_root->create  = fat16_vfs_create;
     vfs_root->delete  = fat16_vfs_delete;
     vfs_root->mkdir   = fat16_vfs_mkdir;
@@ -104,7 +103,7 @@ unsigned short fat16_find_free_cluster() {
         ata_read_sector(fat_lba + i, fat_table);
         for (int j = 0; j < 512; j += 2) {
             unsigned short cluster = (i * 512 / 2) + (j / 2);
-            if (cluster < 2) continue;  
+            if (cluster < 2) continue;
             unsigned short entry = (unsigned short)fat_table[j] |
                                    ((unsigned short)fat_table[j + 1] << 8);
             if (entry == 0x0000) return cluster;
@@ -121,34 +120,27 @@ static int fat16_create_entry(struct vfs_node* parent, char* name, unsigned char
     unsigned short clus = fat16_find_free_cluster();
     if (clus == 0xFFFF) return -1;
 
-    /* Инициализируем кластер для директории */
     if (attr & 0x10) {
         unsigned char dir_buf[512];
-        
-        /* Очищаем все сектора кластера */
         for (unsigned int s = 0; s < bpb.sectors_per_cluster; s++) {
             for (int i = 0; i < 512; i++) dir_buf[i] = 0;
-            
             if (s == 0) {
-                /* В первом секторе создаем . и .. */
                 struct fat16_dirent* dot = (struct fat16_dirent*)dir_buf;
                 memory_copy(dot->filename, (unsigned char*)".          ", 11);
-                dot->attributes = 0x10;
+                dot->attributes    = 0x10;
                 dot->first_cluster = clus;
-                
+
                 struct fat16_dirent* dotdot = (struct fat16_dirent*)(dir_buf + 32);
                 memory_copy(dotdot->filename, (unsigned char*)"..         ", 11);
-                dotdot->attributes = 0x10;
-                dotdot->first_cluster = (parent && parent->inode != 0) ? (unsigned short)parent->inode : 0;
+                dotdot->attributes    = 0x10;
+                dotdot->first_cluster = (parent && parent->inode != 0)
+                                        ? (unsigned short)parent->inode : 0;
             }
-            
             ata_write_sector(cluster_to_lba(clus) + s, dir_buf);
         }
     }
 
-    /* Ищем свободный слот в родителе */
     if (!parent || parent->inode == 0) {
-        /* Корень */
         for (unsigned int i = 0; i < root_sectors; i++) {
             ata_read_sector(root_lba + i, buf);
             for (int j = 0; j < 512; j += 32) {
@@ -165,7 +157,6 @@ static int fat16_create_entry(struct vfs_node* parent, char* name, unsigned char
             }
         }
     } else {
-        /* Поддиректория */
         unsigned short parent_cluster = (unsigned short)parent->inode;
         while (parent_cluster >= 2 && parent_cluster < 0xFFF8) {
             unsigned int lba = cluster_to_lba(parent_cluster);
@@ -185,11 +176,7 @@ static int fat16_create_entry(struct vfs_node* parent, char* name, unsigned char
                 }
             }
             unsigned short next = fat16_get_next_cluster(parent_cluster);
-            if (next >= 0xFFF8) {
-                /* Нужно выделить новый кластер для директории, если места нет */
-                /* Для простоты пока вернем ошибку */
-                break;
-            }
+            if (next >= 0xFFF8) break;
             parent_cluster = next;
         }
     }
@@ -235,7 +222,6 @@ int fat16_read_file(struct vfs_node* node, unsigned int offset,
     unsigned int bytes_read = 0;
     unsigned char sector_buf[512];
 
-    /* Пропускаем кластеры до смещения offset */
     unsigned int clusters_to_skip = offset / (bpb.sectors_per_cluster * 512);
     for (unsigned int i = 0; i < clusters_to_skip; i++) {
         cluster = fat16_get_next_cluster(cluster);
@@ -243,12 +229,11 @@ int fat16_read_file(struct vfs_node* node, unsigned int offset,
     }
 
     unsigned int offset_in_cluster = offset % (bpb.sectors_per_cluster * 512);
-    
+
     while (bytes_read < size && cluster >= 2 && cluster < 0xFFF8) {
         unsigned int lba = cluster_to_lba(cluster);
         for (unsigned int s = 0; s < bpb.sectors_per_cluster && bytes_read < size; s++) {
             ata_read_sector(lba + s, sector_buf);
-            
             unsigned int start_i = 0;
             if (offset_in_cluster > 0) {
                 if (offset_in_cluster >= 512) {
@@ -259,7 +244,6 @@ int fat16_read_file(struct vfs_node* node, unsigned int offset,
                     offset_in_cluster = 0;
                 }
             }
-
             for (unsigned int i = start_i; i < 512 && bytes_read < size; i++)
                 buffer[bytes_read++] = sector_buf[i];
         }
@@ -300,10 +284,11 @@ static struct vfs_node* fat16_create_vfs_node(struct fat16_dirent* d) {
     res->type    = (d->attributes & 0x10) ? VFS_DIRECTORY : VFS_FILE;
     res->read    = fat16_read_file;
     res->write   = fat16_write_file;
-    res->finddir = (res->type == VFS_DIRECTORY) ? fat16_finddir : 0;
+    res->finddir = (res->type == VFS_DIRECTORY) ? fat16_finddir    : 0;
+    res->listdir = (res->type == VFS_DIRECTORY) ? fat16_list_dir   : 0;
     res->create  = (res->type == VFS_DIRECTORY) ? fat16_vfs_create : 0;
     res->delete  = (res->type == VFS_DIRECTORY) ? fat16_vfs_delete : 0;
-    res->mkdir   = (res->type == VFS_DIRECTORY) ? fat16_vfs_mkdir : 0;
+    res->mkdir   = (res->type == VFS_DIRECTORY) ? fat16_vfs_mkdir  : 0;
     res->open    = 0;
     res->close   = 0;
     res->readdir = 0;
@@ -316,7 +301,6 @@ struct vfs_node* fat16_finddir(struct vfs_node* node, char* name) {
     unsigned char f_name[11];
     fat16_format_name(name, f_name);
 
-    /* Если node == vfs_root или inode == 0, ищем в Root Directory */
     if (node == vfs_root || node->inode == 0) {
         for (unsigned int i = 0; i < root_sectors; i++) {
             ata_read_sector(root_lba + i, buf);
@@ -324,13 +308,11 @@ struct vfs_node* fat16_finddir(struct vfs_node* node, char* name) {
                 struct fat16_dirent* d = (struct fat16_dirent*)(buf + j);
                 if (d->filename[0] == 0x00) return 0;
                 if (d->filename[0] == 0xE5) continue;
-                if (memory_compare(d->filename, f_name, 11) == 0) {
+                if (memory_compare(d->filename, f_name, 11) == 0)
                     return fat16_create_vfs_node(d);
-                }
             }
         }
     } else {
-        /* Ищем в поддиректории (цепочка кластеров) */
         unsigned short cluster = (unsigned short)node->inode;
         while (cluster >= 2 && cluster < 0xFFF8) {
             unsigned int lba = cluster_to_lba(cluster);
@@ -340,9 +322,8 @@ struct vfs_node* fat16_finddir(struct vfs_node* node, char* name) {
                     struct fat16_dirent* d = (struct fat16_dirent*)(buf + j);
                     if (d->filename[0] == 0x00) return 0;
                     if (d->filename[0] == 0xE5) continue;
-                    if (memory_compare(d->filename, f_name, 11) == 0) {
+                    if (memory_compare(d->filename, f_name, 11) == 0)
                         return fat16_create_vfs_node(d);
-                    }
                 }
             }
             cluster = fat16_get_next_cluster(cluster);
@@ -356,7 +337,7 @@ static void fat16_print_dirent(struct fat16_dirent* d) {
 
     kprint("  ");
     if (d->attributes & 0x10) kprint("<DIR> ");
-    
+
     for (int k = 0; k < 8; k++) {
         if (d->filename[k] != ' ') {
             char c[2] = {d->filename[k], 0};
@@ -372,7 +353,6 @@ static void fat16_print_dirent(struct fat16_dirent* d) {
             }
         }
     }
-    
     if (!(d->attributes & 0x10)) {
         char sz[16];
         itoa(d->file_size, sz);

@@ -24,32 +24,37 @@ void close_vfs(struct vfs_node* node) {
         node->close(node);
 }
 
+void listdir_vfs(struct vfs_node* node) {
+    if (node && node->type == VFS_DIRECTORY && node->listdir)
+        node->listdir(node);
+}
+
 struct vfs_dirent* readdir_vfs(struct vfs_node* node, unsigned int index) {
-    if (node && (node->type & VFS_DIRECTORY) && node->readdir)
+    if (node && node->type == VFS_DIRECTORY && node->readdir)
         return node->readdir(node, index);
     return 0;
 }
 
 struct vfs_node* finddir_vfs(struct vfs_node* node, char* name) {
-    if (node && (node->type & VFS_DIRECTORY) && node->finddir)
+    if (node && node->type == VFS_DIRECTORY && node->finddir)
         return node->finddir(node, name);
     return 0;
 }
 
 int create_vfs(struct vfs_node* node, char* name) {
-    if (node && (node->type & VFS_DIRECTORY) && node->create)
+    if (node && node->type == VFS_DIRECTORY && node->create)
         return node->create(node, name);
     return -1;
 }
 
 int delete_vfs(struct vfs_node* node, char* name) {
-    if (node && (node->type & VFS_DIRECTORY) && node->delete)
+    if (node && node->type == VFS_DIRECTORY && node->delete)
         return node->delete(node, name);
     return -1;
 }
 
 int mkdir_vfs(struct vfs_node* node, char* name) {
-    if (node && (node->type & VFS_DIRECTORY) && node->mkdir)
+    if (node && node->type == VFS_DIRECTORY && node->mkdir)
         return node->mkdir(node, name);
     return -1;
 }

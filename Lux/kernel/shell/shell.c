@@ -2,7 +2,6 @@
 #include "kernel.h"
 #include "keyboard.h"
 #include "vfs.h"
-#include "fat16.h"
 #include "memory.h"
 #include "libc.h"
 
@@ -24,15 +23,15 @@ void sh_help(char* args) {
     kprint_color("Available commands:\n", COLOR_LIGHT_GREY);
     kprint("  help, clear, fetch, ls, ps, reboot, uptime, free, date\n");
     kprint("  cd <dir>, pwd, mkdir <dir>, rmdir <dir>\n");
-    kprint("  cat <file>, write <file> <text>\n");
-    kprint("  touch <file>, rm <file>, echo <text>\n");
+    kprint("  cat <file>, wrt <file> <text>\n");
+    kprint("  tch <file>, rm <file>, echo <text>\n");
 }
 
 void sh_ls(char* args) {
     if (!current_dir) current_dir = vfs_root;
     kprint("\n");
     kprint_color("Contents of directory:\n", COLOR_LIGHT_MAGENTA);
-    fat16_list_dir(current_dir);
+    listdir_vfs(current_dir);
 }
 
 void sh_cd(char* args) {
@@ -118,8 +117,7 @@ void sh_date(char* args) {
 }
 
 void sh_uptime(char* args) {
-    /* Так как у нас нет счетчика тиков в C,
-       выведем заглушку или информацию о готовности системы */
+    /* заглушка */
     kprint("\nSystem is up and running.\n");
 }
 
@@ -203,7 +201,6 @@ void sh_rm(char* args) {
 void sh_rmdir(char* args) {
     char* name = skip_token(args);
     if (!name) { kprint("\nUsage: rmdir <dir>\n"); return; }
-    /* В FAT16 удаление директории и файла идентично */
     if (delete_vfs(vfs_root, name) == 0)
         kprint("\nDirectory deleted.\n");
     else
