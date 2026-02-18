@@ -39,6 +39,7 @@ extern void enable_paging();
 
 void init_heap();
 void* kmalloc(uint32_t size);
+void* kmalloc_aligned(uint32_t size, uint32_t align);
 void kfree_heap(void* ptr);
 
 #endif

@@ -131,6 +131,14 @@ void* kmalloc(uint32_t size) {
     return 0;
 }
 
+void* kmalloc_aligned(uint32_t size, uint32_t align) {
+    uint8_t* raw = (uint8_t*)kmalloc(size + align);
+    if (!raw) return NULL;
+    uint32_t addr = (uint32_t)(uintptr_t)raw;
+    uint32_t aligned = (addr + align - 1) & ~(align - 1);
+    return (void*)(uintptr_t)aligned;
+}
+
 void kfree_heap(void* ptr) {
     if (!ptr) return;
 

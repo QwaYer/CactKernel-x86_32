@@ -4,6 +4,10 @@
 #include "vfs.h"
 #include "memory.h"
 #include "libc.h"
+#include "../../net/net.h"
+#include "../../net/ip/ip.h"
+#include "../../net/icmp/icmp.h"
+#include "../../net/protocols/udp/udp.h"
 
 
 struct vfs_node* current_dir = 0;
@@ -25,6 +29,7 @@ void sh_help(char* args) {
     kprint("  cd <dir>, pwd, mkdir <dir>, rmdir <dir>\n");
     kprint("  cat <file>, wrt <file> <text>\n");
     kprint("  tch <file>, rm <file>, echo <text>\n");
+    kprint("  ipconfig, ping <ip>, udptest <ip> <port> <msg>\n");
 }
 
 void sh_ls(char* args) {
@@ -119,6 +124,92 @@ void sh_date(char* args) {
 void sh_uptime(char* args) {
     /* заглушка */
     kprint("\nSystem is up and running.\n");
+}
+
+static uint32_t parse_ip(char* s) {
+    uint32_t ip = 0;
+    for (int i = 0; i < 4; i++) {
+        uint32_t val = 0;
+        while (*s >= '0' && *s <= '9') {
+            val = val * 10 + (*s - '0');
+            s++;
+        }
+        ip = (ip << 8) | (val & 0xFF);
+        if (*s == '.') s++;
+    }
+    return ip;
+}
+
+void sh_ipconfig(char* args) {
+    kprint("\nNetwork Configuration:\n");
+    kprint("  IP Address:  ");
+    char buf[16];
+    itoa((MY_IP >> 24) & 0xFF, buf); kprint(buf); kprint(".");
+    itoa((MY_IP >> 16) & 0xFF, buf); kprint(buf); kprint(".");
+    itoa((MY_IP >> 8) & 0xFF, buf); kprint(buf); kprint(".");
+    itoa(MY_IP & 0xFF, buf); kprint(buf); kprint("\n");
+
+    kprint("  MAC Address: ");
+    for (int i = 0; i < 6; i++) {
+        uint8_t byte = my_mac.b[i];
+        buf[0] = "0123456789ABCDEF"[byte >> 4];
+        buf[1] = "0123456789ABCDEF"[byte & 0xF];
+        buf[2] = 0;
+        kprint(buf);
+        if (i < 5) kprint(":");
+    }
+    kprint("\n");
+}
+
+void sh_ping(char* args) {
+    char* ip_str = skip_token(args);
+    if (!ip_str) {
+        kprint("\nUsage: ping <ip>\n");
+        return;
+    }
+
+    uint32_t dst_ip = parse_ip(ip_str);
+    kprint("\nPinging ");
+    kprint(ip_str);
+    kprint("...\n");
+
+    icmp_send_echo_request(htonl(dst_ip), 1234, 1);
+}
+
+void sh_udp_test(char* args) {
+    char* ip_str = skip_token(args);
+    if (!ip_str) {
+        kprint("\nUsage: udptest <ip> <port> <message>\n");
+        return;
+    }
+    char* port_str = skip_token(ip_str);
+    if (!port_str) {
+        kprint("\nUsage: udptest <ip> <port> <message>\n");
+        return;
+    }
+    char* msg = skip_token(port_str);
+    if (!msg) msg = "Hello from LuxOS!";
+
+    uint32_t dst_ip = parse_ip(ip_str);
+    uint16_t port = 0;
+    char* p = port_str;
+    while (*p >= '0' && *p <= '9') {
+        port = port * 10 + (*p - '0');
+        p++;
+    }
+
+    skb_t* skb = skb_alloc();
+    if (!skb) return;
+    uint8_t* data = skb_put(skb, strlen(msg));
+    for (int i = 0; i < (int)strlen(msg); i++) data[i] = msg[i];
+
+    kprint("\nSending UDP to ");
+    kprint(ip_str);
+    kprint(":");
+    kprint(port_str);
+    kprint("\n");
+
+    udp_output(skb, htonl(dst_ip), 12345, port);
 }
 
 void sh_fetch(char* args) {
@@ -273,6 +364,9 @@ static struct shell_command sh_tab[] = {
     {"free",   "Memory info",    sh_free},
     {"date",   "Show date",      sh_date},
     {"uptime", "System uptime",  sh_uptime},
+    {"ipconfig", "Network info", sh_ipconfig},
+    {"ping",   "Send ICMP echo", sh_ping},
+    {"udptest", "Send UDP packet", sh_udp_test},
 };
 
 #define SH_TAB_COUNT (sizeof(sh_tab) / sizeof(struct shell_command))

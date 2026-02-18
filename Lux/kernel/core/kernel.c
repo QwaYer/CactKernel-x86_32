@@ -248,6 +248,9 @@ void kernel_setup_hardware() {
     fat16_init();
     boot_log("FAT16 File System", 0);
 
+    net_init();
+    boot_log("Network Stack", 0);
+
     task_init();     
     init_scheduler();
     init_timer(100); 
@@ -272,7 +275,10 @@ void init() {
 
     kprint("\nSystem is ready. Starting terminal...\n");
 
-    system_ready = 1;
+        system_ready = 1;
     __asm__ __volatile__("sti");
-    while (1) { __asm__ __volatile__("pause"); }
+    while (1) { 
+        net_poll();
+        __asm__ __volatile__("pause"); 
+    }
 }
