@@ -36,7 +36,7 @@ static int sys_delete(char* name) {
 }
 static int sys_exit() {
     if (current_task) current_task->state = TASK_ZOMBIE;
-    return 0; /* syscall_isr увидит ZOMBIE и переключится */
+    return 0; 
 }
 
 typedef int (*syscall_fn)();

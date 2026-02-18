@@ -129,7 +129,7 @@ void exception_handler(struct context_frame* regs) {
     hex_to_ascii(regs->eip, buf);
     kprint_color(buf, COLOR_LIGHT_RED);
 
-    /* Печатаем основные регистры для диагностики */
+    /* основные регистры для диагностики */
     kprint("\nEAX: 0x"); hex_to_ascii(regs->eax, buf); kprint(buf);
     kprint("  EBX: 0x"); hex_to_ascii(regs->ebx, buf); kprint(buf);
     kprint("\nECX: 0x"); hex_to_ascii(regs->ecx, buf); kprint(buf);
@@ -154,25 +154,12 @@ void init_timer(unsigned int frequency) {
 
 
 void terminal_task() {
-    /* ОТЛАДКА: пишем 'T' прямо в VRAM до всего остального.
-       Если 'T' не появился — terminal_task вообще не запустилась. */
-    volatile uint8_t* vram = (volatile uint8_t*)VIDEO_ADDRESS;
-    vram[(1 * 80 + 70) * 2]     = 'T';
-    vram[(1 * 80 + 70) * 2 + 1] = 0x4E; /* жёлтый на чёрном */
 
     char* cmd_buffer = (char*)kmalloc(1024);
     int idx = 0;
 
-    /* ОТЛАДКА: дошли до kmalloc */
-    vram[(1 * 80 + 71) * 2]     = 'K';
-    vram[(1 * 80 + 71) * 2 + 1] = 0x4E;
-
-    /* Ждём завершения инициализации ядра */
     while (!system_ready);
-
-    /* ОТЛАДКА: вышли из spin-wait */
-    vram[(1 * 80 + 72) * 2]     = 'S';
-    vram[(1 * 80 + 72) * 2 + 1] = 0x4E;
+    
 
     kprint("\n");
     kprint_color("LuxOS Shell", COLOR_LIGHT_CYAN);

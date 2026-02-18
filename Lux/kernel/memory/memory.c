@@ -70,11 +70,10 @@ uint32_t* vmm_create_address_space() {
     uint32_t* pd = (uint32_t*)kalloc();
     if (!pd) return 0;
 
-    /* Копируем ядро (первые 128 МБ для простоты) */
     for (int i = 0; i < 32; i++) {
         pd[i] = page_directory[i];
     }
-    /* Остальное пусто */
+
     for (int i = 32; i < 1024; i++) {
         pd[i] = 0;
     }
