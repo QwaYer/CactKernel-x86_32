@@ -3,6 +3,15 @@
 #include "memory.h"
 #include "libc.h"
 
+extern void isr0();
+extern void isr13();
+extern void isr14();
+extern void isr_common_stub();
+extern void timer_isr();
+extern void keyboard_isr();
+extern void virtio_net_isr();
+extern void syscall_isr();
+
 static struct idt_entry idt[256];
 static struct idt_ptr   idtp;
 
@@ -28,9 +37,9 @@ void init_pic() {
     /* ICW4: режим 8086 */
     port_byte_out(0x21, 0x01);
     port_byte_out(0xA1, 0x01);
-    /* OCW1: маски — разрешается только IRQ0 и IRQ1 */
+    /* OCW1: маски — разрешается IRQ0, IRQ1 и IRQ11 (VirtIO) */
     port_byte_out(0x21, 0xFC);
-    port_byte_out(0xA1, 0xFF);
+    port_byte_out(0xA1, 0xF7);
 }
 
 int init_idt() {
@@ -49,6 +58,7 @@ int init_idt() {
     /* IRQ */
     set_idt_gate(32, (uint32_t)timer_isr);
     set_idt_gate(33, (uint32_t)keyboard_isr);
+    set_idt_gate(0x2B, (uint32_t)virtio_net_isr);
 
     /* Системный вызов (int 0x80) — DPL=3 чтобы вызывать из userspace */
     set_idt_gate(128, (uint32_t)syscall_isr);

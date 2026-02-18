@@ -125,6 +125,11 @@ void kernel_setup_hardware();
 /* ELF Loader */
 void* load_elf(char* path, uint32_t* pd);
 
+/* Networking */
+void net_init(void);
+void net_poll(void);
+void virtio_net_irq_handler(void);
+
 /* Global State */
 extern volatile int keyboard_irq_count;
 extern volatile uint8_t last_scancode_raw;

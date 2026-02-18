@@ -15,6 +15,13 @@ DRIVER_INPUT_DIR = Lux/drivers/input
 DRIVER_BLOCK_DIR = Lux/drivers/block
 FS_VFS_DIR       = Lux/fs/vfs
 FS_FAT16_DIR     = Lux/fs/fat16
+NET_DIR          = Lux/net
+NET_ETH_DIR      = Lux/net/ethernet
+NET_IP_DIR       = Lux/net/ip
+NET_ICMP_DIR     = Lux/net/icmp
+NET_UDP_DIR      = Lux/net/protocols/udp
+NET_TCP_DIR      = Lux/net/protocols/tcp
+DRIVER_NET_DIR   = Lux/drivers/network
 BUILD_DIR        = build
 
 # ------------------------------------------------------------------------------
@@ -34,6 +41,13 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_BLOCK_DIR) \
          -I$(FS_VFS_DIR) \
          -I$(FS_FAT16_DIR) \
+         -I$(NET_DIR) \
+         -I$(NET_ETH_DIR) \
+         -I$(NET_IP_DIR) \
+         -I$(NET_ICMP_DIR) \
+         -I$(NET_UDP_DIR) \
+         -I$(NET_TCP_DIR) \
+         -I$(DRIVER_NET_DIR) \
          -Wall
 
 LDFLAGS = -m elf_i386 -Ttext 0x10000 --oformat binary
@@ -60,7 +74,15 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/io.o \
       $(BUILD_DIR)/mm.o \
       $(BUILD_DIR)/keyboard.o \
-      $(BUILD_DIR)/idt.o
+      $(BUILD_DIR)/idt.o \
+      $(BUILD_DIR)/net.o \
+      $(BUILD_DIR)/ethernet.o \
+      $(BUILD_DIR)/arp.o \
+      $(BUILD_DIR)/ip.o \
+      $(BUILD_DIR)/icmp.o \
+      $(BUILD_DIR)/udp.o \
+      $(BUILD_DIR)/tcp.o \
+      $(BUILD_DIR)/virtio_net.o
 
 
 all: $(BUILD_DIR)/luxos.img
@@ -195,6 +217,38 @@ $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/keyboard.o: $(DRIVER_INPUT_DIR)/keyboard.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/net.o: $(NET_DIR)/net.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ethernet.o: $(NET_ETH_DIR)/ethernet.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/arp.o: $(NET_DIR)/arp.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ip.o: $(NET_IP_DIR)/ip.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/icmp.o: $(NET_ICMP_DIR)/icmp.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/udp.o: $(NET_UDP_DIR)/udp.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tcp.o: $(NET_TCP_DIR)/tcp.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/virtio_net.o: $(DRIVER_NET_DIR)/virtio_net.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

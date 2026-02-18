@@ -1,6 +1,7 @@
 [bits 32]
 
 global keyboard_isr
+global virtio_net_isr
 global timer_isr
 global syscall_isr
 global isr_common_stub
@@ -9,6 +10,7 @@ global isr13
 global isr14
 
 extern keyboard_handler
+extern virtio_net_irq_handler
 extern exception_handler
 extern syscall_handler
 extern current_task
@@ -88,6 +90,16 @@ keyboard_isr:
     popa
     iretd
 
+virtio_net_isr:
+    pusha
+    call virtio_net_irq_handler
+    ; send EOI to both PICs
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    popa
+    iret
+
 syscall_isr:
     pusha
     push ds
@@ -100,18 +112,14 @@ syscall_isr:
     call syscall_handler
     add esp, 4
 
-    ; После syscall_handler проверяем — вдруг задача стала ZOMBIE
-    ; Если да — делаем принудительное переключение как timer_isr
     mov eax, [current_task]
     test eax, eax
     jz .no_switch
 
-    ; Проверяем state (offset 8 в task_struct: esp=0, pid=4, state=8)
     mov ecx, [eax + 8]
-    cmp ecx, 3          ; TASK_ZOMBIE = 3
+    cmp ecx, 3        
     jne .no_switch
 
-    ; Задача ZOMBIE — сохраняем esp и переключаемся
     mov [eax], esp
     call schedule
     mov eax, [current_task]
