@@ -6,16 +6,32 @@ boot:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7c00          
-
+    mov sp, 0x7c00
     mov [BOOT_DRIVE], dl
 
-    mov si, msg
+    mov ah, 0x00
+    int 0x13            
+
+    mov ah, 0x02
+    mov al, 32          
+    mov ch, 0
+    mov dh, 0
+    mov cl, 2           
+    mov dl, [BOOT_DRIVE]
+    mov bx, 0x7e00
+    int 0x13
+    jc disk_error
+
+    cmp al, 32
+    jne disk_error
+
+    mov dl, [BOOT_DRIVE]
+    jmp 0x0000:0x7e00   
+
+disk_error:
+    mov si, err_msg
     call print_string
-
-    call load_kernel
-
-    jmp 0x7e00
+    jmp $
 
 print_string:
     mov ah, 0x0e
@@ -28,34 +44,7 @@ print_string:
 .done:
     ret
 
-load_kernel:
-    mov ah, 0x00
-    int 0x13
-
-    mov ah, 0x02       
-    mov al, 60         
-    mov ch, 0        
-    mov dh, 0          
-    mov cl, 2              
-    mov dl, [BOOT_DRIVE] 
-    mov bx, 0x7e00        
-    
-    int 0x13           
-
-    jc disk_error
-
-    cmp al, 60
-    jne disk_error
-    
-    ret
-
-disk_error:
-    mov si, err_msg
-    call print_string
-    jmp $                   
-
-msg db 'Lumen Bootloader: Loading OS...', 13, 10, 0
-err_msg db 'Disk Error!', 0
+err_msg db 'Stage1 Disk Error!', 0
 BOOT_DRIVE db 0
 
 times 510-($-$$) db 0
