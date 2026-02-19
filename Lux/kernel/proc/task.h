@@ -14,18 +14,36 @@ typedef enum {
     TASK_ZOMBIE
 } task_state;
 
+/*
+ * Реальный порядок полей на стеке после входа в isr_common_stub:
+ *
+ *  push es, push ds  → es, ds  (меньшие адреса)
+ *  pusha             → edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax
+ *  push int_no
+ *  push err_code
+ *  CPU автоматически: eip, cs, eflags
+ *  CPU при ring3→0:   useresp, ss
+ */
 struct context_frame {
+    /* push ds / push es (в обратном порядке pop) */
+    uint32_t es;
+    uint32_t ds;
+    /* pusha */
     uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
+    /* номер вектора и код ошибки */
     uint32_t int_no;
     uint32_t err_code;
-    uint32_t eip, cs, eflags, useresp, ss;
+    /* CPU сохраняет автоматически */
+    uint32_t eip, cs, eflags;
+    /* CPU сохраняет только при переходе ring3→ring0 */
+    uint32_t useresp, ss;
 };
 
 struct task_struct {
     uint32_t esp;               /* Поле ПЕРВОЕ — timer_isr делает mov [eax], esp */
     uint32_t pid;
     task_state state;
-    uint8_t  is_kernel;         /* 1 = ядровая задача, не удалять */
+    uint8_t  is_kernel;         /* 1 = ядровая задача */
     void* stack_base;           /* Ядровый стек */
     void* ustack_phys;          /* Физический адрес пользовательского стека */
     uint32_t ustack_virt;       /* Виртуальный адрес пользовательского стека */

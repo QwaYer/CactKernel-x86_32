@@ -16,19 +16,38 @@ extern syscall_handler
 extern current_task
 extern schedule
 
+
 isr0:
-    push 0
-    push 0
+    push dword 0   
+    push dword 0   
     jmp isr_common_stub
 
 isr13:
-    push 13
+    push dword 13 
     jmp isr_common_stub
 
 isr14:
-    push 14
+    push dword 14 
     jmp isr_common_stub
 
+; Реальный порядок на стеке (от младших адресов к старшим):
+;   [esp+0]  = es
+;   [esp+4]  = ds
+;   [esp+8]  = edi  \
+;   [esp+12] = esi   |
+;   [esp+16] = ebp   |
+;   [esp+20] = esp   | pusha
+;   [esp+24] = ebx   |
+;   [esp+28] = edx   |
+;   [esp+32] = ecx   |
+;   [esp+36] = eax  /
+;   [esp+40] = int_no
+;   [esp+44] = err_code
+;   [esp+48] = eip    \  CPU
+;   [esp+52] = cs      |
+;   [esp+56] = eflags /
+;   [esp+60] = useresp \  только при ring3→ring0
+;   [esp+64] = ss      /
 isr_common_stub:
     pusha
     push ds
@@ -36,13 +55,13 @@ isr_common_stub:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    push esp
+    push esp                
     call exception_handler
     add esp, 4
     pop es
     pop ds
     popa
-    add esp, 8
+    add esp, 8             
     iretd
 
 timer_isr:
@@ -56,7 +75,7 @@ timer_isr:
     mov eax, [current_task]
     test eax, eax
     jz .skip_save
-    mov [eax], esp
+    mov [eax], esp          
 
 .skip_save:
     call schedule
@@ -64,10 +83,9 @@ timer_isr:
     mov eax, [current_task]
     test eax, eax
     jz .do_eoi
-    mov esp, [eax]
+    mov esp, [eax]     
 
 .do_eoi:
-    ; send EOI to PIC
     mov al, 0x20
     out 0x20, al
 
@@ -94,7 +112,6 @@ keyboard_isr:
 virtio_net_isr:
     pusha
     call virtio_net_irq_handler
-    ; send EOI to both PICs
     mov al, 0x20
     out 0xA0, al
     out 0x20, al
@@ -113,18 +130,12 @@ syscall_isr:
     call syscall_handler
     add esp, 4
 
-    ; После системного вызова проверяем, не нужно ли переключить задачу
-    ; (например, если процесс завершился или вызвал yield)
     mov eax, [current_task]
     test eax, eax
     jz .no_switch
 
-    ; Сохраняем текущий стек в структуру задачи
     mov [eax], esp
-    
     call schedule
-    
-    ; Загружаем стек новой (или той же) задачи
     mov eax, [current_task]
     mov esp, [eax]
 
