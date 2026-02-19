@@ -67,6 +67,7 @@ timer_isr:
     mov esp, [eax]
 
 .do_eoi:
+    ; send EOI to PIC
     mov al, 0x20
     out 0x20, al
 
@@ -112,16 +113,18 @@ syscall_isr:
     call syscall_handler
     add esp, 4
 
+    ; После системного вызова проверяем, не нужно ли переключить задачу
+    ; (например, если процесс завершился или вызвал yield)
     mov eax, [current_task]
     test eax, eax
     jz .no_switch
 
-    mov ecx, [eax + 8]
-    cmp ecx, 3        
-    jne .no_switch
-
+    ; Сохраняем текущий стек в структуру задачи
     mov [eax], esp
+    
     call schedule
+    
+    ; Загружаем стек новой (или той же) задачи
     mov eax, [current_task]
     mov esp, [eax]
 

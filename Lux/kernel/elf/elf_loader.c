@@ -80,5 +80,8 @@ void* load_elf(char* path, uint32_t* pd) {
         }
     }
 
+    /* Обязательно мапим ядро в новое адресное пространство, если vmm_create_address_space этого не сделал */
+    /* Обычно vmm_create_address_space копирует kernel mapping из kernel_directory */
+
     return (void*)header.e_entry;
 }

@@ -245,8 +245,8 @@ void kernel_setup_hardware() {
     ata_init();
     boot_log("ATA Hard Drive", 0);
 
-    fat16_init();
-    boot_log("FAT16 File System", 0);
+    ext4_init();
+    boot_log("EXT4 File System", 0);
 
     net_init();
     boot_log("Network Stack", 0);

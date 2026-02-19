@@ -73,15 +73,26 @@ struct task_struct* create_user_task(void* entry_point) {
 
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + 4096);
 
-    *(--esp) = 0x23;
-    *(--esp) = ustack_virt + 4096 - 4;
-    *(--esp) = 0x00000202;
-    *(--esp) = 0x1B;
-    *(--esp) = (uint32_t)entry_point;
-    *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    *(--esp) = 0x23;
-    *(--esp) = 0x23;
+    /* iretd frame */
+    *(--esp) = 0x23;                     /* SS */
+    *(--esp) = ustack_virt + 4096 - 4;   /* ESP */
+    *(--esp) = 0x00000202;               /* EFLAGS */
+    *(--esp) = 0x1B;                     /* CS */
+    *(--esp) = (uint32_t)entry_point;    /* EIP */
+
+    /* pusha frame */
+    *(--esp) = 0; /* eax */
+    *(--esp) = 0; /* ecx */
+    *(--esp) = 0; /* edx */
+    *(--esp) = 0; /* ebx */
+    *(--esp) = 0; /* esp_dummy */
+    *(--esp) = 0; /* ebp */
+    *(--esp) = 0; /* esi */
+    *(--esp) = 0; /* edi */
+
+    /* segments */
+    *(--esp) = 0x23; /* es */
+    *(--esp) = 0x23; /* ds */
 
     t->esp = (uint32_t)esp;
     t->stack_base = (void*)kstack;
@@ -89,6 +100,8 @@ struct task_struct* create_user_task(void* entry_point) {
     t->state = TASK_READY;
     t->is_kernel = 0;
     t->page_directory = 0;
+    t->ustack_phys = ustack_phys;
+    t->ustack_virt = ustack_virt;
 
     task_list_add(t);
     return t;
@@ -114,8 +127,6 @@ struct task_struct* create_elf_task(char* path) {
             (uint32_t)t->ustack_phys,
             PAGE_USER | PAGE_RW | PAGE_PRESENT);
 
-    tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
-
     return t;
 }
 
@@ -123,7 +134,7 @@ int init_scheduler() {
     current_task = (struct task_struct*)kmalloc(sizeof(struct task_struct));
     if (!current_task) return -1;
     current_task->pid = 0;
-    current_task->stack_base = 0;
+    current_task->stack_base = (void*)0x90000; /* Безопасный адрес для начального стека ядра */
     current_task->state = TASK_RUNNING;
     current_task->is_kernel = 1;
     current_task->page_directory = 0;
@@ -135,6 +146,8 @@ int init_scheduler() {
     create_task(terminal_task);
     return 0;
 }
+
+extern uint32_t page_directory[];
 
 void schedule() {
     if (!task_list_head || !current_task) return;
@@ -154,6 +167,8 @@ void schedule() {
 
     if (current_task->page_directory)
         switch_paging(current_task->page_directory);
+    else
+        switch_paging(page_directory);
 
     tss_entry.esp0 = (uint32_t)current_task->stack_base + 4096;
 }
