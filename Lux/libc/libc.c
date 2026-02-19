@@ -32,6 +32,10 @@ char* strcpy(char* dest, const char* src) {
     return dest;
 }
 
+char* copy_string(char* dest, const char* src) {
+    return strcpy(dest, src);
+}
+
 void itoa(int n, char str[]) {
     int i, sign;
     if ((sign = n) < 0) n = -n;

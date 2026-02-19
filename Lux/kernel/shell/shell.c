@@ -4,10 +4,10 @@
 #include "vfs.h"
 #include "memory.h"
 #include "libc.h"
-#include "../../net/net.h"
-#include "../../net/ip/ip.h"
-#include "../../net/icmp/icmp.h"
-#include "../../net/protocols/udp/udp.h"
+#include "net.h"
+#include "ip.h"
+#include "icmp.h"
+#include "udp.h"
 
 
 struct vfs_node* current_dir = 0;
