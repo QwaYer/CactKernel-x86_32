@@ -60,6 +60,11 @@ void vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int fl
         uint32_t* pt = (uint32_t*)kalloc();
         for (int i = 0; i < 1024; i++) pt[i] = 0;
         pd[pd_idx] = ((uint32_t)pt) | flags | PAGE_PRESENT;
+    } else {
+        /* PD entry уже существует — обновляем флаги (важно для PAGE_USER).
+         * Если страница была создана без USER бита, CPU выдаст #PF(5)
+         * при попытке ring3 обратиться к ней, даже если PT entry верный. */
+        pd[pd_idx] |= (flags & (PAGE_USER | PAGE_RW));
     }
 
     uint32_t* pt = (uint32_t*)(pd[pd_idx] & ~0xFFF);
@@ -70,8 +75,15 @@ uint32_t* vmm_create_address_space() {
     uint32_t* pd = (uint32_t*)kalloc();
     if (!pd) return 0;
 
+    /* Первые 32 записи (0..128MB) — identity map ядра.
+     * Копируем только ссылку на PT (не USER), ядро само по себе
+     * не должно быть доступно из ring3. Флаг PAGE_USER НЕ ставим
+     * намеренно — ядровые страницы остаются защищёнными.
+     * ELF загружается в отдельные виртуальные адреса (>= 0x1000),
+     * vmm_map сам создаст новые PT для user-страниц или добавит
+     * PAGE_USER к уже существующим PD-записям. */
     for (int i = 0; i < 32; i++) {
-        pd[i] = page_directory[i];
+        pd[i] = page_directory[i];  /* kernel identity map, без PAGE_USER */
     }
 
     for (int i = 32; i < 1024; i++) {

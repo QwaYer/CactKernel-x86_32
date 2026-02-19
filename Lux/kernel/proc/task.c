@@ -35,13 +35,19 @@ struct task_struct* create_task(void (*entry_point)()) {
 
     uint32_t* esp = (uint32_t*)((uint32_t)stack + 4096);
 
-    *(--esp) = 0x00000202;
-    *(--esp) = 0x08;
-    *(--esp) = (uint32_t)entry_point;
-    *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    *(--esp) = 0x10;
-    *(--esp) = 0x10;
+    *(--esp) = 0x00000202; // EFLAGS
+    *(--esp) = 0x08;       // CS
+    *(--esp) = (uint32_t)entry_point; // EIP
+    *(--esp) = 0;          // EAX
+    *(--esp) = 0;          // ECX
+    *(--esp) = 0;          // EDX
+    *(--esp) = 0;          // EBX
+    *(--esp) = 0;          // ESP (dummy)
+    *(--esp) = 0;          // EBP
+    *(--esp) = 0;          // ESI
+    *(--esp) = 0;          // EDI
+    *(--esp) = 0x10;       // DS
+    *(--esp) = 0x10;       // ES
 
     t->esp = (uint32_t)esp;
     t->stack_base = (void*)stack;
@@ -56,7 +62,12 @@ struct task_struct* create_task(void (*entry_point)()) {
     return t;
 }
 
-struct task_struct* create_user_task(void* entry_point) {
+/*
+ * Внутренняя версия create_user_task без task_list_add.
+ * create_elf_task использует её, чтобы добавить задачу в список
+ * только после того, как всё готово (страницы замаплены).
+ */
+static struct task_struct* create_user_task_internal(void* entry_point, int add_to_list) {
     struct task_struct* t = (struct task_struct*)kmalloc(sizeof(struct task_struct));
     if (!t) return 0;
 
@@ -73,26 +84,21 @@ struct task_struct* create_user_task(void* entry_point) {
 
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + 4096);
 
-    /* iretd frame */
-    *(--esp) = 0x23;                     /* SS */
-    *(--esp) = ustack_virt + 4096 - 4;   /* ESP */
-    *(--esp) = 0x00000202;               /* EFLAGS */
-    *(--esp) = 0x1B;                     /* CS */
-    *(--esp) = (uint32_t)entry_point;    /* EIP */
-
-    /* pusha frame */
-    *(--esp) = 0; /* eax */
-    *(--esp) = 0; /* ecx */
-    *(--esp) = 0; /* edx */
-    *(--esp) = 0; /* ebx */
-    *(--esp) = 0; /* esp_dummy */
-    *(--esp) = 0; /* ebp */
-    *(--esp) = 0; /* esi */
-    *(--esp) = 0; /* edi */
-
-    /* segments */
-    *(--esp) = 0x23; /* es */
-    *(--esp) = 0x23; /* ds */
+    *(--esp) = 0x23;                    // SS
+    *(--esp) = ustack_virt + 4096 - 4; // ESP (вершина user stack)
+    *(--esp) = 0x00000202;             // EFLAGS (IF=1)
+    *(--esp) = 0x1B;                   // CS (ring3 code)
+    *(--esp) = (uint32_t)entry_point;  // EIP
+    *(--esp) = 0;                      // EAX
+    *(--esp) = 0;                      // ECX
+    *(--esp) = 0;                      // EDX
+    *(--esp) = 0;                      // EBX
+    *(--esp) = 0;                      // ESP (dummy для pusha)
+    *(--esp) = 0;                      // EBP
+    *(--esp) = 0;                      // ESI
+    *(--esp) = 0;                      // EDI
+    *(--esp) = 0x23;                   // DS
+    *(--esp) = 0x23;                   // ES
 
     t->esp = (uint32_t)esp;
     t->stack_base = (void*)kstack;
@@ -100,33 +106,56 @@ struct task_struct* create_user_task(void* entry_point) {
     t->state = TASK_READY;
     t->is_kernel = 0;
     t->page_directory = 0;
-    t->ustack_phys = ustack_phys;
-    t->ustack_virt = ustack_virt;
 
-    task_list_add(t);
+    if (add_to_list)
+        task_list_add(t);
+
     return t;
 }
 
+struct task_struct* create_user_task(void* entry_point) {
+    return create_user_task_internal(entry_point, 1);
+}
+
 struct task_struct* create_elf_task(char* path) {
+    /* Отключаем прерывания на время подготовки задачи,
+     * чтобы планировщик не запустил незавершённую задачу. */
+    __asm__ __volatile__("cli");
+
     uint32_t* pd = vmm_create_address_space();
-    if (!pd) return 0;
+    if (!pd) {
+        __asm__ __volatile__("sti");
+        return 0;
+    }
 
     void* entry_point = load_elf(path, pd);
     if (!entry_point) {
         kprint("ELF: load failed\n");
+        __asm__ __volatile__("sti");
         return 0;
     }
 
-    struct task_struct* t = create_user_task(entry_point);
-    if (!t) return 0;
+    /* Создаём задачу БЕЗ добавления в список планировщика */
+    struct task_struct* t = create_user_task_internal(entry_point, 0);
+    if (!t) {
+        __asm__ __volatile__("sti");
+        return 0;
+    }
 
     t->page_directory = pd;
 
+    /* Маппим user stack в адресное пространство процесса */
     vmm_map(pd,
             t->ustack_virt,
             (uint32_t)t->ustack_phys,
             PAGE_USER | PAGE_RW | PAGE_PRESENT);
 
+    tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
+
+    /* Только теперь задача полностью готова — добавляем в список */
+    task_list_add(t);
+
+    __asm__ __volatile__("sti");
     return t;
 }
 
@@ -134,7 +163,7 @@ int init_scheduler() {
     current_task = (struct task_struct*)kmalloc(sizeof(struct task_struct));
     if (!current_task) return -1;
     current_task->pid = 0;
-    current_task->stack_base = (void*)0x90000; /* Безопасный адрес для начального стека ядра */
+    current_task->stack_base = 0;
     current_task->state = TASK_RUNNING;
     current_task->is_kernel = 1;
     current_task->page_directory = 0;
@@ -146,8 +175,6 @@ int init_scheduler() {
     create_task(terminal_task);
     return 0;
 }
-
-extern uint32_t page_directory[];
 
 void schedule() {
     if (!task_list_head || !current_task) return;
@@ -167,8 +194,6 @@ void schedule() {
 
     if (current_task->page_directory)
         switch_paging(current_task->page_directory);
-    else
-        switch_paging(page_directory);
 
     tss_entry.esp0 = (uint32_t)current_task->stack_base + 4096;
 }

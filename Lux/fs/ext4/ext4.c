@@ -9,8 +9,11 @@ static uint32_t block_size;
 
 void ext4_read_block(uint32_t block, uint8_t* buffer) {
     uint32_t sectors_per_block = block_size / 512;
+    /* s_first_data_block: для block_size>1024 суперблок на блоке 0,
+     * сами данные начинаются с блока 0. LBA = block * sectors_per_block. */
+    uint32_t lba_start = block * sectors_per_block;
     for (uint32_t i = 0; i < sectors_per_block; i++) {
-        ata_read_sector(block * sectors_per_block + i, buffer + (i * 512));
+        ata_read_sector(lba_start + i, buffer + (i * 512));
     }
 }
 
@@ -38,6 +41,7 @@ void ext4_read_inode(uint32_t inode_no, struct ext4_inode* inode) {
     memory_set(inode_buf, 0, block_size);
 
     ext4_read_block(inode_table_block + block_offset, inode_buf);
+
     memory_copy(inode, inode_buf + inner_offset, sizeof(struct ext4_inode));
 
     kfree_heap(gd_buf);
@@ -68,13 +72,40 @@ int ext4_read_file(struct vfs_node* node, unsigned int offset, unsigned int size
     struct ext4_inode inode;
     ext4_read_inode(node->inode, &inode);
 
-    if (!(inode.i_flags & 0x80000)) {
-        kprint("[EXT4] Only extent-based files supported\n");
-        return -1;
-    }
-
     uint8_t* tmp_buf = kmalloc(block_size);
     if (!tmp_buf) return -1;
+
+    struct ext4_extent_header* _eh = (struct ext4_extent_header*)inode.i_block;
+
+    if (_eh->eh_magic != 0xF30A) {
+        uint32_t bytes_read2   = 0;
+        uint32_t cur_offset2   = offset;
+        uint32_t file_size2    = inode.i_size_lo;
+
+        if (cur_offset2 >= file_size2) { kfree_heap(tmp_buf); return 0; }
+        if (cur_offset2 + size > file_size2) size = file_size2 - cur_offset2;
+
+        while (bytes_read2 < size) {
+            uint32_t file_block   = cur_offset2 / block_size;
+            uint32_t in_block_off = cur_offset2 % block_size;
+
+            if (file_block >= 12) break;
+            uint32_t phys_block = inode.i_block[file_block];
+            if (!phys_block) break;
+
+            memory_set(tmp_buf, 0, block_size);
+            ext4_read_block(phys_block, tmp_buf);
+
+            uint32_t to_copy = block_size - in_block_off;
+            if (to_copy > size - bytes_read2) to_copy = size - bytes_read2;
+
+            memory_copy(buffer + bytes_read2, tmp_buf + in_block_off, to_copy);
+            bytes_read2 += to_copy;
+            cur_offset2 += to_copy;
+        }
+        kfree_heap(tmp_buf);
+        return (int)bytes_read2;
+    }
 
     uint32_t bytes_read    = 0;
     uint32_t cur_offset    = offset;
@@ -112,16 +143,33 @@ static void ext4_iterate_dir(struct vfs_node* node,
     ext4_read_inode(node->inode, &inode);
 
     struct ext4_extent_header* eh = (struct ext4_extent_header*)inode.i_block;
-    if (eh->eh_magic != 0xF30A) return;
-
-    struct ext4_extent* extents = (struct ext4_extent*)((uint8_t*)inode.i_block + sizeof(struct ext4_extent_header));
 
     uint8_t* dir_buf = kmalloc(block_size);
     if (!dir_buf) return;
 
-    for (uint16_t ei = 0; ei < eh->eh_entries; ei++) {
-        for (uint32_t bi = 0; bi < extents[ei].ee_len; bi++) {
-            uint32_t phys_block = extents[ei].ee_start_lo + bi;
+    if (eh->eh_magic == 0xF30A) {
+        /* Extent tree */
+        struct ext4_extent* extents = (struct ext4_extent*)((uint8_t*)inode.i_block + sizeof(struct ext4_extent_header));
+        for (uint16_t ei = 0; ei < eh->eh_entries; ei++) {
+            for (uint32_t bi = 0; bi < extents[ei].ee_len; bi++) {
+                uint32_t phys_block = extents[ei].ee_start_lo + bi;
+                memory_set(dir_buf, 0, block_size);
+                ext4_read_block(phys_block, dir_buf);
+
+                uint32_t off = 0;
+                while (off < block_size) {
+                    struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(dir_buf + off);
+                    if (de->rec_len == 0) break;
+                    if (de->inode != 0 && de->name_len > 0) callback(de, userdata);
+                    off += de->rec_len;
+                }
+            }
+        }
+    } else {
+        /* Direct blocks (старый формат) */
+        for (int bi = 0; bi < 12; bi++) {
+            uint32_t phys_block = inode.i_block[bi];
+            if (!phys_block) break;
             memory_set(dir_buf, 0, block_size);
             ext4_read_block(phys_block, dir_buf);
 
@@ -129,9 +177,7 @@ static void ext4_iterate_dir(struct vfs_node* node,
             while (off < block_size) {
                 struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(dir_buf + off);
                 if (de->rec_len == 0) break;
-                if (de->inode != 0 && de->name_len > 0) {
-                    callback(de, userdata);
-                }
+                if (de->inode != 0 && de->name_len > 0) callback(de, userdata);
                 off += de->rec_len;
             }
         }
