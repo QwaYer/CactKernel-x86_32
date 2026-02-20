@@ -42,7 +42,7 @@ void sh_help(char* args) {
     kprint_color("LuxOS Shell v0.3\n", COLOR_LIGHT_CYAN);
     kprint_color("Commands:\n", COLOR_LIGHT_GREY);
     kprint("  help, clear, fetch, ls, ps, reboot, uptime, free, date\n");
-    kprint("  cd <dir>, cd .., cd /    pwd\n");
+    kprint("  cd <dir>, pwd\n");
     kprint("  mkdir <dir>, rmdir <dir>\n");
     kprint("  cat <file>, wrt <file> <text>\n");
     kprint("  tch <file>, rm <file>, echo <text>\n");

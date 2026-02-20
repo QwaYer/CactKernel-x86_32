@@ -57,16 +57,12 @@ struct task_struct* create_task(void (*entry_point)()) {
     t->page_directory = 0;
     t->ustack_phys = 0;
     t->ustack_virt = 0;
+    t->pending_signals = 0;
 
     task_list_add(t);
     return t;
 }
 
-/*
- * Внутренняя версия create_user_task без task_list_add.
- * create_elf_task использует её, чтобы добавить задачу в список
- * только после того, как всё готово (страницы замаплены).
- */
 static struct task_struct* create_user_task_internal(void* entry_point, int add_to_list) {
     struct task_struct* t = (struct task_struct*)kmalloc(sizeof(struct task_struct));
     if (!t) return 0;
@@ -107,7 +103,7 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     t->is_kernel = 0;
     t->page_directory = 0;
 
-    /* Инициализируем fd_table нулями */
+    t->pending_signals = 0;
     for (int i = 0; i < MAX_FD; i++) t->fd_table[i] = 0;
 
     if (add_to_list)
@@ -121,8 +117,6 @@ struct task_struct* create_user_task(void* entry_point) {
 }
 
 struct task_struct* create_elf_task(char* path) {
-    /* Отключаем прерывания на время подготовки задачи,
-     * чтобы планировщик не запустил незавершённую задачу. */
     __asm__ __volatile__("cli");
 
     uint32_t* pd = vmm_create_address_space();
@@ -138,7 +132,6 @@ struct task_struct* create_elf_task(char* path) {
         return 0;
     }
 
-    /* Создаём задачу БЕЗ добавления в список планировщика */
     struct task_struct* t = create_user_task_internal(entry_point, 0);
     if (!t) {
         __asm__ __volatile__("sti");
@@ -147,7 +140,6 @@ struct task_struct* create_elf_task(char* path) {
 
     t->page_directory = pd;
 
-    /* Маппим user stack в адресное пространство процесса */
     vmm_map(pd,
             t->ustack_virt,
             (uint32_t)t->ustack_phys,
@@ -155,7 +147,6 @@ struct task_struct* create_elf_task(char* path) {
 
     tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
 
-    /* Только теперь задача полностью готова — добавляем в список */
     task_list_add(t);
 
     __asm__ __volatile__("sti");
@@ -189,18 +180,14 @@ void task_reap() {
     while (curr != task_list_head && count < 64) {
         count++;
         if (curr->state == TASK_ZOMBIE && !curr->is_kernel) {
-            /* Удаляем из кольцевого списка */
             prev->next = curr->next;
 
-            /* Освобождаем адресное пространство */
             if (curr->page_directory)
                 vmm_free_address_space(curr->page_directory);
 
-            /* Освобождаем kernel stack */
             if (curr->stack_base)
                 kfree_page(curr->stack_base);
 
-            /* Освобождаем user stack */
             if (curr->ustack_phys)
                 kfree_page(curr->ustack_phys);
 
@@ -217,7 +204,6 @@ void task_reap() {
 void schedule() {
     if (!task_list_head || !current_task) return;
 
-    /* Чистим зомби перед переключением */
     task_reap();
 
     struct task_struct* next = current_task->next;
@@ -231,6 +217,13 @@ void schedule() {
 
     current_task->state = TASK_READY;
     current_task = next;
+
+    task_handle_signals(current_task);
+
+    if (current_task->state == TASK_ZOMBIE || current_task->state == TASK_SLEEPING) {
+        return;
+    }
+
     current_task->state = TASK_RUNNING;
 
     if (current_task->page_directory)
@@ -285,7 +278,6 @@ struct task_struct* task_fork(struct context_frame* regs) {
         return 0;
     }
 
-    /* Копируем все user страницы родителя (PD index 0..31 это kernel, пропускаем) */
     for (int i = 0; i < 1024; i++) {
         if (!(parent->page_directory[i] & PAGE_PRESENT)) continue;
         if (i < 32) { pd[i] = parent->page_directory[i]; continue; } /* kernel — просто копируем ссылку */
@@ -297,7 +289,6 @@ struct task_struct* task_fork(struct context_frame* regs) {
 
         for (int j = 0; j < 1024; j++) {
             if (!(src_pt[j] & PAGE_PRESENT)) continue;
-            /* Выделяем новую физическую страницу и копируем данные */
             void* new_page = kalloc();
             if (!new_page) continue;
             memory_copy(new_page, (void*)(src_pt[j] & ~0xFFF), PAGE_SIZE);
@@ -306,11 +297,9 @@ struct task_struct* task_fork(struct context_frame* regs) {
         pd[i] = ((uint32_t)dst_pt) | (parent->page_directory[i] & 0xFFF);
     }
 
-    /* Маппим user stack дочернего */
     uint32_t ustack_virt = parent->ustack_virt;
     vmm_map(pd, ustack_virt, (uint32_t)ustack_phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
 
-    /* Создаём task_struct дочернего */
     struct task_struct* child = (struct task_struct*)kmalloc(sizeof(struct task_struct));
     if (!child) {
         kfree_page(kstack);
@@ -327,11 +316,9 @@ struct task_struct* task_fork(struct context_frame* regs) {
     child->ustack_virt   = ustack_virt;
     child->page_directory = pd;
 
-    /* Копируем fd_table */
+    child->pending_signals = 0; /* дочерний стартует без сигналов */
     for (int i = 0; i < MAX_FD; i++) child->fd_table[i] = parent->fd_table[i];
 
-    /* Строим kernel stack дочернего — копия context_frame родителя,
-     * но EAX = 0 (fork возвращает 0 в дочернем) */
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + PAGE_SIZE);
 
     *(--esp) = regs->ss;
@@ -359,17 +346,12 @@ struct task_struct* task_fork(struct context_frame* regs) {
     return child; /* родитель получает указатель → pid дочернего */
 }
 
-/*
- * task_exec — заменяет текущий процесс новым ELF.
- * Вызывается из syscall, поэтому прерывания уже отключены через cli в syscall_isr.
- */
 int task_exec(char* path, struct context_frame* regs) {
     __asm__ __volatile__("cli");
 
     struct task_struct* t = current_task;
     if (!t || t->is_kernel) { __asm__ __volatile__("sti"); return -1; }
 
-    /* Новое адресное пространство */
     uint32_t* new_pd = vmm_create_address_space();
     if (!new_pd) { __asm__ __volatile__("sti"); return -1; }
 
@@ -380,11 +362,9 @@ int task_exec(char* path, struct context_frame* regs) {
         return -1;
     }
 
-    /* Освобождаем старое адресное пространство */
     if (t->page_directory)
         vmm_free_address_space(t->page_directory);
 
-    /* Новый user stack */
     uint32_t* ustack_phys = (uint32_t*)kalloc();
     if (!ustack_phys) { __asm__ __volatile__("sti"); return -1; }
     memory_set(ustack_phys, 0, PAGE_SIZE);
@@ -396,10 +376,8 @@ int task_exec(char* path, struct context_frame* regs) {
     t->ustack_phys    = ustack_phys;
     t->ustack_virt    = ustack_virt;
 
-    /* Закрываем все fd */
     for (int i = 3; i < MAX_FD; i++) t->fd_table[i] = 0;
 
-    /* Перестраиваем kernel stack с новым entry point */
     uint32_t* esp = (uint32_t*)((uint32_t)t->stack_base + PAGE_SIZE);
 
     *(--esp) = 0x23;                    /* SS */
@@ -421,17 +399,47 @@ int task_exec(char* path, struct context_frame* regs) {
     return 0;
 }
 
-/*
- * task_kill — убивает процесс по PID (для сигналов SIGKILL).
- */
-void task_kill(uint32_t pid) {
+void task_signal(uint32_t pid, uint32_t signal) {
     if (!task_list_head) return;
     struct task_struct* tmp = task_list_head;
     do {
         if (tmp->pid == pid && !tmp->is_kernel) {
-            tmp->state = TASK_ZOMBIE;
+            tmp->pending_signals |= signal;
             return;
         }
         tmp = tmp->next;
     } while (tmp != task_list_head);
+}
+
+void task_handle_signals(struct task_struct* t) {
+    if (!t || t->is_kernel || !t->pending_signals) return;
+
+    if (t->pending_signals & SIGKILL) {
+        t->pending_signals = 0;
+        t->state = TASK_ZOMBIE;
+        return;
+    }
+
+    if (t->pending_signals & SIGTERM) {
+        t->pending_signals &= ~SIGTERM;
+        t->state = TASK_ZOMBIE;
+        return;
+    }
+
+    if (t->pending_signals & SIGSTOP) {
+        t->pending_signals &= ~SIGSTOP;
+        t->state = TASK_SLEEPING;
+        return;
+    }
+
+    if (t->pending_signals & SIGCONT) {
+        t->pending_signals &= ~SIGCONT;
+        if (t->state == TASK_SLEEPING)
+            t->state = TASK_READY;
+        return;
+    }
+}
+
+void task_kill(uint32_t pid) {
+    task_signal(pid, SIGKILL);
 }

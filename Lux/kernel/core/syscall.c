@@ -106,6 +106,14 @@ static int sys_kill(uint32_t pid) {
     return 0;
 }
 
+/* sys_signal — отправляет произвольный сигнал процессу.
+ * EBX = pid, ECX = signal (SIGKILL=1, SIGTERM=2, SIGSTOP=4, SIGCONT=8) */
+static int sys_signal(uint32_t pid, uint32_t signal) {
+    if (!pid) return -1;
+    task_signal(pid, signal);
+    return 0;
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -120,6 +128,7 @@ static syscall_fn syscall_table[] = {
     [9]  = (syscall_fn)sys_fork,
     [10] = (syscall_fn)sys_exec,
     [11] = (syscall_fn)sys_kill,
+    [12] = (syscall_fn)sys_signal
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
