@@ -58,3 +58,9 @@ int mkdir_vfs(struct vfs_node* node, char* name) {
         return node->mkdir(node, name);
     return -1;
 }
+
+int rmdir_vfs(struct vfs_node* node, char* name) {
+    if (node && node->type == VFS_DIRECTORY && node->rmdir)
+        return node->rmdir(node, name);
+    return -1;
+}
