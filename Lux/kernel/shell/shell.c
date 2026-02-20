@@ -39,7 +39,7 @@ static char* skip_token(char* s) {
 
 void sh_help(char* args) {
     kprint("\n");
-    kprint_color("LuxOS Shell v0.3\n", COLOR_LIGHT_CYAN);
+    kprint_color("Lux Shell v0.3\n", COLOR_LIGHT_CYAN);
     kprint_color("Commands:\n", COLOR_LIGHT_GREY);
     kprint("  help, clear, fetch, ls, ps, reboot, uptime, free, date\n");
     kprint("  cd <dir>, pwd\n");
