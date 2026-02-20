@@ -1,4 +1,5 @@
 #include "shell.h"
+#include "task.h"
 #include "kernel.h"
 #include "keyboard.h"
 #include "vfs.h"
@@ -29,6 +30,7 @@ void sh_help(char* args) {
     kprint("  cd <dir>, pwd, mkdir <dir>, rmdir <dir>\n");
     kprint("  cat <file>, wrt <file> <text>\n");
     kprint("  tch <file>, rm <file>, echo <text>\n");
+    kprint("  kill <pid>\n");
     kprint("  ipconfig, ping <ip>, udptest <ip> <port> <msg>\n");
 }
 
@@ -49,8 +51,6 @@ void sh_cd(char* args) {
     }
 
     if (compare_string(name, "..") == 0) {
-        /* Для простоты пока возвращаемся в корень,
-           так как у vfs_node нет ссылки на parent */
         current_dir = vfs_root;
         return;
     }
@@ -58,7 +58,6 @@ void sh_cd(char* args) {
     struct vfs_node* next = finddir_vfs(current_dir, name);
     if (next && next->type == VFS_DIRECTORY) {
         current_dir = next;
-        /* Обновляем путь (упрощенно) */
         if (compare_string(current_path, "/") != 0) {
             int len = strlen(current_path);
             current_path[len] = '/';
@@ -331,6 +330,22 @@ void sh_wrt(char* args) {
 }
 
 
+void sh_kill(char* args) {
+    char* pid_str = skip_token(args);
+    if (!pid_str) { kprint("\nUsage: kill <pid>\n"); return; }
+
+    uint32_t pid = 0;
+    char* p = pid_str;
+    while (*p >= '0' && *p <= '9') { pid = pid * 10 + (*p - '0'); p++; }
+
+    if (pid == 0) { kprint("\nError: invalid PID\n"); return; }
+
+    task_kill(pid);
+    kprint("\nSignal sent to PID ");
+    kprint(pid_str);
+    kprint("\n");
+}
+
 void sh_run(char* args) {
     char* name = skip_token(args);
     if (!name) { kprint("\nUsage: run <file>\n"); return; }
@@ -345,6 +360,7 @@ void sh_run(char* args) {
 static struct shell_command sh_tab[] = {
     {"help",   "Show help",      sh_help},
     {"run",    "Run ELF file",   sh_run},
+    {"kill",   "Kill process",   sh_kill},
     {"ls",     "List files",     sh_ls},
     {"cd",     "Change dir",     sh_cd},
     {"fetch",  "System info",    sh_fetch},

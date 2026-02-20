@@ -38,8 +38,10 @@ extern void load_page_directory(uint32_t* directory);
 extern void enable_paging(); 
 
 void init_heap();
+void kfree_page(void* ptr);
 void* kmalloc(uint32_t size);
 void* kmalloc_aligned(uint32_t size, uint32_t align);
+void vmm_free_address_space(uint32_t* pd);
 void kfree_heap(void* ptr);
 
 #endif

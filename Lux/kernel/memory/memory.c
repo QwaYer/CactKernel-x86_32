@@ -61,9 +61,6 @@ void vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int fl
         for (int i = 0; i < 1024; i++) pt[i] = 0;
         pd[pd_idx] = ((uint32_t)pt) | flags | PAGE_PRESENT;
     } else {
-        /* PD entry уже существует — обновляем флаги (важно для PAGE_USER).
-         * Если страница была создана без USER бита, CPU выдаст #PF(5)
-         * при попытке ring3 обратиться к ней, даже если PT entry верный. */
         pd[pd_idx] |= (flags & (PAGE_USER | PAGE_RW));
     }
 
@@ -75,15 +72,8 @@ uint32_t* vmm_create_address_space() {
     uint32_t* pd = (uint32_t*)kalloc();
     if (!pd) return 0;
 
-    /* Первые 32 записи (0..128MB) — identity map ядра.
-     * Копируем только ссылку на PT (не USER), ядро само по себе
-     * не должно быть доступно из ring3. Флаг PAGE_USER НЕ ставим
-     * намеренно — ядровые страницы остаются защищёнными.
-     * ELF загружается в отдельные виртуальные адреса (>= 0x1000),
-     * vmm_map сам создаст новые PT для user-страниц или добавит
-     * PAGE_USER к уже существующим PD-записям. */
     for (int i = 0; i < 32; i++) {
-        pd[i] = page_directory[i];  /* kernel identity map, без PAGE_USER */
+        pd[i] = page_directory[i]; 
     }
 
     for (int i = 32; i < 1024; i++) {
@@ -91,6 +81,31 @@ uint32_t* vmm_create_address_space() {
     }
 
     return pd;
+}
+
+void kfree_page(void* ptr) {
+    if (!ptr) return;
+    uint32_t addr = (uint32_t)ptr;
+    if (addr < MEM_START) return;
+    int page_idx = (addr - MEM_START) / PAGE_SIZE;
+    if (page_idx < 0 || page_idx >= TOTAL_PAGES) return;
+    memory_bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+}
+
+void vmm_free_address_space(uint32_t* pd) {
+    if (!pd) return;
+    for (int i = 32; i < 1024; i++) {
+        if (pd[i] & PAGE_PRESENT) {
+            uint32_t* pt = (uint32_t*)(pd[i] & ~0xFFF);
+            for (int j = 0; j < 1024; j++) {
+                if (pt[j] & PAGE_PRESENT) {
+                    kfree_page((void*)(pt[j] & ~0xFFF));
+                }
+            }
+            kfree_page(pt); 
+        }
+    }
+    kfree_page(pd); 
 }
 
 void* kalloc() {
