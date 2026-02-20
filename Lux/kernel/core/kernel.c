@@ -162,11 +162,11 @@ void terminal_task() {
     
 
     kprint("\n");
-    kprint_color("LuxOS Shell", COLOR_LIGHT_CYAN);
+    kprint_color("Lux Shell", COLOR_LIGHT_CYAN);
     kprint(" ready!\n");
-    kprint_color("qwayer", COLOR_LIGHT_GREEN);
+    kprint_color("kernel", COLOR_LIGHT_GREEN);
     kprint("@");
-    kprint_color("luxos", COLOR_LIGHT_RED);
+    kprint_color("lux", COLOR_LIGHT_RED);
     kprint(":");
     kprint_color("~", COLOR_LIGHT_BLUE);
     kprint("$ ");
@@ -183,9 +183,9 @@ void terminal_task() {
                 
                 idx = 0; 
                 kprint("\n");
-                kprint_color("qwayer", COLOR_LIGHT_GREEN);
+                kprint_color("kernel", COLOR_LIGHT_GREEN);
                 kprint("@");
-                kprint_color("luxos", COLOR_LIGHT_RED);
+                kprint_color("lux", COLOR_LIGHT_RED);
                 kprint(":");
                 kprint_color("~", COLOR_LIGHT_BLUE);
                 kprint("$ ");
@@ -268,12 +268,12 @@ void kernel_setup_hardware() {
 
 void init() {
     clear_screen();
-    kprint_color("LuxOS Kernel Version 0.0.8\n", COLOR_LIGHT_BROWN);
+    kprint_color("Lux Kernel Version 0.1.0\n", COLOR_LIGHT_BROWN);
     kprint_color("--------------------------\n", COLOR_DARK_GREY);
 
     kernel_setup_hardware();
 
-    kprint("\nSystem is ready. Starting terminal...\n");
+    kprint("\nKernel is ready. Starting terminal...\n");
 
         system_ready = 1;
     __asm__ __volatile__("sti");

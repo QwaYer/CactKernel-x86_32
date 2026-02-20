@@ -6,6 +6,15 @@
 
 #define EXT4_SUPER_MAGIC 0xEF53
 
+#define EXT4_FT_UNKNOWN  0
+#define EXT4_FT_REG_FILE 1
+#define EXT4_FT_DIR      2
+#define EXT4_FT_CHRDEV   3
+#define EXT4_FT_BLKDEV   4
+#define EXT4_FT_FIFO     5
+#define EXT4_FT_SOCK     6
+#define EXT4_FT_SYMLINK  7
+
 struct ext4_superblock {
     uint32_t s_inodes_count;
     uint32_t s_blocks_count_lo;
@@ -32,8 +41,7 @@ struct ext4_superblock {
     uint32_t s_rev_level;
     uint16_t s_def_resuid;
     uint16_t s_def_resgid;
-    
-    // EXT4_DYNAMIC_REV specific
+
     uint32_t s_first_ino;
     uint16_t s_inode_size;
     uint16_t s_block_group_nr;
@@ -44,13 +52,11 @@ struct ext4_superblock {
     char     s_volume_name[16];
     char     s_last_mounted[64];
     uint32_t s_algorithm_usage_bitmap;
-    
-    // Performance hints
+
     uint8_t  s_prealloc_blocks;
     uint8_t  s_prealloc_dir_blocks;
     uint16_t s_reserved_gdt_blocks;
-    
-    // Journaling support
+
     uint8_t  s_journal_uuid[16];
     uint32_t s_journal_inum;
     uint32_t s_journal_dev;
@@ -63,8 +69,7 @@ struct ext4_superblock {
     uint32_t s_first_meta_bg;
     uint32_t s_mkfs_time;
     uint32_t s_jnl_blocks[17];
-    
-    // 64bit support
+
     uint32_t s_blocks_count_hi;
     uint32_t s_r_blocks_count_hi;
     uint32_t s_free_blocks_count_hi;
@@ -121,7 +126,6 @@ struct ext4_group_desc {
     uint16_t bg_inode_bitmap_csum_lo;
     uint16_t bg_itable_unused_lo;
     uint16_t bg_checksum;
-    // 64-bit fields
     uint32_t bg_block_bitmap_hi;
     uint32_t bg_inode_bitmap_hi;
     uint32_t bg_inode_table_hi;
@@ -195,9 +199,17 @@ struct ext4_dir_entry_2 {
     char     name[];
 } __attribute__((packed));
 
-void ext4_init();
-int  ext4_read_file(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
+/* Публичные функции */
+void             ext4_init();
+void             ext4_read_block(uint32_t block, uint8_t* buffer);
+void             ext4_read_inode(uint32_t inode_no, struct ext4_inode* inode);
+int              ext4_read_file(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
+int              ext4_write_file(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
 struct vfs_node* ext4_finddir(struct vfs_node* node, char* name);
-void ext4_list_dir(struct vfs_node* node);
+void             ext4_list_dir(struct vfs_node* node);
+int              ext4_mkdir(struct vfs_node* node, char* name);
+int              ext4_rmdir(struct vfs_node* node, char* name);
+int              ext4_create(struct vfs_node* node, char* name);
+int              ext4_delete(struct vfs_node* node, char* name);
 
 #endif
