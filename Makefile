@@ -85,13 +85,13 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/virtio_net.o
 
 
-all: $(BUILD_DIR)/luxos.img
+all: $(BUILD_DIR)/lux.img
 	@echo "--------------------------------------------------"
-	@echo "Сборка LuxOS завершена успешно!"
+	@echo "Сборка ядра lux завершена успешно!"
 	@echo "  Stage 1: $(BUILD_DIR)/boot.bin"
 	@echo "  Stage 2: $(BUILD_DIR)/stage2.bin"
 	@echo "  Ядро:    $(BUILD_DIR)/kernel.bin"
-	@echo "  Образ:   $(BUILD_DIR)/luxos.img"
+	@echo "  Образ:   $(BUILD_DIR)/lux.img"
 	@KERN_SIZE=$$(wc -c < $(BUILD_DIR)/kernel.bin); \
 	 KERN_SECTORS=$$(( ($$KERN_SIZE + 511) / 512 )); \
 	 echo "  Размер ядра: $$KERN_SIZE байт ($$KERN_SECTORS секторов)"; 
@@ -101,7 +101,7 @@ all: $(BUILD_DIR)/luxos.img
 # Сборка образа диска: Stage1 + Stage2 + Kernel
 # ------------------------------------------------------------------------------
 
-$(BUILD_DIR)/luxos.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin
+$(BUILD_DIR)/lux.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin
 	cat $^ > $@
 	truncate -s 10M $@
 
