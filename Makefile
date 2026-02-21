@@ -10,6 +10,7 @@ KERN_SHELL_DIR   = Lux/kernel/shell
 KERN_MEM_DIR     = Lux/kernel/memory
 KERN_PROCMM_DIR  = Lux/kernel/memory/proc_mm
 KERN_PROC_DIR    = Lux/kernel/proc
+KERN_SYNC_DIR    = Lux/kernel/sync
 KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR = Lux/drivers/input
@@ -37,6 +38,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_MEM_DIR) \
 		 -I$(KERN_PROCMM_DIR) \
          -I$(KERN_PROC_DIR) \
+         -I$(KERN_SYNC_DIR) \
          -I$(KERN_IDT_DIR) \
          -I$(KERN_LIBC_DIR) \
          -I$(DRIVER_INPUT_DIR) \
@@ -66,7 +68,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/shell.o \
       $(BUILD_DIR)/libc.o \
       $(BUILD_DIR)/memory.o \
-	  $(BUILD_DIR)/proc_mm.o \
+      $(BUILD_DIR)/proc_mm.o \
+      $(BUILD_DIR)/sync.o \
       $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/vfs.o \
       $(BUILD_DIR)/ext4.o \
@@ -200,6 +203,10 @@ $(BUILD_DIR)/memory.o: $(KERN_MEM_DIR)/memory.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/proc_mm.o: $(KERN_PROCMM_DIR)/proc_mm.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sync.o: $(KERN_SYNC_DIR)/sync.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

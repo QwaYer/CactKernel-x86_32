@@ -5,6 +5,7 @@
 #include "gdt.h"
 #include "vfs.h"
 #include "proc_mm.h"
+#include "sync.h"
 
 #define USER_CODE_SEL 0x1B
 #define USER_DATA_SEL 0x23
@@ -66,6 +67,7 @@ void vmm_free_address_space(uint32_t* pd);
 extern struct task_struct* volatile current_task;
 extern struct task_struct* volatile task_list_head;
 extern uint32_t next_pid;
+extern spinlock_t scheduler_lock;
 
 extern void terminal_task();
 extern void switch_to(uint32_t* old_esp, uint32_t new_esp);

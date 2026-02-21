@@ -5,6 +5,7 @@
 #include "proc_mm.h"
 #include "libc.h"
 
+void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 {
     tracker->page_dir = pd;
 
