@@ -7,14 +7,17 @@
 struct task_struct* volatile current_task = 0;
 struct task_struct* volatile task_list_head = 0;
 uint32_t next_pid = 1;
+spinlock_t scheduler_lock;
 
 void task_init() {
     current_task = 0;
     task_list_head = 0;
     next_pid = 1;
+    spinlock_init(&scheduler_lock);
 }
 
 static void task_list_add(struct task_struct* t) {
+    spinlock_acquire(&scheduler_lock);
     if (!task_list_head) {
         task_list_head = t;
         t->next = t;
@@ -24,6 +27,7 @@ static void task_list_add(struct task_struct* t) {
         last->next = t;
         t->next = task_list_head;
     }
+    spinlock_release(&scheduler_lock);
 }
 
 struct task_struct* create_task(void (*entry_point)()) {
@@ -188,7 +192,7 @@ int init_scheduler() {
     return 0;
 }
 
-void task_reap() {
+static void task_reap_internal() {
     if (!task_list_head) return;
 
     struct task_struct* prev = task_list_head;
@@ -225,19 +229,35 @@ void task_reap() {
     }
 }
 
-void schedule() {
-    if (!task_list_head || !current_task) return;
+void task_reap() {
+    spinlock_acquire(&scheduler_lock);
+    task_reap_internal();
+    spinlock_release(&scheduler_lock);
+}
 
-    task_reap();
+void schedule() {
+    spinlock_acquire(&scheduler_lock);
+    if (!task_list_head || !current_task) {
+        spinlock_release(&scheduler_lock);
+        return;
+    }
+
+    task_reap_internal();
 
     struct task_struct* next = current_task->next;
     int checked = 0;
     while (next->state != TASK_READY && next->state != TASK_RUNNING) {
         next = next->next;
-        if (++checked > 64) return;
+        if (++checked > 64) {
+            spinlock_release(&scheduler_lock);
+            return;
+        }
     }
 
-    if (next == current_task) return;
+    if (next == current_task) {
+        spinlock_release(&scheduler_lock);
+        return;
+    }
 
     current_task->state = TASK_READY;
     current_task = next;
@@ -245,6 +265,7 @@ void schedule() {
     task_handle_signals(current_task);
 
     if (current_task->state == TASK_ZOMBIE || current_task->state == TASK_SLEEPING) {
+        spinlock_release(&scheduler_lock);
         return;
     }
 
@@ -254,22 +275,46 @@ void schedule() {
         switch_paging(current_task->page_directory);
 
     tss_entry.esp0 = (uint32_t)current_task->stack_base + 4096;
+    spinlock_release(&scheduler_lock);
 }
 
 void list_tasks() {
-    if (!task_list_head) return;
+    spinlock_acquire(&scheduler_lock);
+    if (!task_list_head) {
+        spinlock_release(&scheduler_lock);
+        return;
+    }
+
+    int count = 0;
     struct task_struct* tmp = task_list_head;
-    kprint("\nPID  STATE\n");
     do {
-        char buf[16];
-        itoa(tmp->pid, buf);
-        kprint(buf);
-        if      (tmp->state == TASK_RUNNING) kprint("  RUNNING\n");
-        else if (tmp->state == TASK_READY)   kprint("  READY\n");
-        else if (tmp->state == TASK_ZOMBIE)  kprint("  ZOMBIE\n");
-        else                                 kprint("  SLEEPING\n");
+        count++;
         tmp = tmp->next;
-    } while (tmp != task_list_head);
+    } while (tmp != task_list_head && count < 256);
+
+    struct {
+        uint32_t pid;
+        task_state state;
+    } tasks[count];
+
+    tmp = task_list_head;
+    for (int i = 0; i < count; i++) {
+        tasks[i].pid = tmp->pid;
+        tasks[i].state = tmp->state;
+        tmp = tmp->next;
+    }
+    spinlock_release(&scheduler_lock);
+
+    kprint("\nPID  STATE\n");
+    for (int i = 0; i < count; i++) {
+        char buf[16];
+        itoa(tasks[i].pid, buf);
+        kprint(buf);
+        if      (tasks[i].state == TASK_RUNNING) kprint("  RUNNING\n");
+        else if (tasks[i].state == TASK_READY)   kprint("  READY\n");
+        else if (tasks[i].state == TASK_ZOMBIE)  kprint("  ZOMBIE\n");
+        else                                     kprint("  SLEEPING\n");
+    }
 }
 
 /*
@@ -436,15 +481,21 @@ int task_exec(char* path, struct context_frame* regs) {
 }
 
 void task_signal(uint32_t pid, uint32_t signal) {
-    if (!task_list_head) return;
+    spinlock_acquire(&scheduler_lock);
+    if (!task_list_head) {
+        spinlock_release(&scheduler_lock);
+        return;
+    }
     struct task_struct* tmp = task_list_head;
     do {
         if (tmp->pid == pid && !tmp->is_kernel) {
             tmp->pending_signals |= signal;
+            spinlock_release(&scheduler_lock);
             return;
         }
         tmp = tmp->next;
     } while (tmp != task_list_head);
+    spinlock_release(&scheduler_lock);
 }
 
 void task_handle_signals(struct task_struct* t) {
