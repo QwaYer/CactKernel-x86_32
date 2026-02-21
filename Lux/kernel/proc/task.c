@@ -58,6 +58,7 @@ struct task_struct* create_task(void (*entry_point)()) {
     t->ustack_phys = 0;
     t->ustack_virt = 0;
     t->pending_signals = 0;
+    proc_tracker_init(&t->mm);
 
     task_list_add(t);
     return t;
@@ -71,7 +72,7 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     if (!kstack) { kfree_heap(t); return 0; }
 
     uint32_t* ustack_phys = (uint32_t*)kalloc();
-    if (!ustack_phys) { kfree_heap(t); return 0; }
+    if (!ustack_phys) { kfree_page(kstack); kfree_heap(t); return 0; }
 
     uint32_t ustack_virt = 0xBFFFF000;
 
@@ -84,7 +85,7 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     *(--esp) = ustack_virt + 4096 - 4; // ESP (вершина user stack)
     *(--esp) = 0x00000202;             // EFLAGS (IF=1)
     *(--esp) = 0x1B;                   // CS (ring3 code)
-    *(--esp) = (uint32_t)entry_point;  // EIP
+    *(--esp) = (uint32_t)entry_point;  // EIP  ← для ELF перезапишем ниже
     *(--esp) = 0;                      // EAX
     *(--esp) = 0;                      // ECX
     *(--esp) = 0;                      // EDX
@@ -102,8 +103,8 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     t->state = TASK_READY;
     t->is_kernel = 0;
     t->page_directory = 0;
-
     t->pending_signals = 0;
+    proc_tracker_init(&t->mm);
     for (int i = 0; i < MAX_FD; i++) t->fd_table[i] = 0;
 
     if (add_to_list)
@@ -125,20 +126,35 @@ struct task_struct* create_elf_task(char* path) {
         return 0;
     }
 
-    void* entry_point = load_elf(path, pd);
-    if (!entry_point) {
-        kprint("ELF: load failed\n");
+    struct task_struct* t = create_user_task_internal((void*)0, 0);
+    if (!t) {
+        kfree_page(pd);
         __asm__ __volatile__("sti");
         return 0;
     }
 
-    struct task_struct* t = create_user_task_internal(entry_point, 0);
-    if (!t) {
+    proc_tracker_init(&t->mm);
+
+    void* entry_point = load_elf(path, pd, &t->mm);
+    if (!entry_point) {
+        kprint("ELF: load failed\n");
+        /* proc_free_pages уже вызван внутри load_elf */
+        kfree_page(t->stack_base);
+        kfree_page(t->ustack_phys);
+        kfree_heap(t);
         __asm__ __volatile__("sti");
         return 0;
     }
 
     t->page_directory = pd;
+
+    /*
+     * Исправляем EIP в уже подготовленном стеке.
+     * Раскладка от вершины (t->esp): ES, DS, EDI, ESI, EBP, ESP_dummy,
+     * EBX, EDX, ECX, EAX, EIP — итого 10 слов до EIP.
+     */
+    uint32_t* stk = (uint32_t*)t->esp;
+    stk[10] = (uint32_t)entry_point;
 
     vmm_map(pd,
             t->ustack_virt,
@@ -164,6 +180,8 @@ int init_scheduler() {
     current_task->ustack_phys = 0;
     current_task->ustack_virt = 0;
     current_task->next = current_task;
+    current_task->pending_signals = 0;
+    proc_tracker_init(&current_task->mm);
     task_list_head = current_task;
 
     create_task(terminal_task);
@@ -182,8 +200,14 @@ void task_reap() {
         if (curr->state == TASK_ZOMBIE && !curr->is_kernel) {
             prev->next = curr->next;
 
-            if (curr->page_directory)
-                vmm_free_address_space(curr->page_directory);
+            /*
+             * proc_free_pages освобождает:
+             *   - все физические страницы кода/данных/bss (mm.pages[])
+             *   - page directory через vmm_free_address_space
+             * Поэтому отдельный вызов vmm_free_address_space не нужен.
+             * ustack_phys управляется вручную (не через трекер).
+             */
+            proc_free_pages(&curr->mm);
 
             if (curr->stack_base)
                 kfree_page(curr->stack_base);
@@ -247,9 +271,12 @@ void list_tasks() {
         tmp = tmp->next;
     } while (tmp != task_list_head);
 }
+
 /*
- * sys_fork — создаёт копию текущего процесса.
- * Возвращает PID дочернего в родителе, 0 в дочернем.
+ * task_fork — создаёт копию текущего процесса.
+ * Страницы форка выделяются напрямую через kalloc() и не проходят
+ * через трекер родителя — дочерний процесс управляет ими сам через
+ * vmm_free_address_space при завершении (task_reap → proc_free_pages).
  */
 struct task_struct* task_fork(struct context_frame* regs) {
     __asm__ __volatile__("cli");
@@ -280,7 +307,7 @@ struct task_struct* task_fork(struct context_frame* regs) {
 
     for (int i = 0; i < 1024; i++) {
         if (!(parent->page_directory[i] & PAGE_PRESENT)) continue;
-        if (i < 32) { pd[i] = parent->page_directory[i]; continue; } /* kernel — просто копируем ссылку */
+        if (i < 32) { pd[i] = parent->page_directory[i]; continue; }
 
         uint32_t* src_pt = (uint32_t*)(parent->page_directory[i] & ~0xFFF);
         uint32_t* dst_pt = (uint32_t*)kalloc();
@@ -308,15 +335,18 @@ struct task_struct* task_fork(struct context_frame* regs) {
         return 0;
     }
 
-    child->pid           = next_pid++;
-    child->state         = TASK_READY;
-    child->is_kernel     = 0;
-    child->stack_base    = kstack;
-    child->ustack_phys   = ustack_phys;
-    child->ustack_virt   = ustack_virt;
+    child->pid            = next_pid++;
+    child->state          = TASK_READY;
+    child->is_kernel      = 0;
+    child->stack_base     = kstack;
+    child->ustack_phys    = ustack_phys;
+    child->ustack_virt    = ustack_virt;
     child->page_directory = pd;
+    child->pending_signals = 0;
 
-    child->pending_signals = 0; /* дочерний стартует без сигналов */
+    proc_tracker_init(&child->mm);
+    child->mm.page_dir = pd;   /* чтобы proc_free_pages освободил pd */
+
     for (int i = 0; i < MAX_FD; i++) child->fd_table[i] = parent->fd_table[i];
 
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + PAGE_SIZE);
@@ -343,7 +373,7 @@ struct task_struct* task_fork(struct context_frame* regs) {
     task_list_add(child);
 
     __asm__ __volatile__("sti");
-    return child; /* родитель получает указатель → pid дочернего */
+    return child;
 }
 
 int task_exec(char* path, struct context_frame* regs) {
@@ -355,9 +385,11 @@ int task_exec(char* path, struct context_frame* regs) {
     uint32_t* new_pd = vmm_create_address_space();
     if (!new_pd) { __asm__ __volatile__("sti"); return -1; }
 
-    void* entry = load_elf(path, new_pd);
+    proc_tracker_init(&t->mm);
+
+    void* entry = load_elf(path, new_pd, &t->mm);
     if (!entry) {
-        kfree_page(new_pd);
+        /* proc_free_pages (включая new_pd) уже вызван внутри load_elf */
         __asm__ __volatile__("sti");
         return -1;
     }
@@ -366,7 +398,11 @@ int task_exec(char* path, struct context_frame* regs) {
         vmm_free_address_space(t->page_directory);
 
     uint32_t* ustack_phys = (uint32_t*)kalloc();
-    if (!ustack_phys) { __asm__ __volatile__("sti"); return -1; }
+    if (!ustack_phys) {
+        proc_free_pages(&t->mm); 
+        __asm__ __volatile__("sti");
+        return -1;
+    }
     memory_set(ustack_phys, 0, PAGE_SIZE);
 
     uint32_t ustack_virt = 0xBFFFF000;
@@ -380,15 +416,15 @@ int task_exec(char* path, struct context_frame* regs) {
 
     uint32_t* esp = (uint32_t*)((uint32_t)t->stack_base + PAGE_SIZE);
 
-    *(--esp) = 0x23;                    /* SS */
-    *(--esp) = ustack_virt + PAGE_SIZE - 4; /* ESP */
-    *(--esp) = 0x00000202;             /* EFLAGS */
-    *(--esp) = 0x1B;                   /* CS */
-    *(--esp) = (uint32_t)entry;        /* EIP */
+    *(--esp) = 0x23;
+    *(--esp) = ustack_virt + PAGE_SIZE - 4;
+    *(--esp) = 0x00000202;
+    *(--esp) = 0x1B;
+    *(--esp) = (uint32_t)entry;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    *(--esp) = 0x23;                   /* DS */
-    *(--esp) = 0x23;                   /* ES */
+    *(--esp) = 0x23;
+    *(--esp) = 0x23;
 
     t->esp = (uint32_t)esp;
 

@@ -123,7 +123,7 @@ extern void fat16_list_root();
 void kernel_setup_hardware();
 
 /* ELF Loader */
-void* load_elf(char* path, uint32_t* pd);
+struct proc_page_tracker;
 
 /* Networking */
 void net_init(void);

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "gdt.h"
 #include "vfs.h"
+#include "proc_mm.h"
 
 #define USER_CODE_SEL 0x1B
 #define USER_DATA_SEL 0x23
@@ -33,7 +34,7 @@ struct context_frame {
 };
 
 struct task_struct {
-    uint32_t esp;              
+    uint32_t esp;
     uint32_t pid;
     task_state state;
     uint8_t  is_kernel;
@@ -44,6 +45,7 @@ struct task_struct {
     struct task_struct* next;
     uint32_t pending_signals;          /* битовая маска ожидающих сигналов */
     struct vfs_node* fd_table[MAX_FD];
+    proc_page_tracker_t mm;            /* трекер физических страниц ELF     */
 };
 
 void task_init();
