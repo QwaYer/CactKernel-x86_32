@@ -16,6 +16,7 @@ KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR = Lux/drivers/input
 DRIVER_BLOCK_DIR = Lux/drivers/block
 FS_VFS_DIR       = Lux/fs/vfs
+FS_PIPE_DIR      = Lux/fs/vfs/pipe
 FS_EXT4_DIR      = Lux/fs/ext4
 NET_DIR          = Lux/net
 NET_ETH_DIR      = Lux/net/ethernet
@@ -44,6 +45,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_INPUT_DIR) \
          -I$(DRIVER_BLOCK_DIR) \
          -I$(FS_VFS_DIR) \
+         -I$(FS_PIPE_DIR) \
          -I$(FS_EXT4_DIR) \
          -I$(NET_DIR) \
          -I$(NET_ETH_DIR) \
@@ -72,6 +74,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/sync.o \
       $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/vfs.o \
+      $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/ext4.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/syscall.o \
@@ -215,6 +218,10 @@ $(BUILD_DIR)/task.o: $(KERN_PROC_DIR)/task.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/vfs.o: $(FS_VFS_DIR)/vfs.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pipe.o: $(FS_PIPE_DIR)/pipe.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
