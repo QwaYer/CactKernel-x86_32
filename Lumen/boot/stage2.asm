@@ -19,11 +19,26 @@ stage2_start:
     mov es, ax
     xor bx, bx
 
-    mov ah, 0x02
-    mov al, 127      
-    mov ch, 0           
-    mov dh, 0             
-    mov cl, 34            
+    mov word  [dap_count],   127
+    mov dword [dap_lba_lo],  33
+    mov dword [dap_lba_hi],  0
+    mov word  [dap_seg],     0x1000
+    mov word  [dap_off],     0x0000
+
+    mov ah, 0x42
+    mov si, dap
+    mov dl, [BOOT_DRIVE]
+    int 0x13
+    jc disk_error
+
+    mov word  [dap_count],   64
+    mov dword [dap_lba_lo],  160
+    mov dword [dap_lba_hi],  0
+    mov word  [dap_seg],     0x1FE0
+    mov word  [dap_off],     0x0000
+
+    mov ah, 0x42
+    mov si, dap
     mov dl, [BOOT_DRIVE]
     int 0x13
     jc disk_error
@@ -57,6 +72,19 @@ disk_error:
     call print_string
     jmp $
 
+dap:
+    db  0x10        
+    db  0x00       
+dap_count:
+    dw  0           
+dap_off:
+    dw  0         
+dap_seg:
+    dw  0          
+dap_lba_lo:
+    dd  0         
+dap_lba_hi:
+    dd  0          
 
 msg_loading db 'Stage2: Loading kernel...', 13, 10, 0
 msg_pm      db 'Entering protected mode...', 13, 10, 0

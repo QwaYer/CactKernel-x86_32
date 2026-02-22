@@ -5,7 +5,7 @@
 #define VFS_DIRECTORY   0x02
 #define VFS_CHARDEVICE  0x03
 #define VFS_BLOCKDEVICE 0x04
-#define VFS_PIPE        0x05
+#define VFS_PIPE        0x05   
 
 struct vfs_node {
     char name[128];
@@ -26,7 +26,6 @@ struct vfs_node {
     int (*delete) (struct vfs_node* node, char* name);
     int (*mkdir)  (struct vfs_node* node, char* name);
     int (*rmdir)  (struct vfs_node* node, char* name);
-
     struct vfs_node* ptr;
 };
 
@@ -36,6 +35,8 @@ struct vfs_dirent {
 };
 
 extern struct vfs_node* vfs_root;
+
+void vfs_init(void);
 
 int                read_vfs   (struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
 int                write_vfs  (struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
