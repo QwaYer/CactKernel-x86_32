@@ -73,7 +73,7 @@ void mutex_lock(mutex_t* m) {
         } else {
 
             spinlock_release(&m->guard);
-            kprint_color("mutex: waiter queue full, spinning!\n", 12 COLOR_LIGHT_RED );
+            kprint_color("mutex: waiter queue full, spinning!\n", COLOR_LIGHT_RED );
             __asm__ __volatile__("pause");
         }
     }
