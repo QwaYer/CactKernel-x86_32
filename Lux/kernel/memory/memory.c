@@ -1,6 +1,7 @@
 #include "memory.h"
 #include "libc.h"
 #include "kernel.h"
+#include "sync.h"
 
 uint8_t memory_bitmap[BITMAP_SIZE];
 struct heap_block* heap_start = (struct heap_block*)HEAP_START;
@@ -9,6 +10,7 @@ uint32_t page_directory[1024] __attribute__((aligned(4096)));
 uint32_t page_tables[32][1024] __attribute__((aligned(4096)));
 
 static int first_available_page = 0;
+static irq_spinlock_t heap_lock;
 
 void bitmap_set(int page_idx) {
     memory_bitmap[page_idx / 8] |= (1 << (page_idx % 8));
@@ -27,6 +29,7 @@ void init_memory_manager() {
 }
 
 void init_heap() {
+    irq_spinlock_init(&heap_lock);
     heap_start = (struct heap_block*)HEAP_START;
     
     heap_start->magic = HEAP_MAGIC;
@@ -53,6 +56,16 @@ void init_paging() {
 
 
 void vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int flags) {
+    if (!pd) return;
+    if (physical_addr >= MEM_START + MEM_SIZE) {
+        kprint("[ERR] vmm_map: physical address out of bounds\n");
+        return;
+    }
+    if (virtual_addr % PAGE_SIZE != 0 || physical_addr % PAGE_SIZE != 0) {
+        kprint("[ERR] vmm_map: addresses must be page-aligned\n");
+        return;
+    }
+
     uint32_t pd_idx = PD_INDEX(virtual_addr);
     uint32_t pt_idx = PT_INDEX(virtual_addr);
 
@@ -123,37 +136,45 @@ void* kmalloc(uint32_t size) {
 
     size = (size + 7) & ~7;
 
-    __asm__ __volatile__("cli");
+    irq_spinlock_acquire(&heap_lock);
 
     struct heap_block* current = heap_start;
+    struct heap_block* best_fit = 0;
+
     while (current != 0) {
         if (current->magic != HEAP_MAGIC) {
             kprint("[FATAL] Heap corruption detected!\n");
-            __asm__ __volatile__("sti");
+            irq_spinlock_release(&heap_lock);
             return 0;
         }
 
         if (current->is_free && current->size >= size) {
-            if (current->size > (size + sizeof(struct heap_block) + 16)) {
-                struct heap_block* next_block = (struct heap_block*)((uint8_t*)current + sizeof(struct heap_block) + size);
-                
-                next_block->magic = HEAP_MAGIC;
-                next_block->size = current->size - size - sizeof(struct heap_block);
-                next_block->is_free = 1;
-                next_block->next = current->next;
-                
-                current->size = size;
-                current->next = next_block;
+            if (!best_fit || current->size < best_fit->size) {
+                best_fit = current;
             }
-            
-            current->is_free = 0;
-            __asm__ __volatile__("sti");
-            return (void*)((uint8_t*)current + sizeof(struct heap_block));
         }
         current = current->next;
     }
 
-    __asm__ __volatile__("sti");
+    if (best_fit) {
+        if (best_fit->size > (size + sizeof(struct heap_block) + 16)) {
+            struct heap_block* next_block = (struct heap_block*)((uint8_t*)best_fit + sizeof(struct heap_block) + size);
+            
+            next_block->magic = HEAP_MAGIC;
+            next_block->size = best_fit->size - size - sizeof(struct heap_block);
+            next_block->is_free = 1;
+            next_block->next = best_fit->next;
+            
+            best_fit->size = size;
+            best_fit->next = next_block;
+        }
+        
+        best_fit->is_free = 0;
+        irq_spinlock_release(&heap_lock);
+        return (void*)((uint8_t*)best_fit + sizeof(struct heap_block));
+    }
+
+    irq_spinlock_release(&heap_lock);
     kprint("[ERR] kmalloc: Out of heap memory\n");
     return 0;
 }
@@ -169,7 +190,7 @@ void* kmalloc_aligned(uint32_t size, uint32_t align) {
 void kfree_heap(void* ptr) {
     if (!ptr) return;
 
-    __asm__ __volatile__("cli");
+    irq_spinlock_acquire(&heap_lock);
 
     struct heap_block* block = (struct heap_block*)((uint8_t*)ptr - sizeof(struct heap_block));
     if (block->magic == HEAP_MAGIC) {
@@ -185,7 +206,7 @@ void kfree_heap(void* ptr) {
             }
         }
     }
-    __asm__ __volatile__("sti");
+    irq_spinlock_release(&heap_lock);
 }
 
 uint32_t get_free_heap_memory() {
