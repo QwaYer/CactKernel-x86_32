@@ -199,7 +199,7 @@ struct ext4_dir_entry_2 {
     char     name[];
 } __attribute__((packed));
 
-/* Публичные функции */
+/* PUBLIC API */
 void             ext4_init();
 void             ext4_read_block(uint32_t block, uint8_t* buffer);
 void             ext4_read_inode(uint32_t inode_no, struct ext4_inode* inode);
