@@ -116,7 +116,7 @@ int search_pci() {
 void exception_handler(struct context_frame* regs) {
     char buf[32];
     clear_screen();
-    kprint_color("!!! KERNEL PANIC !!!\n", COLOR_LIGHT_RED);
+    kprint_color("!!! KERNEL FATAL ERROR !!!\n", COLOR_LIGHT_RED);
 
     kprint("Exception ID: ");
     itoa(regs->int_no, buf);
