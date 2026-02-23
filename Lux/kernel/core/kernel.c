@@ -4,7 +4,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "vfs.h"
-#include "pipe.h"
+#include "devfs.h"
 #include "libc.h"
 #include "task.h"
 #include "shell.h"
@@ -226,7 +226,6 @@ void boot_log(char* component, int status) {
 }
 
 void kernel_setup_hardware() {
-
     init_gdt();
     init_memory_manager();
     init_heap();
@@ -247,11 +246,14 @@ void kernel_setup_hardware() {
     ata_init();
     boot_log("ATA Hard Drive", 0);
 
-    vfs_init();                             
-    boot_log("Virtual File System", 0);
-
     ext4_init();
     boot_log("EXT4 File System", 0);
+
+    vfs_init();
+    boot_log("Virtual File System", 0);
+
+    devfs_init();
+    boot_log("Device File System", 0);
 
     net_init();
     boot_log("Network Stack", 0);
