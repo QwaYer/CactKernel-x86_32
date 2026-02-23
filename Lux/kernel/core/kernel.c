@@ -255,6 +255,9 @@ void kernel_setup_hardware() {
     devfs_init();
     boot_log("Device File System", 0);
 
+    procfs_init();
+    boot_log("Process File System", 0);
+
     net_init();
     boot_log("Network Stack", 0);
 

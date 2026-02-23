@@ -16,6 +16,17 @@ extern syscall_handler
 extern current_task
 extern schedule
 
+global timer_ticks_get
+
+section .data
+timer_ticks dd 0
+
+section .text
+
+timer_ticks_get:
+    mov eax, [timer_ticks]
+    ret
+
 
 isr0:
     push dword 0   
@@ -30,7 +41,7 @@ isr14:
     push dword 14 
     jmp isr_common_stub
 
-; Реальный порядок на стеке (от младших адресов к старшим):
+; порядок на стеке (от младших адресов к старшим):
 ;   [esp+0]  = es
 ;   [esp+4]  = ds
 ;   [esp+8]  = edi  \
@@ -71,6 +82,8 @@ timer_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
+
+    inc dword [timer_ticks]  
 
     mov eax, [current_task]
     test eax, eax

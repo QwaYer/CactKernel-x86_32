@@ -19,6 +19,7 @@ FS_VFS_DIR       = Lux/fs/vfs
 FS_PIPE_DIR      = Lux/fs/vfs/pipe
 FS_DEVFS_DIR     = Lux/fs/devfs
 FS_EXT4_DIR      = Lux/fs/ext4
+FS_PROCFS_DIR    = Lux/fs/procfs
 NET_DIR          = Lux/net
 NET_ETH_DIR      = Lux/net/ethernet
 NET_IP_DIR       = Lux/net/ip
@@ -49,6 +50,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_PIPE_DIR) \
          -I$(FS_DEVFS_DIR) \
          -I$(FS_EXT4_DIR) \
+         -I$(FS_PROCFS_DIR) \
          -I$(NET_DIR) \
          -I$(NET_ETH_DIR) \
          -I$(NET_IP_DIR) \
@@ -79,6 +81,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
       $(BUILD_DIR)/ext4.o \
+      $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/syscall.o \
       $(BUILD_DIR)/elf_loader.o \
@@ -228,12 +231,15 @@ $(BUILD_DIR)/pipe.o: $(FS_PIPE_DIR)/pipe.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-
 $(BUILD_DIR)/devfs.o: $(FS_DEVFS_DIR)/devfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ext4.o: $(FS_EXT4_DIR)/ext4.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/procfs.o: $(FS_PROCFS_DIR)/procfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
