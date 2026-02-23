@@ -290,8 +290,7 @@ void init() {
 
         system_ready = 1;
     __asm__ __volatile__("sti");
-    while (1) { 
-        net_poll();
-        __asm__ __volatile__("pause"); 
+    while (1) {
+        __asm__ __volatile__("pause");
     }
 }

@@ -224,7 +224,7 @@ static void virtio_net_poll(void) {
 void virtio_net_irq_handler(void) {
     /* Ack the ISR register to clear the interrupt */
     port_byte_in(io_base + VIRTIO_PCI_ISR);
-    virtio_net_drain_rx();
+    sema_up(&net_sema);
 }
 
 static void virtio_net_get_mac(mac_addr_t* out) {
