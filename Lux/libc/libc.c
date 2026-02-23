@@ -111,3 +111,26 @@ void* memcpy(void* dest, const void* src, unsigned int len) {
     while (len-- > 0) *d++ = *s++;
     return dest;
 }
+
+int strncmp(const char* a, const char* b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a - *b;
+}
+
+void strncpy(char* dst, const char* src, int n) {
+    int i = 0;
+    while (src[i] && i < n - 1) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+}
+
+int buf_append(char* buf, int pos, int max, const char* s) {
+    while (*s && pos < max - 1) buf[pos++] = *s++;
+    buf[pos] = '\0';
+    return pos;
+}
+
+int buf_append_int(char* buf, int pos, int max, int n) {
+    char tmp[32];
+    itoa(n, tmp);
+    return buf_append(buf, pos, max, tmp);
+}

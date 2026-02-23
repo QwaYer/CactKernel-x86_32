@@ -246,17 +246,17 @@ void kernel_setup_hardware() {
     ata_init();
     boot_log("ATA Hard Drive", 0);
 
-    ext4_init();
-    boot_log("EXT4 File System", 0);
-
     vfs_init();
-    boot_log("Virtual File System", 0);
+    boot_log("Virtual File System mount", 0);
+
+    ext4_init();
+    boot_log("EXT4 File System mount", 0);
 
     devfs_init();
-    boot_log("Device File System", 0);
+    boot_log("Device File System mount", 0);
 
     procfs_init();
-    boot_log("Process File System", 0);
+    boot_log("Process File System mount", 0);
 
     net_init();
     boot_log("Network Stack", 0);
@@ -265,6 +265,9 @@ void kernel_setup_hardware() {
     init_scheduler();
     init_timer(100); 
     boot_log("Scheduler & PIT Timer", 0);
+
+    commands_init();
+    boot_log("Terminal Commands", 0);
     
     key_buffer = (char*)kmalloc(2048);
     if (key_buffer != 0) {

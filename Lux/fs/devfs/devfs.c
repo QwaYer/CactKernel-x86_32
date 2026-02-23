@@ -9,16 +9,6 @@ static devfs_entry_t devfs_table[DEVFS_MAX_DEVICES];
 static struct vfs_node devfs_root_node;
 static int devfs_initialized = 0;
 
-static void _strncpy(char* dst, const char* src, int n) {
-    int i = 0;
-    while (src[i] && i < n - 1) { dst[i] = src[i]; i++; }
-    dst[i] = '\0';
-}
-
-static int _strcmp(const char* a, const char* b) {
-    while (*a && *a == *b) { a++; b++; }
-    return *a - *b;
-}
 
 static int _null_read(struct vfs_node* node, unsigned int off, unsigned int size, char* buf) {
     (void)node; (void)off; (void)size; (void)buf;
@@ -122,7 +112,7 @@ static int _tty_write(struct vfs_node* node, unsigned int off, unsigned int size
 static struct vfs_node* _devfs_finddir(struct vfs_node* node, char* name) {
     (void)node;
     for (int i = 0; i < DEVFS_MAX_DEVICES; i++)
-        if (devfs_table[i].used && _strcmp(devfs_table[i].name, name) == 0)
+        if (devfs_table[i].used && strncmp(devfs_table[i].name, name) == 0)
             return &devfs_table[i].node;
     return 0;
 }
@@ -145,7 +135,7 @@ static struct vfs_dirent* _devfs_readdir(struct vfs_node* node, unsigned int ind
     for (int i = 0; i < DEVFS_MAX_DEVICES; i++) {
         if (devfs_table[i].used) {
             if (found == index) {
-                _strncpy(_devfs_dirent.name, devfs_table[i].name, 128);
+                strncpy(_devfs_dirent.name, devfs_table[i].name, 128);
                 _devfs_dirent.inode = (unsigned int)i;
                 return &_devfs_dirent;
             }
@@ -160,7 +150,7 @@ static void _fill_node(struct vfs_node* n, const char* name, unsigned int type,
     int (*write)(struct vfs_node*, unsigned int, unsigned int, char*))
 {
     memset(n, 0, sizeof(struct vfs_node));
-    _strncpy(n->name, name, 128);
+    strncpy(n->name, name, 128);
     n->type  = type;
     n->read  = read;
     n->write = write;
@@ -173,13 +163,13 @@ struct vfs_node* devfs_get_root(void) {
 struct vfs_node* devfs_register(const char* name, struct vfs_node* node) {
     if (!name || !node) return 0;
     for (int i = 0; i < DEVFS_MAX_DEVICES; i++)
-        if (devfs_table[i].used && _strcmp(devfs_table[i].name, name) == 0)
+        if (devfs_table[i].used && strncmp(devfs_table[i].name, name) == 0)
             return &devfs_table[i].node;
     for (int i = 0; i < DEVFS_MAX_DEVICES; i++) {
         if (!devfs_table[i].used) {
-            _strncpy(devfs_table[i].name, name, 128);
+            strncpy(devfs_table[i].name, name, 128);
             memcpy(&devfs_table[i].node, node, sizeof(struct vfs_node));
-            _strncpy(devfs_table[i].node.name, name, 128);
+            strncpy(devfs_table[i].node.name, name, 128);
             devfs_table[i].used = 1;
             return &devfs_table[i].node;
         }
@@ -190,7 +180,7 @@ struct vfs_node* devfs_register(const char* name, struct vfs_node* node) {
 
 int devfs_unregister(const char* name) {
     for (int i = 0; i < DEVFS_MAX_DEVICES; i++) {
-        if (devfs_table[i].used && _strcmp(devfs_table[i].name, name) == 0) {
+        if (devfs_table[i].used && strncmp(devfs_table[i].name, name) == 0) {
             devfs_table[i].used = 0;
             memset(&devfs_table[i], 0, sizeof(devfs_entry_t));
             return 0;
@@ -210,7 +200,7 @@ void devfs_init(void) {
     memset(devfs_table, 0, sizeof(devfs_table));
 
     memset(&devfs_root_node, 0, sizeof(struct vfs_node));
-    _strncpy(devfs_root_node.name, "dev", 128);
+    strncpy(devfs_root_node.name, "dev", 128);
     devfs_root_node.type    = VFS_DIRECTORY;
     devfs_root_node.finddir = _devfs_finddir;
     devfs_root_node.listdir = _devfs_listdir;
