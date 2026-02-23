@@ -2,7 +2,6 @@
 # LuxOS Makefile 
 # ==============================================================================
 
-BOOT_DIR         = Lumen/boot
 KERN_CORE_DIR    = Lux/kernel/core
 KERN_GDT_DIR     = Lux/kernel/gdt
 KERN_ELF_DIR     = Lux/kernel/elf
@@ -62,7 +61,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_NET_DIR) \
          -Wall
 
-LDFLAGS = -m elf_i386 -Ttext 0x10000 --oformat binary
+LDFLAGS = -m elf_i386 -T linker.ld -z noexecstack
 
 # ------------------------------------------------------------------------------
 # Объектные файлы ядра
@@ -104,49 +103,25 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/virtio_net.o
 
 
-all: $(BUILD_DIR)/lux.img
+all: $(BUILD_DIR)/lux.iso
 	@echo "--------------------------------------------------"
 	@echo "Сборка ядра lux завершена успешно!"
-	@echo "  Stage 1: $(BUILD_DIR)/boot.bin"
-	@echo "  Stage 2: $(BUILD_DIR)/stage2.bin"
 	@echo "  Ядро:    $(BUILD_DIR)/kernel.bin"
-	@echo "  Образ:   $(BUILD_DIR)/lux.img"
+	@echo "  Образ:   $(BUILD_DIR)/lux.iso"
 	@KERN_SIZE=$$(wc -c < $(BUILD_DIR)/kernel.bin); \
 	 KERN_SECTORS=$$(( ($$KERN_SIZE + 511) / 512 )); \
 	 echo "  Размер ядра: $$KERN_SIZE байт ($$KERN_SECTORS секторов)"; 
 	@echo "--------------------------------------------------"
 
 # ------------------------------------------------------------------------------
-# Сборка образа диска: Stage1 + Stage2 + Kernel
+# Сборка образа диска: GRUB + Kernel
 # ------------------------------------------------------------------------------
 
-$(BUILD_DIR)/lux.img: $(BUILD_DIR)/boot.bin $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/kernel.bin
-	cat $^ > $@
-	truncate -s 10M $@
-
-# ------------------------------------------------------------------------------
-# Stage 1 — первичный загрузчик (512 байт, грузит Stage 2 в 0x7E00)
-# ------------------------------------------------------------------------------
-
-$(BUILD_DIR)/boot.bin: $(BOOT_DIR)/boot.asm
-	@mkdir -p $(BUILD_DIR)
-	nasm -f bin $< -o $@
-	@SIZE=$$(wc -c < $@); \
-	 if [ $$SIZE -ne 512 ]; then \
-	   echo "ОШИБКА: boot.bin должен быть ровно 512 байт, получилось $$SIZE"; exit 1; \
-	 fi
-
-# ------------------------------------------------------------------------------
-# Stage 2 — вторичный загрузчик (16 КБ, грузит ядро в 0x10000)
-# ------------------------------------------------------------------------------
-
-$(BUILD_DIR)/stage2.bin: $(BOOT_DIR)/stage2.asm
-	@mkdir -p $(BUILD_DIR)
-	nasm -f bin $< -o $@
-	@SIZE=$$(wc -c < $@); \
-	 if [ $$SIZE -ne 16384 ]; then \
-	   echo "ОШИБКА: stage2.bin должен быть ровно 16384 байт (32 сектора), получилось $$SIZE"; exit 1; \
-	 fi
+$(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
+	@mkdir -p $(BUILD_DIR)/isodir/boot/grub
+	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir/boot/kernel.bin
+	cp grub.cfg $(BUILD_DIR)/isodir/boot/grub/grub.cfg
+	grub-mkrescue -o $(BUILD_DIR)/lux.iso $(BUILD_DIR)/isodir
 
 # ------------------------------------------------------------------------------
 # Ядро — линкуется на 0x10000

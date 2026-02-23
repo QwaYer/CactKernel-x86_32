@@ -169,11 +169,11 @@ static void cmd_help(char* args) {
 static void cmd_fetch(char* args) {
     (void)args;
     kprint("\n");
-    kprint_color("  _                ___  ____  \n", COLOR_LIGHT_CYAN);
-    kprint_color(" | |   _   ___  __/ _ \\/ ___| \n", COLOR_LIGHT_CYAN);
-    kprint_color(" | |  | | | \\ \\/ / | | \\___ \\ \n", COLOR_LIGHT_CYAN);
-    kprint_color(" | |__| |_| |>  <| |_| |___) |\n", COLOR_LIGHT_CYAN);
-    kprint_color(" |_____\\__,_/_/\\_\\\\___/|____/ \n", COLOR_LIGHT_CYAN);
+    kprint_color("  _                 \n", COLOR_LIGHT_CYAN);
+    kprint_color(" | |   _   ___  __  \n", COLOR_LIGHT_CYAN);
+    kprint_color(" | |  | | | \\ \\/ /  \n", COLOR_LIGHT_CYAN);
+    kprint_color(" | |__| |_| |>  <   \n", COLOR_LIGHT_CYAN);
+    kprint_color(" |_____\\__,_/_/\\_\\  \n", COLOR_LIGHT_CYAN);
     kprint("\n");
     kprint_color(" Kernel:  ", COLOR_LIGHT_BROWN); kprint("Lux Kernel 0.1.0\n");
     kprint_color(" Arch:    ", COLOR_LIGHT_BROWN); kprint("x86_32\n");
