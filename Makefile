@@ -7,6 +7,7 @@ KERN_CORE_DIR    = Lux/kernel/core
 KERN_GDT_DIR     = Lux/kernel/gdt
 KERN_ELF_DIR     = Lux/kernel/elf
 KERN_SHELL_DIR   = Lux/kernel/shell
+KERN_CMDS_DIR    = Lux/kernel/shell/commands
 KERN_MEM_DIR     = Lux/kernel/memory
 KERN_PROCMM_DIR  = Lux/kernel/memory/proc_mm
 KERN_PROC_DIR    = Lux/kernel/proc
@@ -38,6 +39,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_GDT_DIR) \
          -I$(KERN_ELF_DIR) \
          -I$(KERN_SHELL_DIR) \
+         -I$(KERN_CMDS_DIR) \
          -I$(KERN_MEM_DIR) \
 		 -I$(KERN_PROCMM_DIR) \
          -I$(KERN_PROC_DIR) \
@@ -72,6 +74,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/gdt.o \
       $(BUILD_DIR)/kernel.o \
       $(BUILD_DIR)/shell.o \
+      $(BUILD_DIR)/commands.o \
       $(BUILD_DIR)/libc.o \
       $(BUILD_DIR)/memory.o \
       $(BUILD_DIR)/proc_mm.o \
@@ -188,6 +191,10 @@ $(BUILD_DIR)/gdt.o: $(KERN_GDT_DIR)/gdt.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/commands.o: $(KERN_CMDS_DIR)/commands.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

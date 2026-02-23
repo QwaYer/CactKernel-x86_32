@@ -1,23 +1,16 @@
 #ifndef SHELL_H
 #define SHELL_H
 
-struct shell_command {
-    char* name;
-    char* help;
-    void (*handler)(char* args);
-};
+#include "vfs.h"
 
-void sh_help(char* args);
-void sh_ls(char* args);
-void sh_fetch(char* args);
-void sh_reboot(char* args);
-void sh_kbd(char* args);
-void sh_pic(char* args);
-void sh_cat(char* args);
-void sh_wrt(char* args);
-void sh_tch(char* args);
-void sh_rm(char* args);
-void sh_echo(char* args);
+
+extern struct vfs_node* current_dir;
+extern char             current_path[512];
+
+
+void shell_pushdir(struct vfs_node* node);
+void shell_popdir(void);
+void shell_resetdir(void);
 
 void shell_execute(char* input);
 
