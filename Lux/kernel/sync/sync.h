@@ -34,8 +34,18 @@ typedef struct {
 } mutex_t;
 
 void mutex_init   (mutex_t* m);
-void mutex_lock   (mutex_t* m);   
-void mutex_unlock (mutex_t* m);   
-int  mutex_trylock(mutex_t* m);    
+void mutex_lock   (mutex_t* m);
+void mutex_unlock (mutex_t* m);
+int  mutex_trylock(mutex_t* m);
 
-#endif 
+typedef struct {
+    spinlock_t guard;
+    struct task_struct* waiters[MUTEX_WAIT_QUEUE_MAX];
+    uint32_t waiter_count;
+} semaphore_t;
+
+void sema_init(semaphore_t* s, int val);
+void sema_down(semaphore_t* s);
+void sema_up(semaphore_t* s);
+
+#endif

@@ -5,6 +5,7 @@
 
 net_driver_t* active_nic = NULL;
 mac_addr_t    my_mac;
+semaphore_t   net_sema;
 
 skb_t* skb_alloc(void) {
     skb_t* skb = (skb_t*)kmalloc(sizeof(skb_t));
@@ -56,7 +57,17 @@ void net_register_driver(net_driver_t* drv) {
     my_mac = drv->mac;
 }
 
+static void knetd() {
+    while (1) {
+        sema_down(&net_sema);
+        net_poll();
+    }
+}
+
 void net_init(void) {
+    sema_init(&net_sema, 0);
+    create_task(knetd);
+
     /* 1. Bring up the NIC driver */
     extern void virtio_net_init(void);
     virtio_net_init();

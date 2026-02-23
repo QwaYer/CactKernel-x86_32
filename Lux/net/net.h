@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "sync.h"
 
 /* ───────────────────────────────────────────────
    Compile-time network configuration
@@ -78,6 +79,7 @@ extern net_driver_t* active_nic;
 void net_register_driver(net_driver_t* drv);
 void net_init(void);                  /* called from kernel_setup_hardware() */
 void net_poll(void);                  /* call periodically from scheduler    */
+extern semaphore_t net_sema;
 void net_receive(skb_t* skb);        /* drivers call this on RX             */
 
 #endif 

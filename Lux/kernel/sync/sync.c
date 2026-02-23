@@ -122,3 +122,45 @@ void mutex_unlock(mutex_t* m) {
         spinlock_release(&m->guard);
     }
 }
+
+void sema_init(semaphore_t* s, int val) {
+    spinlock_init(&s->guard);
+    s->waiter_count = 0;
+}
+
+void sema_down(semaphore_t* s) {
+    while (1) {
+        spinlock_acquire(&s->guard);
+        if (current_task && s->waiter_count < MUTEX_WAIT_QUEUE_MAX) {
+            s->waiters[s->waiter_count++] = current_task;
+            
+            spinlock_acquire(&scheduler_lock);
+            current_task->state = TASK_SLEEPING;
+            spinlock_release(&scheduler_lock);
+            
+            spinlock_release(&s->guard);
+            schedule();
+            return;
+        }
+        spinlock_release(&s->guard);
+        __asm__ __volatile__("pause");
+    }
+}
+
+void sema_up(semaphore_t* s) {
+    spinlock_acquire(&s->guard);
+    if (s->waiter_count > 0) {
+        struct task_struct* woken = s->waiters[0];
+        for (uint32_t i = 1; i < s->waiter_count; i++)
+            s->waiters[i-1] = s->waiters[i];
+        s->waiter_count--;
+        spinlock_release(&s->guard);
+
+        spinlock_acquire(&scheduler_lock);
+        if (woken && woken->state == TASK_SLEEPING)
+            woken->state = TASK_READY;
+        spinlock_release(&scheduler_lock);
+    } else {
+        spinlock_release(&s->guard);
+    }
+}
