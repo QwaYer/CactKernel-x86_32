@@ -17,5 +17,4 @@ libc.a
 *.log
 qemu.dmp
 qemu.txt
-hello.c
 diskcomm.txt
