@@ -6,6 +6,202 @@
 
 static struct ext4_superblock sb;
 static uint32_t block_size;
+static struct jbd2_journal journal;
+
+static void jbd2_journal_commit(void);
+
+static uint32_t ext4_journal_read_block(uint32_t journal_block, uint8_t* buf) {
+    struct ext4_inode j_inode;
+    ext4_read_inode(journal.j_inum, &j_inode);
+
+    struct ext4_extent_header* eh = (struct ext4_extent_header*)j_inode.i_block;
+    if (eh->eh_magic == 0xF30A) {
+        struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)j_inode.i_block + sizeof(struct ext4_extent_header));
+        for (uint16_t i = 0; i < eh->eh_entries; i++) {
+            if (journal_block >= ee[i].ee_block && journal_block < ee[i].ee_block + ee[i].ee_len) {
+                ext4_read_block(ee[i].ee_start_lo + (journal_block - ee[i].ee_block), buf);
+                return 1;
+            }
+        }
+    } else {
+        if (journal_block < 12 && j_inode.i_block[journal_block]) {
+            ext4_read_block(j_inode.i_block[journal_block], buf);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint32_t ext4_journal_write_block(uint32_t journal_block, uint8_t* buf) {
+    struct ext4_inode j_inode;
+    ext4_read_inode(journal.j_inum, &j_inode);
+
+    struct ext4_extent_header* eh = (struct ext4_extent_header*)j_inode.i_block;
+    if (eh->eh_magic == 0xF30A) {
+        struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)j_inode.i_block + sizeof(struct ext4_extent_header));
+        for (uint16_t i = 0; i < eh->eh_entries; i++) {
+            if (journal_block >= ee[i].ee_block && journal_block < ee[i].ee_block + ee[i].ee_len) {
+                uint32_t phys = ee[i].ee_start_lo + (journal_block - ee[i].ee_block);
+                uint32_t sectors_per_block = block_size / 512;
+                uint32_t lba = phys * sectors_per_block;
+                for (uint32_t s = 0; s < sectors_per_block; s++)
+                    ata_write_sector(lba + s, buf + s * 512);
+                return 1;
+            }
+        }
+    } else {
+        if (journal_block < 12 && j_inode.i_block[journal_block]) {
+            uint32_t phys = j_inode.i_block[journal_block];
+            uint32_t sectors_per_block = block_size / 512;
+            uint32_t lba = phys * sectors_per_block;
+            for (uint32_t s = 0; s < sectors_per_block; s++)
+                ata_write_sector(lba + s, buf + s * 512);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void jbd2_journal_start(void) {
+    if (!journal.j_sb) return;
+    if (journal.j_running_transaction) return;
+
+    struct jbd2_transaction* t = kmalloc(sizeof(struct jbd2_transaction));
+    if (!t) return;
+
+    t->t_tid = journal.j_sb->s_sequence++;
+    t->t_state = 1;
+    t->t_nr_buffers = 0;
+    t->t_buffers = 0;
+
+    journal.j_running_transaction = t;
+}
+
+void jbd2_journal_stop(void) {
+    if (!journal.j_sb) return;
+    if (!journal.j_running_transaction) return;
+
+    jbd2_journal_commit();
+
+    struct jbd2_buffer* b = journal.j_running_transaction->t_buffers;
+    while (b) {
+        struct jbd2_buffer* next = b->b_next;
+        kfree_heap(b->b_data);
+        kfree_heap(b);
+        b = next;
+    }
+
+    kfree_heap(journal.j_running_transaction);
+    journal.j_running_transaction = 0;
+}
+
+void jbd2_journal_get_write_access(uint32_t blocknr, uint8_t* data) {
+    if (!journal.j_sb || !journal.j_running_transaction) return;
+
+    struct jbd2_buffer* b = journal.j_running_transaction->t_buffers;
+    while (b) {
+        if (b->b_blocknr == blocknr) return;
+        b = b->b_next;
+    }
+
+    b = kmalloc(sizeof(struct jbd2_buffer));
+    if (!b) return;
+
+    b->b_blocknr = blocknr;
+    b->b_data = kmalloc(block_size);
+    if (!b->b_data) {
+        kfree_heap(b);
+        return;
+    }
+    memory_copy(b->b_data, data, block_size);
+
+    b->b_next = journal.j_running_transaction->t_buffers;
+    journal.j_running_transaction->t_buffers = b;
+    journal.j_running_transaction->t_nr_buffers++;
+}
+
+void jbd2_journal_dirty_metadata(uint32_t blocknr, uint8_t* data) {
+    if (!journal.j_sb || !journal.j_running_transaction) return;
+
+    struct jbd2_buffer* b = journal.j_running_transaction->t_buffers;
+    while (b) {
+        if (b->b_blocknr == blocknr) {
+            memory_copy(b->b_data, data, block_size);
+            return;
+        }
+        b = b->b_next;
+    }
+}
+
+static void jbd2_journal_commit(void) {
+    if (!journal.j_sb || !journal.j_running_transaction) return;
+    if (journal.j_running_transaction->t_nr_buffers == 0) return;
+
+    struct jbd2_transaction* t = journal.j_running_transaction;
+    uint32_t start_block = journal.j_head;
+
+    uint8_t* desc_buf = kmalloc(block_size);
+    if (!desc_buf) return;
+    memory_set(desc_buf, 0, block_size);
+
+    struct jbd2_header* hdr = (struct jbd2_header*)desc_buf;
+    hdr->h_magic     = JBD2_MAGIC_NUMBER;
+    hdr->h_blocktype = JBD2_DESCRIPTOR_BLOCK;
+    hdr->h_sequence  = t->t_tid;
+
+    uint32_t max_tags = (block_size - sizeof(struct jbd2_header)) / sizeof(struct jbd2_block_tag);
+    struct jbd2_block_tag* tag = (struct jbd2_block_tag*)(desc_buf + sizeof(struct jbd2_header));
+
+    struct jbd2_buffer* b = t->t_buffers;
+    uint32_t current_block = start_block + 1;
+    if (current_block >= journal.j_maxlen) current_block = journal.j_first;
+
+    uint32_t tag_count = 0;
+    while (b && tag_count < max_tags) {
+        tag->t_blocknr = b->b_blocknr;
+        tag->t_flags   = 0;
+        if (!b->b_next || tag_count + 1 >= max_tags) tag->t_flags |= 8;
+
+        ext4_journal_write_block(current_block, b->b_data);
+
+        current_block++;
+        if (current_block >= journal.j_maxlen) current_block = journal.j_first;
+
+        tag++;
+        tag_count++;
+        b = b->b_next;
+    }
+
+    ext4_journal_write_block(start_block, desc_buf);
+    kfree_heap(desc_buf);
+
+    uint8_t* commit_buf = kmalloc(block_size);
+    if (!commit_buf) return;
+    memory_set(commit_buf, 0, block_size);
+
+    hdr = (struct jbd2_header*)commit_buf;
+    hdr->h_magic     = JBD2_MAGIC_NUMBER;
+    hdr->h_blocktype = JBD2_COMMIT_BLOCK;
+    hdr->h_sequence  = t->t_tid;
+
+    ext4_journal_write_block(current_block, commit_buf);
+    kfree_heap(commit_buf);
+
+    current_block++;
+    if (current_block >= journal.j_maxlen) current_block = journal.j_first;
+
+    journal.j_head           = current_block;
+    journal.j_sb->s_start    = journal.j_head;
+    journal.j_sb->s_sequence = t->t_tid + 1;
+
+    uint8_t* jsb_buf = kmalloc(block_size);
+    if (jsb_buf) {
+        memory_set(jsb_buf, 0, block_size);
+        memory_copy(jsb_buf, journal.j_sb, sizeof(struct jbd2_superblock));
+        ext4_journal_write_block(0, jsb_buf);
+        kfree_heap(jsb_buf);
+    }
+}
 
 void ext4_read_block(uint32_t block, uint8_t* buffer) {
     uint32_t sectors_per_block = block_size / 512;
@@ -16,6 +212,11 @@ void ext4_read_block(uint32_t block, uint8_t* buffer) {
 }
 
 static void ext4_write_block(uint32_t block, uint8_t* buffer) {
+    if (journal.j_sb && journal.j_running_transaction) {
+        jbd2_journal_get_write_access(block, buffer);
+        jbd2_journal_dirty_metadata(block, buffer);
+    }
+
     uint32_t sectors_per_block = block_size / 512;
     uint32_t lba_start = block * sectors_per_block;
     for (uint32_t i = 0; i < sectors_per_block; i++) {
@@ -103,6 +304,20 @@ static void ext4_write_superblock(void) {
     uint8_t buf[1024];
     memory_set(buf, 0, sizeof(buf));
     memory_copy(buf, &sb, sizeof(struct ext4_superblock));
+
+    if (journal.j_sb && journal.j_running_transaction) {
+        uint32_t sb_block = (block_size == 1024) ? 1 : 0;
+        uint8_t* sb_block_buf = kmalloc(block_size);
+        if (sb_block_buf) {
+            ext4_read_block(sb_block, sb_block_buf);
+            uint32_t offset = (block_size == 1024) ? 0 : 1024;
+            memory_copy(sb_block_buf + offset, buf, 1024);
+            jbd2_journal_get_write_access(sb_block, sb_block_buf);
+            jbd2_journal_dirty_metadata(sb_block, sb_block_buf);
+            kfree_heap(sb_block_buf);
+        }
+    }
+
     ata_write_sector(2, buf);
     ata_write_sector(3, buf + 512);
 }
@@ -416,7 +631,7 @@ static int ext4_dir_add_entry(struct vfs_node* node, uint32_t entry_inode,
         return -1;
     }
 
-    dir_inode.i_size_lo  += block_size;
+    dir_inode.i_size_lo   += block_size;
     dir_inode.i_blocks_lo += block_size / 512;
     ext4_write_inode(node->inode, &dir_inode);
     return 0;
@@ -455,7 +670,7 @@ static int ext4_dir_remove_entry(struct vfs_node* node, const char* name,
                     if (compare_string(en, name) == 0) {
                         if (out_inode) *out_inode = de->inode;
                         if (out_type)  *out_type  = de->file_type;
-                        de->inode = 0; 
+                        de->inode = 0;
                         ext4_write_block(phys, dir_buf);
                         kfree_heap(dir_buf);
                         return 0;
@@ -554,6 +769,8 @@ int ext4_read_file(struct vfs_node* node, unsigned int offset, unsigned int size
 int ext4_write_file(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
     if (!size) return 0;
 
+    jbd2_journal_start();
+
     struct ext4_inode inode;
     ext4_read_inode(node->inode, &inode);
 
@@ -605,6 +822,7 @@ int ext4_write_file(struct vfs_node* node, unsigned int offset, unsigned int siz
     }
 
     ext4_write_inode(node->inode, &inode);
+    jbd2_journal_stop();
     return (int)written;
 }
 
@@ -678,40 +896,46 @@ struct vfs_node* ext4_finddir(struct vfs_node* node, char* name) {
 }
 
 int ext4_create(struct vfs_node* node, char* name) {
+    jbd2_journal_start();
+
     struct vfs_node* ex = ext4_finddir(node, name);
-    if (ex) { kfree_heap(ex); return -1; }
+    if (ex) { kfree_heap(ex); jbd2_journal_stop(); return -1; }
 
     uint32_t new_ino = ext4_alloc_inode();
-    if (!new_ino) return -1;
+    if (!new_ino) { jbd2_journal_stop(); return -1; }
 
     struct ext4_inode new_inode;
     memory_set(&new_inode, 0, sizeof(struct ext4_inode));
-    new_inode.i_mode        = 0x81A4; 
+    new_inode.i_mode        = 0x81A4;
     new_inode.i_links_count = 1;
-    new_inode.i_flags       = 0x80000; 
+    new_inode.i_flags       = 0x80000;
     ext4_init_extent_header(&new_inode);
     ext4_write_inode(new_ino, &new_inode);
 
     if (ext4_dir_add_entry(node, new_ino, name, EXT4_FT_REG_FILE) < 0) {
         ext4_free_inode(new_ino);
+        jbd2_journal_stop();
         return -1;
     }
+    jbd2_journal_stop();
     return 0;
 }
 
 int ext4_mkdir(struct vfs_node* node, char* name) {
+    jbd2_journal_start();
+
     struct vfs_node* ex = ext4_finddir(node, name);
-    if (ex) { kfree_heap(ex); return -1; }
+    if (ex) { kfree_heap(ex); jbd2_journal_stop(); return -1; }
 
     uint32_t new_ino = ext4_alloc_inode();
-    if (!new_ino) return -1;
+    if (!new_ino) { jbd2_journal_stop(); return -1; }
 
     uint32_t dir_block = ext4_alloc_block();
-    if (!dir_block) { ext4_free_inode(new_ino); return -1; }
+    if (!dir_block) { ext4_free_inode(new_ino); jbd2_journal_stop(); return -1; }
 
     struct ext4_inode new_inode;
     memory_set(&new_inode, 0, sizeof(struct ext4_inode));
-    new_inode.i_mode        = 0x41ED; 
+    new_inode.i_mode        = 0x41ED;
     new_inode.i_links_count = 2;
     new_inode.i_size_lo     = block_size;
     new_inode.i_blocks_lo   = block_size / 512;
@@ -750,20 +974,23 @@ int ext4_mkdir(struct vfs_node* node, char* name) {
     if (ext4_dir_add_entry(node, new_ino, name, EXT4_FT_DIR) < 0) {
         ext4_free_inode(new_ino);
         ext4_free_block(dir_block);
+        jbd2_journal_stop();
         return -1;
     }
+    jbd2_journal_stop();
     return 0;
 }
 
-
 int ext4_delete(struct vfs_node* node, char* name) {
+    jbd2_journal_start();
+
     uint32_t del_ino  = 0;
     uint8_t  del_type = 0;
 
-    if (ext4_dir_remove_entry(node, name, &del_ino, &del_type) < 0) return -1;
-    if (!del_ino) return -1;
+    if (ext4_dir_remove_entry(node, name, &del_ino, &del_type) < 0) { jbd2_journal_stop(); return -1; }
+    if (!del_ino) { jbd2_journal_stop(); return -1; }
 
-    if (del_type == EXT4_FT_DIR) return -1;
+    if (del_type == EXT4_FT_DIR) { jbd2_journal_stop(); return -1; }
 
     struct ext4_inode inode;
     ext4_read_inode(del_ino, &inode);
@@ -783,22 +1010,25 @@ int ext4_delete(struct vfs_node* node, char* name) {
     } else {
         ext4_write_inode(del_ino, &inode);
     }
+    jbd2_journal_stop();
     return 0;
 }
 
 int ext4_rmdir(struct vfs_node* node, char* name) {
+    jbd2_journal_start();
+
     struct vfs_node* target = ext4_finddir(node, name);
-    if (!target) return -1;
-    if (target->type != VFS_DIRECTORY) { kfree_heap(target); return -1; }
+    if (!target) { jbd2_journal_stop(); return -1; }
+    if (target->type != VFS_DIRECTORY) { kfree_heap(target); jbd2_journal_stop(); return -1; }
 
     uint32_t target_ino = target->inode;
     kfree_heap(target);
 
-    if (!ext4_dir_is_empty(target_ino)) return -1;
+    if (!ext4_dir_is_empty(target_ino)) { jbd2_journal_stop(); return -1; }
 
     uint32_t del_ino  = 0;
     uint8_t  del_type = 0;
-    if (ext4_dir_remove_entry(node, name, &del_ino, &del_type) < 0) return -1;
+    if (ext4_dir_remove_entry(node, name, &del_ino, &del_type) < 0) { jbd2_journal_stop(); return -1; }
 
     struct ext4_inode dir_inode;
     ext4_read_inode(del_ino, &dir_inode);
@@ -820,9 +1050,9 @@ int ext4_rmdir(struct vfs_node* node, char* name) {
     if (parent.i_links_count > 1) parent.i_links_count--;
     ext4_write_inode(node->inode, &parent);
 
+    jbd2_journal_stop();
     return 0;
 }
-
 
 void ext4_init() {
     uint8_t buf[2048];
@@ -856,4 +1086,57 @@ void ext4_init() {
     vfs_root->rmdir   = ext4_rmdir;
     vfs_root->create  = ext4_create;
     vfs_root->delete  = ext4_delete;
+
+    if (sb.s_feature_compat & 0x0004) {
+        journal.j_inum = sb.s_journal_inum;
+        if (journal.j_inum) {
+            struct vfs_node* jnode = kmalloc(sizeof(struct vfs_node));
+            memory_set(jnode, 0, sizeof(struct vfs_node));
+            jnode->inode = journal.j_inum;
+            journal.j_node = jnode;
+
+            uint8_t* jsb_buf = kmalloc(block_size);
+            if (!jsb_buf) {
+                kprint("[ext4] ERROR: kmalloc failed for journal superblock.\n");
+                journal.j_sb = 0;
+                journal.j_running_transaction = 0;
+                return;
+            }
+            memory_set(jsb_buf, 0, block_size);
+
+            ext4_journal_read_block(0, jsb_buf);
+
+            journal.j_sb = (struct jbd2_superblock*)jsb_buf;
+
+            uint32_t magic = journal.j_sb->s_header.h_magic;
+            uint32_t magic_be = ((magic & 0xff000000) >> 24) |
+                                ((magic & 0x00ff0000) >>  8) |
+                                ((magic & 0x0000ff00) <<  8) |
+                                ((magic & 0x000000ff) << 24);
+
+            if (magic == JBD2_MAGIC_NUMBER || magic_be == JBD2_MAGIC_NUMBER) {
+                journal.j_maxlen = journal.j_sb->s_maxlen;
+                journal.j_first  = journal.j_sb->s_first;
+                journal.j_head   = journal.j_sb->s_start;
+                journal.j_tail   = journal.j_sb->s_start;
+
+                uint32_t used = (journal.j_head >= journal.j_first)
+                    ? (journal.j_head - journal.j_first)
+                    : (journal.j_maxlen - journal.j_first + journal.j_head);
+                journal.j_free = journal.j_maxlen - journal.j_first - used;
+
+                journal.j_running_transaction = 0;
+            } else {
+                kprint("[ext4] ERROR: Invalid journal magic number.\n");
+                kfree_heap(jsb_buf);
+                journal.j_sb = 0;
+            }
+        } else {
+            kprint("[ext4] WARNING: Journal inode is 0.\n");
+        }
+    } else {
+        kprint("[ext4] WARNING: Filesystem mounted without journaling.\n");
+        journal.j_sb = 0;
+        journal.j_running_transaction = 0;
+    }
 }

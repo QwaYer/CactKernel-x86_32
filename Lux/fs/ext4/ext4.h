@@ -199,7 +199,79 @@ struct ext4_dir_entry_2 {
     char     name[];
 } __attribute__((packed));
 
-/* PUBLIC API */
+
+#define JBD2_MAGIC_NUMBER 0xc03b3998U
+
+#define JBD2_DESCRIPTOR_BLOCK 1
+#define JBD2_COMMIT_BLOCK     2
+#define JBD2_SUPERBLOCK_V1    3
+#define JBD2_SUPERBLOCK_V2    4
+#define JBD2_REVOKE_BLOCK     5
+
+struct jbd2_header {
+    uint32_t h_magic;
+    uint32_t h_blocktype;
+    uint32_t h_sequence;
+} __attribute__((packed));
+
+struct jbd2_superblock {
+    struct jbd2_header s_header;
+    uint32_t s_blocksize;
+    uint32_t s_maxlen;
+    uint32_t s_first;
+    uint32_t s_sequence;
+    uint32_t s_start;
+    uint32_t s_errno;
+    uint32_t s_feature_compat;
+    uint32_t s_feature_incompat;
+    uint32_t s_feature_ro_compat;
+    uint8_t  s_uuid[16];
+    uint32_t s_nr_users;
+    uint32_t s_dynsuper;
+    uint32_t s_max_transaction;
+    uint32_t s_max_trans_data;
+    uint8_t  s_checksum_type;
+    uint8_t  s_padding2[3];
+    uint32_t s_padding[42];
+    uint32_t s_checksum;
+} __attribute__((packed));
+
+struct jbd2_block_tag {
+    uint32_t t_blocknr;
+    uint32_t t_flags;
+} __attribute__((packed));
+
+struct jbd2_transaction {
+    uint32_t t_tid;
+    uint32_t t_state;
+    uint32_t t_nr_buffers;
+    struct jbd2_buffer* t_buffers;
+};
+
+struct jbd2_buffer {
+    uint32_t b_blocknr;
+    uint8_t* b_data;
+    struct jbd2_buffer* b_next;
+};
+
+struct jbd2_journal {
+    uint32_t j_inum;
+    struct vfs_node* j_node;
+    struct jbd2_superblock* j_sb;
+    uint32_t j_maxlen;
+    uint32_t j_first;
+    uint32_t j_tail;
+    uint32_t j_head;
+    uint32_t j_free;
+    struct jbd2_transaction* j_running_transaction;
+};
+
+// PUBLIC API 
+void             jbd2_journal_start(void);
+void             jbd2_journal_stop(void);
+void             jbd2_journal_get_write_access(uint32_t blocknr, uint8_t* data);
+void             jbd2_journal_dirty_metadata(uint32_t blocknr, uint8_t* data);
+
 void             ext4_init();
 void             ext4_read_block(uint32_t block, uint8_t* buffer);
 void             ext4_read_inode(uint32_t inode_no, struct ext4_inode* inode);
