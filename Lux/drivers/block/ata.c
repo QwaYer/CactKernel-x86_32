@@ -2,6 +2,7 @@
 #include "vfs.h"
 #include "kernel.h"
 #include "memory.h"
+#include "buf.h"
 
 #define ATA_PRIMARY_IO   0x1F0
 #define ATA_PRIMARY_CTRL 0x3F6
@@ -107,6 +108,7 @@ static int ata_select_drive(unsigned short base, unsigned char drive, unsigned i
 }
 
 void ata_init() {
+    binit();
     ata_soft_reset(ATA_PRIMARY_IO);
 
     if (ata_identify(0xB0)) {
@@ -195,12 +197,23 @@ void ata_write_sector(unsigned int lba, unsigned char* buffer) {
 }
 
 int ata_read(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
-    ata_read_sector(offset / 512, (unsigned char*)buffer);
+    struct buf *b = bread(0, offset / 512);
+    if (!b) return 0;
+    for (unsigned int i = 0; i < size; i++) {
+        buffer[i] = b->data[i];
+    }
+    brelse(b);
     return size;
 }
 
 int ata_write(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
-    ata_write_sector(offset / 512, (unsigned char*)buffer);
+    struct buf *b = bread(0, offset / 512);
+    if (!b) return 0;
+    for (unsigned int i = 0; i < size; i++) {
+        b->data[i] = buffer[i];
+    }
+    bwrite(b);
+    brelse(b);
     return size;
 }
 

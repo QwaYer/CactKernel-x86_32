@@ -86,6 +86,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/ext4.o \
       $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/ata.o \
+      $(BUILD_DIR)/buf.o \
       $(BUILD_DIR)/syscall.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/interrupt.o \
@@ -251,6 +252,10 @@ $(BUILD_DIR)/procfs.o: $(FS_PROCFS_DIR)/procfs.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ata.o: $(DRIVER_BLOCK_DIR)/ata.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/buf.o: $(DRIVER_BLOCK_DIR)/buf.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
