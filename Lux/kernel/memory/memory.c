@@ -11,12 +11,14 @@ uint32_t page_tables[32][1024] __attribute__((aligned(4096)));
 
 static int first_available_page = 0;
 static irq_spinlock_t heap_lock;
+static irq_spinlock_t page_lock;
 
 void bitmap_set(int page_idx) {
     memory_bitmap[page_idx / 8] |= (1 << (page_idx % 8));
 }
 
 void init_memory_manager() {
+    irq_spinlock_init(&page_lock);
     for (int i = 0; i < BITMAP_SIZE; i++) memory_bitmap[i] = 0;
     
     uint32_t reserved_end = HEAP_START + HEAP_SIZE;
@@ -102,7 +104,12 @@ void kfree_page(void* ptr) {
     if (addr < MEM_START) return;
     int page_idx = (addr - MEM_START) / PAGE_SIZE;
     if (page_idx < 0 || page_idx >= TOTAL_PAGES) return;
+    irq_spinlock_acquire(&page_lock);
     memory_bitmap[page_idx / 8] &= ~(1 << (page_idx % 8));
+    if (page_idx < first_available_page) {
+        first_available_page = page_idx;
+    }
+    irq_spinlock_release(&page_lock);
 }
 
 void vmm_free_address_space(uint32_t* pd) {
@@ -122,12 +129,16 @@ void vmm_free_address_space(uint32_t* pd) {
 }
 
 void* kalloc() {
+    irq_spinlock_acquire(&page_lock);
     for (int i = first_available_page; i < TOTAL_PAGES; i++) {
         if (!(memory_bitmap[i / 8] & (1 << (i % 8)))) {
             bitmap_set(i);
+            first_available_page = i + 1;
+            irq_spinlock_release(&page_lock);
             return (void*)(MEM_START + i * PAGE_SIZE);
         }
     }
+    irq_spinlock_release(&page_lock);
     return 0;
 }
 
@@ -157,7 +168,7 @@ void* kmalloc(uint32_t size) {
     }
 
     if (best_fit) {
-        if (best_fit->size > (size + sizeof(struct heap_block) + 16)) {
+        if (best_fit->size >= (size + sizeof(struct heap_block) + 8)) {
             struct heap_block* next_block = (struct heap_block*)((uint8_t*)best_fit + sizeof(struct heap_block) + size);
             
             next_block->magic = HEAP_MAGIC;
@@ -211,6 +222,7 @@ void kfree_heap(void* ptr) {
 
 uint32_t get_free_heap_memory() {
     uint32_t free_mem = 0;
+    irq_spinlock_acquire(&heap_lock);
     struct heap_block* current = heap_start;
     while (current != 0) {
         if (current->is_free) {
@@ -218,5 +230,6 @@ uint32_t get_free_heap_memory() {
         }
         current = current->next;
     }
+    irq_spinlock_release(&heap_lock);
     return free_mem;
 }
