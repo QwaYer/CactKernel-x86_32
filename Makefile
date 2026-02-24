@@ -1,5 +1,5 @@
 # ==============================================================================
-# LuxOS Makefile 
+# Lux Kernel Makefile
 # ==============================================================================
 
 KERN_CORE_DIR    = Lux/kernel/core
@@ -20,6 +20,7 @@ FS_PIPE_DIR      = Lux/fs/vfs/pipe
 FS_DEVFS_DIR     = Lux/fs/devfs
 FS_EXT4_DIR      = Lux/fs/ext4
 FS_PROCFS_DIR    = Lux/fs/procfs
+FS_MNTFS_DIR     = Lux/fs/mntfs
 NET_DIR          = Lux/net
 NET_ETH_DIR      = Lux/net/ethernet
 NET_IP_DIR       = Lux/net/ip
@@ -30,7 +31,7 @@ DRIVER_NET_DIR   = Lux/drivers/network
 BUILD_DIR        = build
 
 # ------------------------------------------------------------------------------
-# Флаги компилятора
+# Compiler flags
 # ------------------------------------------------------------------------------
 
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
@@ -40,7 +41,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_SHELL_DIR) \
          -I$(KERN_CMDS_DIR) \
          -I$(KERN_MEM_DIR) \
-		 -I$(KERN_PROCMM_DIR) \
+         -I$(KERN_PROCMM_DIR) \
          -I$(KERN_PROC_DIR) \
          -I$(KERN_SYNC_DIR) \
          -I$(KERN_IDT_DIR) \
@@ -52,6 +53,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_DEVFS_DIR) \
          -I$(FS_EXT4_DIR) \
          -I$(FS_PROCFS_DIR) \
+         -I$(FS_MNTFS_DIR) \
          -I$(NET_DIR) \
          -I$(NET_ETH_DIR) \
          -I$(NET_IP_DIR) \
@@ -64,7 +66,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
 LDFLAGS = -m elf_i386 -T linker.ld -z noexecstack
 
 # ------------------------------------------------------------------------------
-# Объектные файлы ядра
+# Kernel object files
 # ------------------------------------------------------------------------------
 
 OBJ = $(BUILD_DIR)/kernel_entry.o \
@@ -84,6 +86,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/devfs.o \
       $(BUILD_DIR)/ext4.o \
       $(BUILD_DIR)/procfs.o \
+      $(BUILD_DIR)/mntfs.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/buf.o \
       $(BUILD_DIR)/syscall.o \
@@ -105,16 +108,16 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
 
 all: $(BUILD_DIR)/lux.iso
 	@echo "--------------------------------------------------"
-	@echo "Сборка ядра lux завершена успешно!"
-	@echo "  Ядро:    $(BUILD_DIR)/kernel.bin"
-	@echo "  Образ:   $(BUILD_DIR)/lux.iso"
+	@echo "LuxOS kernel build complete!"
+	@echo "  Kernel:  $(BUILD_DIR)/kernel.bin"
+	@echo "  Image:   $(BUILD_DIR)/lux.iso"
 	@KERN_SIZE=$$(wc -c < $(BUILD_DIR)/kernel.bin); \
 	 KERN_SECTORS=$$(( ($$KERN_SIZE + 511) / 512 )); \
-	 echo "  Размер ядра: $$KERN_SIZE байт ($$KERN_SECTORS секторов)"; 
+	 echo "  Kernel size: $$KERN_SIZE bytes ($$KERN_SECTORS sectors)";
 	@echo "--------------------------------------------------"
 
 # ------------------------------------------------------------------------------
-# Сборка образа диска: GRUB + Kernel
+# Disk image: GRUB + Kernel
 # ------------------------------------------------------------------------------
 
 $(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
@@ -124,14 +127,14 @@ $(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/lux.iso $(BUILD_DIR)/isodir
 
 # ------------------------------------------------------------------------------
-# Ядро — линкуется на 0x10000
+# Kernel binary
 # ------------------------------------------------------------------------------
 
 $(BUILD_DIR)/kernel.bin: $(OBJ)
 	ld $(LDFLAGS) -o $@ $^
 
 # ------------------------------------------------------------------------------
-# Правила для ASM-файлов
+# ASM files
 # ------------------------------------------------------------------------------
 
 $(BUILD_DIR)/kernel_entry.o: $(KERN_CORE_DIR)/kernel.asm
@@ -159,7 +162,7 @@ $(BUILD_DIR)/mm.o: $(KERN_MEM_DIR)/mm.asm
 	nasm -f elf32 $< -o $@
 
 # ------------------------------------------------------------------------------
-# Правила для C-файлов
+# C files
 # ------------------------------------------------------------------------------
 
 $(BUILD_DIR)/gdt.o: $(KERN_GDT_DIR)/gdt.c
@@ -223,6 +226,10 @@ $(BUILD_DIR)/ext4.o: $(FS_EXT4_DIR)/ext4.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/procfs.o: $(FS_PROCFS_DIR)/procfs.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

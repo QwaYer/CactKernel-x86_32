@@ -258,6 +258,9 @@ void kernel_setup_hardware() {
     procfs_init();
     boot_log("Process File System mount", 0);
 
+    mntfs_init();
+    boot_log("Mount manager", 0);
+
     net_init();
     boot_log("Network Stack", 0);
 
