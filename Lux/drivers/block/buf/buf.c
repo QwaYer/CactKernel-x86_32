@@ -61,7 +61,8 @@ struct buf* bread(uint32_t dev, uint32_t blockno) {
     if(!b) return 0;
 
     if(!(b->flags & B_VALID)) {
-        ata_read_sector(b->blockno, b->data);
+        // TODO: Use dev to determine port and slave
+        ata_read_sector(0x1F0, 0, b->blockno, b->data);
         b->flags |= B_VALID;
     }
     return b;
@@ -73,7 +74,8 @@ void bwrite(struct buf *b) {
         return;
     }
     b->flags |= B_DIRTY;
-    ata_write_sector(b->blockno, b->data);
+    // TODO: Use dev to determine port and slave
+    ata_write_sector(0x1F0, 0, b->blockno, b->data);
     b->flags &= ~B_DIRTY;
 }
 

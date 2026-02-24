@@ -7,6 +7,8 @@
 static struct ext4_superblock sb;
 static uint32_t block_size;
 static struct jbd2_journal journal;
+static uint16_t current_port = 0x1F0;
+static uint8_t current_slave = 0;
 
 static void jbd2_journal_commit(void);
 
@@ -45,7 +47,7 @@ static uint32_t ext4_journal_write_block(uint32_t journal_block, uint8_t* buf) {
                 uint32_t sectors_per_block = block_size / 512;
                 uint32_t lba = phys * sectors_per_block;
                 for (uint32_t s = 0; s < sectors_per_block; s++)
-                    ata_write_sector(lba + s, buf + s * 512);
+                    ata_write_sector(current_port, current_slave, lba + s, buf + s * 512);
                 return 1;
             }
         }
@@ -55,7 +57,7 @@ static uint32_t ext4_journal_write_block(uint32_t journal_block, uint8_t* buf) {
             uint32_t sectors_per_block = block_size / 512;
             uint32_t lba = phys * sectors_per_block;
             for (uint32_t s = 0; s < sectors_per_block; s++)
-                ata_write_sector(lba + s, buf + s * 512);
+                ata_write_sector(current_port, current_slave, lba + s, buf + s * 512);
             return 1;
         }
     }
@@ -207,7 +209,7 @@ void ext4_read_block(uint32_t block, uint8_t* buffer) {
     uint32_t sectors_per_block = block_size / 512;
     uint32_t lba_start = block * sectors_per_block;
     for (uint32_t i = 0; i < sectors_per_block; i++) {
-        ata_read_sector(lba_start + i, buffer + (i * 512));
+        ata_read_sector(current_port, current_slave, lba_start + i, buffer + (i * 512));
     }
 }
 
@@ -220,7 +222,7 @@ static void ext4_write_block(uint32_t block, uint8_t* buffer) {
     uint32_t sectors_per_block = block_size / 512;
     uint32_t lba_start = block * sectors_per_block;
     for (uint32_t i = 0; i < sectors_per_block; i++) {
-        ata_write_sector(lba_start + i, buffer + (i * 512));
+        ata_write_sector(current_port, current_slave, lba_start + i, buffer + (i * 512));
     }
 }
 
@@ -318,8 +320,8 @@ static void ext4_write_superblock(void) {
         }
     }
 
-    ata_write_sector(2, buf);
-    ata_write_sector(3, buf + 512);
+    ata_write_sector(current_port, current_slave, 2, buf);
+    ata_write_sector(current_port, current_slave, 3, buf + 512);
 }
 
 static int bitmap_test(uint8_t* bmap, uint32_t bit) {
@@ -1054,38 +1056,41 @@ int ext4_rmdir(struct vfs_node* node, char* name) {
     return 0;
 }
 
-void ext4_init() {
+struct vfs_node* ext4_mount_disk(uint16_t port, uint8_t slave) {
+    current_port = port;
+    current_slave = slave;
+
     uint8_t buf[2048];
     memory_set(buf, 0, sizeof(buf));
 
-    ata_read_sector(2, buf);
-    ata_read_sector(3, buf + 512);
+    ata_read_sector(port, slave, 2, buf);
+    ata_read_sector(port, slave, 3, buf + 512);
     memory_copy(&sb, buf, 1024);
 
     if (sb.s_magic != EXT4_SUPER_MAGIC) {
-        ata_read_sector(0, buf);
-        ata_read_sector(1, buf + 512);
+        ata_read_sector(port, slave, 0, buf);
+        ata_read_sector(port, slave, 1, buf + 512);
         memory_copy(&sb, buf, 1024);
     }
 
     if (sb.s_magic != EXT4_SUPER_MAGIC) {
         kprint("[ext4] ERROR: superblock not found!\n");
-        return;
+        return 0;
     }
 
     block_size = 1024u << sb.s_log_block_size;
 
-    vfs_root = (struct vfs_node*)kmalloc(sizeof(struct vfs_node));
-    memory_set(vfs_root, 0, sizeof(struct vfs_node));
-    copy_string(vfs_root->name, "/");
-    vfs_root->type    = VFS_DIRECTORY;
-    vfs_root->inode   = 2;
-    vfs_root->finddir = ext4_finddir;
-    vfs_root->listdir = ext4_list_dir;
-    vfs_root->mkdir   = ext4_mkdir;
-    vfs_root->rmdir   = ext4_rmdir;
-    vfs_root->create  = ext4_create;
-    vfs_root->delete  = ext4_delete;
+    struct vfs_node* root = (struct vfs_node*)kmalloc(sizeof(struct vfs_node));
+    memory_set(root, 0, sizeof(struct vfs_node));
+    copy_string(root->name, "/");
+    root->type    = VFS_DIRECTORY;
+    root->inode   = 2;
+    root->finddir = ext4_finddir;
+    root->listdir = ext4_list_dir;
+    root->mkdir   = ext4_mkdir;
+    root->rmdir   = ext4_rmdir;
+    root->create  = ext4_create;
+    root->delete  = ext4_delete;
 
     if (sb.s_feature_compat & 0x0004) {
         journal.j_inum = sb.s_journal_inum;
@@ -1100,7 +1105,7 @@ void ext4_init() {
                 kprint("[ext4] ERROR: kmalloc failed for journal superblock.\n");
                 journal.j_sb = 0;
                 journal.j_running_transaction = 0;
-                return;
+                return root;
             }
             memory_set(jsb_buf, 0, block_size);
 
@@ -1139,4 +1144,10 @@ void ext4_init() {
         journal.j_sb = 0;
         journal.j_running_transaction = 0;
     }
+    
+    return root;
+}
+
+void ext4_init() {
+    vfs_root = ext4_mount_disk(0x1F0, 0); // Default to primary master
 }

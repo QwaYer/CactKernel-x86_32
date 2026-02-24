@@ -122,10 +122,11 @@ void ata_init() {
     ata_soft_reset(ATA_PRIMARY_IO);
 }
 
-void ata_read_sector(unsigned int lba, unsigned char* buffer) {
-    unsigned short base = ATA_PRIMARY_IO;
+void ata_read_sector(unsigned short port, unsigned char slave, unsigned int lba, unsigned char* buffer) {
+    unsigned short base = port;
+    unsigned char drive = slave ? 0xF0 : 0xE0;
 
-    if (ata_select_drive(base, active_drive, lba) < 0) goto fail;
+    if (ata_select_drive(base, drive, lba) < 0) goto fail;
 
     /* Сбрасываем ERR чтением status */
     port_byte_in(base + 7);
@@ -163,10 +164,11 @@ fail:
     for (int i = 0; i < 512; i++) buffer[i] = 0;
 }
 
-void ata_write_sector(unsigned int lba, unsigned char* buffer) {
-    unsigned short base = ATA_PRIMARY_IO;
+void ata_write_sector(unsigned short port, unsigned char slave, unsigned int lba, unsigned char* buffer) {
+    unsigned short base = port;
+    unsigned char drive = slave ? 0xF0 : 0xE0;
 
-    if (ata_select_drive(base, active_drive, lba) < 0) return;
+    if (ata_select_drive(base, drive, lba) < 0) return;
 
     unsigned char status;
     int timeout = 1000000;

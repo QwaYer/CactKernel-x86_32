@@ -273,6 +273,7 @@ void             jbd2_journal_get_write_access(uint32_t blocknr, uint8_t* data);
 void             jbd2_journal_dirty_metadata(uint32_t blocknr, uint8_t* data);
 
 void             ext4_init();
+struct vfs_node* ext4_mount_disk(uint16_t port, uint8_t slave);
 void             ext4_read_block(uint32_t block, uint8_t* buffer);
 void             ext4_read_inode(uint32_t inode_no, struct ext4_inode* inode);
 int              ext4_read_file(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
