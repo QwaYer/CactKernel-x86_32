@@ -122,10 +122,11 @@ extern void fat16_list_root();
 // Kernel Entry Point Helpers 
 void kernel_setup_hardware();
 
-// ELF Loader 
-struct proc_page_tracker;
+// ELF Loader
+struct proc_page_tracker_t;
+void* load_elf(char* path, uint32_t* pd, struct proc_page_tracker_t* tracker);
 
-// Networking 
+// Networking
 void net_init(void);
 void net_poll(void);
 void virtio_net_irq_handler(void);

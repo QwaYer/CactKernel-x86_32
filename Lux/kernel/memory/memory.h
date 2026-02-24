@@ -42,6 +42,7 @@ void kfree_page(void* ptr);
 void* kmalloc(uint32_t size);
 void* kmalloc_aligned(uint32_t size, uint32_t align);
 void vmm_free_address_space(uint32_t* pd);
+void vmm_copy_address_space(uint32_t* src_pd, uint32_t* dst_pd);
 void kfree_heap(void* ptr);
 
 #endif

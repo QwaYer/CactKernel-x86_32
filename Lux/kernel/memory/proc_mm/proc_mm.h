@@ -6,7 +6,7 @@
 
 #define PROC_MAX_PAGES 256
 
-typedef struct {
+typedef struct proc_page_tracker_t {
     void*    pages[PROC_MAX_PAGES]; /* физические адреса страниц данных/кода */
     uint32_t count;                 /* реально использованных записей         */
     uint32_t* page_dir;             /* пользовательский page directory        */
