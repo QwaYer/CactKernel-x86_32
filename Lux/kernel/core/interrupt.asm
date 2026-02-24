@@ -288,6 +288,25 @@ keyboard_isr:
     popa
     iretd
 
+global mouse_isr
+extern mouse_handler
+
+mouse_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    call mouse_handler
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop es
+    pop ds
+    popa
+    iretd
+
 virtio_net_isr:
     pusha
     call virtio_net_irq_handler

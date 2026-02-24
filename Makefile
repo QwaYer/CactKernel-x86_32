@@ -99,6 +99,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/io.o \
       $(BUILD_DIR)/mm.o \
       $(BUILD_DIR)/keyboard.o \
+      $(BUILD_DIR)/mouse.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/net.o \
       $(BUILD_DIR)/ethernet.o \
@@ -250,6 +251,10 @@ $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/keyboard.o: $(DRIVER_INPUT_DIR)/keyboard.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mouse.o: $(DRIVER_INPUT_DIR)/mouse.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

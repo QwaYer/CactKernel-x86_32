@@ -38,6 +38,7 @@ extern void isr31();
 extern void isr_common_stub();
 extern void timer_isr();
 extern void keyboard_isr();
+extern void mouse_isr();
 extern void virtio_net_isr();
 extern void syscall_isr();
 
@@ -66,9 +67,9 @@ void init_pic() {
     /* ICW4: режим 8086 */
     port_byte_out(0x21, 0x01);
     port_byte_out(0xA1, 0x01);
-    /* OCW1: маски — разрешается IRQ0, IRQ1 и IRQ11 (VirtIO) */
+    /* OCW1: маски — разрешается IRQ0, IRQ1, IRQ11 (VirtIO) и IRQ12 (Mouse) */
     port_byte_out(0x21, 0xFC);
-    port_byte_out(0xA1, 0xF7);
+    port_byte_out(0xA1, 0xEF);
 }
 
 int init_idt() {
@@ -113,6 +114,7 @@ int init_idt() {
     /* IRQ */
     set_idt_gate(32, (uint32_t)timer_isr);
     set_idt_gate(33, (uint32_t)keyboard_isr);
+    set_idt_gate(44, (uint32_t)mouse_isr);
     set_idt_gate(0x2B, (uint32_t)virtio_net_isr);
 
     /* Системный вызов (int 0x80) — DPL=3 чтобы вызывать из userspace */

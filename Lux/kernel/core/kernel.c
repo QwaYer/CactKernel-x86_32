@@ -1,5 +1,6 @@
 #include "kernel.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "memory.h"
 #include "gdt.h"
 #include "idt.h"
@@ -254,6 +255,8 @@ void kernel_setup_hardware() {
 
     boot_log("VGA Text Mode", init_vga());
     boot_log("PS/2 Keyboard", init_keyboard());
+    init_mouse();
+    boot_log("PS/2 Mouse", 0);
     boot_log("I/O Ports Probe", probe_io_ports());
     boot_log("Base Memory Detect", detect_memory());
     boot_log("PCI Bus Scan", search_pci());
