@@ -122,10 +122,32 @@ void vmm_free_address_space(uint32_t* pd) {
                     kfree_page((void*)(pt[j] & ~0xFFF));
                 }
             }
-            kfree_page(pt); 
+            kfree_page(pt);
         }
     }
-    kfree_page(pd); 
+    kfree_page(pd);
+}
+
+void vmm_copy_address_space(uint32_t* src_pd, uint32_t* dst_pd) {
+    if (!src_pd || !dst_pd) return;
+    for (int i = 32; i < 1024; i++) {
+        if (src_pd[i] & PAGE_PRESENT) {
+            uint32_t* src_pt = (uint32_t*)(src_pd[i] & ~0xFFF);
+            uint32_t* dst_pt = (uint32_t*)kalloc();
+            if (!dst_pt) continue;
+            for (int j = 0; j < 1024; j++) dst_pt[j] = 0;
+
+            for (int j = 0; j < 1024; j++) {
+                if (src_pt[j] & PAGE_PRESENT) {
+                    void* new_page = kalloc();
+                    if (!new_page) continue;
+                    memory_copy(new_page, (void*)(src_pt[j] & ~0xFFF), PAGE_SIZE);
+                    dst_pt[j] = ((uint32_t)new_page & ~0xFFF) | (src_pt[j] & 0xFFF);
+                }
+            }
+            dst_pd[i] = ((uint32_t)dst_pt) | (src_pd[i] & 0xFFF);
+        }
+    }
 }
 
 void* kalloc() {

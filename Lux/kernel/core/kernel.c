@@ -249,26 +249,30 @@ void kernel_setup_hardware() {
     vfs_init();
     boot_log("Virtual File System mount", 0);
 
+    extern void ext4_init();
     ext4_init();
     boot_log("EXT4 File System mount", 0);
 
     devfs_init();
     boot_log("Device File System mount", 0);
 
+    extern void procfs_init();
     procfs_init();
     boot_log("Process File System mount", 0);
 
+    extern void mntfs_init();
     mntfs_init();
     boot_log("Mount manager", 0);
 
     net_init();
     boot_log("Network Stack", 0);
 
-    task_init();     
+    task_init();
     init_scheduler();
-    init_timer(100); 
+    init_timer(100);
     boot_log("Scheduler & PIT Timer", 0);
 
+    extern void commands_init();
     commands_init();
     boot_log("Terminal Commands", 0);
     

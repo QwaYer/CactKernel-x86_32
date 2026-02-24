@@ -273,6 +273,10 @@ void schedule() {
 
     if (current_task->page_directory)
         switch_paging(current_task->page_directory);
+    else {
+        extern uint32_t page_directory[1024];
+        switch_paging(page_directory);
+    }
 
     tss_entry.esp0 = (uint32_t)current_task->stack_base + 4096;
     spinlock_release(&scheduler_lock);
@@ -350,24 +354,7 @@ struct task_struct* task_fork(struct context_frame* regs) {
         return 0;
     }
 
-    for (int i = 0; i < 1024; i++) {
-        if (!(parent->page_directory[i] & PAGE_PRESENT)) continue;
-        if (i < 32) { pd[i] = parent->page_directory[i]; continue; }
-
-        uint32_t* src_pt = (uint32_t*)(parent->page_directory[i] & ~0xFFF);
-        uint32_t* dst_pt = (uint32_t*)kalloc();
-        if (!dst_pt) continue;
-        for (int j = 0; j < 1024; j++) dst_pt[j] = 0;
-
-        for (int j = 0; j < 1024; j++) {
-            if (!(src_pt[j] & PAGE_PRESENT)) continue;
-            void* new_page = kalloc();
-            if (!new_page) continue;
-            memory_copy(new_page, (void*)(src_pt[j] & ~0xFFF), PAGE_SIZE);
-            dst_pt[j] = ((uint32_t)new_page & ~0xFFF) | (src_pt[j] & 0xFFF);
-        }
-        pd[i] = ((uint32_t)dst_pt) | (parent->page_directory[i] & 0xFFF);
-    }
+    vmm_copy_address_space(parent->page_directory, pd);
 
     uint32_t ustack_virt = parent->ustack_virt;
     vmm_map(pd, ustack_virt, (uint32_t)ustack_phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
