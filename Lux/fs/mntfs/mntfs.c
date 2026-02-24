@@ -102,7 +102,7 @@ static int _probe_ext4_at(uint16_t base, uint8_t slave, uint32_t lba_start)
         return 0; 
 
     uint8_t buf[512];
-    ata_read_sector(lba_start + 2, buf);
+    ata_read_sector(base, slave, lba_start + 2, buf);
 
     uint16_t magic = *(uint16_t*)(buf + 56);
     return (magic == EXT4_SUPER_MAGIC);

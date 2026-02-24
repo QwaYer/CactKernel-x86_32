@@ -114,8 +114,8 @@ uint32_t get_free_heap_memory();
 
 // Storage & File System 
 extern void ata_init();
-extern void ata_read_sector(uint32_t lba, uint8_t* buffer);
-extern void ata_write_sector(uint32_t lba, uint8_t* buffer);
+extern void ata_read_sector(uint16_t port, uint8_t slave, uint32_t lba, uint8_t* buffer);
+extern void ata_write_sector(uint16_t port, uint8_t slave, uint32_t lba, uint8_t* buffer);
 extern void fat16_init();
 extern void fat16_list_root();
 
