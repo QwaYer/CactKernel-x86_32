@@ -52,7 +52,7 @@ static int _hda_read(struct vfs_node* node, unsigned int off, unsigned int size,
     unsigned int lba = off / 512;
     unsigned int written = 0;
     while (written < size) {
-        ata_read_sector(lba, sector_buf);
+        ata_read_sector(0x1F0, 0, lba, sector_buf);
         unsigned int chunk = 512;
         if (chunk > size - written) chunk = size - written;
         memcpy(buf + written, sector_buf, chunk);
@@ -68,11 +68,11 @@ static int _hda_write(struct vfs_node* node, unsigned int off, unsigned int size
     unsigned int lba = off / 512;
     unsigned int written = 0;
     while (written < size) {
-        ata_read_sector(lba, sector_buf);
+        ata_read_sector(0x1F0, 0, lba, sector_buf);
         unsigned int chunk = 512;
         if (chunk > size - written) chunk = size - written;
         memcpy(sector_buf, buf + written, chunk);
-        ata_write_sector(lba, sector_buf);
+        ata_write_sector(0x1F0, 0, lba, sector_buf);
         written += chunk;
         lba++;
     }
