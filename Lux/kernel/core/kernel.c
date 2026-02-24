@@ -115,6 +115,21 @@ int search_pci() {
 
 void exception_handler(struct context_frame* regs) {
     char buf[32];
+
+    if (current_task && !current_task->is_kernel) {
+        kprint_color("\n[KERNEL] User process crashed. Exception ID: ", COLOR_LIGHT_RED);
+        itoa(regs->int_no, buf);
+        kprint_color(buf, COLOR_LIGHT_RED);
+        kprint_color(" PID: ", COLOR_LIGHT_RED);
+        itoa(current_task->pid, buf);
+        kprint_color(buf, COLOR_LIGHT_RED);
+        kprint("\n");
+        
+        task_signal(current_task->pid, SIGKILL);
+        schedule();
+        return;
+    }
+
     clear_screen();
     kprint_color("!!! KERNEL FATAL ERROR !!!\n", COLOR_LIGHT_RED);
 
