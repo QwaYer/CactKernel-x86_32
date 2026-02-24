@@ -14,7 +14,8 @@ KERN_SYNC_DIR    = Lux/kernel/sync
 KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR = Lux/drivers/input
-DRIVER_BLOCK_DIR = Lux/drivers/block
+DRIVER_ATA_DIR 	 = Lux/drivers/block/ata
+DRIVER_BUF_DIR   = Lux/drivers/block/buf
 FS_VFS_DIR       = Lux/fs/vfs
 FS_PIPE_DIR      = Lux/fs/vfs/pipe
 FS_DEVFS_DIR     = Lux/fs/devfs
@@ -22,12 +23,13 @@ FS_EXT4_DIR      = Lux/fs/ext4
 FS_PROCFS_DIR    = Lux/fs/procfs
 FS_MNTFS_DIR     = Lux/fs/mntfs
 NET_DIR          = Lux/net
+NET_ARP_DIR      = Lux/net/arp
 NET_ETH_DIR      = Lux/net/ethernet
 NET_IP_DIR       = Lux/net/ip
 NET_ICMP_DIR     = Lux/net/icmp
 NET_UDP_DIR      = Lux/net/protocols/udp
 NET_TCP_DIR      = Lux/net/protocols/tcp
-DRIVER_NET_DIR   = Lux/drivers/network
+DRIVER_NET_DIR   = Lux/drivers/network/virtio_net
 BUILD_DIR        = build
 
 # ------------------------------------------------------------------------------
@@ -47,7 +49,8 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_IDT_DIR) \
          -I$(KERN_LIBC_DIR) \
          -I$(DRIVER_INPUT_DIR) \
-         -I$(DRIVER_BLOCK_DIR) \
+         -I$(DRIVER_ATA_DIR) \
+		 -I$(DRIVER_BUF_DIR) \
          -I$(FS_VFS_DIR) \
          -I$(FS_PIPE_DIR) \
          -I$(FS_DEVFS_DIR) \
@@ -55,6 +58,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_PROCFS_DIR) \
          -I$(FS_MNTFS_DIR) \
          -I$(NET_DIR) \
+		 -I$(NET_ARP_DIR) \
          -I$(NET_ETH_DIR) \
          -I$(NET_IP_DIR) \
          -I$(NET_ICMP_DIR) \
@@ -233,11 +237,11 @@ $(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ata.o: $(DRIVER_BLOCK_DIR)/ata.c
+$(BUILD_DIR)/ata.o: $(DRIVER_ATA_DIR)/ata.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/buf.o: $(DRIVER_BLOCK_DIR)/buf.c
+$(BUILD_DIR)/buf.o: $(DRIVER_BUF_DIR)/buf.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -257,7 +261,7 @@ $(BUILD_DIR)/ethernet.o: $(NET_ETH_DIR)/ethernet.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/arp.o: $(NET_DIR)/arp.c
+$(BUILD_DIR)/arp.o: $(NET_ARP_DIR)/arp.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
