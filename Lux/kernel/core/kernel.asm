@@ -4,7 +4,8 @@
 ; Multiboot header
 MODULEALIGN equ  1<<0
 MEMINFO     equ  1<<1
-FLAGS       equ  MODULEALIGN | MEMINFO
+VIDINFO     equ  1<<2
+FLAGS       equ  MODULEALIGN | MEMINFO | VIDINFO
 MAGIC       equ  0x1BADB002
 CHECKSUM    equ -(MAGIC + FLAGS)
 
@@ -13,6 +14,11 @@ align 4
     dd MAGIC
     dd FLAGS
     dd CHECKSUM
+    dd 0, 0, 0, 0, 0 ; unused fields for a.out kludge
+    dd 0 ; mode_type (0 = linear graphics)
+    dd 1024 ; width
+    dd 768 ; height
+    dd 32 ; depth
 
 section .bss
 align 16

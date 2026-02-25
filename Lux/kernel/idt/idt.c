@@ -67,9 +67,13 @@ void init_pic() {
     /* ICW4: режим 8086 */
     port_byte_out(0x21, 0x01);
     port_byte_out(0xA1, 0x01);
-    /* OCW1: маски — разрешается IRQ0, IRQ1, IRQ11 (VirtIO) и IRQ12 (Mouse) */
-    port_byte_out(0x21, 0xFC);
-    port_byte_out(0xA1, 0xEF);
+    /* OCW1: маски — разрешается IRQ0 (таймер), IRQ1 (клавиатура), IRQ2 (каскад),
+     *        IRQ11 (VirtIO), IRQ12 (мышь).
+     * 0 = разрешено, 1 = заблокировано.
+     * Master PIC: 0xF8 = 11111000 → IRQ0, IRQ1, IRQ2 разрешены.
+     * Slave  PIC: 0xE7 = 11100111 → IRQ11 (бит 3) и IRQ12 (бит 4) разрешены. */
+    port_byte_out(0x21, 0xF8);
+    port_byte_out(0xA1, 0xE7);
 }
 
 int init_idt() {

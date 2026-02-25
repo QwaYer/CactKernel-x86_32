@@ -30,6 +30,8 @@ NET_ICMP_DIR     = Lux/net/icmp
 NET_UDP_DIR      = Lux/net/protocols/udp
 NET_TCP_DIR      = Lux/net/protocols/tcp
 DRIVER_NET_DIR   = Lux/drivers/network/virtio_net
+DRIVER_FB_DIR    = Lux/drivers/video/fb
+DRIVER_FONT_DIR  = Lux/drivers/video/font
 BUILD_DIR        = build
 
 # ------------------------------------------------------------------------------
@@ -65,6 +67,8 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(NET_UDP_DIR) \
          -I$(NET_TCP_DIR) \
          -I$(DRIVER_NET_DIR) \
+         -I$(DRIVER_FB_DIR) \
+         -I$(DRIVER_FONT_DIR) \
          -Wall
 
 LDFLAGS = -m elf_i386 -T linker.ld -z noexecstack
@@ -108,7 +112,9 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/icmp.o \
       $(BUILD_DIR)/udp.o \
       $(BUILD_DIR)/tcp.o \
-      $(BUILD_DIR)/virtio_net.o
+      $(BUILD_DIR)/virtio_net.o \
+      $(BUILD_DIR)/fb.o \
+      $(BUILD_DIR)/font.o
 
 
 all: $(BUILD_DIR)/lux.iso
@@ -295,4 +301,10 @@ $(BUILD_DIR)/virtio_net.o: $(DRIVER_NET_DIR)/virtio_net.c
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all clean
+$(BUILD_DIR)/fb.o: $(DRIVER_FB_DIR)/fb.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/font.o: $(DRIVER_FONT_DIR)/font.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@

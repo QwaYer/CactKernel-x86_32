@@ -1,6 +1,7 @@
 #include "mouse.h"
 #include "kernel.h"
 #include "libc.h"
+#include "fb.h"
 
 int mouse_x = 0;
 int mouse_y = 0;
@@ -99,9 +100,9 @@ void mouse_handler() {
 
             
             if (mouse_x < 0) mouse_x = 0;
-            if (mouse_x >= MAX_COLS * 8) mouse_x = MAX_COLS * 8 - 1; 
+            if (mouse_x >= (int)fb_get_width()) mouse_x = (int)fb_get_width() - 1; 
             if (mouse_y < 0) mouse_y = 0;
-            if (mouse_y >= MAX_ROWS * 16) mouse_y = MAX_ROWS * 16 - 1; 
+            if (mouse_y >= (int)fb_get_height()) mouse_y = (int)fb_get_height() - 1; 
 
             mouse_buttons = mouse_byte[0] & 0x07;
             break;

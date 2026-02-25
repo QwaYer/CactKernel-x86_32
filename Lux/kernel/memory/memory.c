@@ -42,7 +42,9 @@ void init_heap() {
 
 void init_paging() {
     for(int i = 0; i < 1024; i++) {
-        page_directory[i] = 0x00000002; 
+        if (page_directory[i] == 0) {
+            page_directory[i] = 0x00000002; 
+        }
     }
 
     for(int j = 0; j < 32; j++) {
@@ -59,10 +61,6 @@ void init_paging() {
 
 void vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int flags) {
     if (!pd) return;
-    if (physical_addr >= MEM_START + MEM_SIZE) {
-        kprint("[ERR] vmm_map: physical address out of bounds\n");
-        return;
-    }
     if (virtual_addr % PAGE_SIZE != 0 || physical_addr % PAGE_SIZE != 0) {
         kprint("[ERR] vmm_map: addresses must be page-aligned\n");
         return;

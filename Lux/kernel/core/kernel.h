@@ -4,32 +4,80 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// VGA Text Mode Constants 
-#define VIDEO_ADDRESS 0xb8000
-#define MAX_ROWS 25
-#define MAX_COLS 80
+// Forward declarations
+struct context_frame;
 
-// VGA Colors 
+// Multiboot Info Structure
+typedef struct {
+    uint32_t flags;
+    uint32_t mem_lower;
+    uint32_t mem_upper;
+    uint32_t boot_device;
+    uint32_t cmdline;
+    uint32_t mods_count;
+    uint32_t mods_addr;
+    uint32_t num;
+    uint32_t size;
+    uint32_t addr;
+    uint32_t shndx;
+    uint32_t mmap_length;
+    uint32_t mmap_addr;
+    uint32_t drives_length;
+    uint32_t drives_addr;
+    uint32_t config_table;
+    uint32_t boot_loader_name;
+    uint32_t apm_table;
+    
+    uint32_t vbe_control_info;
+    uint32_t vbe_mode_info;
+    uint16_t vbe_mode;
+    uint16_t vbe_interface_seg;
+    uint16_t vbe_interface_off;
+    uint16_t vbe_interface_len;
+
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t framebuffer_bpp;
+    uint8_t framebuffer_type;
+    union {
+        struct {
+            uint32_t framebuffer_palette_addr;
+            uint16_t framebuffer_palette_num_colors;
+        };
+        struct {
+            uint8_t framebuffer_red_field_position;
+            uint8_t framebuffer_red_mask_size;
+            uint8_t framebuffer_green_field_position;
+            uint8_t framebuffer_green_mask_size;
+            uint8_t framebuffer_blue_field_position;
+            uint8_t framebuffer_blue_mask_size;
+        };
+    };
+} __attribute__((packed)) multiboot_info_t;
+
+// Framebuffer Colors
 typedef enum {
-    COLOR_BLACK = 0,
-    COLOR_BLUE = 1,
-    COLOR_GREEN = 2,
-    COLOR_CYAN = 3,
-    COLOR_RED = 4,
-    COLOR_MAGENTA = 5,
-    COLOR_BROWN = 6,
-    COLOR_LIGHT_GREY = 7,
-    COLOR_DARK_GREY = 8,
-    COLOR_LIGHT_BLUE = 9,
-    COLOR_LIGHT_GREEN = 10,
-    COLOR_LIGHT_CYAN = 11,
-    COLOR_LIGHT_RED = 12,
-    COLOR_LIGHT_MAGENTA = 13,
-    COLOR_LIGHT_BROWN = 14,
-    COLOR_WHITE = 15
-} vga_color_t;
+    COLOR_BLACK = 0x000000,
+    COLOR_BLUE = 0x0000AA,
+    COLOR_GREEN = 0x00AA00,
+    COLOR_CYAN = 0x00AAAA,
+    COLOR_RED = 0xAA0000,
+    COLOR_MAGENTA = 0xAA00AA,
+    COLOR_BROWN = 0xAA5500,
+    COLOR_LIGHT_GREY = 0xAAAAAA,
+    COLOR_DARK_GREY = 0x555555,
+    COLOR_LIGHT_BLUE = 0x5555FF,
+    COLOR_LIGHT_GREEN = 0x55FF55,
+    COLOR_LIGHT_CYAN = 0x55FFFF,
+    COLOR_LIGHT_RED = 0xFF5555,
+    COLOR_LIGHT_MAGENTA = 0xFF55FF,
+    COLOR_LIGHT_BROWN = 0xFFFF55,
+    COLOR_WHITE = 0xFFFFFF
+} fb_color_t;
 
-#define WHITE_ON_BLACK ((COLOR_BLACK << 4) | COLOR_WHITE)
+#define WHITE_ON_BLACK COLOR_WHITE
 
 // Paging Constants 
 #define PAGE_PRESENT 0x1
@@ -87,12 +135,13 @@ extern void isr_common_stub();
 
 // Video/Console Functions 
 void kprint(char* message);
-void kprint_color(char* message, uint8_t color);
+void kprint_color(char* message, uint32_t color);
 void kprint_at(char* message, int x, int y);
 void clear_screen();
 void scroll();
-void update_hardware_cursor(int x, int y);
 void boot_log(char* component, int status);
+int get_cursor_x();
+int get_cursor_y();
 
 // Libc-like Functions (Kernel Space) 
 void itoa(int n, char str[]);
@@ -102,7 +151,6 @@ int compare_string(char* s1, char* s2);
 void hex_to_ascii(uint32_t n, char str[]);
 
 // Exception Handling 
-struct context_frame; 
 void exception_handler(struct context_frame* regs);
 
 static inline uint32_t read_cr2() {
@@ -118,7 +166,7 @@ static inline uint32_t* get_current_pd() {
 }
 
 // Hardware Initialization 
-int init_vga();
+int init_framebuffer();
 int init_keyboard();
 int probe_io_ports();
 int detect_memory();
