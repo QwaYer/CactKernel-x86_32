@@ -303,7 +303,7 @@ void kernel_setup_hardware() {
     }
 
     init_paging();
-
+    slab_init();
     boot_log("Memory Manager & Heap", 0);
 
     init_pic();
