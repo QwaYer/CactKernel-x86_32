@@ -405,9 +405,17 @@ struct task_struct* task_fork(struct context_frame* regs) {
 }
 
 
-//exec
+#ifndef KERNEL_BASE
+#define KERNEL_BASE 0xC0000000U
+#endif
+
 int task_exec(char* path, struct context_frame* regs) {
     __asm__ __volatile__("cli");
+
+    if (!path || (uint32_t)path >= KERNEL_BASE) {
+        __asm__ __volatile__("sti");
+        return -1;
+    }
 
     struct task_struct* t = current_task;
     if (!t || t->is_kernel) { __asm__ __volatile__("sti"); return -1; }
