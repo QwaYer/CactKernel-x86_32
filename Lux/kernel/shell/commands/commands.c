@@ -11,6 +11,7 @@
 #include "ip.h"
 #include "icmp.h"
 #include "udp.h"
+#include "fb.h"
 
 
 //Утилиты
@@ -182,6 +183,30 @@ static void cmd_fetch(char* args) {
     unsigned int free_mem = get_free_heap_memory();
     kprint_color(" Memory:  ", COLOR_LIGHT_BROWN);
     itoa(free_mem, buf); kprint(buf); kprint(" bytes free\n");
+
+    kprint("\n");
+    
+    if (fb_get_width() > 0) {
+        uint32_t start_x = get_cursor_x() + 8;
+        uint32_t start_y = get_cursor_y();
+        uint32_t sq_size = 16;
+
+        uint32_t colors[] = {
+            COLOR_BLACK, COLOR_RED, COLOR_GREEN, COLOR_BROWN,
+            COLOR_BLUE, COLOR_MAGENTA, COLOR_CYAN, COLOR_LIGHT_GREY,
+            COLOR_DARK_GREY, COLOR_LIGHT_RED, COLOR_LIGHT_GREEN, COLOR_LIGHT_BROWN,
+            COLOR_LIGHT_BLUE, COLOR_LIGHT_MAGENTA, COLOR_LIGHT_CYAN, COLOR_WHITE
+        };
+
+        for (int i = 0; i < 8; i++) {
+            fb_fill_rect(start_x + i * sq_size, start_y, sq_size, sq_size, colors[i]);
+        }
+        for (int i = 0; i < 8; i++) {
+            fb_fill_rect(start_x + i * sq_size, start_y + sq_size, sq_size, sq_size, colors[i + 8]);
+        }
+        
+        kprint("\n\n\n"); 
+    }
 }
 
 static void cmd_clear(char* args) {
