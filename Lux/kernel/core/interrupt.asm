@@ -37,11 +37,15 @@ global isr28
 global isr29
 global isr30
 global isr31
+global ata_isr
+global mouse_isr
 
 extern keyboard_handler
 extern virtio_net_irq_handler
 extern exception_handler
 extern syscall_handler
+extern ata_irq_handler
+extern mouse_handler
 extern current_task
 extern schedule
 
@@ -55,7 +59,6 @@ section .text
 timer_ticks_get:
     mov eax, [timer_ticks]
     ret
-
 
 isr0:
     push dword 0
@@ -223,7 +226,7 @@ isr31:
 ;   [esp+48] = eip    \  CPU
 ;   [esp+52] = cs      |
 ;   [esp+56] = eflags /
-;   [esp+60] = useresp \  только при ring3→ring0
+;   [esp+60] = useresp \  только при ring3->ring0
 ;   [esp+64] = ss      /
 isr_common_stub:
     pusha
@@ -232,13 +235,13 @@ isr_common_stub:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    push esp                
+    push esp
     call exception_handler
     add esp, 4
     pop es
     pop ds
     popa
-    add esp, 8             
+    add esp, 8
     iretd
 
 timer_isr:
@@ -249,12 +252,12 @@ timer_isr:
     mov ds, ax
     mov es, ax
 
-    inc dword [timer_ticks]  
+    inc dword [timer_ticks]
 
     mov eax, [current_task]
     test eax, eax
     jz .skip_save
-    mov [eax], esp          
+    mov [eax], esp
 
 .skip_save:
     call schedule
@@ -262,7 +265,7 @@ timer_isr:
     mov eax, [current_task]
     test eax, eax
     jz .do_eoi
-    mov esp, [eax]     
+    mov esp, [eax]
 
 .do_eoi:
     mov al, 0x20
@@ -288,9 +291,6 @@ keyboard_isr:
     popa
     iretd
 
-global mouse_isr
-extern mouse_handler
-
 mouse_isr:
     pusha
     push ds
@@ -302,6 +302,25 @@ mouse_isr:
     mov al, 0x20
     out 0xA0, al
     out 0x20, al
+    pop es
+    pop ds
+    popa
+    iretd
+
+ata_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+
+    call ata_irq_handler
+
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+
     pop es
     pop ds
     popa
