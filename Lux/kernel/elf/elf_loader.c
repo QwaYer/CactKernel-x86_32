@@ -2,6 +2,7 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "memory.h"
+#include "page_fault.h"
 #include "proc_mm.h"
 #include "libc.h"
 
@@ -11,90 +12,90 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 
     struct vfs_node* file = finddir_vfs(vfs_root, path);
     if (!file) {
-        kprint("ELF: File not found\n");
-        proc_free_pages(tracker);
+        kprint("ELF: file not found\n");
         return 0;
     }
 
-    Elf32_Ehdr header;
-    if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&header) <= 0) {
-        kprint("ELF: Failed to read header\n");
-        proc_free_pages(tracker);
+    Elf32_Ehdr hdr;
+    if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) {
+        kprint("ELF: cannot read header\n");
         return 0;
     }
 
-    if (*(uint32_t*)header.e_ident != ELF_MAGIC) {
-        kprint("ELF: Invalid magic\n");
-        proc_free_pages(tracker);
+    if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
+        kprint("ELF: bad magic\n");
+        return 0;
+    }
+    if (hdr.e_machine != 3) { /* EM_386 */
+        kprint("ELF: not i386\n");
         return 0;
     }
 
-    if (header.e_machine != 3) { /* EM_386 */
-        kprint("ELF: Not i386\n");
-        proc_free_pages(tracker);
-        return 0;
-    }
-
-    for (int i = 0; i < header.e_phnum; i++) {
-        Elf32_Phdr phdr;
-
+    for (int i = 0; i < hdr.e_phnum; i++) {
+        Elf32_Phdr ph;
         if (read_vfs(file,
-                     header.e_phoff + (uint32_t)i * header.e_phentsize,
+                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
-                     (char*)&phdr) <= 0) {
-            kprint("ELF: Failed to read phdr\n");
+                     (char*)&ph) <= 0) {
+            kprint("ELF: cannot read phdr\n");
             proc_free_pages(tracker);
             return 0;
         }
 
-        if (phdr.p_type != PT_LOAD) continue;
-        if (phdr.p_memsz == 0)      continue;
+        if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
 
-        uint32_t num_pages = (phdr.p_memsz + PAGE_SIZE - 1) / PAGE_SIZE;
+        uint32_t file_pages = (ph.p_filesz + 0xFFF) >> 12;
+        uint32_t mem_pages  = (ph.p_memsz  + 0xFFF) >> 12;
 
-        for (uint32_t p = 0; p < num_pages; p++) {
-            uint32_t vaddr = phdr.p_vaddr + p * PAGE_SIZE;
+        for (uint32_t p = 0; p < file_pages; p++) {
+            uint32_t vaddr = ph.p_vaddr + p * PAGE_SIZE;
 
             void* phys = kalloc();
             if (!phys) {
-                kprint("ELF: out of physical memory\n");
+                kprint("ELF: out of memory (code/data)\n");
                 proc_free_pages(tracker);
                 return 0;
             }
-
             if (proc_tracker_add(tracker, phys) < 0) {
-                kprint("ELF: page tracker overflow\n");          
+                kprint("ELF: tracker overflow\n");
                 kfree_page(phys);
                 proc_free_pages(tracker);
                 return 0;
             }
 
-            vmm_map(pd, vaddr, (uint32_t)phys,
-                    PAGE_USER | PAGE_RW | PAGE_PRESENT);
+            uint8_t* b = (uint8_t*)phys;
+            for (int k = 0; k < (int)PAGE_SIZE; k++) b[k] = 0;
 
-            memset(phys, 0, PAGE_SIZE);
-
-            uint32_t page_offset = p * PAGE_SIZE;
-            uint32_t copy_size   = 0;
-
-            if (page_offset < phdr.p_filesz) {
-                copy_size = phdr.p_filesz - page_offset;
-                if (copy_size > PAGE_SIZE)
-                    copy_size = PAGE_SIZE;
-            }
+            uint32_t file_off    = p * PAGE_SIZE;
+            uint32_t bytes_left  = ph.p_filesz - file_off;
+            uint32_t copy_size   = (bytes_left > PAGE_SIZE) ? PAGE_SIZE : bytes_left;
 
             if (copy_size > 0) {
                 if (read_vfs(file,
-                             phdr.p_offset + page_offset,
+                             ph.p_offset + file_off,
                              copy_size,
                              (char*)phys) <= 0) {
-                    kprint("ELF: Failed to read segment data\n");
+                    kprint("ELF: read error\n");
                     proc_free_pages(tracker);
                     return 0;
                 }
             }
+
+            vmm_map(pd, vaddr, (uint32_t)phys,
+                    PAGE_USER | PAGE_RW | PAGE_PRESENT);
+        }
+
+        if (mem_pages > file_pages) {
+            uint32_t bss_start = ph.p_vaddr + file_pages * PAGE_SIZE;
+            uint32_t bss_size  = (mem_pages - file_pages) * PAGE_SIZE;
+
+            if (vmm_map_zero(pd, bss_start, bss_size, PAGE_USER) != 0) {
+                kprint("ELF: vmm_map_zero failed (BSS)\n");
+                proc_free_pages(tracker);
+                return 0;
+            }
         }
     }
 
-    return (void*)header.e_entry;
+    return (void*)hdr.e_entry;
 }
