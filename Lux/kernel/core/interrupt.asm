@@ -48,6 +48,7 @@ extern ata_irq_handler
 extern mouse_handler
 extern current_task
 extern schedule
+extern page_fault_handler
 
 global timer_ticks_get
 
@@ -126,8 +127,13 @@ isr13:
     jmp isr_common_stub
 
 isr14:
-    push dword 14
-    jmp isr_common_stub
+    push dword 14      
+    push eax          
+    mov  eax, [esp+8]   
+    mov  [esp+8], dword 14 
+    mov  [esp+4], eax     
+    pop  eax              
+    jmp  isr_pf_stub
 
 isr15:
     push dword 0
@@ -210,40 +216,54 @@ isr31:
     push dword 31
     jmp isr_common_stub
 
-; порядок на стеке (от младших адресов к старшим):
-;   [esp+0]  = es
-;   [esp+4]  = ds
-;   [esp+8]  = edi  \
-;   [esp+12] = esi   |
-;   [esp+16] = ebp   |
-;   [esp+20] = esp   | pusha
-;   [esp+24] = ebx   |
-;   [esp+28] = edx   |
-;   [esp+32] = ecx   |
-;   [esp+36] = eax  /
-;   [esp+40] = int_no
-;   [esp+44] = err_code
-;   [esp+48] = eip    \  CPU
-;   [esp+52] = cs      |
-;   [esp+56] = eflags /
-;   [esp+60] = useresp \  только при ring3->ring0
-;   [esp+64] = ss      /
+; ============================================================================
+; isr_pf_stub — вызывает page_fault_handler (C-функция)
+; На входе стек: [esp]=int_no(14), [esp+4]=error_code, [esp+8]=eip, ...
+; ============================================================================
+isr_pf_stub:
+    pusha
+    push ds
+    push es
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+
+    push esp                   ; параметр: struct context_frame* regs
+    call page_fault_handler
+    add esp, 4
+
+    pop es
+    pop ds
+    popa
+    add esp, 8                 ; убрать int_no + err_code со стека
+    iretd
+
+; ============================================================================
+; isr_common_stub — все остальные исключения -> exception_handler
+; ============================================================================
 isr_common_stub:
     pusha
     push ds
     push es
+
     mov ax, 0x10
     mov ds, ax
     mov es, ax
+
     push esp
     call exception_handler
     add esp, 4
+
     pop es
     pop ds
     popa
     add esp, 8
     iretd
 
+; ============================================================================
+; Timer IRQ (IRQ0 -> INT 32)
+; ============================================================================
 timer_isr:
     pusha
     push ds
@@ -257,7 +277,7 @@ timer_isr:
     mov eax, [current_task]
     test eax, eax
     jz .skip_save
-    mov [eax], esp
+    mov [eax], esp              ; task->esp = esp (первое поле структуры)
 
 .skip_save:
     call schedule
@@ -265,7 +285,7 @@ timer_isr:
     mov eax, [current_task]
     test eax, eax
     jz .do_eoi
-    mov esp, [eax]
+    mov esp, [eax]              ; esp = task->esp следующей задачи
 
 .do_eoi:
     mov al, 0x20
@@ -276,6 +296,9 @@ timer_isr:
     popa
     iretd
 
+; ============================================================================
+; Keyboard IRQ (IRQ1 -> INT 33)
+; ============================================================================
 keyboard_isr:
     pusha
     push ds
@@ -291,6 +314,9 @@ keyboard_isr:
     popa
     iretd
 
+; ============================================================================
+; Mouse IRQ (IRQ12 -> INT 44)
+; ============================================================================
 mouse_isr:
     pusha
     push ds
@@ -307,6 +333,9 @@ mouse_isr:
     popa
     iretd
 
+; ============================================================================
+; ATA IRQ (IRQ14 -> INT 46)
+; ============================================================================
 ata_isr:
     pusha
     push ds
@@ -314,18 +343,18 @@ ata_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-
     call ata_irq_handler
-
     mov al, 0x20
     out 0xA0, al
     out 0x20, al
-
     pop es
     pop ds
     popa
     iretd
 
+; ============================================================================
+; VirtIO Net IRQ (IRQ11 -> INT 43/0x2B)
+; ============================================================================
 virtio_net_isr:
     pusha
     call virtio_net_irq_handler
@@ -335,6 +364,9 @@ virtio_net_isr:
     popa
     iret
 
+; ============================================================================
+; Syscall (INT 0x80) — DPL=3, из userspace
+; ============================================================================
 syscall_isr:
     pusha
     push ds

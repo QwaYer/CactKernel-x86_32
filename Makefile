@@ -10,12 +10,13 @@ KERN_CMDS_DIR    = Lux/kernel/shell/commands
 KERN_MEM_DIR     = Lux/kernel/memory
 KERN_PROCMM_DIR  = Lux/kernel/memory/proc_mm
 KERN_SLABMM_DIR  = Lux/kernel/memory/slab_mm
+KERN_PF_DIR      = Lux/kernel/memory/page_fault
 KERN_PROC_DIR    = Lux/kernel/proc
 KERN_SYNC_DIR    = Lux/kernel/sync
 KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR = Lux/drivers/input
-DRIVER_ATA_DIR 	 = Lux/drivers/block/ata
+DRIVER_ATA_DIR   = Lux/drivers/block/ata
 DRIVER_BUF_DIR   = Lux/drivers/block/buf
 FS_VFS_DIR       = Lux/fs/vfs
 FS_PIPE_DIR      = Lux/fs/vfs/pipe
@@ -35,9 +36,6 @@ DRIVER_FB_DIR    = Lux/drivers/video/fb
 DRIVER_FONT_DIR  = Lux/drivers/video/font
 BUILD_DIR        = build
 
-# ------------------------------------------------------------------------------
-# Compiler flags
-# ------------------------------------------------------------------------------
 
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
@@ -46,6 +44,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_SHELL_DIR) \
          -I$(KERN_CMDS_DIR) \
          -I$(KERN_MEM_DIR) \
+         -I$(KERN_PF_DIR) \
          -I$(KERN_PROCMM_DIR) \
          -I$(KERN_SLABMM_DIR) \
          -I$(KERN_PROC_DIR) \
@@ -54,7 +53,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_LIBC_DIR) \
          -I$(DRIVER_INPUT_DIR) \
          -I$(DRIVER_ATA_DIR) \
-		 -I$(DRIVER_BUF_DIR) \
+         -I$(DRIVER_BUF_DIR) \
          -I$(FS_VFS_DIR) \
          -I$(FS_PIPE_DIR) \
          -I$(FS_DEVFS_DIR) \
@@ -62,7 +61,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_PROCFS_DIR) \
          -I$(FS_MNTFS_DIR) \
          -I$(NET_DIR) \
-		 -I$(NET_ARP_DIR) \
+         -I$(NET_ARP_DIR) \
          -I$(NET_ETH_DIR) \
          -I$(NET_IP_DIR) \
          -I$(NET_ICMP_DIR) \
@@ -75,23 +74,27 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
 
 LDFLAGS = -m elf_i386 -T linker.ld -z noexecstack
 
-# ------------------------------------------------------------------------------
-# Kernel object files
-# ------------------------------------------------------------------------------
 
 OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/gdt_asm.o \
       $(BUILD_DIR)/task_asm.o \
+      $(BUILD_DIR)/mm.o \
+      $(BUILD_DIR)/interrupt.o \
+      $(BUILD_DIR)/io.o \
       $(BUILD_DIR)/gdt.o \
       $(BUILD_DIR)/kernel.o \
+      $(BUILD_DIR)/memory.o \
+      $(BUILD_DIR)/memory_cow.o \
+      $(BUILD_DIR)/proc_mm.o \
+      $(BUILD_DIR)/slab.o \
+      $(BUILD_DIR)/page_fault.o \
+      $(BUILD_DIR)/task.o \
+      $(BUILD_DIR)/elf_loader.o \
+      $(BUILD_DIR)/sync.o \
+      $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/shell.o \
       $(BUILD_DIR)/commands.o \
       $(BUILD_DIR)/libc.o \
-      $(BUILD_DIR)/memory.o \
-      $(BUILD_DIR)/proc_mm.o \
-      $(BUILD_DIR)/slab.o \
-      $(BUILD_DIR)/sync.o \
-      $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/vfs.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
@@ -101,13 +104,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/buf.o \
       $(BUILD_DIR)/syscall.o \
-      $(BUILD_DIR)/elf_loader.o \
-      $(BUILD_DIR)/interrupt.o \
-      $(BUILD_DIR)/io.o \
-      $(BUILD_DIR)/mm.o \
       $(BUILD_DIR)/keyboard.o \
       $(BUILD_DIR)/mouse.o \
-      $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/net.o \
       $(BUILD_DIR)/ethernet.o \
       $(BUILD_DIR)/arp.o \
@@ -130,9 +128,6 @@ all: $(BUILD_DIR)/lux.iso
 	 echo "  Kernel size: $$KERN_SIZE bytes ($$KERN_SECTORS sectors)";
 	@echo "--------------------------------------------------"
 
-# ------------------------------------------------------------------------------
-# Disk image: GRUB + Kernel
-# ------------------------------------------------------------------------------
 
 $(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 	@mkdir -p $(BUILD_DIR)/isodir/boot/grub
@@ -140,16 +135,10 @@ $(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 	cp grub.cfg $(BUILD_DIR)/isodir/boot/grub/grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/lux.iso $(BUILD_DIR)/isodir
 
-# ------------------------------------------------------------------------------
-# Kernel binary
-# ------------------------------------------------------------------------------
 
 $(BUILD_DIR)/kernel.bin: $(OBJ)
 	ld $(LDFLAGS) -o $@ $^
 
-# ------------------------------------------------------------------------------
-# ASM files
-# ------------------------------------------------------------------------------
 
 $(BUILD_DIR)/kernel_entry.o: $(KERN_CORE_DIR)/kernel.asm
 	@mkdir -p $(BUILD_DIR)
@@ -175,9 +164,6 @@ $(BUILD_DIR)/mm.o: $(KERN_MEM_DIR)/mm.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
 
-# ------------------------------------------------------------------------------
-# C files
-# ------------------------------------------------------------------------------
 
 $(BUILD_DIR)/gdt.o: $(KERN_GDT_DIR)/gdt.c
 	@mkdir -p $(BUILD_DIR)
@@ -187,27 +173,24 @@ $(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/commands.o: $(KERN_CMDS_DIR)/commands.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/shell.o: $(KERN_SHELL_DIR)/shell.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/syscall.o: $(KERN_CORE_DIR)/syscall.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
+$(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/libc.o: $(KERN_LIBC_DIR)/libc.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/memory.o: $(KERN_MEM_DIR)/memory.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/page_fault.o: $(KERN_PF_DIR)/page_fault.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/memory_cow.o: $(KERN_MEM_DIR)/memory_cow.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -219,13 +202,32 @@ $(BUILD_DIR)/slab.o: $(KERN_SLABMM_DIR)/slab.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/sync.o: $(KERN_SYNC_DIR)/sync.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/task.o: $(KERN_PROC_DIR)/task.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sync.o: $(KERN_SYNC_DIR)/sync.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+
+$(BUILD_DIR)/shell.o: $(KERN_SHELL_DIR)/shell.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/commands.o: $(KERN_CMDS_DIR)/commands.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/libc.o: $(KERN_LIBC_DIR)/libc.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
 
 $(BUILD_DIR)/vfs.o: $(FS_VFS_DIR)/vfs.c
 	@mkdir -p $(BUILD_DIR)
@@ -239,6 +241,7 @@ $(BUILD_DIR)/devfs.o: $(FS_DEVFS_DIR)/devfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+
 $(BUILD_DIR)/ext4.o: $(FS_EXT4_DIR)/ext4.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -251,15 +254,12 @@ $(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+
 $(BUILD_DIR)/ata.o: $(DRIVER_ATA_DIR)/ata.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/buf.o: $(DRIVER_BUF_DIR)/buf.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -270,6 +270,19 @@ $(BUILD_DIR)/keyboard.o: $(DRIVER_INPUT_DIR)/keyboard.c
 $(BUILD_DIR)/mouse.o: $(DRIVER_INPUT_DIR)/mouse.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/fb.o: $(DRIVER_FB_DIR)/fb.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/font.o: $(DRIVER_FONT_DIR)/font.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/virtio_net.o: $(DRIVER_NET_DIR)/virtio_net.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
 
 $(BUILD_DIR)/net.o: $(NET_DIR)/net.c
 	@mkdir -p $(BUILD_DIR)
@@ -299,19 +312,8 @@ $(BUILD_DIR)/tcp.o: $(NET_TCP_DIR)/tcp.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/virtio_net.o: $(DRIVER_NET_DIR)/virtio_net.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-# ------------------------------------------------------------------------------
 
 clean:
 	rm -rf $(BUILD_DIR)
 
-$(BUILD_DIR)/fb.o: $(DRIVER_FB_DIR)/fb.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/font.o: $(DRIVER_FONT_DIR)/font.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
+.PHONY: all clean

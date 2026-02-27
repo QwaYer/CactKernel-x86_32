@@ -306,6 +306,9 @@ void kernel_setup_hardware() {
     slab_init();
     boot_log("Memory Manager & Heap", 0);
 
+    page_fault_init();
+    boot_log("Page Fault Handler", 0);
+
     init_pic();
     init_idt();
     boot_log("IDT & PIC (Interrupts)", 0);
