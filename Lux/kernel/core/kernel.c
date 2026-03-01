@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "pci.h"
 #include "keyboard.h"
 #include "mouse.h"
 #include "memory.h"
@@ -134,10 +135,6 @@ int detect_memory() {
     return ((high << 8) | low) > 0 ? 0 : 1;
 }
 
-int search_pci() {
-    port_long_out(0xCF8, 0x80000000);
-    return (port_long_in(0xCF8) == 0x80000000) ? 0 : 1;
-}
 
 void exception_handler(struct context_frame* regs) {
     char buf[32];
@@ -320,6 +317,7 @@ void kernel_setup_hardware() {
     boot_log("I/O Ports Probe", probe_io_ports());
     boot_log("Base Memory Detect", detect_memory());
     boot_log("PCI Bus Scan", search_pci());
+    pci_dump_all();
 
     ata_init();
     boot_log("ATA Hard Drive", 0);
@@ -327,19 +325,11 @@ void kernel_setup_hardware() {
     vfs_init();
     boot_log("Virtual File System mount", 0);
 
-    extern void ext4_init();
-    ext4_init();
-    boot_log("EXT4 File System mount", 0);
-
-    devfs_init();
-    boot_log("Device File System mount", 0);
-
-    extern void procfs_init();
-    procfs_init();
-    boot_log("Process File System mount", 0);
-
     extern void mntfs_init();
     mntfs_init();
+    boot_log("EXT4 File System mount", 0);
+    boot_log("Device File System mount", 0);
+    boot_log("Process File System mount", 0);
     boot_log("Mount manager", 0);
 
     net_init();
@@ -353,6 +343,9 @@ void kernel_setup_hardware() {
     extern void commands_init();
     commands_init();
     boot_log("Terminal Commands", 0);
+
+    extern void shell_init();
+    shell_init();
 
     key_buffer = (char*)kmalloc(2048);
     if (key_buffer != 0) {

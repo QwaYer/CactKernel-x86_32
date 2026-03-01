@@ -16,6 +16,7 @@ KERN_SYNC_DIR    = Lux/kernel/sync
 KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR = Lux/drivers/input
+DRIVER_PCI_DIR   = Lux/drivers/pci
 DRIVER_ATA_DIR   = Lux/drivers/block/ata
 DRIVER_BUF_DIR   = Lux/drivers/block/buf
 FS_VFS_DIR       = Lux/fs/vfs
@@ -24,6 +25,7 @@ FS_DEVFS_DIR     = Lux/fs/devfs
 FS_EXT4_DIR      = Lux/fs/ext4
 FS_PROCFS_DIR    = Lux/fs/procfs
 FS_MNTFS_DIR     = Lux/fs/mntfs
+FS_ETCFS_DIR     = Lux/fs/etcfs
 NET_DIR          = Lux/net
 NET_ARP_DIR      = Lux/net/arp
 NET_ETH_DIR      = Lux/net/ethernet
@@ -52,6 +54,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_IDT_DIR) \
          -I$(KERN_LIBC_DIR) \
          -I$(DRIVER_INPUT_DIR) \
+         -I$(DRIVER_PCI_DIR) \
          -I$(DRIVER_ATA_DIR) \
          -I$(DRIVER_BUF_DIR) \
          -I$(FS_VFS_DIR) \
@@ -60,6 +63,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_EXT4_DIR) \
          -I$(FS_PROCFS_DIR) \
          -I$(FS_MNTFS_DIR) \
+		 -I$(FS_ETCFS_DIR) \
          -I$(NET_DIR) \
          -I$(NET_ARP_DIR) \
          -I$(NET_ETH_DIR) \
@@ -101,6 +105,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/ext4.o \
       $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/mntfs.o \
+	  $(BUILD_DIR)/etcfs.o \
+      $(BUILD_DIR)/pci.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/buf.o \
       $(BUILD_DIR)/syscall.o \
@@ -254,6 +260,14 @@ $(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/etcfs.o: $(FS_ETCFS_DIR)/etcfs.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+
+$(BUILD_DIR)/pci.o: $(DRIVER_PCI_DIR)/pci.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ata.o: $(DRIVER_ATA_DIR)/ata.c
 	@mkdir -p $(BUILD_DIR)

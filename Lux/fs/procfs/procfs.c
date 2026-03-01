@@ -267,6 +267,4 @@ void procfs_init(void) {
         proc_file_nodes[i].read = proc_files[i].read;
     }
 
-    if (vfs_root)
-        vfs_mount(vfs_root, "proc", &procfs_root_node);
 }

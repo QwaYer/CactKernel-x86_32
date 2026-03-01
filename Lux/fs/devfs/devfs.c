@@ -206,9 +206,6 @@ void devfs_init(void) {
     devfs_root_node.listdir = _devfs_listdir;
     devfs_root_node.readdir = _devfs_readdir;
 
-    if (vfs_root)
-        vfs_mount(vfs_root, "dev", &devfs_root_node);
-
     struct vfs_node n;
     _fill_node(&n, "null",    VFS_CHARDEVICE,  _null_read,   _null_write);
     devfs_register("null", &n);
