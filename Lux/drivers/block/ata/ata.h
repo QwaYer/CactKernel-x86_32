@@ -21,4 +21,10 @@ int              ata_read (struct vfs_node *node, uint32_t off, uint32_t sz, cha
 int              ata_write(struct vfs_node *node, uint32_t off, uint32_t sz, char *buf);
 struct vfs_node *init_ata_device(void);
 
-#endif 
+
+struct buf;
+void bio_enqueue_sync(struct buf* b);
+void bio_irq_complete(int error);
+void ata_irq_handler(void);
+
+#endif

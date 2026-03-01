@@ -28,17 +28,6 @@ static uint16_t pci_read16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off) {
     port_long_out(0xCF8, addr);
     return (uint16_t)((port_long_in(0xCFC) >> ((off & 2)*8)) & 0xFFFF);
 }
-static uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off) {
-    uint32_t addr = 0x80000000 | (bus<<16) | (dev<<11) | (fn<<8) | (off & 0xFC);
-    port_long_out(0xCF8, addr);
-    return port_long_in(0xCFC);
-}
-static void pci_write32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off, uint32_t val) {
-    uint32_t addr = 0x80000000 | (bus<<16) | (dev<<11) | (fn<<8) | (off & 0xFC);
-    port_long_out(0xCF8, addr);
-    port_long_out(0xCFC, val);
-}
-
 /* Scan all 256 buses × 32 devices for vendor:device */
 static int pci_find(uint16_t vendor, uint16_t device,
                     uint8_t* out_bus, uint8_t* out_dev) {

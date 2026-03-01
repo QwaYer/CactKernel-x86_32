@@ -134,3 +134,8 @@ int buf_append_int(char* buf, int pos, int max, int n) {
     itoa(n, tmp);
     return buf_append(buf, pos, max, tmp);
 }
+void kprint_hex(uint32_t n) {
+    char buf[12];
+    hex_to_ascii(n, buf);
+    kprint(buf);
+}

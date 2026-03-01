@@ -2,6 +2,9 @@
 #define LIBC_H
 
 #include <stddef.h>
+#include <stdint.h>
+
+void kprint(char* message);
 
 int strcmp(char* s1, char* s2);
 int compare_string(char* s1, char* s2);
@@ -25,5 +28,7 @@ int  strncmp(const char* a, const char* b);
 void strncpy(char* dst, const char* src, int n);
 int  buf_append(char* buf, int pos, int max, const char* s);
 int  buf_append_int(char* buf, int pos, int max, int n);
+
+void kprint_hex(uint32_t n);
 
 #endif

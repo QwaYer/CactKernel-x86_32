@@ -5,7 +5,6 @@
 #include "memory.h"
 #include "libc.h"
 
-
 #define DIR_STACK_MAX 32
 
 static struct vfs_node* dir_stack[DIR_STACK_MAX];
@@ -43,11 +42,15 @@ void shell_resetdir(void) {
     copy_string(current_path, "/");
 }
 
+void shell_init(void) {
+    shell_resetdir();
+}
 
 void shell_execute(char* input) {
     if (!input || input[0] == '\0') return;
 
-    if (!current_dir) shell_resetdir();
+    if (!current_dir)
+        shell_resetdir();
 
     char cmd_name[64];
     int i = 0;

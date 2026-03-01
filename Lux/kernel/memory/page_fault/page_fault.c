@@ -26,13 +26,6 @@ static inline void tlb_flush(uint32_t vaddr)
     __asm__ __volatile__("invlpg (%0)" :: "r"(vaddr) : "memory");
 }
 
-static void kprint_hex(uint32_t v)
-{
-    char buf[12];
-    hex_to_ascii(v, buf);
-    kprint(buf);
-}
-
 static void kill_current(uint32_t fault_addr, uint32_t err, uint32_t eip)
 {
     struct task_struct* t = (struct task_struct*)current_task;
