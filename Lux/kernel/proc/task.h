@@ -6,12 +6,12 @@
 #include "vfs.h"
 #include "proc_mm.h"
 #include "sync.h"
+#include "mmap.h"
 
 #define USER_CODE_SEL 0x1B
 #define USER_DATA_SEL 0x23
 #define MAX_FD        256
 
-// Сигналы — битовая маска 
 #define SIGKILL  (1 << 0)
 #define SIGTERM  (1 << 1)
 #define SIGSTOP  (1 << 2)
@@ -44,28 +44,26 @@ struct task_struct {
     uint32_t ustack_virt;
     uint32_t* page_directory;
 
-
-    struct task_struct* next;        
-    struct task_struct* queue_next;  
+    struct task_struct* next;
+    struct task_struct* queue_next;
 
     uint32_t pending_signals;
     struct vfs_node* fd_table[MAX_FD];
     proc_page_tracker_t mm;
+
+    mmap_table_t mmap_table;
 };
 
-
 typedef struct sched_queue {
-    struct task_struct* head;   // первый элемент (dequeue берёт отсюда) 
-    struct task_struct* tail;   // последний элемент (enqueue добавляет) 
+    struct task_struct* head;
+    struct task_struct* tail;
     uint32_t            count;
 } sched_queue_t;
-
 
 static inline void sched_queue_init(sched_queue_t* q) {
     q->head = q->tail = 0;
     q->count = 0;
 }
-
 
 static inline void sched_queue_push(sched_queue_t* q, struct task_struct* t) {
     t->queue_next = 0;
@@ -78,7 +76,6 @@ static inline void sched_queue_push(sched_queue_t* q, struct task_struct* t) {
     q->count++;
 }
 
-// Снять с головы; возвращает 0 если очередь пуста 
 static inline struct task_struct* sched_queue_pop(sched_queue_t* q) {
     if (!q->head) return 0;
     struct task_struct* t = q->head;
@@ -88,7 +85,6 @@ static inline struct task_struct* sched_queue_pop(sched_queue_t* q) {
     q->count--;
     return t;
 }
-
 
 static inline void sched_queue_remove(sched_queue_t* q, struct task_struct* t) {
     struct task_struct* prev = 0;
@@ -108,13 +104,10 @@ static inline void sched_queue_remove(sched_queue_t* q, struct task_struct* t) {
     }
 }
 
-// Глобальные очереди планировщика 
-extern sched_queue_t ready_queue;   // TASK_READY  — O(1) dequeue 
-extern sched_queue_t sleep_queue;   // TASK_SLEEPING              
-extern sched_queue_t zombie_queue;  // TASK_ZOMBIE                 
+extern sched_queue_t ready_queue;
+extern sched_queue_t sleep_queue;
+extern sched_queue_t zombie_queue;
 
-
-//PUBLIC API
 void task_init();
 struct task_struct* create_task(void (*entry_point)());
 struct task_struct* create_user_task(void* entry_point);
@@ -129,7 +122,6 @@ void schedule();
 int init_scheduler();
 void list_tasks();
 
-
 void task_set_state(struct task_struct* t, task_state old_state, task_state new_state);
 
 uint32_t* vmm_create_address_space();
@@ -143,4 +135,4 @@ extern spinlock_t scheduler_lock;
 extern void terminal_task();
 extern void switch_to(uint32_t* old_esp, uint32_t new_esp);
 
-#endif 
+#endif
