@@ -6,32 +6,33 @@
 #include "kernel.h"
 
 
-#define PAGE_COW       0x200  // Copy-on-Write страница (bit 9)         
-#define PAGE_DEMAND    0x400  // Demand paging (bit 10)                  
-#define PAGE_ZERO      0x800  // Zero page (bit 11)                      
+#define PAGE_COW       0x200          
+#define PAGE_DEMAND    0x400                   
+#define PAGE_ZERO      0x800                      
 
 
-#define USER_STACK_TOP    0xC0000000   // Верхушка стека пользователя  
-#define USER_STACK_LIMIT  0xBF000000   // Нижний лимит стека (16 MB)   
-#define USER_HEAP_START   0x40000000   // Начало кучи                  
-#define USER_HEAP_LIMIT   0x80000000   // Лимит кучи                   
+#define USER_STACK_TOP    0xC0000000   
+#define USER_STACK_LIMIT  0xBF000000  
+#define USER_HEAP_START   0x40000000                  
+#define USER_HEAP_LIMIT   0x80000000                   
 
 
-#define PF_PRESENT     0x01   // Страница присутствует (защита)          
-#define PF_WRITE       0x02   // Попытка записи                          
-#define PF_USER        0x04   // Из user mode                           
-#define PF_RESERVED    0x08   // Зарезервированные биты                  
-#define PF_INSTR_FETCH 0x10   // Instruction fetch                       
+#define PF_PRESENT     0x01           
+#define PF_WRITE       0x02                        
+#define PF_USER        0x04                   
+#define PF_RESERVED    0x08                 
+#define PF_INSTR_FETCH 0x10                    
 
 
 typedef struct {
-    uint32_t total_faults;        // Всего page fault'ов             
-    uint32_t demand_allocs;       // Demand paging аллокаций         
-    uint32_t cow_copies;          // Copy-on-Write копирований       
-    uint32_t stack_grows;         // Расширений стека                
-    uint32_t zero_pages;          // Zero page аллокаций             
-    uint32_t protection_faults;   // Нарушений защиты (killed)      
-    uint32_t invalid_access;      // Невалидных обращений (killed)   
+    uint32_t total_faults;                  
+    uint32_t demand_allocs;         
+    uint32_t cow_copies;         
+    uint32_t stack_grows;                    
+    uint32_t zero_pages; 
+    uint32_t swap_ins;                      
+    uint32_t protection_faults;     
+    uint32_t invalid_access;      
 } pf_stats_t;
 
 

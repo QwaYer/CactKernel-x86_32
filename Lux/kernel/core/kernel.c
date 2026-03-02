@@ -12,6 +12,7 @@
 #include "shell.h"
 #include "fb.h"
 #include "font.h"
+#include "swap.h"
 
 extern uint32_t page_directory[1024];
 
@@ -134,7 +135,6 @@ int detect_memory() {
     unsigned char high = port_byte_in(0x71);
     return ((high << 8) | low) > 0 ? 0 : 1;
 }
-
 
 void exception_handler(struct context_frame* regs) {
     char buf[32];
@@ -282,6 +282,36 @@ void boot_log(char* component, int status) {
 int get_cursor_x() { return cursor_x; }
 int get_cursor_y() { return cursor_y; }
 
+/* =========================================================================
+ * swap I/O wrappers — адаптируют ATA API к сигнатуре swap_read/write_fn
+ *
+ * ata_read_sector / ata_write_sector работают с одним сектором за раз,
+ * поэтому оборачиваем цикл.  Используем Secondary канал, master-диск
+ * (port=0x170, slave=0) как swap-раздел.  Поменяйте под свою конфигурацию.
+ * ========================================================================= */
+#define SWAP_ATA_PORT  0x1F0   /* Primary канал                             */
+#define SWAP_ATA_SLAVE 0       /* Master диск                               */
+
+static int swap_disk_read(uint32_t lba, void* buf, uint32_t sectors)
+{
+    uint8_t* ptr = (uint8_t*)buf;
+    for (uint32_t i = 0; i < sectors; i++) {
+        ata_read_sector(SWAP_ATA_PORT, SWAP_ATA_SLAVE, lba + i, ptr);
+        ptr += 512;
+    }
+    return 0;
+}
+
+static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
+{
+    const uint8_t* ptr = (const uint8_t*)buf;
+    for (uint32_t i = 0; i < sectors; i++) {
+        ata_write_sector(SWAP_ATA_PORT, SWAP_ATA_SLAVE, lba + i, (uint8_t*)ptr);
+        ptr += 512;
+    }
+    return 0;
+}
+
 void kernel_setup_hardware() {
     init_gdt();
     init_memory_manager();
@@ -321,6 +351,10 @@ void kernel_setup_hardware() {
 
     ata_init();
     boot_log("ATA Hard Drive", 0);
+    {
+        int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
+        boot_log("Swap (Page Eviction)", swap_status);
+    }
 
     vfs_init();
     boot_log("Virtual File System mount", 0);

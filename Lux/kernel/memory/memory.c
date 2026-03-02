@@ -159,6 +159,16 @@ void* kalloc() {
         }
     }
     irq_spinlock_release(&page_lock);
+
+    if (swap_is_enabled()) {
+        extern uint32_t* get_current_pd(void);
+        uint32_t* pd = get_current_pd();
+        if (pd && swap_evict_page(pd) == 0) {
+            return kalloc();  
+        }
+    }
+
+    kprint("[PMM] kalloc: OUT OF MEMORY\n");
     return 0;
 }
 
