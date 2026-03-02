@@ -3,6 +3,7 @@
 #include "kernel.h"
 #include "task.h"
 #include "libc.h"
+#include "swap.h"
 
 static pf_stats_t g_stats;
 
@@ -92,6 +93,15 @@ void page_fault_handler(struct context_frame* regs)
         uint32_t page_va = fault_addr & ~0xFFFu;
         uint32_t* pte    = pte_get(pd, fault_addr);
 
+        if (pte && swap_pte_is_swapped(*pte)) {
+            if (swap_handle_fault(pd, fault_addr) == 0) {
+                g_stats.swap_ins++;
+                return;
+            }
+            kill_current(fault_addr, err, eip);
+            return;
+        }
+
         if (pte && (*pte & PAGE_DEMAND)) {
             void* phys = kalloc();
             if (!phys) { kill_current(fault_addr, err, eip); return; }
@@ -122,12 +132,10 @@ void page_fault_handler(struct context_frame* regs)
             g_stats.stack_grows++;
             return;
         }
-
         g_stats.invalid_access++;
         kill_current(fault_addr, err, eip);
         return;
     }
-
     kill_current(fault_addr, err, eip);
 }
 
@@ -252,6 +260,7 @@ void pf_print_stats(void)
     PF_STAT("cow_copies",       cow_copies)
     PF_STAT("stack_grows",      stack_grows)
     PF_STAT("zero_pages",       zero_pages)
+    PF_STAT("swap_ins",         swap_ins)
     PF_STAT("prot_faults",      protection_faults)
     PF_STAT("invalid_access",   invalid_access)
 #undef PF_STAT

@@ -11,6 +11,7 @@ KERN_MEM_DIR     = Lux/kernel/memory
 KERN_PROCMM_DIR  = Lux/kernel/memory/proc_mm
 KERN_SLABMM_DIR  = Lux/kernel/memory/slab_mm
 KERN_PF_DIR      = Lux/kernel/memory/page_fault
+KERN_SWAP_DIR    = Lux/kernel/memory/swap
 KERN_PROC_DIR    = Lux/kernel/proc
 KERN_SYNC_DIR    = Lux/kernel/sync
 KERN_IDT_DIR     = Lux/kernel/idt
@@ -49,6 +50,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_PF_DIR) \
          -I$(KERN_PROCMM_DIR) \
          -I$(KERN_SLABMM_DIR) \
+         -I$(KERN_SWAP_DIR) \
          -I$(KERN_PROC_DIR) \
          -I$(KERN_SYNC_DIR) \
          -I$(KERN_IDT_DIR) \
@@ -63,7 +65,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_EXT4_DIR) \
          -I$(FS_PROCFS_DIR) \
          -I$(FS_MNTFS_DIR) \
-		 -I$(FS_ETCFS_DIR) \
+         -I$(FS_ETCFS_DIR) \
          -I$(NET_DIR) \
          -I$(NET_ARP_DIR) \
          -I$(NET_ETH_DIR) \
@@ -92,6 +94,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/proc_mm.o \
       $(BUILD_DIR)/slab.o \
       $(BUILD_DIR)/page_fault.o \
+      $(BUILD_DIR)/swap.o \
       $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/sync.o \
@@ -105,7 +108,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/ext4.o \
       $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/mntfs.o \
-	  $(BUILD_DIR)/etcfs.o \
+      $(BUILD_DIR)/etcfs.o \
       $(BUILD_DIR)/pci.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/buf.o \
@@ -205,6 +208,10 @@ $(BUILD_DIR)/proc_mm.o: $(KERN_PROCMM_DIR)/proc_mm.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/slab.o: $(KERN_SLABMM_DIR)/slab.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/swap.o: $(KERN_SWAP_DIR)/swap.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
