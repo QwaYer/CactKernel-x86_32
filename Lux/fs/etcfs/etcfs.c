@@ -221,7 +221,6 @@ void etcfs_init(struct vfs_node* ext4_node) {
 
     _load_all_from_disk();
 
-    kprint("[etcfs] initialized\n");
 }
 
 struct vfs_node* etcfs_get_root(void) {

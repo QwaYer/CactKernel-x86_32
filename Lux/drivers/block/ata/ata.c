@@ -157,8 +157,8 @@ void ata_init(void) {
     for (int i = 0; i < 1000000; i++)
         if (!(port_byte_in(ATA_PRIMARY_IO + 7) & 0x80)) break;
 
-    if      (ata_identify(0xE0)) kprint("[ATA] Master drive detected, DMA ready.\n");
-    else if (ata_identify(0xB0)) kprint("[ATA] Slave  drive detected, DMA ready.\n");
+    if      (ata_identify(0xE0));
+    else if (ata_identify(0xB0));
     else {
         kprint("[ATA] Drive ready (PIO mode).\n");
     }
