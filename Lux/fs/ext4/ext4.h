@@ -268,6 +268,8 @@ struct ext4_ctx {
     uint8_t                 slave;
 };
 
+
+//Public api
 void             ext4_init(void);
 struct vfs_node* ext4_mount_disk(uint16_t port, uint8_t slave);
 

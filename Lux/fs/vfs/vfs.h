@@ -37,6 +37,8 @@ struct vfs_dirent {
 
 extern struct vfs_node* vfs_root;
 
+
+//Public api
 void               vfs_init   (void);
 int                vfs_mount  (struct vfs_node* host, const char* name, struct vfs_node* target);
 int                vfs_umount (struct vfs_node* host, const char* name);

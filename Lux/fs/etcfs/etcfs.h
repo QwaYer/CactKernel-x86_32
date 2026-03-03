@@ -17,6 +17,8 @@ typedef struct {
     struct vfs_node  node;   
 } etcfs_entry_t;
 
+
+//Public api
 void             etcfs_init   (struct vfs_node* ext4_node);
 struct vfs_node* etcfs_get_root(void);
 int              etcfs_read   (const char* name, char* buf, uint32_t size);

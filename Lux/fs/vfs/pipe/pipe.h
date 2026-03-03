@@ -31,7 +31,8 @@ typedef struct pipe_end {
     int      is_write;  
 } pipe_end_t;
 
-// PUBLIC API
+
+//Public api
 int pipe_create(struct vfs_node* pipefd[2], int flags);
 
 struct vfs_node* fifo_create(const char* name, int flags);
