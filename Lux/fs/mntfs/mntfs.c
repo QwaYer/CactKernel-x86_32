@@ -426,7 +426,6 @@ void mntfs_init(void) {
     vfs_root = &mntfs_root_node;
     mntfs_initialized = 1;
 
-    kprint("[mntfs] probing hda...\n");
     struct vfs_node* sys = ext4_mount_disk(0x1F0, 0);
     if (!sys) {
         kprint("[mntfs] WARNING: hda has no ext4. Use 'mount hda <n>' manually.\n");
@@ -447,22 +446,18 @@ void mntfs_init(void) {
     system_wrapper_node.mkdir   = _system_mkdir;
     system_wrapper_node.rmdir   = _system_rmdir;
     mntfs_mount("system", "hda", &system_wrapper_node, 0);
-    kprint("[mntfs] hda -> /system\n");
 
     etcfs_init(sys);
     etcfs_create("fstab");
     mntfs_mount("system/etc", "etcfs", etcfs_get_root(), 0);
-    kprint("[mntfs] etcfs -> /system/etc\n");
 
     _fstab_mount_all();
 
     devfs_init();
     mntfs_mount("system/dev", "devfs", devfs_get_root(), 0);
-    kprint("[mntfs] devfs -> /system/dev\n");
 
     procfs_init();
     mntfs_mount("system/proc", "procfs", procfs_get_root(), 0);
-    kprint("[mntfs] procfs -> /system/proc\n");
 
     memset(&mntfs_mnt_node, 0, sizeof(struct vfs_node));
     strncpy(mntfs_mnt_node.name, "mnt", 128);
@@ -471,7 +466,6 @@ void mntfs_init(void) {
     mntfs_mnt_node.listdir = _mnt_listdir;
     mntfs_mnt_node.readdir = _mnt_readdir;
     mntfs_mount("system/mnt", "mntfs", &mntfs_mnt_node, 0);
-    kprint("[mntfs] /system/mnt ready\n");
 }
 
 int mntfs_mount(const char* name, const char* source,

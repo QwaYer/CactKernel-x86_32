@@ -19,6 +19,9 @@ KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR = Lux/drivers/input
 DRIVER_PCI_DIR   = Lux/drivers/pci
+DRIVER_PCI_ENUM_DIR   = Lux/drivers/pci/enum
+DRIVER_PCI_DRV_DIR    = Lux/drivers/pci/driver
+DRIVER_PCI_LOADER_DIR = Lux/drivers/pci/loader
 DRIVER_ATA_DIR   = Lux/drivers/block/ata
 DRIVER_BUF_DIR   = Lux/drivers/block/buf
 FS_VFS_DIR       = Lux/fs/vfs
@@ -59,6 +62,9 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_LIBC_DIR) \
          -I$(DRIVER_INPUT_DIR) \
          -I$(DRIVER_PCI_DIR) \
+         -I$(DRIVER_PCI_ENUM_DIR) \
+         -I$(DRIVER_PCI_DRV_DIR) \
+         -I$(DRIVER_PCI_LOADER_DIR) \
          -I$(DRIVER_ATA_DIR) \
          -I$(DRIVER_BUF_DIR) \
          -I$(FS_VFS_DIR) \
@@ -113,6 +119,9 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/mntfs.o \
       $(BUILD_DIR)/etcfs.o \
       $(BUILD_DIR)/pci.o \
+      $(BUILD_DIR)/pci_enum.o \
+      $(BUILD_DIR)/pci_driver.o \
+      $(BUILD_DIR)/pci_loader.o \
       $(BUILD_DIR)/ata.o \
       $(BUILD_DIR)/buf.o \
       $(BUILD_DIR)/syscall.o \
@@ -279,6 +288,18 @@ $(BUILD_DIR)/etcfs.o: $(FS_ETCFS_DIR)/etcfs.c
 
 
 $(BUILD_DIR)/pci.o: $(DRIVER_PCI_DIR)/pci.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pci_enum.o: $(DRIVER_PCI_ENUM_DIR)/pci_enum.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pci_driver.o: $(DRIVER_PCI_DRV_DIR)/pci_driver.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pci_loader.o: $(DRIVER_PCI_LOADER_DIR)/pci_loader.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

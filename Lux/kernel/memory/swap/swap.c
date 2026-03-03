@@ -61,11 +61,8 @@ int swap_init(swap_read_fn read_fn, swap_write_fn write_fn, uint32_t slots)
     irq_spinlock_init(&g_swap_lock);
     g_enabled = 1;
 
-    kprint("[SWAP] Initialized: slots=");
-    char buf[12]; itoa((int)g_total_slots, buf); kprint(buf);
-    kprint(" capacity=");
-    itoa((int)(g_total_slots * PAGE_SIZE / 1024 / 1024), buf); kprint(buf);
-    kprint(" MB\n");
+    char buf[12]; itoa((int)g_total_slots, buf); 
+    itoa((int)(g_total_slots * PAGE_SIZE / 1024 / 1024), buf); 
     return 0;
 }
 

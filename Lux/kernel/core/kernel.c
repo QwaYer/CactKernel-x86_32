@@ -1,5 +1,7 @@
 #include "kernel.h"
 #include "pci.h"
+#include "pci_enum.h"
+#include "pci_driver.h"
 #include "keyboard.h"
 #include "mouse.h"
 #include "memory.h"
@@ -346,8 +348,9 @@ void kernel_setup_hardware() {
     boot_log("PS/2 Mouse", 0);
     boot_log("I/O Ports Probe", probe_io_ports());
     boot_log("Base Memory Detect", detect_memory());
-    boot_log("PCI Bus Scan", search_pci());
-    pci_dump_all();
+    boot_log("PCI Bus Scan",  search_pci());
+    pci_enumerate();
+    boot_log("PCI Enumerate", pci_device_count > 0 ? 0 : 1);
 
     ata_init();
     boot_log("ATA Hard Drive", 0);
