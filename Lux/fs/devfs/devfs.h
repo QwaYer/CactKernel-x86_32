@@ -13,6 +13,8 @@ typedef struct devfs_entry {
     int             used;
 } devfs_entry_t;
 
+
+//Public api
 void             devfs_init(void);
 struct vfs_node* devfs_register(const char* name, struct vfs_node* node);
 int              devfs_unregister(const char* name);

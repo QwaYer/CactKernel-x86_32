@@ -4,6 +4,7 @@
 #include "page_fault.h"
 #include "libc.h"
 #include "gdt.h"
+#include "dynlink.h"   
 
 struct task_struct* volatile current_task   = 0;
 struct task_struct* volatile task_list_head = 0;
@@ -80,13 +81,11 @@ struct task_struct* create_task(void (*entry_point)()) {
 
     uint32_t* esp = (uint32_t*)((uint32_t)stack + 4096);
 
-    *(--esp) = 0x00000202;          /* EFLAGS: IF=1             */
-    *(--esp) = 0x08;                /* CS: kernel code segment  */
+    *(--esp) = 0x00000202;
+    *(--esp) = 0x08;
     *(--esp) = (uint32_t)entry_point;
-    /* pusha: eax ecx edx ebx esp ebp esi edi */
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    /* ds, es */
     *(--esp) = 0x10;
     *(--esp) = 0x10;
 
@@ -100,6 +99,7 @@ struct task_struct* create_task(void (*entry_point)()) {
     t->ustack_virt    = 0;
     t->pending_signals= 0;
     t->queue_next     = 0;
+    t->dyn_ctx        = 0;
     proc_tracker_init(&t->mm);
 
     spinlock_acquire(&scheduler_lock);
@@ -126,16 +126,13 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
 
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + 4096);
 
-    /* iretd-фрейм для возврата в ring3 */
-    *(--esp) = 0x23;                          /* SS                    */
-    *(--esp) = ustack_virt + 4096 - 4;        /* ESP пользователя      */
-    *(--esp) = 0x00000202;                    /* EFLAGS                */
-    *(--esp) = 0x1B;                          /* CS ring3              */
-    *(--esp) = (uint32_t)entry_point;         /* EIP                   */
-    /* pusha */
+    *(--esp) = 0x23;
+    *(--esp) = ustack_virt + 4096 - 4;
+    *(--esp) = 0x00000202;
+    *(--esp) = 0x1B;
+    *(--esp) = (uint32_t)entry_point;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    /* ds, es ring3 */
     *(--esp) = 0x23;
     *(--esp) = 0x23;
 
@@ -147,6 +144,7 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     t->page_directory  = 0;
     t->pending_signals = 0;
     t->queue_next      = 0;
+    t->dyn_ctx         = 0;
     proc_tracker_init(&t->mm);
     for (int i = 0; i < MAX_FD; i++) t->fd_table[i] = 0;
 
@@ -161,6 +159,51 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
 
 struct task_struct* create_user_task(void* entry_point) {
     return create_user_task_internal(entry_point, 1);
+}
+
+struct task_struct* create_task_with_entry(void*                entry,
+                                            uint32_t*            pd,
+                                            proc_page_tracker_t* tracker)
+{
+    __asm__ __volatile__("cli");
+
+    struct task_struct* t = create_user_task_internal(entry, 0);
+    if (!t) { __asm__ __volatile__("sti"); return 0; }
+
+    t->mm = *tracker;
+
+    t->page_directory = pd;
+
+    uint32_t* stk = (uint32_t*)t->esp;
+    stk[10] = (uint32_t)entry;
+
+    vmm_map(pd, t->ustack_virt, (uint32_t)t->ustack_phys,
+            PAGE_USER | PAGE_RW | PAGE_PRESENT);
+
+    tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
+
+    spinlock_acquire(&scheduler_lock);
+    task_list_add(t);
+    sched_queue_push(&ready_queue, t);
+    spinlock_release(&scheduler_lock);
+
+    __asm__ __volatile__("sti");
+    return t;
+}
+
+struct task_struct* create_task_dynamic(void*                entry,
+                                         uint32_t*            pd,
+                                         proc_page_tracker_t* tracker,
+                                         dyn_ctx_t*           ctx)
+{
+    struct task_struct* t = create_task_with_entry(entry, pd, tracker);
+    if (!t) return 0;
+
+    spinlock_acquire(&scheduler_lock);
+    t->dyn_ctx = ctx;
+    spinlock_release(&scheduler_lock);
+
+    return t;
 }
 
 
@@ -186,6 +229,7 @@ struct task_struct* create_elf_task(char* path) {
     }
 
     t->page_directory = pd;
+    t->dyn_ctx        = 0;
 
     uint32_t* stk = (uint32_t*)t->esp;
     stk[10] = (uint32_t)entry_point;
@@ -219,6 +263,7 @@ int init_scheduler() {
     current_task->next            = current_task;
     current_task->pending_signals = 0;
     current_task->queue_next      = 0;
+    current_task->dyn_ctx         = 0;
     proc_tracker_init(&current_task->mm);
     task_list_head = current_task;
 
@@ -226,14 +271,20 @@ int init_scheduler() {
     return 0;
 }
 
-
 static void task_reap_internal() {
     struct task_struct* t;
     while ((t = sched_queue_pop(&zombie_queue)) != 0) {
         task_list_remove(t);
+
+        if (t->dyn_ctx) {
+            dynlink_unload_all(t->dyn_ctx);
+            kfree_heap(t->dyn_ctx);
+            t->dyn_ctx = 0;
+        }
+
         proc_free_pages(&t->mm);
-        if (t->stack_base)  kfree_page(t->stack_base);
-        if (t->ustack_phys) kfree_page(t->ustack_phys);
+        if (t->stack_base)     kfree_page(t->stack_base);
+        if (t->ustack_phys)    kfree_page(t->ustack_phys);
         if (t->page_directory) vmm_free_address_space(t->page_directory);
         kfree_heap(t);
     }
@@ -303,26 +354,28 @@ void list_tasks() {
     struct task_struct* tmp = task_list_head;
     do { count++; tmp = tmp->next; } while (tmp != task_list_head && count < 256);
 
-    struct { uint32_t pid; task_state state; } tasks[count];
+    struct { uint32_t pid; task_state state; int dynamic; } tasks[count];
     tmp = task_list_head;
     for (int i = 0; i < count; i++) {
-        tasks[i].pid   = tmp->pid;
-        tasks[i].state = tmp->state;
+        tasks[i].pid     = tmp->pid;
+        tasks[i].state   = tmp->state;
+        tasks[i].dynamic = (tmp->dyn_ctx != 0);
         tmp = tmp->next;
     }
     spinlock_release(&scheduler_lock);
 
-    kprint("\nPID  STATE\n");
+    kprint("\nPID  STATE      TYPE\n");
     for (int i = 0; i < count; i++) {
         char buf[16];
         itoa((int)tasks[i].pid, buf);
         kprint(buf);
         switch (tasks[i].state) {
-            case TASK_RUNNING:  kprint("  RUNNING\n");  break;
-            case TASK_READY:    kprint("  READY\n");    break;
-            case TASK_ZOMBIE:   kprint("  ZOMBIE\n");   break;
-            default:            kprint("  SLEEPING\n"); break;
+            case TASK_RUNNING:  kprint("  RUNNING   "); break;
+            case TASK_READY:    kprint("  READY     "); break;
+            case TASK_ZOMBIE:   kprint("  ZOMBIE    "); break;
+            default:            kprint("  SLEEPING  "); break;
         }
+        kprint(tasks[i].dynamic ? "dynamic\n" : "static\n");
     }
 }
 
@@ -335,11 +388,9 @@ struct task_struct* task_fork(struct context_frame* regs) {
         return 0;
     }
 
-    /* 1. Ядерный стек дочернего */
     uint32_t* kstack = (uint32_t*)kalloc();
     if (!kstack) { __asm__ __volatile__("sti"); return 0; }
 
-    /* 2. Адресное пространство: CoW-форк */
     uint32_t* pd = vmm_create_address_space();
     if (!pd) {
         kfree_page(kstack);
@@ -364,11 +415,12 @@ struct task_struct* task_fork(struct context_frame* regs) {
     child->state           = TASK_READY;
     child->is_kernel       = 0;
     child->stack_base      = kstack;
-    child->ustack_phys     = parent->ustack_phys; /* CoW — своя страница при записи */
+    child->ustack_phys     = parent->ustack_phys;
     child->ustack_virt     = ustack_virt;
     child->page_directory  = pd;
     child->pending_signals = 0;
     child->queue_next      = 0;
+    child->dyn_ctx         = 0;
 
     proc_tracker_init(&child->mm);
     child->mm.page_dir = pd;
@@ -376,29 +428,20 @@ struct task_struct* task_fork(struct context_frame* regs) {
     for (int i = 0; i < MAX_FD; i++)
         child->fd_table[i] = parent->fd_table[i];
 
-    /* 5. Ядерный стек дочернего: копирует прерванный контекст.
-     *    Порядок полей ТОЧНО совпадает с context_frame из task.h:
-     *    es, ds, edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax,
-     *    int_no, err_code, eip, cs, eflags, useresp, ss
-     *    Но нужна только пользовательская часть (без int_no/err_code):  */
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + PAGE_SIZE);
-
-    /* iretd-фрейм (ring3 → ring0 → ring3) */
     *(--esp) = regs->ss;
     *(--esp) = regs->useresp;
     *(--esp) = regs->eflags;
     *(--esp) = regs->cs;
     *(--esp) = regs->eip;
-    /* pusha: eax=0 (fork возвращает 0 в дочернем), остальное копируем */
-    *(--esp) = 0;               /* EAX = 0 */
+    *(--esp) = 0;
     *(--esp) = regs->ecx;
     *(--esp) = regs->edx;
     *(--esp) = regs->ebx;
-    *(--esp) = 0;               /* esp_dummy */
+    *(--esp) = 0;
     *(--esp) = regs->ebp;
     *(--esp) = regs->esi;
     *(--esp) = regs->edi;
-    /* ds, es (порядок: в context_frame — es первый (ниже), ds второй) */
     *(--esp) = regs->ds;
     *(--esp) = regs->es;
 
@@ -430,6 +473,12 @@ int task_exec(char* path, struct context_frame* regs) {
     struct task_struct* t = current_task;
     if (!t || t->is_kernel) { __asm__ __volatile__("sti"); return -1; }
 
+    if (t->dyn_ctx) {
+        dynlink_unload_all(t->dyn_ctx);
+        kfree_heap(t->dyn_ctx);
+        t->dyn_ctx = 0;
+    }
+
     uint32_t* new_pd = vmm_create_address_space();
     if (!new_pd) { __asm__ __volatile__("sti"); return -1; }
 
@@ -446,7 +495,6 @@ int task_exec(char* path, struct context_frame* regs) {
     proc_free_pages(&t->mm);
     t->mm = new_mm;
 
-    /* Новый стек пользователя */
     uint32_t* ustack_phys = (uint32_t*)kalloc();
     if (!ustack_phys) {
         proc_free_pages(&t->mm);
@@ -464,7 +512,6 @@ int task_exec(char* path, struct context_frame* regs) {
     t->ustack_virt    = ustack_virt;
     for (int i = 3; i < MAX_FD; i++) t->fd_table[i] = 0;
 
-    /* Пересобрать ядерный стек для iretd в новый образ */
     uint32_t* esp = (uint32_t*)((uint32_t)t->stack_base + PAGE_SIZE);
     *(--esp) = 0x23;
     *(--esp) = ustack_virt + PAGE_SIZE - 4;

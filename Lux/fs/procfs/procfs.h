@@ -3,6 +3,8 @@
 
 #include "vfs.h"
 
+
+//Public api
 void             procfs_init(void);
 struct vfs_node* procfs_get_root(void);
 struct vfs_node* procfs_get_commands_dir(void);

@@ -5,6 +5,7 @@
 KERN_CORE_DIR    = Lux/kernel/core
 KERN_GDT_DIR     = Lux/kernel/gdt
 KERN_ELF_DIR     = Lux/kernel/elf
+KERN_DYNLINK_DIR = Lux/kernel/elf/dynlink
 KERN_SHELL_DIR   = Lux/kernel/shell
 KERN_CMDS_DIR    = Lux/kernel/shell/commands
 KERN_MEM_DIR     = Lux/kernel/memory
@@ -48,6 +49,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
          -I$(KERN_GDT_DIR) \
          -I$(KERN_ELF_DIR) \
+		 -I$(KERN_DYNLINK_DIR) \
          -I$(KERN_SHELL_DIR) \
          -I$(KERN_CMDS_DIR) \
          -I$(KERN_MEM_DIR) \
@@ -106,6 +108,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/mmap.o \
       $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/elf_loader.o \
+	  $(BUILD_DIR)/dynlink.o \
       $(BUILD_DIR)/sync.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/shell.o \
@@ -141,7 +144,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
 
 all: $(BUILD_DIR)/lux.iso
 	@echo "--------------------------------------------------"
-	@echo "LuxOS kernel build complete!"
+	@echo "Lux kernel build complete!"
 	@echo "  Kernel:  $(BUILD_DIR)/kernel.bin"
 	@echo "  Image:   $(BUILD_DIR)/lux.iso"
 	@KERN_SIZE=$$(wc -c < $(BUILD_DIR)/kernel.bin); \
@@ -243,6 +246,9 @@ $(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/dynlink.o: $(KERN_DYNLINK_DIR)/dynlink.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/shell.o: $(KERN_SHELL_DIR)/shell.c
 	@mkdir -p $(BUILD_DIR)

@@ -15,6 +15,9 @@
 #include "icmp.h"
 #include "udp.h"
 #include "fb.h"
+#include "elf.h"   
+#include "dynlink.h"      
+#include "proc_mm.h"  
 
 /* ── Утилиты ──────────────────────────────────────────────────── */
 
@@ -280,6 +283,10 @@ static void cmd_help(char* args) {
     kprint("  Network    : ipconfig  ping  udptest\n");
     kprint("  Debug      : kbd  pic\n");
     kprint("\n");
+    kprint_color("run usage:\n", COLOR_LIGHT_BROWN);
+    kprint("  run <path>            <- static or dynamic ELF\n");
+    kprint("  run <path> --static   <- force static loader\n");
+    kprint("\n");
     kprint_color("Disk layout:\n", COLOR_LIGHT_BROWN);
     kprint("  /system          <- hda (auto-mounted)\n");
     kprint("  /system/etc      <- etcfs (configs, fstab)\n");
@@ -369,10 +376,131 @@ static void cmd_kill(char* args) {
 }
 
 static void cmd_run(char* args) {
-    char* name = _skip_token(args);
-    if (!name) { kprint("\nUsage: run <file>\n"); return; }
-    if (create_elf_task(name)) kprint("\nTask created.\n");
-    else kprint("\nError: could not load ELF.\n");
+    char* path = _skip_token(args);
+    if (!path) {
+        kprint("\nUsage: run <path>\n");
+        kprint("  <path>     : path to ELF binary (static or dynamic)\n");
+        return;
+    }
+
+    int force_static = 0;
+    char* flag = _skip_token(path);
+    if (flag) {
+        const char* fs = "--static";
+        int match = 1;
+        for (int i = 0; fs[i]; i++)
+            if (flag[i] != fs[i]) { match = 0; break; }
+        if (match) force_static = 1;
+    }
+
+    struct vfs_node* file = finddir_vfs(vfs_root, path);
+    if (!file) {
+        kprint("\nError: file not found: "); kprint(path); kprint("\n");
+        return;
+    }
+
+    Elf32_Ehdr hdr;
+    if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) {
+        kprint("\nError: cannot read ELF header\n");
+        return;
+    }
+
+    if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
+        kprint("\nError: not an ELF file\n");
+        return;
+    }
+    if (hdr.e_machine != 3) { /* EM_386 */
+        kprint("\nError: ELF is not i386\n");
+        return;
+    }
+    if (hdr.e_type != 2 && hdr.e_type != 3) { /* ET_EXEC=2, ET_DYN=3 */
+        kprint("\nError: ELF is not executable (ET_EXEC/ET_DYN)\n");
+        return;
+    }
+
+    int has_dynamic = 0;
+    if (!force_static) {
+        for (int i = 0; i < hdr.e_phnum; i++) {
+            Elf32_Phdr ph;
+            if (read_vfs(file,
+                         hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                         sizeof(Elf32_Phdr),
+                         (char*)&ph) <= 0)
+                break;
+            if (ph.p_type == PT_DYNAMIC) { has_dynamic = 1; break; }
+        }
+    }
+
+    uint32_t* pd = vmm_create_address_space();
+    if (!pd) {
+        kprint("\nError: cannot allocate page directory\n");
+        return;
+    }
+
+    proc_page_tracker_t* tracker =
+        (proc_page_tracker_t*)kmalloc(sizeof(proc_page_tracker_t));
+    if (!tracker) {
+        kfree_page(pd);
+        kprint("\nError: out of kernel memory\n");
+        return;
+    }
+    proc_tracker_init(tracker);
+
+    void* entry = 0;
+
+    if (has_dynamic) {
+        dyn_ctx_t* ctx = (dyn_ctx_t*)kmalloc(sizeof(dyn_ctx_t));
+        if (!ctx) {
+            kfree_heap(tracker);
+            kfree_page(pd);
+            kprint("\nError: out of kernel memory (dyn_ctx)\n");
+            return;
+        }
+
+        kprint("\n[run] dynamic ELF detected, loading shared libraries...\n");
+        entry = load_elf_dynamic(path, pd, tracker, ctx);
+
+        if (!entry) {
+            dynlink_unload_all(ctx);
+            kfree_heap(ctx);
+            proc_free_pages(tracker);
+            kfree_heap(tracker);
+            kfree_page(pd);
+            kprint("[run] Error: dynamic load failed\n");
+            return;
+        }
+
+        if (create_task_dynamic(entry, pd, tracker, ctx)) {
+            kprint("[run] task created (dynamic)\n");
+        } else {
+            dynlink_unload_all(ctx);
+            kfree_heap(ctx);
+            proc_free_pages(tracker);
+            kfree_heap(tracker);
+            kprint("[run] Error: scheduler refused task\n");
+        }
+
+    } else {
+        if (force_static)
+            kprint("\n[run] --static: skipping dynamic linker\n");
+
+        entry = load_elf(path, pd, tracker);
+
+        if (!entry) {
+            proc_free_pages(tracker);
+            kfree_heap(tracker);
+            kprint("[run] Error: static load failed\n");
+            return;
+        }
+
+        if (create_task_with_entry(entry, pd, tracker)) {
+            kprint("[run] task created (static)\n");
+        } else {
+            proc_free_pages(tracker);
+            kfree_heap(tracker);
+            kprint("[run] Error: scheduler refused task\n");
+        }
+    }
 }
 
 /* ── Отладка ──────────────────────────────────────────────────── */
@@ -461,7 +589,7 @@ void commands_init(void) {
     procfs_register_command("uptime",   "System uptime",                  cmd_uptime);
     procfs_register_command("ps",       "Task list",                      cmd_ps);
     procfs_register_command("kill",     "Kill process by PID",            cmd_kill);
-    procfs_register_command("run",      "Run ELF binary",                 cmd_run);
+    procfs_register_command("run",      "Run ELF binary (static or .so)",cmd_run);
     procfs_register_command("kbd",      "Keyboard stats",                 cmd_kbd);
     procfs_register_command("pic",      "PIC masks",                      cmd_pic);
     procfs_register_command("ipconfig", "Network configuration",          cmd_ipconfig);

@@ -7,6 +7,7 @@
 #include "proc_mm.h"
 #include "sync.h"
 #include "mmap.h"
+#include "dynlink.h"   
 
 #define USER_CODE_SEL 0x1B
 #define USER_DATA_SEL 0x23
@@ -52,6 +53,7 @@ struct task_struct {
     proc_page_tracker_t mm;
 
     mmap_table_t mmap_table;
+    dyn_ctx_t* dyn_ctx;
 };
 
 typedef struct sched_queue {
@@ -123,6 +125,15 @@ int init_scheduler();
 void list_tasks();
 
 void task_set_state(struct task_struct* t, task_state old_state, task_state new_state);
+
+struct task_struct* create_task_with_entry(void*                entry,
+                                            uint32_t*            pd,
+                                            proc_page_tracker_t* tracker);
+
+struct task_struct* create_task_dynamic(void*                entry,
+                                         uint32_t*            pd,
+                                         proc_page_tracker_t* tracker,
+                                         dyn_ctx_t*           ctx);
 
 uint32_t* vmm_create_address_space();
 void vmm_free_address_space(uint32_t* pd);
