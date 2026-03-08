@@ -2,8 +2,8 @@
 #include "pci.h"
 #include "pci_enum.h"
 #include "pci_driver.h"
-#include "keyboard.h"
-#include "mouse.h"
+#include "ps_2_keyboard.h"
+#include "ps_2_mouse.h"
 #include "memory.h"
 #include "gdt.h"
 #include "idt.h"
@@ -284,15 +284,8 @@ void boot_log(char* component, int status) {
 int get_cursor_x() { return cursor_x; }
 int get_cursor_y() { return cursor_y; }
 
-/* =========================================================================
- * swap I/O wrappers — адаптируют ATA API к сигнатуре swap_read/write_fn
- *
- * ata_read_sector / ata_write_sector работают с одним сектором за раз,
- * поэтому оборачиваем цикл.  Используем Secondary канал, master-диск
- * (port=0x170, slave=0) как swap-раздел.  Поменяйте под свою конфигурацию.
- * ========================================================================= */
-#define SWAP_ATA_PORT  0x1F0   /* Primary канал                             */
-#define SWAP_ATA_SLAVE 0       /* Master диск                               */
+#define SWAP_ATA_PORT  0x1F0   
+#define SWAP_ATA_SLAVE 0     
 
 static int swap_disk_read(uint32_t lba, void* buf, uint32_t sectors)
 {
@@ -343,14 +336,18 @@ void kernel_setup_hardware() {
     boot_log("IDT & PIC (Interrupts)", 0);
 
     boot_log("Framebuffer", init_framebuffer());
-    boot_log("PS/2 Keyboard", init_keyboard());
-    init_mouse();
+    boot_log("PS/2 Keyboard", ps2_keyboard_init());
+    ps2_mouse_init();
     boot_log("PS/2 Mouse", 0);
     boot_log("I/O Ports Probe", probe_io_ports());
     boot_log("Base Memory Detect", detect_memory());
     boot_log("PCI Bus Scan",  search_pci());
     pci_enumerate();
     boot_log("PCI Enumerate", pci_device_count > 0 ? 0 : 1);
+
+    extern void usb_init(void);
+    usb_init();
+    boot_log("USB Stack", 0);
 
     ata_init();
     boot_log("ATA Hard Drive", 0);
@@ -417,6 +414,6 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
     system_ready = 1;
     __asm__ __volatile__("sti");
     while (1) {
-        __asm__ __volatile__("pause");
+        __asm__ __volatile__("hlt");
     }
 }

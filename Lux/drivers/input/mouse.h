@@ -3,11 +3,10 @@
 
 #include <stdint.h>
 
-void init_mouse();
-void mouse_handler();
-
 extern int mouse_x;
 extern int mouse_y;
 extern int mouse_buttons;
+
+void mouse_post_move(int x, int y, int buttons, int absolute);
 
 #endif
