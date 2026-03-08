@@ -24,13 +24,13 @@ static pipe_t* _pipe_alloc(int flags)
     memset(p, 0, sizeof(pipe_t));
     p->magic      = PIPE_MAGIC;
     p->flags      = flags;
-    p->write_open = 1;
-    p->read_open  = 1;
+    p->write_open = 0;  
+    p->read_open  = 0;
     mutex_init(&p->lock);
     return p;
 }
 
-static struct vfs_node* _make_pipe_node(pipe_t* p, const char* name)
+static struct vfs_node* _make_pipe_node(pipe_t* p, const char* name, int is_write)
 {
     struct vfs_node* n = (struct vfs_node*)kmalloc(sizeof(struct vfs_node));
     if (!n) return 0;
@@ -44,14 +44,14 @@ static struct vfs_node* _make_pipe_node(pipe_t* p, const char* name)
     n->name[i] = '\0';
     n->type  = VFS_PIPE;
     n->size  = PIPE_BUF_SIZE;
-    n->inode = 0;
+    n->inode = (uint32_t)is_write;  // 0 = read-end, 1 = write-end 
 
     n->read  = _vfs_pipe_read;
     n->write = _vfs_pipe_write;
     n->open  = _vfs_pipe_open;
     n->close = _vfs_pipe_close;
 
-    n->ptr = (struct vfs_node*)p;   
+    n->ptr = (struct vfs_node*)p;
 
     return n;
 }
@@ -61,17 +61,15 @@ int pipe_create(struct vfs_node* pipefd[2], int flags)
     pipe_t* p = _pipe_alloc(flags);
     if (!p) return -1;
 
-    /* read-end */
-    pipefd[0] = _make_pipe_node(p, "pipe:r");
+    pipefd[0] = _make_pipe_node(p, "pipe:r", 0);
     if (!pipefd[0]) { kfree_heap(p); return -1; }
 
-    /* write-end */
-    pipefd[1] = _make_pipe_node(p, "pipe:w");
+    pipefd[1] = _make_pipe_node(p, "pipe:w", 1);
     if (!pipefd[1]) { kfree_heap(pipefd[0]); kfree_heap(p); return -1; }
 
     mutex_lock(&p->lock);
     p->write_open = 1;
-    p->read_open  = 1; 
+    p->read_open  = 1;
     mutex_unlock(&p->lock);
 
     return 0;
@@ -82,10 +80,10 @@ struct vfs_node* fifo_create(const char* name, int flags)
     pipe_t* p = _pipe_alloc(flags);
     if (!p) return 0;
 
-    struct vfs_node* n = _make_pipe_node(p, name);
+    struct vfs_node* n = _make_pipe_node(p, name, 0);
     if (!n) { kfree_heap(p); return 0; }
 
-    p->name = n->name;   
+    p->name = n->name;
 
     p->write_open = 0;
     p->read_open  = 0;
@@ -95,7 +93,7 @@ struct vfs_node* fifo_create(const char* name, int flags)
 
 int pipe_read(pipe_t* p, unsigned int offset, unsigned int size, char* buffer)
 {
-    (void)offset; 
+    (void)offset;
 
     if (!p || p->magic != PIPE_MAGIC || !buffer || size == 0)
         return -1;
@@ -110,11 +108,11 @@ int pipe_read(pipe_t* p, unsigned int offset, unsigned int size, char* buffer)
         if (PIPE_EMPTY(p)) {
             if (p->write_open == 0) {
                 mutex_unlock(&p->lock);
-                return (int)copied;
+                return (int)copied;   
             }
             if (nonblock) {
                 mutex_unlock(&p->lock);
-                return (copied > 0) ? (int)copied : -1; 
+                return (copied > 0) ? (int)copied : -EAGAIN;
             }
             mutex_unlock(&p->lock);
             schedule();
@@ -139,6 +137,15 @@ int pipe_write(pipe_t* p, unsigned int offset, unsigned int size, char* buffer)
     if (!p || p->magic != PIPE_MAGIC || !buffer || size == 0)
         return -1;
 
+    mutex_lock(&p->lock);
+    if (p->read_open == 0) {
+        mutex_unlock(&p->lock);
+        if (current_task)
+            task_signal(current_task->pid, SIGPIPE);
+        return -EPIPE;
+    }
+    mutex_unlock(&p->lock);
+
     int nonblock = (p->flags & O_NONBLOCK);
     unsigned int written = 0;
 
@@ -146,10 +153,17 @@ int pipe_write(pipe_t* p, unsigned int offset, unsigned int size, char* buffer)
     {
         mutex_lock(&p->lock);
 
+        if (p->read_open == 0) {
+            mutex_unlock(&p->lock);
+            if (current_task)
+                task_signal(current_task->pid, SIGPIPE);
+            return (written > 0) ? (int)written : -EPIPE;
+        }
+
         if (PIPE_FULL(p)) {
             if (nonblock) {
                 mutex_unlock(&p->lock);
-                return (written > 0) ? (int)written : -1; 
+                return (written > 0) ? (int)written : -EAGAIN;
             }
             mutex_unlock(&p->lock);
             schedule();
@@ -167,16 +181,27 @@ int pipe_write(pipe_t* p, unsigned int offset, unsigned int size, char* buffer)
     return (int)written;
 }
 
+static void _pipe_try_destroy(pipe_t* p)
+{
+    mutex_lock(&p->lock);
+    int dead = (p->read_open == 0 && p->write_open == 0);
+    if (dead) {
+        p->magic = 0;
+    }
+    mutex_unlock(&p->lock);
+
+    if (dead) kfree_heap(p);
+}
+
 void pipe_close_read(pipe_t* p)
 {
     if (!p || p->magic != PIPE_MAGIC) return;
 
     mutex_lock(&p->lock);
     if (p->read_open > 0) p->read_open--;
-    int dead = (p->read_open == 0 && p->write_open == 0);
     mutex_unlock(&p->lock);
 
-    if (dead) pipe_destroy(p);
+    _pipe_try_destroy(p);
 }
 
 void pipe_close_write(pipe_t* p)
@@ -185,22 +210,26 @@ void pipe_close_write(pipe_t* p)
 
     mutex_lock(&p->lock);
     if (p->write_open > 0) p->write_open--;
-    int dead = (p->read_open == 0 && p->write_open == 0);
     mutex_unlock(&p->lock);
 
-    if (dead) pipe_destroy(p);
+    _pipe_try_destroy(p);
 }
 
 void pipe_destroy(pipe_t* p)
 {
-    if (!p || p->magic != PIPE_MAGIC) return;
-    p->magic = 0;   
+    if (!p) return;
+    p->magic = 0;
     kfree_heap(p);
 }
 
 static inline pipe_t* _node_to_pipe(struct vfs_node* node)
 {
     return (pipe_t*)node->ptr;
+}
+
+static inline int _node_is_write_end(struct vfs_node* node)
+{
+    return (int)node->inode;  // 1 = write-end, 0 = read-end 
 }
 
 static int _vfs_pipe_read(struct vfs_node* node, unsigned int off,
@@ -224,6 +253,11 @@ static void _vfs_pipe_open(struct vfs_node* node)
     if (p->name) {
         p->read_open++;
         p->write_open++;
+    } else {
+        if (_node_is_write_end(node))
+            p->write_open++;
+        else
+            p->read_open++;
     }
     mutex_unlock(&p->lock);
 }
@@ -236,5 +270,10 @@ static void _vfs_pipe_close(struct vfs_node* node)
     if (p->name) {
         pipe_close_read(p);
         pipe_close_write(p);
+    } else {
+        if (_node_is_write_end(node))
+            pipe_close_write(p);
+        else
+            pipe_close_read(p);
     }
 }

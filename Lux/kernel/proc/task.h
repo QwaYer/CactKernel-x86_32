@@ -17,6 +17,7 @@
 #define SIGTERM  (1 << 1)
 #define SIGSTOP  (1 << 2)
 #define SIGCONT  (1 << 3)
+#define SIGPIPE  (1 << 4)
 
 typedef enum {
     TASK_READY,
