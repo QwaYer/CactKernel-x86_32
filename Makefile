@@ -18,13 +18,20 @@ KERN_PROC_DIR    = Lux/kernel/proc
 KERN_SYNC_DIR    = Lux/kernel/sync
 KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
-DRIVER_INPUT_DIR = Lux/drivers/input
-DRIVER_PCI_DIR   = Lux/drivers/pci
+DRIVER_INPUT_DIR     = Lux/drivers/input
+DRIVER_PS2_KBD_DIR   = Lux/drivers/input/ps_2/keyboard
+DRIVER_PS2_MOUSE_DIR = Lux/drivers/input/ps_2/mouse
+DRIVER_PCI_DIR        = Lux/drivers/pci
 DRIVER_PCI_ENUM_DIR   = Lux/drivers/pci/enum
 DRIVER_PCI_DRV_DIR    = Lux/drivers/pci/driver
 DRIVER_PCI_LOADER_DIR = Lux/drivers/pci/loader
 DRIVER_ATA_DIR   = Lux/drivers/block/ata
 DRIVER_BUF_DIR   = Lux/drivers/block/buf
+DRIVER_USB_DIR      = Lux/drivers/usb
+DRIVER_USB_UHCI_DIR = Lux/drivers/input/uhci
+DRIVER_USB_OHCI_DIR = Lux/drivers/input/ohci
+DRIVER_USB_HID_DIR  = Lux/drivers/usb/hid
+DRIVER_USB_HUB_DIR  = Lux/drivers/usb/hub
 FS_VFS_DIR       = Lux/fs/vfs
 FS_PIPE_DIR      = Lux/fs/vfs/pipe
 FS_DEVFS_DIR     = Lux/fs/devfs
@@ -49,7 +56,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
          -I$(KERN_GDT_DIR) \
          -I$(KERN_ELF_DIR) \
-		 -I$(KERN_DYNLINK_DIR) \
+         -I$(KERN_DYNLINK_DIR) \
          -I$(KERN_SHELL_DIR) \
          -I$(KERN_CMDS_DIR) \
          -I$(KERN_MEM_DIR) \
@@ -63,12 +70,19 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_IDT_DIR) \
          -I$(KERN_LIBC_DIR) \
          -I$(DRIVER_INPUT_DIR) \
+         -I$(DRIVER_PS2_KBD_DIR) \
+         -I$(DRIVER_PS2_MOUSE_DIR) \
          -I$(DRIVER_PCI_DIR) \
          -I$(DRIVER_PCI_ENUM_DIR) \
          -I$(DRIVER_PCI_DRV_DIR) \
          -I$(DRIVER_PCI_LOADER_DIR) \
          -I$(DRIVER_ATA_DIR) \
          -I$(DRIVER_BUF_DIR) \
+         -I$(DRIVER_USB_DIR) \
+         -I$(DRIVER_USB_UHCI_DIR) \
+         -I$(DRIVER_USB_OHCI_DIR) \
+         -I$(DRIVER_USB_HID_DIR) \
+         -I$(DRIVER_USB_HUB_DIR) \
          -I$(FS_VFS_DIR) \
          -I$(FS_PIPE_DIR) \
          -I$(FS_DEVFS_DIR) \
@@ -108,7 +122,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/mmap.o \
       $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/elf_loader.o \
-	  $(BUILD_DIR)/dynlink.o \
+      $(BUILD_DIR)/dynlink.o \
       $(BUILD_DIR)/sync.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/shell.o \
@@ -130,6 +144,13 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/syscall.o \
       $(BUILD_DIR)/keyboard.o \
       $(BUILD_DIR)/mouse.o \
+      $(BUILD_DIR)/ps_2_keyboard.o \
+      $(BUILD_DIR)/ps_2_mouse.o \
+      $(BUILD_DIR)/usb.o \
+      $(BUILD_DIR)/usb_uhci.o \
+      $(BUILD_DIR)/usb_ohci.o \
+      $(BUILD_DIR)/usb_hid.o \
+      $(BUILD_DIR)/usb_hub.o \
       $(BUILD_DIR)/net.o \
       $(BUILD_DIR)/ethernet.o \
       $(BUILD_DIR)/arp.o \
@@ -322,6 +343,34 @@ $(BUILD_DIR)/keyboard.o: $(DRIVER_INPUT_DIR)/keyboard.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/mouse.o: $(DRIVER_INPUT_DIR)/mouse.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ps_2_keyboard.o: $(DRIVER_PS2_KBD_DIR)/ps_2_keyboard.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ps_2_mouse.o: $(DRIVER_PS2_MOUSE_DIR)/ps_2_mouse.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/usb.o: $(DRIVER_USB_DIR)/usb.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/usb_uhci.o: $(DRIVER_USB_UHCI_DIR)/usb_uhci.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/usb_ohci.o: $(DRIVER_USB_OHCI_DIR)/usb_ohci.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/usb_hid.o: $(DRIVER_USB_HID_DIR)/usb_hid.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/usb_hub.o: $(DRIVER_USB_HUB_DIR)/usb_hub.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

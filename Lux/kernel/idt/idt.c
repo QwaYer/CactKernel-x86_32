@@ -18,9 +18,12 @@ extern void isr30(); extern void isr31();
 extern void timer_isr();
 extern void keyboard_isr();
 extern void mouse_isr();
-extern void ata_isr();          
-extern void virtio_net_isr();
+extern void ata_isr();
+extern void virtio_net_isr();     
 extern void syscall_isr();
+extern void usb_isr();
+extern void uhci_isr();
+extern void ohci_isr();
 
 static struct idt_entry idt[256];
 static struct idt_ptr   idtp;
@@ -29,25 +32,30 @@ void set_idt_gate(int n, uint32_t handler) {
     idt[n].low_offset  = (uint16_t)(handler & 0xFFFF);
     idt[n].sel         = 0x08;
     idt[n].always0     = 0;
-    idt[n].flags       = 0x8E;  
+    idt[n].flags       = 0x8E;
     idt[n].high_offset = (uint16_t)((handler >> 16) & 0xFFFF);
 }
 
 void init_pic(void) {
+    // Инициализация каскадом ICW1 
     port_byte_out(0x20, 0x11);
     port_byte_out(0xA0, 0x11);
 
-    port_byte_out(0x21, 0x20);  
-    port_byte_out(0xA1, 0x28);  
+    // ICW2: базовые векторы 
+    port_byte_out(0x21, 0x20);   // master: IRQ0 → INT 32 (0x20) 
+    port_byte_out(0xA1, 0x28);   // slave:  IRQ8 → INT 40 (0x28) 
 
-    port_byte_out(0x21, 0x04);  
-    port_byte_out(0xA1, 0x02);   
+    // ICW3: каскад 
+    port_byte_out(0x21, 0x04);   // master: slave подключён к IRQ2 
+    port_byte_out(0xA1, 0x02);   // slave:  cascade identity = 2   
 
+    // ICW4: 8086 mode 
     port_byte_out(0x21, 0x01);
     port_byte_out(0xA1, 0x01);
 
-    port_byte_out(0x21, 0xF8);
-    port_byte_out(0xA1, 0xA7);   
+    // IMR — маски прерываний 
+    port_byte_out(0x21, 0xF8);   
+    port_byte_out(0xA1, 0xC0);
 }
 
 int init_idt(void) {
@@ -55,7 +63,6 @@ int init_idt(void) {
     idtp.base  = (uint32_t)&idt;
     memory_set(&idt, 0, sizeof(struct idt_entry) * 256);
 
-    /* CPU exceptions 0-31 */
     set_idt_gate(0,  (uint32_t)isr0);
     set_idt_gate(1,  (uint32_t)isr1);
     set_idt_gate(2,  (uint32_t)isr2);
@@ -89,16 +96,17 @@ int init_idt(void) {
     set_idt_gate(30, (uint32_t)isr30);
     set_idt_gate(31, (uint32_t)isr31);
 
-    /* Hardware IRQs */
-    set_idt_gate(32, (uint32_t)timer_isr);       /* IRQ 0  — PIT            */
-    set_idt_gate(33, (uint32_t)keyboard_isr);    /* IRQ 1  — PS/2 Keyboard  */
-    set_idt_gate(44, (uint32_t)mouse_isr);       /* IRQ 12 — PS/2 Mouse     */
-    set_idt_gate(46, (uint32_t)ata_isr);         /* IRQ 14 — ATA Primary <<<*/
-    set_idt_gate(0x2B, (uint32_t)virtio_net_isr);/* IRQ 11 — VirtIO Net     */
+    set_idt_gate(0x20, (uint32_t)timer_isr);
+    set_idt_gate(0x21, (uint32_t)keyboard_isr);
+    set_idt_gate(0x29, (uint32_t)usb_isr);
+    set_idt_gate(0x2A, (uint32_t)usb_isr);
+    set_idt_gate(0x2B, (uint32_t)usb_isr);
+    set_idt_gate(0x2C, (uint32_t)mouse_isr);
+    set_idt_gate(0x2D, (uint32_t)virtio_net_isr);
+    set_idt_gate(0x2E, (uint32_t)ata_isr);
 
-    /* Syscall — DPL=3 чтобы вызывать из userspace */
-    set_idt_gate(128, (uint32_t)syscall_isr);
-    idt[128].flags = 0xEE;
+    set_idt_gate(0x80, (uint32_t)syscall_isr);
+    idt[0x80].flags = 0xEE;
 
     __asm__ __volatile__("lidt (%0)" : : "r"(&idtp));
     return 0;

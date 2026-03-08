@@ -39,16 +39,20 @@ global isr30
 global isr31
 global ata_isr
 global mouse_isr
+global ohci_isr
+global uhci_isr
 
-extern keyboard_handler
+extern ps2_keyboard_handler
 extern virtio_net_irq_handler
 extern exception_handler
 extern syscall_handler
 extern ata_irq_handler
-extern mouse_handler
+extern ps2_mouse_handler
 extern current_task
 extern schedule
 extern page_fault_handler
+extern uhci_irq_handler
+extern ohci_irq_handler
 
 global timer_ticks_get
 
@@ -127,12 +131,12 @@ isr13:
     jmp isr_common_stub
 
 isr14:
-    push dword 14      
-    push eax          
-    mov  eax, [esp+8]   
-    mov  [esp+8], dword 14 
-    mov  [esp+4], eax     
-    pop  eax              
+    push dword 14
+    push eax
+    mov  eax, [esp+8]
+    mov  [esp+8], dword 14
+    mov  [esp+4], eax
+    pop  eax
     jmp  isr_pf_stub
 
 isr15:
@@ -216,10 +220,6 @@ isr31:
     push dword 31
     jmp isr_common_stub
 
-; ============================================================================
-; isr_pf_stub — вызывает page_fault_handler (C-функция)
-; На входе стек: [esp]=int_no(14), [esp+4]=error_code, [esp+8]=eip, ...
-; ============================================================================
 isr_pf_stub:
     pusha
     push ds
@@ -229,19 +229,16 @@ isr_pf_stub:
     mov ds, ax
     mov es, ax
 
-    push esp                   ; параметр: struct context_frame* regs
+    push esp
     call page_fault_handler
     add esp, 4
 
     pop es
     pop ds
     popa
-    add esp, 8                 ; убрать int_no + err_code со стека
+    add esp, 8
     iretd
 
-; ============================================================================
-; isr_common_stub — все остальные исключения -> exception_handler
-; ============================================================================
 isr_common_stub:
     pusha
     push ds
@@ -261,9 +258,6 @@ isr_common_stub:
     add esp, 8
     iretd
 
-; ============================================================================
-; Timer IRQ (IRQ0 -> INT 32)
-; ============================================================================
 timer_isr:
     pusha
     push ds
@@ -277,7 +271,7 @@ timer_isr:
     mov eax, [current_task]
     test eax, eax
     jz .skip_save
-    mov [eax], esp              ; task->esp = esp (первое поле структуры)
+    mov [eax], esp
 
 .skip_save:
     call schedule
@@ -285,7 +279,7 @@ timer_isr:
     mov eax, [current_task]
     test eax, eax
     jz .do_eoi
-    mov esp, [eax]              ; esp = task->esp следующей задачи
+    mov esp, [eax]
 
 .do_eoi:
     mov al, 0x20
@@ -296,9 +290,6 @@ timer_isr:
     popa
     iretd
 
-; ============================================================================
-; Keyboard IRQ (IRQ1 -> INT 33)
-; ============================================================================
 keyboard_isr:
     pusha
     push ds
@@ -306,7 +297,7 @@ keyboard_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    call keyboard_handler
+    call ps2_keyboard_handler
     mov al, 0x20
     out 0x20, al
     pop es
@@ -314,9 +305,6 @@ keyboard_isr:
     popa
     iretd
 
-; ============================================================================
-; Mouse IRQ (IRQ12 -> INT 44)
-; ============================================================================
 mouse_isr:
     pusha
     push ds
@@ -324,7 +312,7 @@ mouse_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    call mouse_handler
+    call ps2_mouse_handler
     mov al, 0x20
     out 0xA0, al
     out 0x20, al
@@ -333,9 +321,6 @@ mouse_isr:
     popa
     iretd
 
-; ============================================================================
-; ATA IRQ (IRQ14 -> INT 46)
-; ============================================================================
 ata_isr:
     pusha
     push ds
@@ -352,21 +337,74 @@ ata_isr:
     popa
     iretd
 
-; ============================================================================
-; VirtIO Net IRQ (IRQ11 -> INT 43/0x2B)
-; ============================================================================
 virtio_net_isr:
     pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
     call virtio_net_irq_handler
     mov al, 0x20
     out 0xA0, al
     out 0x20, al
+    pop es
+    pop ds
     popa
-    iret
+    iretd
 
-; ============================================================================
+global usb_isr
+
+usb_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    call uhci_irq_handler
+    call ohci_irq_handler
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop es
+    pop ds
+    popa
+    iretd
+
+uhci_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    call uhci_irq_handler
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop es
+    pop ds
+    popa
+    iretd
+
+ohci_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    call ohci_irq_handler
+    mov al, 0x20
+    out 0xA0, al     
+    out 0x20, al       
+    pop es
+    pop ds
+    popa
+    iretd
+
 ; Syscall (INT 0x80) — DPL=3, из userspace
-; ============================================================================
 syscall_isr:
     pusha
     push ds

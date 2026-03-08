@@ -149,7 +149,6 @@ static inline uint32_t* get_current_pd(void) {
 
 // Hardware Initialization
 int  init_framebuffer(void);
-int  init_keyboard   (void);
 int  probe_io_ports  (void);
 int  detect_memory   (void);
 void init_timer      (uint32_t frequency);
