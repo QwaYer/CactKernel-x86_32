@@ -148,7 +148,6 @@ static void cmd_wrt(char* args) {
     struct vfs_node* node = finddir_vfs(current_dir ? current_dir : vfs_root, name);
     if (!node) { kprint("\nError: not found.\n"); return; }
 
-    /* Если есть stdin-пайп — читаем из него */
     if (shell_stdin) {
         int len = 0;
         char* buf = shell_read_stdin(&len);
@@ -163,7 +162,6 @@ static void cmd_wrt(char* args) {
         return;
     }
 
-    /* Иначе берём текст из аргументов */
     char* text = _skip_token(name);
     if (!text) { kprint("\nUsage: wrt <file> <text>\n"); return; }
     if (write_vfs(node, 0, strlen(text), text) > 0) kprint("\nWritten.\n");
@@ -309,12 +307,6 @@ static void cmd_help(char* args) {
     kprint("  run <path>            <- static or dynamic ELF\n");
     kprint("  run <path> --static   <- force static loader\n");
     kprint("\n");
-    kprint_color("Disk layout:\n", COLOR_LIGHT_BROWN);
-    kprint("  /system          <- hda (auto-mounted)\n");
-    kprint("  /system/etc      <- etcfs (configs, fstab)\n");
-    kprint("  /system/dev      <- devfs\n");
-    kprint("  /system/proc     <- procfs\n");
-    kprint("  /system/mnt/...  <- user disks (mount hdb data)\n");
 }
 
 static void cmd_fetch(char* args) {
@@ -326,9 +318,9 @@ static void cmd_fetch(char* args) {
     kprint_color(" | |__| |_| |>  <   \n", COLOR_LIGHT_CYAN);
     kprint_color(" |_____\\__,_/_/\\_\\  \n", COLOR_LIGHT_CYAN);
     kprint("\n");
-    kprint_color(" Kernel:  ", COLOR_LIGHT_BROWN); kprint("Lux Kernel 0.1.0\n");
+    kprint_color(" Kernel:  ", COLOR_LIGHT_BROWN); kprint("Lux Kernel 0.8.0\n");
     kprint_color(" Arch:    ", COLOR_LIGHT_BROWN); kprint("x86_32\n");
-    kprint_color(" Shell:   ", COLOR_LIGHT_BROWN); kprint("v0.5\n");
+    kprint_color(" Shell:   ", COLOR_LIGHT_BROWN); kprint("v0.8.0\n");
     char buf[32];
     unsigned int free_mem = get_free_heap_memory();
     kprint_color(" Memory:  ", COLOR_LIGHT_BROWN);
