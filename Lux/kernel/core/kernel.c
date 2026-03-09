@@ -355,7 +355,7 @@ void kernel_setup_hardware() {
 
     pc_init();
     boot_log("Page Cache", 0);
-    
+
     {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
         boot_log("Swap (Page Eviction)", swap_status);
@@ -404,7 +404,7 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
     }
 
     clear_screen();
-    kprint_color("Lux Kernel Version 0.1.0\n", COLOR_LIGHT_BROWN);
+    kprint_color("Lux Kernel Version 0.8.0\n", COLOR_LIGHT_BROWN);
     kprint_color("--------------------------\n", COLOR_DARK_GREY);
 
     if (magic != 0x2BADB002) {
