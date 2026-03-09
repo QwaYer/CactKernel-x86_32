@@ -3,6 +3,7 @@
 #include "vfs.h"
 #include "memory.h"
 #include "mmap.h"
+#include "pipe.h"
 
 struct syscall_frame {
     uint32_t es, ds;
@@ -82,7 +83,10 @@ static int sys_write(int fd, char* buf, unsigned int size) {
 static int sys_close(int fd) {
     if (!current_task)          return -1;
     if (fd < 3 || fd >= MAX_FD) return -1;
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) return -1;
     current_task->fd_table[fd] = 0;
+    close_vfs(node);   
     return 0;
 }
 
@@ -179,6 +183,100 @@ static int sys_mprotect(struct syscall_frame* regs) {
     );
 }
 
+static int sys_pipe(struct syscall_frame* regs) {
+    int* user_fds = (int*)regs->ebx;
+    if (!validate_user_ptr(user_fds, sizeof(int) * 2)) return -1;
+    if (!current_task) return -1;
+
+    struct vfs_node* pipefd[2];
+    if (pipe_create(pipefd, 0) != 0) return -1;
+
+    int rfd = -1, wfd = -1;
+    for (int i = 3; i < MAX_FD && (rfd < 0 || wfd < 0); i++) {
+        if (!current_task->fd_table[i]) {
+            if (rfd < 0) rfd = i;
+            else         wfd = i;
+        }
+    }
+
+    if (rfd < 0 || wfd < 0) {
+        close_vfs(pipefd[0]);
+        close_vfs(pipefd[1]);
+        return -1;
+    }
+
+    current_task->fd_table[rfd] = pipefd[0];
+    current_task->fd_table[wfd] = pipefd[1];
+
+    user_fds[0] = rfd;
+    user_fds[1] = wfd;
+    return 0;
+}
+
+static int sys_dup2(struct syscall_frame* regs) {
+    int oldfd = (int)regs->ebx;
+    int newfd = (int)regs->ecx;
+
+    if (!current_task) return -1;
+    if (oldfd < 0 || oldfd >= MAX_FD) return -1;
+    if (newfd < 0 || newfd >= MAX_FD) return -1;
+
+    struct vfs_node* node = current_task->fd_table[oldfd];
+    if (!node) return -1;
+
+    if (current_task->fd_table[newfd]) {
+        close_vfs(current_task->fd_table[newfd]);
+    }
+
+    current_task->fd_table[newfd] = node;
+    open_vfs(node);   
+    return newfd;
+}
+
+static int sys_sigaction(struct syscall_frame* regs) {
+    uint32_t signum  = regs->ebx;
+    uint32_t handler = regs->ecx;
+
+    if (!current_task) return -1;
+
+    if (handler > SIG_IGN && handler >= 0xC0000000u) return -1;
+
+    return task_sigaction(current_task, signum, handler);
+}
+
+static int sys_sigreturn(struct syscall_frame* regs) {
+    if (!current_task || current_task->is_kernel) return -1;
+
+    uint32_t user_esp = regs->useresp;
+    if (user_esp >= 0xC0000000u) return -1;
+
+    uint32_t* pd  = current_task->page_directory;
+    uint32_t  pdi = PD_INDEX(user_esp);
+    uint32_t  pti = PT_INDEX(user_esp);
+    if (!pd || !(pd[pdi] & PAGE_PRESENT)) return -1;
+    uint32_t* pt = (uint32_t*)(pd[pdi] & ~0xFFFu);
+    if (!(pt[pti] & PAGE_PRESENT)) return -1;
+
+    uint32_t phys_page = pt[pti] & ~0xFFFu;
+    uint32_t page_off  = user_esp & 0xFFFu;
+    if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) return -1;
+
+    signal_frame_t* frame = (signal_frame_t*)(phys_page + page_off);
+
+    regs->eax     = frame->eax;
+    regs->ecx     = frame->ecx;
+    regs->edx     = frame->edx;
+    regs->ebx     = frame->ebx;
+    regs->ebp     = frame->ebp;
+    regs->esi     = frame->esi;
+    regs->edi     = frame->edi;
+    regs->eip     = frame->eip;
+    regs->eflags  = frame->eflags;
+    regs->useresp = frame->esp;
+
+    return 0;
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -197,6 +295,10 @@ static syscall_fn syscall_table[] = {
     [13] = (syscall_fn)sys_mmap,
     [14] = (syscall_fn)sys_munmap,
     [15] = (syscall_fn)sys_mprotect,
+    [16] = (syscall_fn)sys_sigreturn,   
+    [17] = (syscall_fn)sys_sigaction,   
+    [18] = (syscall_fn)sys_pipe,     
+    [19] = (syscall_fn)sys_dup2,      
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -208,7 +310,7 @@ void syscall_handler(struct syscall_frame* regs) {
     }
 
     int ret;
-    if (num == 9 || num == 10 || num == 13 || num == 14 || num == 15) {
+    if (num == 9 || num == 10 || num == 13 || num == 14 || num == 15 || num == 16 || num == 17 || num == 18 || num == 19) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](
