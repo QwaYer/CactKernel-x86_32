@@ -19,6 +19,21 @@
 #define SIGCONT  (1 << 3)
 #define SIGPIPE  (1 << 4)
 
+#define NSIG     5   
+
+#define SIG_DFL  ((uint32_t)0)
+#define SIG_IGN  ((uint32_t)1)
+
+
+typedef struct {
+    uint32_t ret_addr;  
+    uint32_t signum;   
+    uint32_t eax, ecx, edx, ebx;
+    uint32_t esp, ebp, esi, edi;
+    uint32_t eip;
+    uint32_t eflags;
+} signal_frame_t;
+
 typedef enum {
     TASK_READY,
     TASK_RUNNING,
@@ -50,6 +65,8 @@ struct task_struct {
     struct task_struct* queue_next;
 
     uint32_t pending_signals;
+    uint32_t signal_handlers[NSIG]; 
+    uint32_t sigreturn_trampoline;  
     struct vfs_node* fd_table[MAX_FD];
     proc_page_tracker_t mm;
 
@@ -120,6 +137,8 @@ int task_exec(char* path, struct context_frame* regs);
 void task_kill(uint32_t pid);
 void task_signal(uint32_t pid, uint32_t signal);
 void task_handle_signals(struct task_struct* t);
+int  task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler);
+void task_setup_sigreturn(struct task_struct* t);
 void task_reap();
 void schedule();
 int init_scheduler();

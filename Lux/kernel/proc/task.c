@@ -4,7 +4,8 @@
 #include "page_fault.h"
 #include "libc.h"
 #include "gdt.h"
-#include "dynlink.h"   
+#include "dynlink.h"
+#include "vfs.h"
 
 struct task_struct* volatile current_task   = 0;
 struct task_struct* volatile task_list_head = 0;
@@ -145,6 +146,8 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     t->pending_signals = 0;
     t->queue_next      = 0;
     t->dyn_ctx         = 0;
+    t->sigreturn_trampoline = 0;
+    for (int i = 0; i < NSIG; i++) t->signal_handlers[i] = SIG_DFL;
     proc_tracker_init(&t->mm);
     for (int i = 0; i < MAX_FD; i++) t->fd_table[i] = 0;
 
@@ -237,6 +240,8 @@ struct task_struct* create_elf_task(char* path) {
     vmm_map(pd, t->ustack_virt, (uint32_t)t->ustack_phys,
             PAGE_USER | PAGE_RW | PAGE_PRESENT);
 
+    task_setup_sigreturn(t);
+
     tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
 
     spinlock_acquire(&scheduler_lock);
@@ -275,6 +280,13 @@ static void task_reap_internal() {
     struct task_struct* t;
     while ((t = sched_queue_pop(&zombie_queue)) != 0) {
         task_list_remove(t);
+
+        for (int i = 0; i < MAX_FD; i++) {
+            if (t->fd_table[i]) {
+                close_vfs(t->fd_table[i]);
+                t->fd_table[i] = 0;
+            }
+        }
 
         if (t->dyn_ctx) {
             dynlink_unload_all(t->dyn_ctx);
@@ -421,12 +433,18 @@ struct task_struct* task_fork(struct context_frame* regs) {
     child->pending_signals = 0;
     child->queue_next      = 0;
     child->dyn_ctx         = 0;
+    child->sigreturn_trampoline = parent->sigreturn_trampoline;
+    for (int i = 0; i < NSIG; i++)
+        child->signal_handlers[i] = parent->signal_handlers[i];
 
     proc_tracker_init(&child->mm);
     child->mm.page_dir = pd;
 
-    for (int i = 0; i < MAX_FD; i++)
+    for (int i = 0; i < MAX_FD; i++) {
         child->fd_table[i] = parent->fd_table[i];
+        if (child->fd_table[i])
+            open_vfs(child->fd_table[i]);  
+    }
 
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + PAGE_SIZE);
     *(--esp) = regs->ss;
@@ -512,6 +530,9 @@ int task_exec(char* path, struct context_frame* regs) {
     t->ustack_virt    = ustack_virt;
     for (int i = 3; i < MAX_FD; i++) t->fd_table[i] = 0;
 
+    for (int i = 0; i < NSIG; i++) t->signal_handlers[i] = SIG_DFL;
+    task_setup_sigreturn(t);
+
     uint32_t* esp = (uint32_t*)((uint32_t)t->stack_base + PAGE_SIZE);
     *(--esp) = 0x23;
     *(--esp) = ustack_virt + PAGE_SIZE - 4;
@@ -547,7 +568,97 @@ void task_signal(uint32_t pid, uint32_t signal) {
     spinlock_release(&scheduler_lock);
 }
 
-void task_handle_signals(struct task_struct* t) {
+static int _sig_to_idx(uint32_t sig_bit)
+{
+    int idx = 0;
+    uint32_t b = sig_bit;
+    while (b > 1) { b >>= 1; idx++; }
+    return idx;
+}
+
+void task_setup_sigreturn(struct task_struct* t)
+{
+    if (!t || !t->page_directory) return;
+
+    uint32_t tramp_va = 0x7FFF0000u;
+    void* phys = kalloc();
+    if (!phys) return;
+
+    uint8_t* p = (uint8_t*)phys;
+    for (uint32_t i = 0; i < PAGE_SIZE; i++) p[i] = 0x90; 
+
+    // mov eax, 16 (sys_sigreturn) 
+    p[0] = 0xB8;
+    p[1] = 16; p[2] = 0; p[3] = 0; p[4] = 0;
+    // int 0x80 
+    p[5] = 0xCD; p[6] = 0x80;
+
+    vmm_map(t->page_directory, tramp_va, (uint32_t)phys,
+            PAGE_PRESENT | PAGE_USER); // read-only: нет PAGE_RW 
+
+    t->sigreturn_trampoline = tramp_va;
+}
+
+int task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler)
+{
+    if (!t || signum == 0 || signum >= ((uint32_t)1 << NSIG)) return -1;
+    int idx = _sig_to_idx(signum);
+    if (idx >= NSIG) return -1;
+
+    if (signum == SIGKILL) return -1;
+
+    t->signal_handlers[idx] = handler;
+    return 0;
+}
+
+static void _deliver_user_signal(struct task_struct* t,
+                                  uint32_t            handler,
+                                  uint32_t            signum)
+{
+    struct context_frame* ctx = (struct context_frame*)t->esp;
+
+    uint32_t user_esp = ctx->useresp - sizeof(signal_frame_t);
+    user_esp &= ~0xFu; 
+
+    if (user_esp >= 0xC0000000u || user_esp < 0x1000u) return;
+
+    uint32_t* pd  = t->page_directory;
+    uint32_t  pdi = PD_INDEX(user_esp);
+    uint32_t  pti = PT_INDEX(user_esp);
+    if (!(pd[pdi] & PAGE_PRESENT)) return;
+    uint32_t* pt  = (uint32_t*)(pd[pdi] & ~0xFFFu);
+    if (!(pt[pti] & PAGE_PRESENT)) return;
+
+    uint32_t phys_page = pt[pti] & ~0xFFFu;
+    uint32_t page_off  = user_esp & 0xFFFu;
+
+    if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) return;
+
+    signal_frame_t* frame = (signal_frame_t*)(phys_page + page_off);
+
+    frame->ret_addr = t->sigreturn_trampoline;
+    frame->signum   = signum;
+    frame->eax      = ctx->eax;
+    frame->ecx      = ctx->ecx;
+    frame->edx      = ctx->edx;
+    frame->ebx      = ctx->ebx;
+    frame->esp      = ctx->useresp;
+    frame->ebp      = ctx->ebp;
+    frame->esi      = ctx->esi;
+    frame->edi      = ctx->edi;
+    frame->eip      = ctx->eip;
+    frame->eflags   = ctx->eflags;
+
+    ctx->eip     = handler;
+    ctx->useresp = user_esp;
+
+    ctx->eax = 0;
+    ctx->ecx = 0;
+    ctx->edx = 0;
+}
+
+void task_handle_signals(struct task_struct* t)
+{
     if (!t || t->is_kernel || !t->pending_signals) return;
 
     if (t->pending_signals & SIGKILL) {
@@ -555,16 +666,13 @@ void task_handle_signals(struct task_struct* t) {
         t->state = TASK_ZOMBIE;
         return;
     }
-    if (t->pending_signals & SIGTERM) {
-        t->pending_signals &= ~SIGTERM;
-        t->state = TASK_ZOMBIE;
-        return;
-    }
+
     if (t->pending_signals & SIGSTOP) {
         t->pending_signals &= ~SIGSTOP;
         t->state = TASK_SLEEPING;
         return;
     }
+
     if (t->pending_signals & SIGCONT) {
         t->pending_signals &= ~SIGCONT;
         if (t->state == TASK_SLEEPING) {
@@ -573,6 +681,34 @@ void task_handle_signals(struct task_struct* t) {
             sched_queue_push(&ready_queue, t);
         }
         return;
+    }
+
+    static const uint32_t deliverable[] = { SIGTERM, SIGPIPE };
+    static const uint32_t n_deliverable = 2;
+
+    for (uint32_t i = 0; i < n_deliverable; i++) {
+        uint32_t sig = deliverable[i];
+        if (!(t->pending_signals & sig)) continue;
+
+        t->pending_signals &= ~sig;
+        int idx = _sig_to_idx(sig);
+        uint32_t handler = t->signal_handlers[idx];
+
+        if (handler == SIG_IGN) {
+            continue;
+        }
+
+        if (handler == SIG_DFL) {
+            t->state = TASK_ZOMBIE;
+            return;
+        }
+
+        if (t->sigreturn_trampoline)
+            _deliver_user_signal(t, handler, idx);
+        else
+            t->state = TASK_ZOMBIE; 
+
+        return; 
     }
 }
 

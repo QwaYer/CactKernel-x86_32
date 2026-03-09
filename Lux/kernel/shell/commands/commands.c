@@ -133,26 +133,48 @@ static void cmd_cat(char* args) {
     if (!buf) { kprint("\nOut of memory.\n"); return; }
     memory_set(buf, 0, sz + 1);
     int bytes = read_vfs(node, 0, sz, buf);
-    if (bytes <= 0) { kfree_heap(buf); kprint("\n(empty)\n"); return; }
+    if (bytes <= 0) { kfree_heap(buf); shell_write("\n(empty)\n"); return; }
     buf[bytes] = '\0';
-    kprint("\n"); kprint(buf); kprint("\n");
+    shell_write("\n");
+    shell_write(buf);
+    shell_write("\n");
     kfree_heap(buf);
 }
 
 static void cmd_wrt(char* args) {
     char* name = _skip_token(args);
-    if (!name) { kprint("\nUsage: wrt <file> <text>\n"); return; }
-    char* text = _skip_token(name);
-    if (!text) { kprint("\nUsage: wrt <file> <text>\n"); return; }
+    if (!name) { kprint("\nUsage: wrt <file> [text]\n"); return; }
+
     struct vfs_node* node = finddir_vfs(current_dir ? current_dir : vfs_root, name);
     if (!node) { kprint("\nError: not found.\n"); return; }
+
+    /* Если есть stdin-пайп — читаем из него */
+    if (shell_stdin) {
+        int len = 0;
+        char* buf = shell_read_stdin(&len);
+        if (buf && len > 0) {
+            write_vfs(node, 0, (unsigned int)len, buf);
+            kfree_heap(buf);
+            kprint("\nWritten.\n");
+        } else {
+            if (buf) kfree_heap(buf);
+            kprint("\nError: stdin empty.\n");
+        }
+        return;
+    }
+
+    /* Иначе берём текст из аргументов */
+    char* text = _skip_token(name);
+    if (!text) { kprint("\nUsage: wrt <file> <text>\n"); return; }
     if (write_vfs(node, 0, strlen(text), text) > 0) kprint("\nWritten.\n");
     else kprint("\nError: write failed.\n");
 }
 
 static void cmd_echo(char* args) {
     char* text = _skip_token(args);
-    kprint("\n"); if (text) kprint(text); kprint("\n");
+    shell_write("\n");
+    if (text) shell_write(text);
+    shell_write("\n");
 }
 
 static void cmd_mount(char* args) {
