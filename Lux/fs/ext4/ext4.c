@@ -3,15 +3,22 @@
 #include "libc.h"
 #include "memory.h"
 #include "kernel.h"
+#include "pagecache.h"
 
 static void _make_node(struct ext4_ctx* ctx, struct vfs_node* n, uint32_t ino, uint8_t ft);
 
-
 static void _read_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
-    uint32_t spb = ctx->block_size / 512;
-    uint32_t lba = block * spb;
-    for (uint32_t i = 0; i < spb; i++)
-        ata_read_sector(ctx->port, ctx->slave, lba + i, buf + i * 512);
+    uint8_t* page = pc_get_page(ctx->port, ctx->slave, block, ctx->block_size);
+    if (page) {
+        memory_copy(buf, page, ctx->block_size);
+        pc_put_page(ctx->port, ctx->slave, block);
+    } else {
+        kprint("[ext4] _read_block: page cache miss fallback, block=");
+        uint32_t spb = ctx->block_size / 512;
+        uint32_t lba = block * spb;
+        for (uint32_t i = 0; i < spb; i++)
+            ata_read_sector(ctx->port, ctx->slave, lba + i, buf + i * 512);
+    }
 }
 
 static void _write_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf);
@@ -183,6 +190,7 @@ static void _journal_stop(struct ext4_ctx* ctx) {
     struct jbd2_journal* j = &ctx->journal;
     if (!j->j_sb || !j->j_running_transaction) return;
     _journal_commit(ctx);
+    pc_flush_dev(ctx->port, ctx->slave);
     struct jbd2_buffer* b = j->j_running_transaction->t_buffers;
     while (b) { struct jbd2_buffer* nx = b->b_next; kfree_heap(b->b_data); kfree_heap(b); b = nx; }
     kfree_heap(j->j_running_transaction);
@@ -208,10 +216,18 @@ static void _journal_log(struct ext4_ctx* ctx, uint32_t blocknr, uint8_t* data) 
 
 static void _write_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
     _journal_log(ctx, block, buf);
-    uint32_t spb = ctx->block_size / 512;
-    uint32_t lba = block * spb;
-    for (uint32_t i = 0; i < spb; i++)
-        ata_write_sector(ctx->port, ctx->slave, lba + i, buf + i * 512);
+
+    uint8_t* page = pc_get_page(ctx->port, ctx->slave, block, ctx->block_size);
+    if (page) {
+        memory_copy(page, buf, ctx->block_size);
+        pc_mark_dirty(ctx->port, ctx->slave, block);
+        pc_put_page(ctx->port, ctx->slave, block);
+    } else {
+        uint32_t spb = ctx->block_size / 512;
+        uint32_t lba = block * spb;
+        for (uint32_t i = 0; i < spb; i++)
+            ata_write_sector(ctx->port, ctx->slave, lba + i, buf + i * 512);
+    }
 }
 
 
@@ -841,7 +857,6 @@ int ext4_rmdir(struct vfs_node* node, char* name) {
     return 0;
 }
 
-/* ── mount ───────────────────────────────────────────────────── */
 
 struct vfs_node* ext4_mount_disk(uint16_t port, uint8_t slave) {
     struct ext4_ctx* ctx = (struct ext4_ctx*)kmalloc(sizeof(*ctx));

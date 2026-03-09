@@ -15,6 +15,7 @@
 #include "fb.h"
 #include "font.h"
 #include "swap.h"
+#include "pagecache.h"
 
 extern uint32_t page_directory[1024];
 
@@ -351,6 +352,10 @@ void kernel_setup_hardware() {
 
     ata_init();
     boot_log("ATA Hard Drive", 0);
+
+    pc_init();
+    boot_log("Page Cache", 0);
+    
     {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
         boot_log("Swap (Page Eviction)", swap_status);

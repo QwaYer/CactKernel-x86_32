@@ -35,6 +35,7 @@ DRIVER_USB_HUB_DIR  = Lux/drivers/usb/hub
 FS_VFS_DIR       = Lux/fs/vfs
 FS_PIPE_DIR      = Lux/pipe
 FS_DEVFS_DIR     = Lux/fs/devfs
+FS_PG_DIR        = Lux/fs/pagecache
 FS_EXT4_DIR      = Lux/fs/ext4
 FS_PROCFS_DIR    = Lux/fs/procfs
 FS_MNTFS_DIR     = Lux/fs/mntfs
@@ -87,6 +88,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_PIPE_DIR) \
          -I$(FS_DEVFS_DIR) \
          -I$(FS_EXT4_DIR) \
+		 -I$(FS_PG_DIR) \
          -I$(FS_PROCFS_DIR) \
          -I$(FS_MNTFS_DIR) \
          -I$(FS_ETCFS_DIR) \
@@ -132,6 +134,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
       $(BUILD_DIR)/ext4.o \
+	  $(BUILD_DIR)/pagecache.o \
       $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/mntfs.o \
       $(BUILD_DIR)/etcfs.o \
@@ -296,6 +299,9 @@ $(BUILD_DIR)/devfs.o: $(FS_DEVFS_DIR)/devfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/pagecache.o: $(FS_PG_DIR)/pagecache.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ext4.o: $(FS_EXT4_DIR)/ext4.c
 	@mkdir -p $(BUILD_DIR)
