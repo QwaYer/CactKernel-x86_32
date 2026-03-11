@@ -213,7 +213,7 @@ void ata_write_sector(uint16_t port, uint8_t slave, uint32_t lba, uint8_t* buffe
 }
 
 
-int ata_read(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
+int ata_read(vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer) {
     struct buf* b = bread(0, offset / 512);
     if (!b) return 0;
     for (unsigned int i = 0; i < size; i++) buffer[i] = b->data[i];
@@ -221,7 +221,7 @@ int ata_read(struct vfs_node* node, unsigned int offset, unsigned int size, char
     return size;
 }
 
-int ata_write(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
+int ata_write(vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer) {
     struct buf* b = bread(0, offset / 512);
     if (!b) return 0;
     for (unsigned int i = 0; i < size; i++) b->data[i] = buffer[i];
@@ -230,13 +230,17 @@ int ata_write(struct vfs_node* node, unsigned int offset, unsigned int size, cha
     return size;
 }
 
-struct vfs_node* init_ata_device(void) {
-    struct vfs_node* node = (struct vfs_node*)kalloc();
+static vfs_ops_t ata_ops = {
+    .read  = ata_read,
+    .write = ata_write,
+};
+
+vfs_node_t* init_ata_device(void) {
+    vfs_node_t* node = (vfs_node_t*)kalloc();
     if (!node) return 0;
     memory_set(node->name, 0, 128);
     node->name[0] = 'h'; node->name[1] = 'd'; node->name[2] = 'a';
-    node->type  = VFS_BLOCKDEVICE;
-    node->read  = ata_read;
-    node->write = ata_write;
+    node->type = VFS_BLOCKDEVICE;
+    node->ops  = &ata_ops;
     return node;
 }

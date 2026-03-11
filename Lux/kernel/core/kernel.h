@@ -94,7 +94,6 @@ extern uint16_t port_word_in (uint16_t port);
 extern void     port_long_out(uint16_t port, uint32_t data);
 extern uint32_t port_long_in (uint16_t port);
 
-/* Алиасы для PCI (port_long и port_dword — одно и то же) */
 #define port_dword_out port_long_out
 #define port_dword_in  port_long_in
 
@@ -178,7 +177,7 @@ extern void ata_read_sector (uint16_t port, uint8_t slave, uint32_t lba, uint8_t
 extern void ata_write_sector(uint16_t port, uint8_t slave, uint32_t lba, uint8_t* buf);
 
 // Kernel Entry Point Helpers
-void kernel_setup_hardware(void);
+void kernel_setup_hardware(multiboot_info_t *mbi);
 
 // ELF Loader
 struct proc_page_tracker_t;

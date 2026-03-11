@@ -1,20 +1,27 @@
 #ifndef PROCFS_H
 #define PROCFS_H
 
+#include <stdint.h>
 #include "vfs.h"
 
 
+typedef int (*procfs_read_fn)(uint32_t off, uint32_t size, char *buf);
+
+typedef int (*procfs_cmd_fn)(const char *cmd, uint32_t len);
+
+
 //Public api
-void             procfs_init(void);
-struct vfs_node* procfs_get_root(void);
-struct vfs_node* procfs_get_commands_dir(void);
+void         procfs_init        (void);
+void         procfs_set_meminfo  (uint32_t mem_lower_kb, uint32_t mem_upper_kb);
+vfs_node_t  *procfs_get_root(void);
 
+int procfs_register_file(const char *name, procfs_read_fn read_fn);
 
-int              procfs_register_command(const char* name, const char* help,
-                                         void (*handler)(char* args));
+int procfs_register_cmd (const char *name,
+                          procfs_read_fn read_fn,
+                          procfs_cmd_fn  cmd_fn);
 
-
-struct vfs_node* procfs_find_command(const char* name);
-void             procfs_exec_command(struct vfs_node* node, char* args);
+int procfs_unregister_file(const char *name);
+int procfs_unregister_cmd (const char *name);
 
 #endif

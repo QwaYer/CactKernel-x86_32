@@ -12,7 +12,8 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 {
     tracker->page_dir = pd;
 
-    struct vfs_node* file = finddir_vfs(vfs_root, path);
+    vfs_node_t *base1 = (path[0] == '/') ? vfs_root : vfs_root;
+    struct vfs_node* file = vfs_walk_path(base1, path);
     if (!file) {
         kprint("ELF: file not found\n");
         return 0;
@@ -109,7 +110,8 @@ void* load_elf_dynamic(char*                path,
 {
     tracker->page_dir = pd;
 
-    struct vfs_node* file = finddir_vfs(vfs_root, path);
+    vfs_node_t *base2 = (path[0] == '/') ? vfs_root : vfs_root;
+    struct vfs_node* file = vfs_walk_path(base2, path);
     if (!file) {
         kprint("ELF: file not found: ");
         kprint(path);

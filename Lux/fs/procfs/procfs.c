@@ -5,266 +5,543 @@
 #include "libc.h"
 #include "task.h"
 
+/* ── узел linked list для файлов /proc ──────────────────────────────── */
+typedef struct proc_file {
+    char            name[64];
+    procfs_read_fn  read_fn;    /* NULL допустим — читать нечего */
+    vfs_node_t      node;
+    struct proc_file *next;
+} proc_file_t;
 
-static int _cpuinfo_read(struct vfs_node* node, unsigned int off,
-                         unsigned int size, char* buf)
-{
-    (void)node; (void)off;
-    static const char data[] =
-        "processor   : 0\n"
-        "vendor_id   : LuxKernel\n"
-        "model name  : x86 (i686 compatible)\n"
-        "cpu MHz     : unknown\n"
-        "cache size  : unknown\n"
-        "flags       : fpu de pse tsc msr pae cx8 apic\n";
-    unsigned int len = sizeof(data) - 1;
-    if (off >= len) return 0;
-    if (size > len - off) size = len - off;
-    memcpy(buf, data + off, size);
+/* ── узел linked list для команд /proc/cmd ──────────────────────────── */
+typedef struct proc_cmd {
+    char            name[64];
+    procfs_read_fn  help_fn;    /* NULL → "no help\n" */
+    procfs_cmd_fn   cmd_fn;
+    vfs_node_t      node;
+    struct proc_cmd *next;
+} proc_cmd_t;
+
+static proc_file_t *file_list = 0;
+static proc_cmd_t  *cmd_list  = 0;
+
+static vfs_node_t procfs_root;
+static vfs_node_t cmd_dir;
+static int        procfs_ready = 0;
+
+/* ── хелперы ────────────────────────────────────────────────────────── */
+
+
+/* ── ops для файла данных ───────────────────────────────────────────── */
+
+static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
+    proc_file_t *f = (proc_file_t *)node->priv;
+    if (!f || !f->read_fn) return 0;
+    return f->read_fn(off, size, buf);
+}
+
+static vfs_ops_t file_ops = { .read = _file_read };
+
+/* ── ops для cmd-узла ───────────────────────────────────────────────── */
+
+static int _cmd_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
+    proc_cmd_t *c = (proc_cmd_t *)node->priv;
+    if (!c) return 0;
+
+    /* справка либо через help_fn, либо синтетическая */
+    char tmp[256];
+    int  n;
+    if (c->help_fn) {
+        n = c->help_fn(0, sizeof(tmp) - 1, tmp);
+    } else {
+        /* "cmd: <name>\n" */
+        int p = 0;
+        const char *pfx = "cmd: ";
+        for (int i = 0; pfx[i]; i++) tmp[p++] = pfx[i];
+        for (int i = 0; c->name[i]; i++) tmp[p++] = c->name[i];
+        tmp[p++] = '\n'; tmp[p] = '\0';
+        n = p;
+    }
+
+    if (n <= 0) return 0;
+    if (off >= (uint32_t)n) return 0;
+    uint32_t avail = (uint32_t)n - off;
+    if (size > avail) size = avail;
+    memcpy(buf, tmp + off, size);
     return (int)size;
 }
 
+static int _cmd_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
+    (void)off;
+    proc_cmd_t *c = (proc_cmd_t *)node->priv;
+    if (!c || !c->cmd_fn) return -1;
+    return c->cmd_fn(buf, size);
+}
 
-static int _meminfo_read(struct vfs_node* node, unsigned int off,
-                         unsigned int size, char* buf)
-{
-    (void)node; (void)off;
+static vfs_ops_t cmd_ops = { .read = _cmd_read, .write = _cmd_write };
+
+/* ── ops для /proc/cmd (директория) ────────────────────────────────── */
+
+static vfs_node_t *_cmd_dir_walk(vfs_node_t *dir, const char *name) {
+    (void)dir;
+    for (proc_cmd_t *c = cmd_list; c; c = c->next)
+        if (streq(c->name, name)) return &c->node;
+    return 0;
+}
+
+static vfs_dirent_t _cmd_de;
+
+static vfs_dirent_t *_cmd_dir_readdir(vfs_node_t *dir, uint32_t index) {
+    (void)dir;
+    uint32_t i = 0;
+    for (proc_cmd_t *c = cmd_list; c; c = c->next) {
+        if (i++ == index) {
+            strlcpy(_cmd_de.name, c->name, 128);
+            _cmd_de.inode = i;
+            return &_cmd_de;
+        }
+    }
+    return 0;
+}
+
+static void _cmd_dir_listdir(vfs_node_t *dir) {
+    (void)dir;
+    for (proc_cmd_t *c = cmd_list; c; c = c->next) {
+        kprint("  "); kprint(c->name); kprint("\n");
+    }
+}
+
+static vfs_ops_t cmd_dir_ops = {
+    .walk    = _cmd_dir_walk,
+    .readdir = _cmd_dir_readdir,
+    .listdir = _cmd_dir_listdir,
+};
+
+/* ── ops для /proc (корневая директория) ────────────────────────────── */
+
+static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
+    (void)dir;
+    /* специальная поддиректория cmd */
+    if (streq(name, "cmd")) return &cmd_dir;
+
+    for (proc_file_t *f = file_list; f; f = f->next)
+        if (streq(f->name, name)) return &f->node;
+    return 0;
+}
+
+static vfs_dirent_t _root_de;
+
+static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
+    (void)dir;
+    /* index 0 — всегда "cmd/" */
+    if (index == 0) {
+        strlcpy(_root_de.name, "cmd", 128);
+        _root_de.inode = 0;
+        return &_root_de;
+    }
+    uint32_t i = 1;
+    for (proc_file_t *f = file_list; f; f = f->next) {
+        if (i++ == index) {
+            strlcpy(_root_de.name, f->name, 128);
+            _root_de.inode = i;
+            return &_root_de;
+        }
+    }
+    return 0;
+}
+
+static void _root_listdir(vfs_node_t *dir) {
+    (void)dir;
+    kprint("  cmd/\n");
+    for (proc_file_t *f = file_list; f; f = f->next) {
+        kprint("  "); kprint(f->name); kprint("\n");
+    }
+}
+
+static vfs_ops_t root_ops = {
+    .walk    = _root_walk,
+    .readdir = _root_readdir,
+    .listdir = _root_listdir,
+};
+
+/* ── встроенные файлы данных ────────────────────────────────────────── */
+
+/* ── CPUID helpers ──────────────────────────────────────────────────── */
+static void _cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
+                   uint32_t *ecx, uint32_t *edx) {
+    __asm__ volatile("cpuid"
+        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
+        : "a"(leaf) : );
+}
+
+static void _cpuid_ext(uint32_t leaf, uint32_t subleaf,
+                        uint32_t *eax, uint32_t *ebx,
+                        uint32_t *ecx, uint32_t *edx) {
+    __asm__ volatile("cpuid"
+        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
+        : "a"(leaf), "c"(subleaf) : );
+}
+
+/* читаем TSC два раза с паузой ~1M циклов для оценки MHz */
+static uint32_t _tsc_mhz(void) {
+    uint32_t lo1, hi1, lo2, hi2;
+    __asm__ volatile("rdtsc" : "=a"(lo1), "=d"(hi1));
+    /* busy wait ~10M iterations */
+    volatile uint32_t c = 10000000;
+    while (c--) __asm__ volatile("nop");
+    __asm__ volatile("rdtsc" : "=a"(lo2), "=d"(hi2));
+    /* только lo32: за ~10M nop дельта << 2^32 даже на 4 ГГц */
+    uint32_t delta = lo2 - lo1;
+    return delta / 10000u;
+}
+
+static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[512];
-    int  pos = 0;
-    unsigned int free_mem = get_free_heap_memory();
-    pos = buf_append(tmp, pos, 512, "MemFree:   ");
-    pos = buf_append_int(tmp, pos, 512, (int)free_mem);
-    pos = buf_append(tmp, pos, 512, " B\n");
-    pos = buf_append(tmp, pos, 512, "MemTotal:  unknown\n");
-    pos = buf_append(tmp, pos, 512, "SwapTotal: 0 B\n");
-    pos = buf_append(tmp, pos, 512, "SwapFree:  0 B\n");
-    unsigned int len = (unsigned int)pos;
+    int  p = 0;
+
+    /* vendor string: EBX EDX ECX из leaf 0 */
+    uint32_t eax, ebx, ecx, edx;
+    _cpuid(0, &eax, &ebx, &ecx, &edx);
+    uint32_t max_leaf = eax;
+    char vendor[13];
+    ((uint32_t*)vendor)[0] = ebx;
+    ((uint32_t*)vendor)[1] = edx;
+    ((uint32_t*)vendor)[2] = ecx;
+    vendor[12] = '\0';
+
+    /* brand string: листья 0x80000002-4 */
+    char brand[49];
+    memset(brand, 0, sizeof(brand));
+    uint32_t max_ext;
+    _cpuid(0x80000000, &max_ext, &ebx, &ecx, &edx);
+    if (max_ext >= 0x80000004) {
+        uint32_t *bp = (uint32_t*)brand;
+        _cpuid(0x80000002, &bp[0],  &bp[1],  &bp[2],  &bp[3]);
+        _cpuid(0x80000003, &bp[4],  &bp[5],  &bp[6],  &bp[7]);
+        _cpuid(0x80000004, &bp[8],  &bp[9],  &bp[10], &bp[11]);
+    } else {
+        /* leaf 1: family/model */
+        if (max_leaf >= 1) {
+            _cpuid(1, &eax, &ebx, &ecx, &edx);
+            uint32_t family = (eax >> 8) & 0xF;
+            uint32_t model  = (eax >> 4) & 0xF;
+            const char *s = "x86 family ";
+            int i = 0;
+            while (s[i]) brand[i] = s[i++];
+            char nb[8]; itoa((int)family, nb);
+            int j = 0; while (nb[j]) brand[i++] = nb[j++];
+            brand[i++] = ' '; brand[i++] = 'm';
+            brand[i++] = 'o'; brand[i++] = 'd';
+            brand[i++] = 'e'; brand[i++] = 'l';
+            brand[i++] = ' ';
+            itoa((int)model, nb); j=0;
+            while (nb[j]) brand[i++] = nb[j++];
+        } else {
+            const char *fb = "x86 compatible";
+            int i=0; while(fb[i]) brand[i]=fb[i++];
+        }
+    }
+
+    /* MHz из TSC */
+    uint32_t mhz = _tsc_mhz();
+
+    /* flags из leaf 1 EDX */
+    uint32_t flags_edx = 0, flags_ecx = 0;
+    if (max_leaf >= 1) {
+        _cpuid(1, &eax, &ebx, &flags_ecx, &flags_edx);
+    }
+
+    /* cache size из leaf 2 или 0x80000006 */
+    uint32_t cache_kb = 0;
+    if (max_ext >= 0x80000006) {
+        uint32_t c6;
+        _cpuid(0x80000006, &eax, &ebx, &c6, &edx);
+        cache_kb = (c6 >> 16) & 0xFFFF;  /* L2 cache в KB */
+    }
+
+    /* строим строку */
+    #define _APP(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
+    #define _APPN(n) { char _nb[16]; itoa((int)(n),_nb); _APP(_nb); }
+
+    _APP("processor   : 0\n");
+    _APP("vendor_id   : "); _APP(vendor); _APP("\n");
+    _APP("model name  : ");
+    /* trim leading spaces from brand */
+    { int bi=0; while(brand[bi]==' ') bi++;
+      const char *b=brand+bi; while(*b) tmp[p++]=*b++; }
+    _APP("\n");
+    _APP("cpu MHz     : "); _APPN(mhz); _APP("\n");
+    if (cache_kb > 0) {
+        _APP("cache size  : "); _APPN(cache_kb); _APP(" KB\n");
+    } else {
+        _APP("cache size  : unknown\n");
+    }
+
+    /* flags */
+    _APP("flags       :");
+    if (flags_edx & (1<<0))  _APP(" fpu");
+    if (flags_edx & (1<<1))  _APP(" vme");
+    if (flags_edx & (1<<2))  _APP(" de");
+    if (flags_edx & (1<<3))  _APP(" pse");
+    if (flags_edx & (1<<4))  _APP(" tsc");
+    if (flags_edx & (1<<5))  _APP(" msr");
+    if (flags_edx & (1<<6))  _APP(" pae");
+    if (flags_edx & (1<<8))  _APP(" cx8");
+    if (flags_edx & (1<<9))  _APP(" apic");
+    if (flags_edx & (1<<11)) _APP(" sep");
+    if (flags_edx & (1<<12)) _APP(" mtrr");
+    if (flags_edx & (1<<13)) _APP(" pge");
+    if (flags_edx & (1<<15)) _APP(" cmov");
+    if (flags_edx & (1<<19)) _APP(" clflush");
+    if (flags_edx & (1<<23)) _APP(" mmx");
+    if (flags_edx & (1<<25)) _APP(" sse");
+    if (flags_edx & (1<<26)) _APP(" sse2");
+    if (flags_edx & (1<<28)) _APP(" ht");
+    if (flags_ecx & (1<<0))  _APP(" sse3");
+    if (flags_ecx & (1<<9))  _APP(" ssse3");
+    if (flags_ecx & (1<<19)) _APP(" sse4_1");
+    if (flags_ecx & (1<<20)) _APP(" sse4_2");
+    if (flags_ecx & (1<<28)) _APP(" avx");
+    if (flags_ecx & (1<<30)) _APP(" rdrand");
+    _APP("\n");
+
+    #undef _APP
+    #undef _APPN
+
+    uint32_t len = (uint32_t)p;
     if (off >= len) return 0;
     if (size > len - off) size = len - off;
     memcpy(buf, tmp + off, size);
     return (int)size;
 }
 
+/* multiboot mem_lower/mem_upper — сохраняются при старте ядра */
+static uint32_t _mb_mem_lower_kb = 0;
+static uint32_t _mb_mem_upper_kb = 0;
+
+void procfs_set_meminfo(uint32_t mem_lower_kb, uint32_t mem_upper_kb) {
+    _mb_mem_lower_kb = mem_lower_kb;
+    _mb_mem_upper_kb = mem_upper_kb;
+}
+
+static uint32_t _get_total_memory_kb(void) {
+    return _mb_mem_lower_kb + 1024 + _mb_mem_upper_kb;
+}
+
+static int _meminfo_read(uint32_t off, uint32_t size, char *buf) {
+    char tmp[256]; int p = 0;
+
+    unsigned int free_kb  = get_free_heap_memory() / 1024;
+    unsigned int total_kb = _get_total_memory_kb();
+    unsigned int used_kb  = total_kb > free_kb ? total_kb - free_kb : 0;
+
+    #define _A(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
+    #define _N(n) { char _b[16]; itoa((int)(n),_b); _A(_b); }
+
+    _A("MemTotal:     "); _N(total_kb); _A(" kB\n");
+    _A("MemFree:      "); _N(free_kb);  _A(" kB\n");
+    _A("MemUsed:      "); _N(used_kb);  _A(" kB\n");
+    _A("SwapTotal:    0 kB\n");
+    _A("SwapFree:     0 kB\n");
+
+    #undef _A
+    #undef _N
+
+    uint32_t len = (uint32_t)p;
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, tmp + off, size);
+    return (int)size;
+}
 
 extern unsigned int timer_ticks_get(void);
 
-static int _uptime_read(struct vfs_node* node, unsigned int off,
-                        unsigned int size, char* buf)
-{
-    (void)node; (void)off;
+static int _uptime_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[64];
-    int  pos = 0;
-    unsigned int secs = timer_ticks_get() / 100;
-    pos = buf_append_int(tmp, pos, 64, (int)secs);
-    pos = buf_append(tmp, pos, 64, " seconds\n");
-    unsigned int len = (unsigned int)pos;
+    int  p = 0;
+    char nb[16]; itoa((int)(timer_ticks_get() / 100), nb);
+    for (int i = 0; nb[i]; i++) tmp[p++] = nb[i];
+    const char *s = " seconds\n";
+    for (int i = 0; s[i]; i++) tmp[p++] = s[i];
+    uint32_t len = (uint32_t)p;
     if (off >= len) return 0;
     if (size > len - off) size = len - off;
     memcpy(buf, tmp + off, size);
     return (int)size;
 }
 
-
-static int _version_read(struct vfs_node* node, unsigned int off,
-                         unsigned int size, char* buf)
-{
-    (void)node; (void)off;
-    static const char data[] = "Lux Kernel 0.1.0 (x86, built with GCC)\n";
-    unsigned int len = sizeof(data) - 1;
+static int _version_read(uint32_t off, uint32_t size, char *buf) {
+    static const char data[] =
+        "Lux Kernel 0.8.0\n"
+        "Arch: x86 (i686)\n"
+        "Compiler: GCC\n"
+        "Build: " __DATE__ " " __TIME__ "\n";
+    uint32_t len = sizeof(data) - 1;
     if (off >= len) return 0;
     if (size > len - off) size = len - off;
     memcpy(buf, data + off, size);
     return (int)size;
 }
 
+typedef struct { uint32_t pid; task_state state; uint8_t is_kernel; } task_snap_t;
+#define TASKS_SNAP_MAX 64
 
-static int _tasks_read(struct vfs_node* node, unsigned int off,
-                       unsigned int size, char* buf)
-{
-    (void)node; (void)off;
-    static const char data[] = "PID  NAME\n(use 'ps' command for live list)\n";
-    unsigned int len = sizeof(data) - 1;
-    if (off >= len) return 0;
-    if (size > len - off) size = len - off;
-    memcpy(buf, data + off, size);
-    return (int)size;
-}
+static int _tasks_read(uint32_t off, uint32_t size, char *buf) {
+    /* Снапшот под блокировкой — копируем только POD-поля,
+     * не держим lock во время форматирования строк */
+    task_snap_t snap[TASKS_SNAP_MAX];
+    int count = 0;
 
+    spinlock_acquire(&scheduler_lock);
+    struct task_struct *head = (struct task_struct *)task_list_head;
+    struct task_struct *t    = head;
+    if (t) do {
+        snap[count].pid       = t->pid;
+        snap[count].state     = t->state;
+        snap[count].is_kernel = t->is_kernel;
+        count++;
+        t = t->next;
+    } while (t && t != head && count < TASKS_SNAP_MAX);
+    spinlock_release(&scheduler_lock);
 
-#define CMD_MAX 64
+    char tmp[2048];
+    int  p = 0;
 
-typedef struct {
-    char            name[64];
-    char            help[128];
-    void          (*handler)(char* args);
-    struct vfs_node node;
-} cmd_entry_t;
+    #define _A(s) { const char *_s=(s); while(*_s && p<(int)sizeof(tmp)-1) tmp[p++]=*_s++; }
+    #define _N(n) { char _b[16]; itoa((int)(n),_b); _A(_b); }
 
-static cmd_entry_t   cmd_table[CMD_MAX];
-static int           cmd_count = 0;
-static struct vfs_node cmd_dir_node;
+    _A("PID  STATE     TYPE\n");
+    _A("---  --------  --------\n");
 
+    for (int i = 0; i < count; i++) {
+        _N(snap[i].pid);
+        int digits = snap[i].pid < 10 ? 1 : snap[i].pid < 100 ? 2 : snap[i].pid < 1000 ? 3 : 4;
+        for (int j = digits; j < 5; j++) { if (p < (int)sizeof(tmp)-1) tmp[p++] = ' '; }
 
-static int _cmd_read(struct vfs_node* node, unsigned int off,
-                     unsigned int size, char* buf)
-{
-    cmd_entry_t* e = (cmd_entry_t*)node->ptr;
-    if (!e) return 0;
-    char tmp[256];
-    int pos = 0;
-    pos = buf_append(tmp, pos, 256, e->name);
-    pos = buf_append(tmp, pos, 256, " - ");
-    pos = buf_append(tmp, pos, 256, e->help);
-    pos = buf_append(tmp, pos, 256, "\n");
-    unsigned int len = (unsigned int)pos;
+        switch (snap[i].state) {
+            case TASK_READY:    _A("ready     "); break;
+            case TASK_RUNNING:  _A("running   "); break;
+            case TASK_SLEEPING: _A("sleeping  "); break;
+            case TASK_ZOMBIE:   _A("zombie    "); break;
+            default:            _A("unknown   "); break;
+        }
+
+        _A(snap[i].is_kernel ? "kernel\n" : "user\n");
+    }
+
+    #undef _A
+    #undef _N
+
+    uint32_t len = (uint32_t)p;
     if (off >= len) return 0;
     if (size > len - off) size = len - off;
     memcpy(buf, tmp + off, size);
     return (int)size;
 }
 
-static struct vfs_node* _cmd_finddir(struct vfs_node* node, char* name) {
-    (void)node;
-    for (int i = 0; i < cmd_count; i++)
-        if (strncmp(cmd_table[i].name, name) == 0)
-            return &cmd_table[i].node;
+/* ── public API ─────────────────────────────────────────────────────── */
+
+vfs_node_t *procfs_get_root(void) { return &procfs_root; }
+
+int procfs_register_file(const char *name, procfs_read_fn read_fn) {
+    if (!name) return -1;
+    /* нет дублей */
+    for (proc_file_t *f = file_list; f; f = f->next)
+        if (streq(f->name, name)) return -1;
+
+    proc_file_t *f = (proc_file_t *)kmalloc(sizeof(proc_file_t));
+    if (!f) return -1;
+    memset(f, 0, sizeof(proc_file_t));
+
+    strlcpy(f->name, name, 64);
+    f->read_fn = read_fn;
+
+    memset(&f->node, 0, sizeof(vfs_node_t));
+    strlcpy(f->node.name, name, 128);
+    f->node.type = VFS_FILE;
+    f->node.ops  = &file_ops;
+    f->node.priv = f;
+
+    f->next   = file_list;
+    file_list = f;
     return 0;
 }
 
-static void _cmd_listdir(struct vfs_node* node) {
-    (void)node;
-    for (int i = 0; i < cmd_count; i++) {
-        kprint("  ");
-        kprint(cmd_table[i].name);
-        kprint("\n");
+int procfs_register_cmd(const char *name,
+                         procfs_read_fn read_fn,
+                         procfs_cmd_fn  cmd_fn) {
+    if (!name || !cmd_fn) return -1;
+    for (proc_cmd_t *c = cmd_list; c; c = c->next)
+        if (streq(c->name, name)) return -1;
+
+    proc_cmd_t *c = (proc_cmd_t *)kmalloc(sizeof(proc_cmd_t));
+    if (!c) return -1;
+    memset(c, 0, sizeof(proc_cmd_t));
+
+    strlcpy(c->name, name, 64);
+    c->help_fn = read_fn;
+    c->cmd_fn  = cmd_fn;
+
+    memset(&c->node, 0, sizeof(vfs_node_t));
+    strlcpy(c->node.name, name, 128);
+    c->node.type = VFS_FILE;
+    c->node.ops  = &cmd_ops;
+    c->node.priv = c;
+
+    c->next  = cmd_list;
+    cmd_list = c;
+    return 0;
+}
+
+int procfs_unregister_file(const char *name) {
+    proc_file_t **pp = &file_list;
+    while (*pp) {
+        if (streq((*pp)->name, name)) {
+            proc_file_t *dead = *pp;
+            *pp = dead->next;
+            kfree_heap(dead);
+            return 0;
+        }
+        pp = &(*pp)->next;
     }
+    return -1;
 }
 
-static struct vfs_dirent _cmd_dirent;
-
-static struct vfs_dirent* _cmd_readdir(struct vfs_node* node, unsigned int index) {
-    (void)node;
-    if (index >= (unsigned int)cmd_count) return 0;
-    strncpy(_cmd_dirent.name, cmd_table[index].name, 128);
-    _cmd_dirent.inode = (unsigned int)index;
-    return &_cmd_dirent;
-}
-
-
-int procfs_register_command(const char* name, const char* help,
-                            void (*handler)(char* args))
-{
-    if (!name || !handler || cmd_count >= CMD_MAX) return -1;
-    for (int i = 0; i < cmd_count; i++)
-        if (strncmp(cmd_table[i].name, name) == 0) return -1;
-
-    cmd_entry_t* e = &cmd_table[cmd_count];
-    strncpy(e->name, name, 64);
-    strncpy(e->help, help ? help : "", 128);
-    e->handler = handler;
-
-    memset(&e->node, 0, sizeof(struct vfs_node));
-    strncpy(e->node.name, name, 128);
-    e->node.type = VFS_FILE;
-    e->node.read = _cmd_read;
-    e->node.ptr  = (struct vfs_node*)e;
-
-    cmd_count++;
-    return 0;
-}
-
-struct vfs_node* procfs_find_command(const char* name) {
-    for (int i = 0; i < cmd_count; i++)
-        if (strncmp(cmd_table[i].name, name) == 0)
-            return &cmd_table[i].node;
-    return 0;
-}
-
-void procfs_exec_command(struct vfs_node* node, char* args) {
-    if (!node) return;
-    cmd_entry_t* e = (cmd_entry_t*)node->ptr;
-    if (e && e->handler) e->handler(args);
-}
-
-
-typedef struct {
-    const char* name;
-    int (*read)(struct vfs_node*, unsigned int, unsigned int, char*);
-} proc_entry_t;
-
-static proc_entry_t proc_files[] = {
-    { "cpuinfo", _cpuinfo_read },
-    { "meminfo", _meminfo_read },
-    { "uptime",  _uptime_read  },
-    { "version", _version_read },
-    { "tasks",   _tasks_read   },
-};
-#define PROC_FILE_COUNT (sizeof(proc_files) / sizeof(proc_entry_t))
-
-static struct vfs_node proc_file_nodes[PROC_FILE_COUNT];
-static struct vfs_node procfs_root_node;
-
-static struct vfs_node* _proc_finddir(struct vfs_node* node, char* name) {
-    (void)node;
-    for (int i = 0; i < (int)PROC_FILE_COUNT; i++)
-        if (strncmp(proc_files[i].name, name) == 0)
-            return &proc_file_nodes[i];
-    if (strncmp(name, "commands") == 0)
-        return &cmd_dir_node;
-    return 0;
-}
-
-static void _proc_listdir(struct vfs_node* node) {
-    (void)node;
-    for (int i = 0; i < (int)PROC_FILE_COUNT; i++) {
-        kprint("  ");
-        kprint((char*)proc_files[i].name);
-        kprint("\n");
+int procfs_unregister_cmd(const char *name) {
+    proc_cmd_t **pp = &cmd_list;
+    while (*pp) {
+        if (streq((*pp)->name, name)) {
+            proc_cmd_t *dead = *pp;
+            *pp = dead->next;
+            kfree_heap(dead);
+            return 0;
+        }
+        pp = &(*pp)->next;
     }
-    kprint("  commands/\n");
+    return -1;
 }
-
-static struct vfs_dirent _proc_dirent;
-
-static struct vfs_dirent* _proc_readdir(struct vfs_node* node, unsigned int index) {
-    (void)node;
-    if (index < PROC_FILE_COUNT) {
-        strncpy(_proc_dirent.name, proc_files[index].name, 128);
-        _proc_dirent.inode = index;
-        return &_proc_dirent;
-    }
-    if (index == PROC_FILE_COUNT) {
-        strncpy(_proc_dirent.name, "commands", 128);
-        _proc_dirent.inode = (unsigned int)index;
-        return &_proc_dirent;
-    }
-    return 0;
-}
-
-
-struct vfs_node* procfs_get_root(void) { return &procfs_root_node; }
-struct vfs_node* procfs_get_commands_dir(void) { return &cmd_dir_node; }
 
 void procfs_init(void) {
-    memset(&cmd_dir_node, 0, sizeof(struct vfs_node));
-    strncpy(cmd_dir_node.name, "commands", 128);
-    cmd_dir_node.type    = VFS_DIRECTORY;
-    cmd_dir_node.finddir = _cmd_finddir;
-    cmd_dir_node.listdir = _cmd_listdir;
-    cmd_dir_node.readdir = _cmd_readdir;
+    if (procfs_ready) return;
 
-    memset(&procfs_root_node, 0, sizeof(struct vfs_node));
-    strncpy(procfs_root_node.name, "proc", 128);
-    procfs_root_node.type    = VFS_DIRECTORY;
-    procfs_root_node.finddir = _proc_finddir;
-    procfs_root_node.listdir = _proc_listdir;
-    procfs_root_node.readdir = _proc_readdir;
+    /* /proc/cmd директория */
+    memset(&cmd_dir, 0, sizeof(vfs_node_t));
+    strlcpy(cmd_dir.name, "cmd", 128);
+    cmd_dir.type = VFS_DIRECTORY;
+    cmd_dir.ops  = &cmd_dir_ops;
 
-    for (int i = 0; i < (int)PROC_FILE_COUNT; i++) {
-        memset(&proc_file_nodes[i], 0, sizeof(struct vfs_node));
-        strncpy(proc_file_nodes[i].name, proc_files[i].name, 128);
-        proc_file_nodes[i].type = VFS_FILE;
-        proc_file_nodes[i].read = proc_files[i].read;
-    }
+    /* /proc корень */
+    memset(&procfs_root, 0, sizeof(vfs_node_t));
+    strlcpy(procfs_root.name, "proc", 128);
+    procfs_root.type = VFS_DIRECTORY;
+    procfs_root.ops  = &root_ops;
 
+    /* встроенные файлы данных */
+    procfs_register_file("cpuinfo", _cpuinfo_read);
+    procfs_register_file("meminfo", _meminfo_read);
+    procfs_register_file("uptime",  _uptime_read);
+    procfs_register_file("version", _version_read);
+    procfs_register_file("tasks",   _tasks_read);
+
+    procfs_ready = 1;
 }
