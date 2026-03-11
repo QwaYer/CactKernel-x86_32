@@ -5,7 +5,7 @@
 #include "kernel.h"
 #include "pagecache.h"
 
-static void _make_node(struct ext4_ctx* ctx, struct vfs_node* n, uint32_t ino, uint8_t ft);
+static void _make_node(struct ext4_ctx* ctx, vfs_node_t* n, uint32_t ino, uint8_t ft);
 
 static void _read_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
     uint8_t* page = pc_get_page(ctx->port, ctx->slave, block, ctx->block_size);
@@ -441,7 +441,7 @@ static int _extent_add(struct ext4_inode* inode, uint32_t fb, uint32_t pb, uint1
 }
 
 
-static void _iter_dir(struct ext4_ctx* ctx, struct vfs_node* node,
+static void _iter_dir(struct ext4_ctx* ctx, vfs_node_t* node,
                       void (*cb)(struct ext4_dir_entry_2*, void*), void* ud) {
     struct ext4_inode inode;
     _read_inode(ctx, node->inode, &inode);
@@ -482,7 +482,7 @@ static void _iter_dir(struct ext4_ctx* ctx, struct vfs_node* node,
 }
 
 
-static int _dir_add(struct ext4_ctx* ctx, struct vfs_node* node,
+static int _dir_add(struct ext4_ctx* ctx, vfs_node_t* node,
                     uint32_t entry_ino, const char* name, uint8_t ft) {
     struct ext4_inode di;
     _read_inode(ctx, node->inode, &di);
@@ -543,7 +543,7 @@ static int _dir_add(struct ext4_ctx* ctx, struct vfs_node* node,
     return 0;
 }
 
-static int _dir_remove(struct ext4_ctx* ctx, struct vfs_node* node,
+static int _dir_remove(struct ext4_ctx* ctx, vfs_node_t* node,
                        const char* name, uint32_t* out_ino, uint8_t* out_ft) {
     struct ext4_inode di;
     _read_inode(ctx, node->inode, &di);
@@ -610,23 +610,67 @@ static int _dir_empty(struct ext4_ctx* ctx, uint32_t ino) {
 }
 
 
-static void _make_node(struct ext4_ctx* ctx, struct vfs_node* n, uint32_t ino, uint8_t ft) {
+typedef struct { uint32_t target_idx; uint32_t cur; vfs_dirent_t de; int found; } _rdctx_t;
+
+static void _readdir_cb(struct ext4_dir_entry_2* de, void* ud) {
+    _rdctx_t* rc = (_rdctx_t*)ud;
+    if (rc->found) return;
+    char name[256];
+    memory_copy(name, de->name, de->name_len);
+    name[de->name_len] = '\0';
+    if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) return;
+    if (rc->cur++ == rc->target_idx) {
+        memory_copy(rc->de.name, name, de->name_len + 1);
+        rc->de.inode = de->inode;
+        rc->found = 1;
+    }
+}
+
+static vfs_dirent_t* ext4_readdir(vfs_node_t* node, uint32_t index) {
+    static _rdctx_t rc;
+    rc.target_idx = index;
+    rc.cur        = 0;
+    rc.found      = 0;
+    memory_set(rc.de.name, 0, 128);
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
+    _iter_dir(ctx, node, _readdir_cb, &rc);
+    return rc.found ? &rc.de : 0;
+}
+
+
+static vfs_node_t* _ops_walk  (vfs_node_t *d, const char *n) { return ext4_finddir(d, (char*)n); }
+static int         _ops_create(vfs_node_t *d, const char *n) { return ext4_create (d, (char*)n); }
+static int         _ops_delete(vfs_node_t *d, const char *n) { return ext4_delete (d, (char*)n); }
+static int         _ops_mkdir (vfs_node_t *d, const char *n) { return ext4_mkdir  (d, (char*)n); }
+static int         _ops_rmdir (vfs_node_t *d, const char *n) { return ext4_rmdir  (d, (char*)n); }
+
+
+static vfs_ops_t ext4_dir_ops = {
+    .walk    = _ops_walk,
+    .readdir = ext4_readdir,
+    .listdir = ext4_list_dir,
+    .mkdir   = _ops_mkdir,
+    .rmdir   = _ops_rmdir,
+    .create  = _ops_create,
+    .delete  = _ops_delete,
+};
+
+static vfs_ops_t ext4_file_ops = {
+    .read   = ext4_read_file,
+    .write  = ext4_write_file,
+    .delete = _ops_delete,
+};
+
+static void _make_node(struct ext4_ctx* ctx, vfs_node_t* n, uint32_t ino, uint8_t ft) {
     memory_set(n, 0, sizeof(*n));
     n->inode = ino;
-    n->ptr   = (struct vfs_node*)ctx;
+    n->priv  = ctx;  
     if (ft == EXT4_FT_DIR) {
-        n->type    = VFS_DIRECTORY;
-        n->finddir = ext4_finddir;
-        n->listdir = ext4_list_dir;
-        n->mkdir   = ext4_mkdir;
-        n->rmdir   = ext4_rmdir;
-        n->create  = ext4_create;
-        n->delete  = ext4_delete;
+        n->type = VFS_DIRECTORY;
+        n->ops  = &ext4_dir_ops;
     } else {
-        n->type   = VFS_FILE;
-        n->read   = ext4_read_file;
-        n->write  = ext4_write_file;
-        n->delete = ext4_delete;
+        n->type = VFS_FILE;
+        n->ops  = &ext4_file_ops;
         struct ext4_inode fi;
         _read_inode(ctx, ino, &fi);
         n->size = fi.i_size_lo;
@@ -649,7 +693,7 @@ static void _listdir_cb(struct ext4_dir_entry_2* de, void* ud) {
 }
 
 
-typedef struct { char* target; struct vfs_node* result; struct ext4_ctx* ctx; } _fctx_t;
+typedef struct { char* target; vfs_node_t* result; struct ext4_ctx* ctx; } _fctx_t;
 
 static void _finddir_cb(struct ext4_dir_entry_2* de, void* ud) {
     _fctx_t* fc = (_fctx_t*)ud;
@@ -658,7 +702,7 @@ static void _finddir_cb(struct ext4_dir_entry_2* de, void* ud) {
     memory_copy(name, de->name, de->name_len);
     name[de->name_len] = '\0';
     if (compare_string(name, fc->target) != 0) return;
-    struct vfs_node* res = (struct vfs_node*)kmalloc(sizeof(*res));
+    vfs_node_t* res = (vfs_node_t*)kmalloc(sizeof(*res));
     if (!res) return;
     copy_string(res->name, name);
     _make_node(fc->ctx, res, de->inode, de->file_type);
@@ -666,20 +710,20 @@ static void _finddir_cb(struct ext4_dir_entry_2* de, void* ud) {
 }
 
 //Public api
-void ext4_list_dir(struct vfs_node* node) {
-    struct ext4_ctx* ctx = (struct ext4_ctx*)node->ptr;
+void ext4_list_dir(vfs_node_t* node) {
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     _iter_dir(ctx, node, _listdir_cb, 0);
 }
 
-struct vfs_node* ext4_finddir(struct vfs_node* node, char* name) {
-    struct ext4_ctx* ctx = (struct ext4_ctx*)node->ptr;
+vfs_node_t* ext4_finddir(vfs_node_t* node, char* name) {
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     _fctx_t fc; fc.target = name; fc.result = 0; fc.ctx = ctx;
     _iter_dir(ctx, node, _finddir_cb, &fc);
     return fc.result;
 }
 
-int ext4_read_file(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
-    struct ext4_ctx* ctx = (struct ext4_ctx*)node->ptr;
+int ext4_read_file(vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer) {
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     struct ext4_inode inode;
     _read_inode(ctx, node->inode, &inode);
     uint32_t fsz = inode.i_size_lo;
@@ -707,9 +751,9 @@ int ext4_read_file(struct vfs_node* node, unsigned int offset, unsigned int size
     return (int)read;
 }
 
-int ext4_write_file(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
+int ext4_write_file(vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer) {
     if (!size) return 0;
-    struct ext4_ctx* ctx = (struct ext4_ctx*)node->ptr;
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     _journal_start(ctx);
     struct ext4_inode inode;
     _read_inode(ctx, node->inode, &inode);
@@ -745,10 +789,10 @@ int ext4_write_file(struct vfs_node* node, unsigned int offset, unsigned int siz
     return (int)written;
 }
 
-int ext4_create(struct vfs_node* node, char* name) {
-    struct ext4_ctx* ctx = (struct ext4_ctx*)node->ptr;
+int ext4_create(vfs_node_t* node, char* name) {
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     _journal_start(ctx);
-    struct vfs_node* ex = ext4_finddir(node, name);
+    vfs_node_t* ex = ext4_finddir(node, name);
     if (ex) { kfree_heap(ex); _journal_stop(ctx); return -1; }
     uint32_t ino = _alloc_inode(ctx);
     if (!ino) { _journal_stop(ctx); return -1; }
@@ -764,10 +808,10 @@ int ext4_create(struct vfs_node* node, char* name) {
     return 0;
 }
 
-int ext4_mkdir(struct vfs_node* node, char* name) {
-    struct ext4_ctx* ctx = (struct ext4_ctx*)node->ptr;
+int ext4_mkdir(vfs_node_t* node, char* name) {
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     _journal_start(ctx);
-    struct vfs_node* ex = ext4_finddir(node, name);
+    vfs_node_t* ex = ext4_finddir(node, name);
     if (ex) { kfree_heap(ex); _journal_stop(ctx); return -1; }
     uint32_t ino = _alloc_inode(ctx);
     if (!ino) { _journal_stop(ctx); return -1; }
@@ -805,8 +849,8 @@ int ext4_mkdir(struct vfs_node* node, char* name) {
     return 0;
 }
 
-int ext4_delete(struct vfs_node* node, char* name) {
-    struct ext4_ctx* ctx = (struct ext4_ctx*)node->ptr;
+int ext4_delete(vfs_node_t* node, char* name) {
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     _journal_start(ctx);
     uint32_t del_ino = 0; uint8_t del_ft = 0;
     if (_dir_remove(ctx, node, name, &del_ino, &del_ft) < 0 || !del_ino) {
@@ -831,10 +875,10 @@ int ext4_delete(struct vfs_node* node, char* name) {
     return 0;
 }
 
-int ext4_rmdir(struct vfs_node* node, char* name) {
-    struct ext4_ctx* ctx = (struct ext4_ctx*)node->ptr;
+int ext4_rmdir(vfs_node_t* node, char* name) {
+    struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     _journal_start(ctx);
-    struct vfs_node* tgt = ext4_finddir(node, name);
+    vfs_node_t* tgt = ext4_finddir(node, name);
     if (!tgt) { _journal_stop(ctx); return -1; }
     if (tgt->type != VFS_DIRECTORY) { kfree_heap(tgt); _journal_stop(ctx); return -1; }
     uint32_t tino = tgt->inode; kfree_heap(tgt);
@@ -858,7 +902,7 @@ int ext4_rmdir(struct vfs_node* node, char* name) {
 }
 
 
-struct vfs_node* ext4_mount_disk(uint16_t port, uint8_t slave) {
+vfs_node_t* ext4_mount_disk(uint16_t port, uint8_t slave) {
     struct ext4_ctx* ctx = (struct ext4_ctx*)kmalloc(sizeof(*ctx));
     if (!ctx) return 0;
     memory_set(ctx, 0, sizeof(*ctx));
@@ -885,7 +929,7 @@ struct vfs_node* ext4_mount_disk(uint16_t port, uint8_t slave) {
 
     ctx->block_size = 1024u << ctx->sb.s_log_block_size;
 
-    struct vfs_node* root = (struct vfs_node*)kmalloc(sizeof(*root));
+    vfs_node_t* root = (vfs_node_t*)kmalloc(sizeof(*root));
     if (!root) { kfree_heap(ctx); return 0; }
     memory_set(root, 0, sizeof(*root));
     copy_string(root->name, "/");

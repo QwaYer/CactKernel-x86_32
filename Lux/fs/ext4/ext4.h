@@ -250,7 +250,7 @@ struct jbd2_buffer {
 
 struct jbd2_journal {
     uint32_t                  j_inum;
-    struct vfs_node*          j_node;
+    vfs_node_t*          j_node;
     struct jbd2_superblock*   j_sb;
     uint32_t                  j_maxlen;
     uint32_t                  j_first;
@@ -271,15 +271,15 @@ struct ext4_ctx {
 
 //Public api
 void             ext4_init(void);
-struct vfs_node* ext4_mount_disk(uint16_t port, uint8_t slave);
+vfs_node_t* ext4_mount_disk(uint16_t port, uint8_t slave);
 
-int              ext4_read_file  (struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
-int              ext4_write_file (struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
-struct vfs_node* ext4_finddir    (struct vfs_node* node, char* name);
-void             ext4_list_dir   (struct vfs_node* node);
-int              ext4_mkdir      (struct vfs_node* node, char* name);
-int              ext4_rmdir      (struct vfs_node* node, char* name);
-int              ext4_create     (struct vfs_node* node, char* name);
-int              ext4_delete     (struct vfs_node* node, char* name);
+int              ext4_read_file  (vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer);
+int              ext4_write_file (vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer);
+vfs_node_t* ext4_finddir    (vfs_node_t* node, char* name);
+void             ext4_list_dir   (vfs_node_t* node);
+int              ext4_mkdir      (vfs_node_t* node, char* name);
+int              ext4_rmdir      (vfs_node_t* node, char* name);
+int              ext4_create     (vfs_node_t* node, char* name);
+int              ext4_delete     (vfs_node_t* node, char* name);
 
 #endif

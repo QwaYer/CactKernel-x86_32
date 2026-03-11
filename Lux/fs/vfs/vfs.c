@@ -1,154 +1,170 @@
 #include "vfs.h"
+#include "libc.h"
 #include "sync.h"
+#include "kernel.h"
 
-struct vfs_node* vfs_root = 0;
+vfs_node_t *vfs_root = 0;
 
-static mutex_t vfs_mutex;
-
-#define VFS_MOUNT_MAX 16
+#define VFS_MOUNT_MAX 32
 
 typedef struct {
-    struct vfs_node* host;
-    struct vfs_node* mounted;
-    char             name[128];
+    vfs_node_t *host;
+    vfs_node_t *target;
+    char        name[128];
 } vfs_mount_t;
 
 static vfs_mount_t mount_table[VFS_MOUNT_MAX];
 static int         mount_count = 0;
 
-static int _strcmp(const char* a, const char* b) {
-    while (*a && *a == *b) { a++; b++; }
-    return *a - *b;
-}
+static mutex_t vfs_mutex;
 
-static void _strncpy(char* dst, const char* src, int n) {
-    int i = 0;
-    while (src[i] && i < n - 1) { dst[i] = src[i]; i++; }
-    dst[i] = '\0';
-}
 
-static struct vfs_node* lookup_mount(struct vfs_node* host, char* name) {
+
+static vfs_node_t *_lookup_mount(vfs_node_t *host, const char *name) {
     for (int i = 0; i < mount_count; i++)
-        if (mount_table[i].host == host && _strcmp(mount_table[i].name, name) == 0)
-            return mount_table[i].mounted;
+        if (mount_table[i].host == host && streq(mount_table[i].name, name))
+            return mount_table[i].target;
     return 0;
 }
 
+static vfs_node_t *_walk_one(vfs_node_t *dir, const char *name) {
+    if (!dir || dir->type != VFS_DIRECTORY) return 0;
+
+    mutex_lock(&vfs_mutex);
+    vfs_node_t *m = _lookup_mount(dir, name);
+    mutex_unlock(&vfs_mutex);
+    if (m) return m;
+
+    if (dir->ops && dir->ops->walk)
+        return dir->ops->walk(dir, name);
+    return 0;
+}
+
+
+//Public api
 void vfs_init(void) {
     mutex_init(&vfs_mutex);
     mount_count = 0;
 }
 
-int vfs_mount(struct vfs_node* host, const char* name, struct vfs_node* target) {
+int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target) {
     if (!host || !name || !target) return -1;
-    if (mount_count >= VFS_MOUNT_MAX) return -1;
+    mutex_lock(&vfs_mutex);
+    if (mount_count >= VFS_MOUNT_MAX) { mutex_unlock(&vfs_mutex); return -1; }
     for (int i = 0; i < mount_count; i++)
-        if (mount_table[i].host == host && _strcmp(mount_table[i].name, name) == 0)
+        if (mount_table[i].host == host && streq(mount_table[i].name, name)) {
+            mutex_unlock(&vfs_mutex);
             return -1;
-    mount_table[mount_count].host    = host;
-    mount_table[mount_count].mounted = target;
-    _strncpy(mount_table[mount_count].name, name, 128);
+        }
+    mount_table[mount_count].host   = host;
+    mount_table[mount_count].target = target;
+    strlcpy(mount_table[mount_count].name, name, 128);
     mount_count++;
+    mutex_unlock(&vfs_mutex);
     return 0;
 }
 
-int vfs_umount(struct vfs_node* host, const char* name) {
+int vfs_umount(vfs_node_t *host, const char *name) {
+    mutex_lock(&vfs_mutex);
     for (int i = 0; i < mount_count; i++) {
-        if (mount_table[i].host == host && _strcmp(mount_table[i].name, name) == 0) {
+        if (mount_table[i].host == host && streq(mount_table[i].name, name)) {
             mount_table[i] = mount_table[--mount_count];
+            mutex_unlock(&vfs_mutex);
             return 0;
         }
     }
+    mutex_unlock(&vfs_mutex);
     return -1;
 }
 
-int read_vfs(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
-    if (!node || !node->read) return -1;
+vfs_node_t *vfs_walk_path(vfs_node_t *start, const char *path) {
+    if (!path) return start ? start : vfs_root;
+    vfs_node_t *cur = start ? start : vfs_root;
+    if (!cur) return 0;
+
+    const char *p = path;
+    while (*p == '/') p++;
+
+    while (*p && cur) {
+        char seg[128];
+        int  si = 0;
+        while (*p && *p != '/' && si < 127) seg[si++] = *p++;
+        seg[si] = '\0';
+        if (*p == '/') p++;
+        if (si == 0) continue;
+        cur = _walk_one(cur, seg);
+    }
+    return cur;
+}
+
+
+int read_vfs(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
+    if (!node || !node->ops || !node->ops->read) return -1;
+    return node->ops->read(node, off, size, buf);
+}
+
+int write_vfs(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
+    if (!node || !node->ops || !node->ops->write) return -1;
+    return node->ops->write(node, off, size, buf);
+}
+
+void open_vfs(vfs_node_t *node) {
+    if (node && node->ops && node->ops->open)
+        node->ops->open(node);
+}
+
+void close_vfs(vfs_node_t *node) {
+    if (node && node->ops && node->ops->close)
+        node->ops->close(node);
+}
+
+int ioctl_vfs(vfs_node_t *node, uint32_t cmd, void *arg) {
+    if (!node || !node->ops || !node->ops->ioctl) return -1;
+    return node->ops->ioctl(node, cmd, arg);
+}
+
+
+vfs_dirent_t *readdir_vfs(vfs_node_t *dir, uint32_t index) {
+    if (!dir || dir->type != VFS_DIRECTORY) return 0;
+    if (!dir->ops || !dir->ops->readdir)    return 0;
+    return dir->ops->readdir(dir, index);
+}
+
+vfs_node_t *finddir_vfs(vfs_node_t *dir, char *name) {
+    return _walk_one(dir, name);
+}
+
+void listdir_vfs(vfs_node_t *dir) {
+    if (!dir || dir->type != VFS_DIRECTORY) return;
+    if (dir->ops && dir->ops->listdir)
+        dir->ops->listdir(dir);
     mutex_lock(&vfs_mutex);
-    int r = node->read(node, offset, size, buffer);
-    mutex_unlock(&vfs_mutex);
-    return r;
-}
-
-int write_vfs(struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer) {
-    if (!node || !node->write) return -1;
-    mutex_lock(&vfs_mutex);
-    int r = node->write(node, offset, size, buffer);
-    mutex_unlock(&vfs_mutex);
-    return r;
-}
-
-void open_vfs(struct vfs_node* node) {
-    if (node && node->open) node->open(node);
-}
-
-void close_vfs(struct vfs_node* node) {
-    if (node && node->close) node->close(node);
-}
-
-void listdir_vfs(struct vfs_node* node) {
-    if (!node || node->type != VFS_DIRECTORY) return;
-    mutex_lock(&vfs_mutex);
-
-    if (node->listdir) node->listdir(node);
-
     for (int i = 0; i < mount_count; i++) {
-        if (mount_table[i].host == node) {
+        if (mount_table[i].host == dir) {
             kprint("  ");
             kprint(mount_table[i].name);
             kprint("/\n");
         }
     }
-
     mutex_unlock(&vfs_mutex);
 }
 
-struct vfs_dirent* readdir_vfs(struct vfs_node* node, unsigned int index) {
-    if (!node || node->type != VFS_DIRECTORY || !node->readdir) return 0;
-    mutex_lock(&vfs_mutex);
-    struct vfs_dirent* d = node->readdir(node, index);
-    mutex_unlock(&vfs_mutex);
-    return d;
+int create_vfs(vfs_node_t *dir, char *name) {
+    if (!dir || dir->type != VFS_DIRECTORY || !dir->ops || !dir->ops->create) return -1;
+    return dir->ops->create(dir, name);
 }
 
-struct vfs_node* finddir_vfs(struct vfs_node* node, char* name) {
-    if (!node || node->type != VFS_DIRECTORY) return 0;
-    mutex_lock(&vfs_mutex);
-    struct vfs_node* m = lookup_mount(node, name);
-    if (m) { mutex_unlock(&vfs_mutex); return m; }
-    struct vfs_node* n = node->finddir ? node->finddir(node, name) : 0;
-    mutex_unlock(&vfs_mutex);
-    return n;
+int delete_vfs(vfs_node_t *dir, char *name) {
+    if (!dir || dir->type != VFS_DIRECTORY || !dir->ops || !dir->ops->delete) return -1;
+    return dir->ops->delete(dir, name);
 }
 
-int create_vfs(struct vfs_node* node, char* name) {
-    if (!node || node->type != VFS_DIRECTORY || !node->create) return -1;
-    mutex_lock(&vfs_mutex);
-    int r = node->create(node, name);
-    mutex_unlock(&vfs_mutex);
-    return r;
+int mkdir_vfs(vfs_node_t *dir, char *name) {
+    if (!dir || dir->type != VFS_DIRECTORY || !dir->ops || !dir->ops->mkdir) return -1;
+    return dir->ops->mkdir(dir, name);
 }
 
-int delete_vfs(struct vfs_node* node, char* name) {
-    if (!node || node->type != VFS_DIRECTORY || !node->delete) return -1;
-    mutex_lock(&vfs_mutex);
-    int r = node->delete(node, name);
-    mutex_unlock(&vfs_mutex);
-    return r;
-}
-
-int mkdir_vfs(struct vfs_node* node, char* name) {
-    if (!node || node->type != VFS_DIRECTORY || !node->mkdir) return -1;
-    mutex_lock(&vfs_mutex);
-    int r = node->mkdir(node, name);
-    mutex_unlock(&vfs_mutex);
-    return r;
-}
-
-int rmdir_vfs(struct vfs_node* node, char* name) {
-    if (!node || node->type != VFS_DIRECTORY || !node->rmdir) return -1;
-    mutex_lock(&vfs_mutex);
-    int r = node->rmdir(node, name);
-    mutex_unlock(&vfs_mutex);
-    return r;
+int rmdir_vfs(vfs_node_t *dir, char *name) {
+    if (!dir || dir->type != VFS_DIRECTORY || !dir->ops || !dir->ops->rmdir) return -1;
+    return dir->ops->rmdir(dir, name);
 }

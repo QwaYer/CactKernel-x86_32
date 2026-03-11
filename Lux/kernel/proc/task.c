@@ -366,28 +366,31 @@ void list_tasks() {
     struct task_struct* tmp = task_list_head;
     do { count++; tmp = tmp->next; } while (tmp != task_list_head && count < 256);
 
-    struct { uint32_t pid; task_state state; int dynamic; } tasks[count];
+    struct { uint32_t pid; task_state state; uint8_t is_kernel; } tasks[count];
     tmp = task_list_head;
     for (int i = 0; i < count; i++) {
-        tasks[i].pid     = tmp->pid;
-        tasks[i].state   = tmp->state;
-        tasks[i].dynamic = (tmp->dyn_ctx != 0);
+        tasks[i].pid       = tmp->pid;
+        tasks[i].state     = tmp->state;
+        tasks[i].is_kernel = tmp->is_kernel;
         tmp = tmp->next;
     }
     spinlock_release(&scheduler_lock);
 
-    kprint("\nPID  STATE      TYPE\n");
+    kprint("\nPID  STATE     TYPE\n");
+    kprint("---  --------  --------\n");
     for (int i = 0; i < count; i++) {
         char buf[16];
         itoa((int)tasks[i].pid, buf);
         kprint(buf);
+        int digits = tasks[i].pid < 10 ? 1 : tasks[i].pid < 100 ? 2 : tasks[i].pid < 1000 ? 3 : 4;
+        for (int j = digits; j < 5; j++) kprint(" ");
         switch (tasks[i].state) {
-            case TASK_RUNNING:  kprint("  RUNNING   "); break;
-            case TASK_READY:    kprint("  READY     "); break;
-            case TASK_ZOMBIE:   kprint("  ZOMBIE    "); break;
-            default:            kprint("  SLEEPING  "); break;
+            case TASK_RUNNING:  kprint("running   "); break;
+            case TASK_READY:    kprint("ready     "); break;
+            case TASK_ZOMBIE:   kprint("zombie    "); break;
+            default:            kprint("sleeping  "); break;
         }
-        kprint(tasks[i].dynamic ? "dynamic\n" : "static\n");
+        kprint(tasks[i].is_kernel ? "kernel\n" : "user\n");
     }
 }
 

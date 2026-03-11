@@ -1,6 +1,6 @@
 #include "shell.h"
 #include "pipe.h"
-#include "procfs.h"
+#include "mntfs.h"
 #include "vfs.h"
 #include "kernel.h"
 #include "memory.h"
@@ -10,13 +10,15 @@
 #define PIPE_PARTS_MAX  8
 #define PIPE_BUF_READ   4096
 
-static struct vfs_node* dir_stack[DIR_STACK_MAX];
+static vfs_node_t* dir_stack[DIR_STACK_MAX];
 static int              dir_stack_top = 0;
 
-struct vfs_node* current_dir       = 0;
+vfs_node_t* current_dir       = 0;
 char             current_path[512] = "/";
-struct vfs_node* shell_out         = 0;
-struct vfs_node* shell_stdin       = 0;  
+vfs_node_t* current_ext4_dir  = 0;
+char             current_mnt_path[128] = "";
+vfs_node_t* shell_out         = 0;
+vfs_node_t* shell_stdin       = 0;
 
 
 void shell_write(const char* s)
@@ -48,9 +50,48 @@ char* shell_read_stdin(int* out_len)
 }
 
 
-void shell_pushdir(struct vfs_node* node) {
+void shell_pushdir(vfs_node_t* node) {
     if (dir_stack_top < DIR_STACK_MAX - 1)
         dir_stack[dir_stack_top++] = node;
+}
+
+void shell_recalc_ext4_dir(void) {
+    current_ext4_dir  = 0;
+    current_mnt_path[0] = '\0';
+
+    const char *cp = current_path;
+    while (*cp == '/') cp++;
+    if (!*cp) return;
+
+    char devname[32]; int di = 0;
+    while (cp[di] && cp[di] != '/' && di < 31) { devname[di] = cp[di]; di++; }
+    devname[di] = '\0';
+
+    const char *rest = (cp[di] == '/') ? cp + di + 1 : "";
+    char second[32]; int si = 0;
+    while (rest[si] && rest[si] != '/' && si < 31) { second[si] = rest[si]; si++; }
+    second[si] = '\0';
+
+    if (compare_string(second, "raw") != 0) return;
+
+    vfs_node_t *ext4r = mntfs_get_ext4(devname);
+    if (!ext4r) return;
+
+    strncpy(current_mnt_path, devname, 128);
+
+    const char *deeper = (rest[si] == '/') ? rest + si + 1 : "";
+    if (!deeper[0]) { current_ext4_dir = ext4r; return; }
+
+    vfs_node_t *node = ext4r;
+    char seg[128]; int idx = 0;
+    while (*deeper) {
+        char c = *deeper++;
+        if (c == '/') {
+            if (idx > 0) { seg[idx] = '\0'; if (node->ops && node->ops->walk) node = node->ops->walk(node, seg); idx = 0; }
+        } else { seg[idx++] = c; }
+    }
+    if (idx > 0) { seg[idx]='\0'; if (node->ops && node->ops->walk) node = node->ops->walk(node, seg); }
+    current_ext4_dir = node;
 }
 
 void shell_popdir(void) {
@@ -67,12 +108,15 @@ void shell_popdir(void) {
         current_dir = vfs_root;
         copy_string(current_path, "/");
     }
+    shell_recalc_ext4_dir();
 }
 
 void shell_resetdir(void) {
-    dir_stack_top = 0;
-    dir_stack[0]  = 0;
-    current_dir   = vfs_root;
+    dir_stack_top        = 0;
+    dir_stack[0]         = 0;
+    current_dir          = vfs_root;
+    current_ext4_dir     = 0;
+    current_mnt_path[0]  = '\0';
     copy_string(current_path, "/");
 }
 
@@ -115,10 +159,14 @@ static void _run_one(char* input)
     }
     cmd_name[i] = '\0';
 
-    struct vfs_node* node = procfs_find_command(cmd_name);
-    if (node) {
-        procfs_exec_command(node, input);
-        return;
+    vfs_node_t* cmd_node = vfs_walk_path(0, "hda/sys/proc/cmd");
+    if (cmd_node) {
+        vfs_node_t* node = cmd_node->ops && cmd_node->ops->walk
+                           ? cmd_node->ops->walk(cmd_node, cmd_name) : 0;
+        if (node) {
+            write_vfs(node, 0, (uint32_t)strlen(input), (char*)input);
+            return;
+        }
     }
 
     kprint("\nUnknown command: ");
@@ -129,12 +177,12 @@ static void _run_one(char* input)
 
 static void _run_pipeline(char* parts[], int n)
 {
-    struct vfs_node* prev_read = 0;
+    vfs_node_t* prev_read = 0;
 
     for (int step = 0; step < n; step++) {
         int is_last = (step == n - 1);
 
-        struct vfs_node* pipe_nodes[2] = {0, 0};
+        vfs_node_t* pipe_nodes[2] = {0, 0};
 
         if (!is_last) {
             if (pipe_create(pipe_nodes, 0) != 0) {

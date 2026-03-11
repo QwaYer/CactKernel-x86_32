@@ -1,58 +1,78 @@
 #ifndef VFS_H
 #define VFS_H
 
+#include <stdint.h>
+
+
 #define VFS_FILE        0x01
 #define VFS_DIRECTORY   0x02
 #define VFS_CHARDEVICE  0x03
 #define VFS_BLOCKDEVICE 0x04
 #define VFS_PIPE        0x05
 
-struct vfs_node {
-    char name[128];
-    unsigned int type;
-    unsigned int size;
-    unsigned int inode;
+struct vfs_node;
+struct vfs_dirent;
 
-    int  (*read)   (struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
-    int  (*write)  (struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
-    void (*open)   (struct vfs_node* node);
-    void (*close)  (struct vfs_node* node);
 
-    struct vfs_dirent* (*readdir)(struct vfs_node* node, unsigned int index);
-    struct vfs_node*   (*finddir)(struct vfs_node* node, char* name);
-    void               (*listdir)(struct vfs_node* node);
+typedef struct vfs_ops {
+    int  (*read)   (struct vfs_node *node, uint32_t off, uint32_t size, char *buf);
+    int  (*write)  (struct vfs_node *node, uint32_t off, uint32_t size, char *buf);
+    void (*open)   (struct vfs_node *node);
+    void (*close)  (struct vfs_node *node);
 
-    int (*create) (struct vfs_node* node, char* name);
-    int (*delete) (struct vfs_node* node, char* name);
-    int (*mkdir)  (struct vfs_node* node, char* name);
-    int (*rmdir)  (struct vfs_node* node, char* name);
+    struct vfs_node*    (*walk)   (struct vfs_node *dir, const char *name);
+    struct vfs_dirent*  (*readdir)(struct vfs_node *dir, uint32_t index);
+    void                (*listdir)(struct vfs_node *dir);
 
-    struct vfs_node* ptr;
-};
+    int (*create)(struct vfs_node *dir, const char *name);
+    int (*delete)(struct vfs_node *dir, const char *name);
+    int (*mkdir) (struct vfs_node *dir, const char *name);
+    int (*rmdir) (struct vfs_node *dir, const char *name);
 
-struct vfs_dirent {
-    char name[128];
-    unsigned int inode;
-};
+    int (*ioctl) (struct vfs_node *node, uint32_t cmd, void *arg);
+} vfs_ops_t;
 
-extern struct vfs_node* vfs_root;
+typedef struct vfs_node {
+    char          name[128];
+    uint32_t      type;   
+    uint32_t      size;
+    uint32_t      inode;
+    vfs_ops_t    *ops;     
+    void         *priv;    
+} vfs_node_t;
+
+typedef struct vfs_dirent {
+    char     name[128];
+    uint32_t inode;
+} vfs_dirent_t;
+
+extern vfs_node_t *vfs_root;
 
 
 //Public api
-void               vfs_init   (void);
-int                vfs_mount  (struct vfs_node* host, const char* name, struct vfs_node* target);
-int                vfs_umount (struct vfs_node* host, const char* name);
+void          vfs_init     (void);
 
-int                read_vfs   (struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
-int                write_vfs  (struct vfs_node* node, unsigned int offset, unsigned int size, char* buffer);
-void               open_vfs   (struct vfs_node* node);
-void               close_vfs  (struct vfs_node* node);
-struct vfs_dirent* readdir_vfs(struct vfs_node* node, unsigned int index);
-struct vfs_node*   finddir_vfs(struct vfs_node* node, char* name);
-void               listdir_vfs(struct vfs_node* node);
-int                create_vfs (struct vfs_node* node, char* name);
-int                delete_vfs (struct vfs_node* node, char* name);
-int                mkdir_vfs  (struct vfs_node* node, char* name);
-int                rmdir_vfs  (struct vfs_node* node, char* name);
 
-#endif
+int           vfs_mount    (vfs_node_t *host, const char *name, vfs_node_t *target);
+int           vfs_umount   (vfs_node_t *host, const char *name);
+
+
+vfs_node_t   *vfs_walk_path(vfs_node_t *start, const char *path);
+
+
+int           read_vfs     (vfs_node_t *node, uint32_t off, uint32_t size, char *buf);
+int           write_vfs    (vfs_node_t *node, uint32_t off, uint32_t size, char *buf);
+void          open_vfs     (vfs_node_t *node);
+void          close_vfs    (vfs_node_t *node);
+int           ioctl_vfs    (vfs_node_t *node, uint32_t cmd, void *arg);
+
+
+vfs_dirent_t *readdir_vfs  (vfs_node_t *dir, uint32_t index);
+vfs_node_t   *finddir_vfs  (vfs_node_t *dir, char *name); 
+void          listdir_vfs  (vfs_node_t *dir);
+int           create_vfs   (vfs_node_t *dir, char *name);
+int           delete_vfs   (vfs_node_t *dir, char *name);
+int           mkdir_vfs    (vfs_node_t *dir, char *name);
+int           rmdir_vfs    (vfs_node_t *dir, char *name);
+
+#endif 

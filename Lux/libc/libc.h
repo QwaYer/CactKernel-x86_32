@@ -29,6 +29,9 @@ void strncpy(char* dst, const char* src, int n);
 int  buf_append(char* buf, int pos, int max, const char* s);
 int  buf_append_int(char* buf, int pos, int max, int n);
 
+int  streq  (const char *a, const char *b);
+void strlcpy(char *dst, const char *src, int n);
+
 void kprint_hex(uint32_t n);
 
 #endif

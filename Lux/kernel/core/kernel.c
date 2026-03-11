@@ -308,7 +308,7 @@ static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
     return 0;
 }
 
-void kernel_setup_hardware() {
+void kernel_setup_hardware(multiboot_info_t *mbi) {
     init_gdt();
     init_memory_manager();
     init_heap();
@@ -366,6 +366,12 @@ void kernel_setup_hardware() {
 
     extern void mntfs_init();
     mntfs_init();
+
+    if (mbi && (mbi->flags & 0x1)) {
+        extern void procfs_set_meminfo(uint32_t, uint32_t);
+        procfs_set_meminfo(mbi->mem_lower, mbi->mem_upper);
+    }
+
     boot_log("EXT4 File System mount", 0);
     boot_log("Device File System mount", 0);
     boot_log("Process File System mount", 0);
@@ -412,7 +418,7 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
         while(1) __asm__ __volatile__("hlt");
     }
 
-    kernel_setup_hardware();
+    kernel_setup_hardware(mbi);
 
     kprint("\nKernel is ready. Starting terminal...\n");
 

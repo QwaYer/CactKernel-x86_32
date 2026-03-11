@@ -134,6 +134,17 @@ int buf_append_int(char* buf, int pos, int max, int n) {
     itoa(n, tmp);
     return buf_append(buf, pos, max, tmp);
 }
+int streq(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+void strlcpy(char *dst, const char *src, int n) {
+    int i = 0;
+    while (src[i] && i < n - 1) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+}
+
 void kprint_hex(uint32_t n) {
     char buf[12];
     hex_to_ascii(n, buf);

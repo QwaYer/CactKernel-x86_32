@@ -19,7 +19,13 @@
 #include "dynlink.h"      
 #include "proc_mm.h"  
 
-/* ── Утилиты ──────────────────────────────────────────────────── */
+
+//Утилиты 
+static vfs_node_t* _resolve_path(const char *path) {
+    if (!path) return 0;
+    vfs_node_t *base = (path[0] == '/') ? vfs_root : (current_dir ? current_dir : vfs_root);
+    return vfs_walk_path(base, path);
+}
 
 static char* _skip_token(char* s) {
     if (!s) return 0;
@@ -49,32 +55,70 @@ static unsigned char _bcd_to_bin(unsigned char b) {
     return ((b >> 4) * 10) + (b & 0x0F);
 }
 
-/* ── Навигация ────────────────────────────────────────────────── */
-
+// Навигация 
 static void cmd_cd(char* args) {
-    char* name = _skip_token(args);
-    if (!name || compare_string(name, "/") == 0) { shell_resetdir(); return; }
-    if (compare_string(name, "..") == 0) { shell_popdir(); return; }
+    char* path = _skip_token(args);
+    if (!path || compare_string(path, "/") == 0) { shell_resetdir(); return; }
+    if (compare_string(path, "..") == 0) { shell_popdir(); return; }
 
-    struct vfs_node* next = finddir_vfs(current_dir, name);
-    if (!next || next->type != VFS_DIRECTORY) {
-        kprint("\nDirectory not found: "); kprint(name); kprint("\n"); return;
+    vfs_node_t* start = current_dir ? current_dir : vfs_root;
+    if (path[0] == '/') { start = vfs_root; path++; }
+    else {
+        char _fseg[32]; int _fi = 0;
+        while (path[_fi] && path[_fi] != '/' && _fi < 31) { _fseg[_fi] = path[_fi]; _fi++; }
+        _fseg[_fi] = '\0';
+        if (mntfs_get_ext4(_fseg) || finddir_vfs(vfs_root, _fseg))
+            start = vfs_root;
     }
-    shell_pushdir(current_dir);
-    current_dir = next;
-    if (compare_string(current_path, "/") != 0) {
-        int len = strlen(current_path);
-        current_path[len] = '/'; current_path[len+1] = '\0';
+
+    vfs_node_t* saved_dir = current_dir;
+    char saved_path[512];
+    copy_string(saved_path, current_path);
+
+    vfs_node_t* cur = start;
+    char tmp_path[512];
+    copy_string(tmp_path, current_path);
+
+    char seg[128];
+    const char *p = path;
+    int pushed = 0;
+    while (*p) {
+        int si = 0;
+        while (*p && *p != '/' && si < 127) seg[si++] = *p++;
+        seg[si] = '\0';
+        if (*p == '/') p++;
+        if (si == 0) continue;
+
+        vfs_node_t* next = finddir_vfs(cur, seg);
+        if (!next || next->type != VFS_DIRECTORY) {
+            for (int i = 0; i < pushed; i++) shell_popdir();
+            current_dir = saved_dir;
+            copy_string(current_path, saved_path);
+            kprint("\nDirectory not found: "); kprint(seg); kprint("\n");
+            return;
+        }
+
+        shell_pushdir(cur);
+        if (compare_string(tmp_path, "/") != 0) {
+            int len = strlen(tmp_path);
+            tmp_path[len] = '/'; tmp_path[len+1] = '\0';
+        }
+        strcat(tmp_path, seg);
+        copy_string(current_path, tmp_path);
+        current_dir = next;
+        cur = next;
+        pushed++;
     }
-    strcat(current_path, name);
+
+    shell_recalc_ext4_dir();
 }
+
 
 static void cmd_pwd(char* args) {
     (void)args;
     kprint("\n"); kprint(current_path); kprint("\n");
 }
 
-/* ── Файловая система ─────────────────────────────────────────── */
 
 static void cmd_ls(char* args) {
     (void)args;
@@ -82,12 +126,38 @@ static void cmd_ls(char* args) {
     if (!current_dir || current_dir == vfs_root) {
         kprint_color("Mounted disks (/):\n", COLOR_LIGHT_CYAN);
         listdir_vfs(vfs_root);
-        kprint("\nTip: cd system  then  ls\n");
+        kprint("\nTip: cd hda/raw  or  cd hda/sys\n");
     } else {
         kprint_color("Directory listing:\n", COLOR_LIGHT_MAGENTA);
         listdir_vfs(current_dir);
     }
 }
+
+static void cmd_lsraw(char* args) {
+    (void)args;
+    kprint("\n");
+
+    vfs_node_t* dir = current_ext4_dir;
+    if (!dir) {
+        kprint("Not in a raw/ directory. Try: cd hda/raw\n");
+        return;
+    }
+
+    if (!dir->ops || !dir->ops->readdir) {
+        kprint("(no readdir)\n"); return;
+    }
+
+    kprint_color("Raw ext4 [", COLOR_LIGHT_BROWN);
+    kprint_color(current_mnt_path[0] ? current_mnt_path : "?", COLOR_LIGHT_BROWN);
+    kprint_color("]:\n", COLOR_LIGHT_BROWN);
+
+    vfs_dirent_t* de; int any = 0;
+    for (uint32_t i = 0; (de = dir->ops->readdir(dir, i)); i++) {
+        kprint("  "); kprint(de->name); kprint("\n"); any = 1;
+    }
+    if (!any) kprint("  (empty)\n");
+}
+
 
 static void cmd_mkdir(char* args) {
     char* name = _skip_token(args);
@@ -123,12 +193,29 @@ static void cmd_rm(char* args) {
 
 static void cmd_cat(char* args) {
     char* name = _skip_token(args);
-    if (!name) { kprint("\nUsage: cat <file>\n"); return; }
-    struct vfs_node* dir  = current_dir ? current_dir : vfs_root;
-    struct vfs_node* node = finddir_vfs(dir, name);
+    if (!name) { kprint("\nUsage: cat <file> [bytes]\n"); return; }
+
+    char* sz_arg = _skip_token(name);
+    uint32_t max_sz = 0;
+    if (sz_arg) {
+        for (char* p = sz_arg; *p >= '0' && *p <= '9'; p++)
+            max_sz = max_sz * 10 + (uint32_t)(*p - '0');
+    }
+
+    vfs_node_t* node = _resolve_path(name);
     if (!node) { kprint("\nError: not found.\n"); return; }
     if (node->type == VFS_DIRECTORY) { kprint("\nError: is a directory.\n"); return; }
-    unsigned int sz = node->size ? node->size : 64*1024;
+
+    uint32_t sz;
+    int is_chardev = (node->type == VFS_CHARDEVICE || node->type == VFS_PIPE);
+    if (max_sz > 0) {
+        sz = max_sz;
+    } else if (is_chardev) {
+        sz = 256;
+    } else {
+        sz = node->size ? node->size : 64 * 1024;
+    }
+
     char* buf = (char*)kmalloc(sz + 1);
     if (!buf) { kprint("\nOut of memory.\n"); return; }
     memory_set(buf, 0, sz + 1);
@@ -145,7 +232,7 @@ static void cmd_wrt(char* args) {
     char* name = _skip_token(args);
     if (!name) { kprint("\nUsage: wrt <file> [text]\n"); return; }
 
-    struct vfs_node* node = finddir_vfs(current_dir ? current_dir : vfs_root, name);
+    vfs_node_t* node = _resolve_path(name);
     if (!node) { kprint("\nError: not found.\n"); return; }
 
     if (shell_stdin) {
@@ -178,30 +265,10 @@ static void cmd_echo(char* args) {
 static void cmd_mount(char* args) {
     char* devname = _skip_token(args);
     if (!devname) { mntfs_list(); return; }
-
-    char* mntname = _skip_token(devname);
-    if (!mntname) {
-        kprint("\nUsage: mount <device> <n>\n");
-        kprint("  Devices : hda  hdb  hdc  hdd\n");
-        kprint("  Example : mount hdb data\n");
-        kprint("  Result  : /system/mnt/data  (saved to fstab)\n");
-        return;
-    }
-
     _trim(devname);
-    _trim(mntname);
 
-    char fullname[MNTFS_NAME_LEN];
-    int fi = 0;
-    const char* pfx = "system/mnt/";
-    for (int i = 0; pfx[i] && fi < MNTFS_NAME_LEN-1; i++) fullname[fi++] = pfx[i];
-    for (int i = 0; mntname[i] && fi < MNTFS_NAME_LEN-1; i++) fullname[fi++] = mntname[i];
-    fullname[fi] = '\0';
-
-    if (mntfs_get(fullname)) {
-        kprint("\nError: '"); kprint(mntname);
-        kprint("' already mounted at /system/mnt/"); kprint(mntname);
-        kprint("\nUse umount "); kprint(mntname); kprint(" first.\n");
+    if (mntfs_get_ext4(devname)) {
+        kprint("\nError: '"); kprint(devname); kprint("' already mounted.\n");
         return;
     }
 
@@ -213,91 +280,33 @@ static void cmd_mount(char* args) {
     }
 
     kprint("\nProbing "); kprint(devname); kprint("...\n");
-    struct vfs_node* root = ext4_mount_disk(base, slave);
-    if (!root) {
-        kprint("Error: no ext4 on "); kprint(devname); kprint("\n");
-        return;
-    }
-    strncpy(root->name, mntname, 128);
+    vfs_node_t* root = ext4_mount_disk(base, slave);
+    if (!root) { kprint("Error: no ext4 on "); kprint(devname); kprint("\n"); return; }
 
-    if (mntfs_mount(fullname, devname, root, 1) < 0) {
-        kprint("Error: mount table full\n"); return;
+    if (mntfs_mount_disk(devname, root, 1) < 0) {
+        kprint("Error: mount failed\n"); return;
     }
-
-    kprint("Mounted "); kprint(devname);
-    kprint(" -> /system/mnt/"); kprint(mntname);
-    kprint("  [saved to fstab]\n");
+    kprint("Mounted /"); kprint(devname); kprint("/raw  [saved to mounts]\n");
 }
+
 
 static void cmd_umount(char* args) {
-    char* name = _skip_token(args);
-    if (!name) {
-        kprint("\nUsage: umount <n>\n");
-        kprint("  Example: umount data   (unmounts /system/mnt/data)\n");
-        return;
-    }
-    _trim(name);
-
-    char fullname[MNTFS_NAME_LEN];
-
-    if (mntfs_get(name)) {
-        strncpy(fullname, name, MNTFS_NAME_LEN);
-    } else {
-        int fi = 0;
-        const char* pfx = "system/mnt/";
-        for (int i = 0; pfx[i] && fi < MNTFS_NAME_LEN-1; i++) fullname[fi++] = pfx[i];
-        for (int i = 0; name[i]  && fi < MNTFS_NAME_LEN-1; i++) fullname[fi++] = name[i];
-        fullname[fi] = '\0';
-
-        if (!mntfs_get(fullname)) {
-            fi = 0;
-            const char* pfx2 = "system/";
-            for (int i = 0; pfx2[i] && fi < MNTFS_NAME_LEN-1; i++) fullname[fi++] = pfx2[i];
-            for (int i = 0; name[i]  && fi < MNTFS_NAME_LEN-1; i++) fullname[fi++] = name[i];
-            fullname[fi] = '\0';
-        }
-    }
-
-    const char* protected[] = {
-        "system", "system/etc", "system/dev",
-        "system/proc", "system/mnt", 0
-    };
-    for (int pi = 0; protected[pi]; pi++) {
-        if (strncmp(fullname, protected[pi]) == 0) {
-            kprint("\nError: '"); kprint(fullname);
-            kprint("' is a system mount point and cannot be unmounted.\n");
-            return;
-        }
-    }
-
-    if (!mntfs_get(fullname)) {
-        kprint("\nError: '"); kprint(name); kprint("' is not mounted.\n");
-        kprint("Use 'mount' to see mounted disks.\n");
-        return;
-    }
-
-    struct vfs_node* mp = mntfs_get(fullname);
-    if (mp && mp == current_dir) {
-        kprint("\nError: cannot umount current directory. Run cd / first.\n");
-        return;
-    }
-
-    if (mntfs_umount(fullname) < 0) {
-        kprint("\nError: umount failed.\n");
-        return;
-    }
-    kprint("\nUnmounted /"); kprint(fullname);
-    kprint("  [removed from fstab]\n");
+    char* devname = _skip_token(args);
+    if (!devname) { kprint("\nUsage: umount <device>\n"); return; }
+    _trim(devname);
+    int r = mntfs_umount_disk(devname);
+    if (r == 0)  { kprint("\nUnmounted /"); kprint(devname); kprint("/\n"); }
+    else if (r == -2) kprint("\nError: cannot unmount master disk (hda)\n");
+    else { kprint("\nError: '"); kprint(devname); kprint("' not mounted\n"); }
 }
 
-/* ── Системные команды ────────────────────────────────────────── */
 
 static void cmd_help(char* args) {
     (void)args;
     kprint("\n");
     kprint_color("Lux Shell commands:\n", COLOR_LIGHT_CYAN);
     kprint("  Navigation : cd  pwd\n");
-    kprint("  Files      : ls  mkdir  rmdir  tch  rm  cat  wrt  echo\n");
+    kprint("  Files      : ls  lsraw  mkdir  rmdir  tch  rm  cat  wrt  echo\n");
     kprint("  Disks      : mount  umount\n");
     kprint("  System     : help  fetch  clear  reboot  free  date  uptime  ps  kill  run\n");
     kprint("  Network    : ipconfig  ping  udptest\n");
@@ -407,7 +416,8 @@ static void cmd_run(char* args) {
         if (match) force_static = 1;
     }
 
-    struct vfs_node* file = finddir_vfs(vfs_root, path);
+    vfs_node_t *base = (path[0] == '/') ? vfs_root : (current_dir ? current_dir : vfs_root);
+    vfs_node_t* file = vfs_walk_path(base, path);
     if (!file) {
         kprint("\nError: file not found: "); kprint(path); kprint("\n");
         return;
@@ -472,7 +482,17 @@ static void cmd_run(char* args) {
         }
 
         kprint("\n[run] dynamic ELF detected, loading shared libraries...\n");
-        entry = load_elf_dynamic(path, pd, tracker, ctx);
+        char _full_path_dyn[256];
+        if (path[0] == '/') {
+            { int _i=0; while(path[_i]&&_i<255){_full_path_dyn[_i]=path[_i];_i++;} _full_path_dyn[_i]='\0'; }
+        } else {
+            int ci = 0;
+            while (current_path[ci] && ci < 250) { _full_path_dyn[ci] = current_path[ci]; ci++; }
+            if (ci > 0 && _full_path_dyn[ci-1] != '/') _full_path_dyn[ci++] = '/';
+            for (int i = 0; path[i] && ci < 255; i++) _full_path_dyn[ci++] = path[i];
+            _full_path_dyn[ci] = '\0';
+        }
+        entry = load_elf_dynamic(_full_path_dyn, pd, tracker, ctx);
 
         if (!entry) {
             dynlink_unload_all(ctx);
@@ -498,7 +518,17 @@ static void cmd_run(char* args) {
         if (force_static)
             kprint("\n[run] --static: skipping dynamic linker\n");
 
-        entry = load_elf(path, pd, tracker);
+        char _full_path[256];
+        if (path[0] == '/') {
+            { int _i=0; while(path[_i]&&_i<255){_full_path[_i]=path[_i];_i++;} _full_path[_i]='\0'; }
+        } else {
+            int ci = 0;
+            while (current_path[ci] && ci < 250) { _full_path[ci] = current_path[ci]; ci++; }
+            if (ci > 0 && _full_path[ci-1] != '/') _full_path[ci++] = '/';
+            for (int i = 0; path[i] && ci < 255; i++) _full_path[ci++] = path[i];
+            _full_path[ci] = '\0';
+        }
+        entry = load_elf(_full_path, pd, tracker);
 
         if (!entry) {
             proc_free_pages(tracker);
@@ -517,8 +547,7 @@ static void cmd_run(char* args) {
     }
 }
 
-/* ── Отладка ──────────────────────────────────────────────────── */
-
+// Отладка
 static void cmd_kbd(char* args) {
     (void)args;
     char buf[32];
@@ -541,8 +570,8 @@ static void cmd_pic(char* args) {
     kprint("\n");
 }
 
-/* ── Сеть ─────────────────────────────────────────────────────── */
 
+// Сеть 
 static void cmd_ipconfig(char* args) {
     (void)args;
     kprint("\nNetwork:\n  IP:  ");
@@ -582,31 +611,32 @@ static void cmd_udptest(char* args) {
 }
 
 void commands_init(void) {
-    procfs_register_command("cd",       "Change directory",               cmd_cd);
-    procfs_register_command("pwd",      "Print working directory",        cmd_pwd);
-    procfs_register_command("ls",       "List directory",                 cmd_ls);
-    procfs_register_command("mkdir",    "Create directory",               cmd_mkdir);
-    procfs_register_command("rmdir",    "Remove directory",               cmd_rmdir);
-    procfs_register_command("tch",      "Create file",                    cmd_tch);
-    procfs_register_command("rm",       "Delete file",                    cmd_rm);
-    procfs_register_command("cat",      "Print file contents",            cmd_cat);
-    procfs_register_command("wrt",      "Write text to file",             cmd_wrt);
-    procfs_register_command("echo",     "Print text",                     cmd_echo);
-    procfs_register_command("mount",    "Mount disk (mount hdb data)",    cmd_mount);
-    procfs_register_command("umount",   "Unmount disk (umount data)",     cmd_umount);
-    procfs_register_command("help",     "Show help",                      cmd_help);
-    procfs_register_command("fetch",    "System info",                    cmd_fetch);
-    procfs_register_command("clear",    "Clear screen",                   cmd_clear);
-    procfs_register_command("reboot",   "Restart system",                 cmd_reboot);
-    procfs_register_command("free",     "Memory info",                    cmd_free);
-    procfs_register_command("date",     "Show date/time",                 cmd_date);
-    procfs_register_command("uptime",   "System uptime",                  cmd_uptime);
-    procfs_register_command("ps",       "Task list",                      cmd_ps);
-    procfs_register_command("kill",     "Kill process by PID",            cmd_kill);
-    procfs_register_command("run",      "Run ELF binary (static or .so)",cmd_run);
-    procfs_register_command("kbd",      "Keyboard stats",                 cmd_kbd);
-    procfs_register_command("pic",      "PIC masks",                      cmd_pic);
-    procfs_register_command("ipconfig", "Network configuration",          cmd_ipconfig);
-    procfs_register_command("ping",     "Send ICMP echo request",         cmd_ping);
-    procfs_register_command("udptest",  "Send UDP packet",                cmd_udptest);
+    procfs_register_cmd("cd", 0, cmd_cd);
+    procfs_register_cmd("pwd", 0, cmd_pwd);
+    procfs_register_cmd("ls", 0, cmd_ls);
+    procfs_register_cmd("lsraw", 0, cmd_lsraw);
+    procfs_register_cmd("mkdir", 0, cmd_mkdir);
+    procfs_register_cmd("rmdir", 0, cmd_rmdir);
+    procfs_register_cmd("tch", 0, cmd_tch);
+    procfs_register_cmd("rm", 0, cmd_rm);
+    procfs_register_cmd("cat", 0, cmd_cat);
+    procfs_register_cmd("wrt", 0, cmd_wrt);
+    procfs_register_cmd("echo", 0, cmd_echo);
+    procfs_register_cmd("mount", 0, cmd_mount);
+    procfs_register_cmd("umount", 0, cmd_umount);
+    procfs_register_cmd("help", 0, cmd_help);
+    procfs_register_cmd("fetch", 0, cmd_fetch);
+    procfs_register_cmd("clear", 0, cmd_clear);
+    procfs_register_cmd("reboot", 0, cmd_reboot);
+    procfs_register_cmd("free", 0, cmd_free);
+    procfs_register_cmd("date", 0, cmd_date);
+    procfs_register_cmd("uptime", 0, cmd_uptime);
+    procfs_register_cmd("ps", 0, cmd_ps);
+    procfs_register_cmd("kill", 0, cmd_kill);
+    procfs_register_cmd("run", 0, cmd_run);
+    procfs_register_cmd("kbd", 0, cmd_kbd);
+    procfs_register_cmd("pic", 0, cmd_pic);
+    procfs_register_cmd("ipconfig", 0, cmd_ipconfig);
+    procfs_register_cmd("ping", 0, cmd_ping);
+    procfs_register_cmd("udptest", 0, cmd_udptest);
 }
