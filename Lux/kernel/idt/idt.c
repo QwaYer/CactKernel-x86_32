@@ -18,7 +18,7 @@ extern void isr30(); extern void isr31();
 extern void timer_isr();
 extern void keyboard_isr();
 extern void mouse_isr();
-extern void ata_isr();
+extern void nvme_isr();
 extern void virtio_net_isr();     
 extern void syscall_isr();
 extern void usb_isr();
@@ -103,7 +103,7 @@ int init_idt(void) {
     set_idt_gate(0x2B, (uint32_t)usb_isr);
     set_idt_gate(0x2C, (uint32_t)mouse_isr);
     set_idt_gate(0x2D, (uint32_t)virtio_net_isr);
-    set_idt_gate(0x2E, (uint32_t)ata_isr);
+    set_idt_gate(0x2E, (uint32_t)nvme_isr);
 
     set_idt_gate(0x80, (uint32_t)syscall_isr);
     idt[0x80].flags = 0xEE;

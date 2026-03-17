@@ -1,5 +1,5 @@
 #include "ext4.h"
-#include "ata.h"
+#include "nvme.h"
 #include "libc.h"
 #include "memory.h"
 #include "kernel.h"
@@ -17,7 +17,7 @@ static void _read_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
         uint32_t spb = ctx->block_size / 512;
         uint32_t lba = block * spb;
         for (uint32_t i = 0; i < spb; i++)
-            ata_read_sector(ctx->port, ctx->slave, lba + i, buf + i * 512);
+            nvme_read_sector(lba + i, buf + i * 512);
     }
 }
 
@@ -68,7 +68,7 @@ static void _jwrite_phys(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
     uint32_t spb = ctx->block_size / 512;
     uint32_t lba = block * spb;
     for (uint32_t i = 0; i < spb; i++)
-        ata_write_sector(ctx->port, ctx->slave, lba + i, buf + i * 512);
+        nvme_write_sector(lba + i, buf + i * 512);
 }
 
 static uint32_t _jwrite(struct ext4_ctx* ctx, uint32_t jblock, uint8_t* buf) {
@@ -226,7 +226,7 @@ static void _write_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
         uint32_t spb = ctx->block_size / 512;
         uint32_t lba = block * spb;
         for (uint32_t i = 0; i < spb; i++)
-            ata_write_sector(ctx->port, ctx->slave, lba + i, buf + i * 512);
+            nvme_write_sector(lba + i, buf + i * 512);
     }
 }
 
@@ -235,8 +235,8 @@ static void _write_sb(struct ext4_ctx* ctx) {
     uint8_t buf[1024];
     memory_set(buf, 0, sizeof(buf));
     memory_copy(buf, &ctx->sb, sizeof(struct ext4_superblock));
-    ata_write_sector(ctx->port, ctx->slave, 2, buf);
-    ata_write_sector(ctx->port, ctx->slave, 3, buf + 512);
+    nvme_write_sector(2, buf);
+    nvme_write_sector(3, buf + 512);
 }
 
 
@@ -911,13 +911,13 @@ vfs_node_t* ext4_mount_disk(uint16_t port, uint8_t slave) {
 
     uint8_t buf[2048];
     memory_set(buf, 0, sizeof(buf));
-    ata_read_sector(port, slave, 2, buf);
-    ata_read_sector(port, slave, 3, buf + 512);
+    nvme_read_sector(2, buf);
+    nvme_read_sector(3, buf + 512);
     memory_copy(&ctx->sb, buf, 1024);
 
     if (ctx->sb.s_magic != EXT4_SUPER_MAGIC) {
-        ata_read_sector(port, slave, 0, buf);
-        ata_read_sector(port, slave, 1, buf + 512);
+        nvme_read_sector(0, buf);
+        nvme_read_sector(1, buf + 512);
         memory_copy(&ctx->sb, buf, 1024);
     }
 
@@ -971,5 +971,5 @@ vfs_node_t* ext4_mount_disk(uint16_t port, uint8_t slave) {
 }
 
 void ext4_init(void) {
-    vfs_root = ext4_mount_disk(0x1F0, 0);
+    vfs_root = ext4_mount_disk(0, 0);
 }
