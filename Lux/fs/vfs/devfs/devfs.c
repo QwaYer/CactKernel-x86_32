@@ -215,46 +215,46 @@ static int _rand_read(void *p, uint32_t o, uint32_t s, char *b) {
 }
 static devfs_driver_t drv_random = { .read=_rand_read, .write=_null_write };
 
-static int _hda_read(void *p, uint32_t off, uint32_t size, char *buf) {
+static int _nvme_read(void *p, uint32_t off, uint32_t size, char *buf) {
     (void)p;
     uint8_t sector_buf[512];
     uint32_t lba=off/512, written=0;
     while(written<size){
-        ata_read_sector(0x1F0,0,lba,sector_buf);
+        nvme_read_sector(lba,sector_buf);
         uint32_t c=512; if(c>size-written)c=size-written;
         memcpy(buf+written,sector_buf,c);
         written+=c; lba++;
     }
     return (int)written;
 }
-static int _hda_write(void *p, uint32_t off, uint32_t size, char *buf) {
+static int _nvme_write(void *p, uint32_t off, uint32_t size, char *buf) {
     (void)p;
     uint8_t sector_buf[512];
     uint32_t lba=off/512, written=0;
     while(written<size){
-        ata_read_sector(0x1F0,0,lba,sector_buf);
+        nvme_read_sector(lba,sector_buf);
         uint32_t c=512; if(c>size-written)c=size-written;
         memcpy(sector_buf,buf+written,c);
-        ata_write_sector(0x1F0,0,lba,sector_buf);
+        nvme_write_sector(lba,sector_buf);
         written+=c; lba++;
     }
     return (int)written;
 }
-static int _hda_ctl(void *p, const char *cmd, uint32_t len) {
+static int _nvme_ctl(void *p, const char *cmd, uint32_t len) {
     (void)p;(void)len;
-    if(cmd[0]=='f'&&cmd[1]=='l') { kprint("[hda] flush (noop)\n"); return 0; }
-    kprint("[hda] unknown ctl: "); kprint((char*)cmd); kprint("\n");
+    if(cmd[0]=='f'&&cmd[1]=='l') { kprint("[nvme] flush (noop)\n"); return 0; }
+    kprint("[nvme] unknown ctl: "); kprint((char*)cmd); kprint("\n");
     return -1;
 }
-static int _hda_status(void *p, char *buf, uint32_t size) {
+static int _nvme_status(void *p, char *buf, uint32_t size) {
     (void)p;
-    const char *s = "device: hda\nport: 0x1F0\nslave: 0\n";
+    const char *s = "device: nvme0n1\ntype: NVMe\n";
     uint32_t n=0; while(s[n]&&n<size-1){buf[n]=s[n];n++;} buf[n]='\0';
     return (int)n;
 }
-static devfs_driver_t drv_hda = {
-    .read=_hda_read, .write=_hda_write,
-    .ctl=_hda_ctl,   .status=_hda_status
+static devfs_driver_t drv_nvme = {
+    .read=_nvme_read, .write=_nvme_write,
+    .ctl=_nvme_ctl,   .status=_nvme_status
 };
 
 extern volatile char last_char;
@@ -351,7 +351,7 @@ void devfs_init(void) {
     devfs_register("random",  DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
     devfs_register("urandom", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
 
-    devfs_register("hda", DEVFS_F_BLOCK, &drv_hda, 0);
+    devfs_register("nvme0n1", DEVFS_F_BLOCK, &drv_nvme, 0);
     devfs_register("tty", DEVFS_F_CHAR,  &drv_tty, 0);
 
     devfs_ready = 1;

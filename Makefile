@@ -25,7 +25,7 @@ DRIVER_PCI_DIR        = Lux/drivers/pci
 DRIVER_PCI_ENUM_DIR   = Lux/drivers/pci/enum
 DRIVER_PCI_DRV_DIR    = Lux/drivers/pci/driver
 DRIVER_PCI_LOADER_DIR = Lux/drivers/pci/loader
-DRIVER_ATA_DIR   = Lux/drivers/block/ata
+DRIVER_NVME_DIR  = Lux/drivers/block/NVMe
 DRIVER_BUF_DIR   = Lux/drivers/block/buf
 DRIVER_USB_DIR      = Lux/drivers/usb
 DRIVER_USB_UHCI_DIR = Lux/drivers/input/uhci
@@ -77,7 +77,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_PCI_ENUM_DIR) \
          -I$(DRIVER_PCI_DRV_DIR) \
          -I$(DRIVER_PCI_LOADER_DIR) \
-         -I$(DRIVER_ATA_DIR) \
+         -I$(DRIVER_NVME_DIR) \
          -I$(DRIVER_BUF_DIR) \
          -I$(DRIVER_USB_DIR) \
          -I$(DRIVER_USB_UHCI_DIR) \
@@ -142,7 +142,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pci_enum.o \
       $(BUILD_DIR)/pci_driver.o \
       $(BUILD_DIR)/pci_loader.o \
-      $(BUILD_DIR)/ata.o \
+      $(BUILD_DIR)/nvme.o \
       $(BUILD_DIR)/buf.o \
       $(BUILD_DIR)/syscall.o \
       $(BUILD_DIR)/keyboard.o \
@@ -336,7 +336,7 @@ $(BUILD_DIR)/pci_loader.o: $(DRIVER_PCI_LOADER_DIR)/pci_loader.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ata.o: $(DRIVER_ATA_DIR)/ata.c
+$(BUILD_DIR)/nvme.o: $(DRIVER_NVME_DIR)/nvme.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
