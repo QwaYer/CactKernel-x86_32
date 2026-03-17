@@ -21,36 +21,32 @@ void pci_write32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg, uint32_t val
     port_dword_out(PCI_CONFIG_DATA, val);
 }
 
-uint16_t pci_find_ide_bm_base(void) {
-    for (uint8_t dev = 0; dev < 32; dev++) {
-        for (uint8_t fn = 0; fn < 8; fn++) {
-            uint32_t id = pci_read32(0, dev, fn, 0x00);
-            if (id == 0xFFFFFFFF || id == 0x00000000) continue;
+int pci_find_nvme(uint8_t *out_bus, uint8_t *out_dev, uint8_t *out_fn) {
+    for (uint8_t bus = 0; bus < 8; bus++) {
+        for (uint8_t dev = 0; dev < 32; dev++) {
+            for (uint8_t fn = 0; fn < 8; fn++) {
+                uint32_t id = pci_read32(bus, dev, fn, 0x00);
+                if (id == 0xFFFFFFFF || id == 0x00000000) continue;
 
-            uint32_t cls = pci_read32(0, dev, fn, 0x08);
-            uint8_t  cc  = (uint8_t)((cls >> 24) & 0xFF);
-            uint8_t  sc  = (uint8_t)((cls >> 16) & 0xFF);
-            if (cc != 0x01 || sc != 0x01) continue;
+                uint32_t cls = pci_read32(bus, dev, fn, 0x08);
+                uint8_t  cc  = (uint8_t)((cls >> 24) & 0xFF);
+                uint8_t  sc  = (uint8_t)((cls >> 16) & 0xFF);
+                uint8_t  pi  = (uint8_t)((cls >>  8) & 0xFF);
 
-            uint32_t cmd = pci_read32(0, dev, fn, 0x04);
-            if (!(cmd & 0x05))
-                pci_write32(0, dev, fn, 0x04, cmd | 0x05);
-
-            uint32_t bar4   = pci_read32(0, dev, fn, 0x20);
-            uint16_t bm_base = (uint16_t)(bar4 & 0xFFFC);
-
-            if (!bm_base) {
-                pci_write32(0, dev, fn, 0x20, 0xC001);
-                bar4    = pci_read32(0, dev, fn, 0x20);
-                bm_base = (uint16_t)(bar4 & 0xFFFC);
+                // class 0x01 (Mass Storage), subclass 0x08 (NVM), prog-if 0x02 (NVMe)
+                if (cc == 0x01 && sc == 0x08 && pi == 0x02) {
+                    uint32_t cmd = pci_read32(bus, dev, fn, 0x04);
+                    pci_write32(bus, dev, fn, 0x04, cmd | 0x06);
+                    *out_bus = bus;
+                    *out_dev = dev;
+                    *out_fn  = fn;
+                    return 1;
+                }
             }
-
-            if (!bm_base) continue;
-            return bm_base;
         }
     }
 
-    kprint("[PCI] IDE Bus Master NOT found\n");
+    kprint("[PCI] NVMe controller NOT found\n");
     return 0;
 }
 
