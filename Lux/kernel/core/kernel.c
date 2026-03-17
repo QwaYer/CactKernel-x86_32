@@ -285,14 +285,11 @@ void boot_log(char* component, int status) {
 int get_cursor_x() { return cursor_x; }
 int get_cursor_y() { return cursor_y; }
 
-#define SWAP_ATA_PORT  0x1F0   
-#define SWAP_ATA_SLAVE 0     
-
 static int swap_disk_read(uint32_t lba, void* buf, uint32_t sectors)
 {
     uint8_t* ptr = (uint8_t*)buf;
     for (uint32_t i = 0; i < sectors; i++) {
-        ata_read_sector(SWAP_ATA_PORT, SWAP_ATA_SLAVE, lba + i, ptr);
+        nvme_read_sector(lba + i, ptr);
         ptr += 512;
     }
     return 0;
@@ -302,7 +299,7 @@ static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
 {
     const uint8_t* ptr = (const uint8_t*)buf;
     for (uint32_t i = 0; i < sectors; i++) {
-        ata_write_sector(SWAP_ATA_PORT, SWAP_ATA_SLAVE, lba + i, (uint8_t*)ptr);
+        nvme_write_sector(lba + i, (uint8_t*)ptr);
         ptr += 512;
     }
     return 0;
@@ -350,8 +347,8 @@ void kernel_setup_hardware(multiboot_info_t *mbi) {
     usb_init();
     boot_log("USB Stack", 0);
 
-    ata_init();
-    boot_log("ATA Hard Drive", 0);
+    nvme_init();
+    boot_log("NVMe Storage", 0);
 
     pc_init();
     boot_log("Page Cache", 0);

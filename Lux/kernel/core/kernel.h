@@ -172,9 +172,9 @@ void      slab_init              (void);
 void      page_fault_init        (void);
 
 // Storage
-extern void ata_init        (void);
-extern void ata_read_sector (uint16_t port, uint8_t slave, uint32_t lba, uint8_t* buf);
-extern void ata_write_sector(uint16_t port, uint8_t slave, uint32_t lba, uint8_t* buf);
+extern void nvme_init        (void);
+extern void nvme_read_sector (uint32_t lba, uint8_t* buf);
+extern void nvme_write_sector(uint32_t lba, uint8_t* buf);
 
 // Kernel Entry Point Helpers
 void kernel_setup_hardware(multiboot_info_t *mbi);
