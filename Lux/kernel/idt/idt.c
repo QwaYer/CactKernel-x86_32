@@ -55,7 +55,7 @@ void init_pic(void) {
 
     // IMR — маски прерываний 
     port_byte_out(0x21, 0xF8);   
-    port_byte_out(0xA1, 0xC0);
+    port_byte_out(0xA1, 0x80);
 }
 
 int init_idt(void) {
