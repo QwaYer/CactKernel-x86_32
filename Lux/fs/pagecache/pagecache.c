@@ -5,11 +5,10 @@
 
 
 struct page {
-    uint16_t  port;
-    uint8_t   slave;
-    uint8_t   flags;          
+    uint32_t  dev;
+    uint8_t   flags;
     uint32_t  block_no;
-    uint32_t  block_size;     
+    uint32_t  block_size;
 
     int       pin_count;
 
@@ -25,16 +24,16 @@ struct page {
 static struct page   pool[PC_MAX_PAGES];
 static struct page  *hash_table[PC_HASH_SIZE];
 
-static struct page  *lru_head; 
-static struct page  *lru_tail;   
+static struct page  *lru_head;
+static struct page  *lru_tail;
 
 static uint32_t stat_hits;
 static uint32_t stat_misses;
 static uint32_t stat_evictions;
 static uint32_t stat_writebacks;
 
-static inline uint32_t _hash(uint16_t port, uint8_t slave, uint32_t block_no) {
-    uint32_t h = (uint32_t)port ^ ((uint32_t)slave << 16);
+static inline uint32_t _hash(uint32_t dev, uint32_t block_no) {
+    uint32_t h = dev;
     h ^= block_no;
     h ^= h >> 16;
     h *= 0x45d9f3bU;
@@ -43,7 +42,7 @@ static inline uint32_t _hash(uint16_t port, uint8_t slave, uint32_t block_no) {
 }
 
 static void _hash_remove(struct page *p) {
-    uint32_t bucket = _hash(p->port, p->slave, p->block_no);
+    uint32_t bucket = _hash(p->dev, p->block_no);
     struct page **pp = &hash_table[bucket];
     while (*pp) {
         if (*pp == p) { *pp = p->hash_next; p->hash_next = 0; return; }
@@ -52,16 +51,16 @@ static void _hash_remove(struct page *p) {
 }
 
 static void _hash_insert(struct page *p) {
-    uint32_t bucket = _hash(p->port, p->slave, p->block_no);
+    uint32_t bucket = _hash(p->dev, p->block_no);
     p->hash_next         = hash_table[bucket];
     hash_table[bucket]   = p;
 }
 
-static struct page *_hash_find(uint16_t port, uint8_t slave, uint32_t block_no) {
-    uint32_t bucket = _hash(port, slave, block_no);
+static struct page *_hash_find(uint32_t dev, uint32_t block_no) {
+    uint32_t bucket = _hash(dev, block_no);
     struct page *p  = hash_table[bucket];
     while (p) {
-        if (p->port == port && p->slave == slave && p->block_no == block_no)
+        if (p->dev == dev && p->block_no == block_no)
             return p;
         p = p->hash_next;
     }
@@ -70,14 +69,14 @@ static struct page *_hash_find(uint16_t port, uint8_t slave, uint32_t block_no) 
 
 static void _lru_remove(struct page *p) {
     if (p->lru_prev) p->lru_prev->lru_next = p->lru_next;
-    else             lru_head              = p->lru_next;  
+    else             lru_head              = p->lru_next;
     if (p->lru_next) p->lru_next->lru_prev = p->lru_prev;
-    else             lru_tail              = p->lru_prev;   
+    else             lru_tail              = p->lru_prev;
     p->lru_prev = p->lru_next = 0;
 }
 
 static void _lru_touch(struct page *p) {
-    if (lru_head == p) return;  
+    if (lru_head == p) return;
     if (p->lru_prev || p->lru_next || lru_tail == p)
         _lru_remove(p);
     p->lru_prev = 0;
@@ -110,9 +109,9 @@ static struct page *_evict_one(void) {
             stat_evictions++;
             return p;
         }
-        p = p->lru_prev;  
+        p = p->lru_prev;
     }
-    return 0;   
+    return 0;
 }
 
 static struct page *_alloc_page(void) {
@@ -138,9 +137,8 @@ void pc_init(void) {
 
 }
 
-uint8_t *pc_get_page(uint16_t port, uint8_t slave,
-                     uint32_t block_no, uint32_t block_size) {
-    struct page *p = _hash_find(port, slave, block_no);
+uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
+    struct page *p = _hash_find(dev, block_no);
     if (p) {
         stat_hits++;
         p->pin_count++;
@@ -169,8 +167,7 @@ uint8_t *pc_get_page(uint16_t port, uint8_t slave,
         }
     }
 
-    p->port       = port;
-    p->slave      = slave;
+    p->dev        = dev;
     p->block_no   = block_no;
     p->block_size = block_size;
     p->flags      = PC_FLAG_USED;
@@ -189,30 +186,30 @@ uint8_t *pc_get_page(uint16_t port, uint8_t slave,
     return p->data;
 }
 
-void pc_mark_dirty(uint16_t port, uint8_t slave, uint32_t block_no) {
-    struct page *p = _hash_find(port, slave, block_no);
+void pc_mark_dirty(uint32_t dev, uint32_t block_no) {
+    struct page *p = _hash_find(dev, block_no);
     if (p) p->flags |= PC_FLAG_DIRTY;
 }
 
-void pc_put_page(uint16_t port, uint8_t slave, uint32_t block_no) {
-    struct page *p = _hash_find(port, slave, block_no);
+void pc_put_page(uint32_t dev, uint32_t block_no) {
+    struct page *p = _hash_find(dev, block_no);
     if (!p) return;
     if (p->pin_count > 0) p->pin_count--;
 }
 
-void pc_flush_dev(uint16_t port, uint8_t slave) {
+void pc_flush_dev(uint32_t dev) {
     for (int i = 0; i < PC_MAX_PAGES; i++) {
         struct page *p = &pool[i];
         if ((p->flags & (PC_FLAG_VALID | PC_FLAG_DIRTY)) ==
                         (PC_FLAG_VALID | PC_FLAG_DIRTY) &&
-            p->port == port && p->slave == slave) {
+            p->dev == dev) {
             _writeback(p);
         }
     }
 }
 
-void pc_invalidate_block(uint16_t port, uint8_t slave, uint32_t block_no) {
-    struct page *p = _hash_find(port, slave, block_no);
+void pc_invalidate_block(uint32_t dev, uint32_t block_no) {
+    struct page *p = _hash_find(dev, block_no);
     if (!p) return;
     if (p->flags & PC_FLAG_DIRTY) _writeback(p);
     _lru_remove(p);
@@ -221,12 +218,11 @@ void pc_invalidate_block(uint16_t port, uint8_t slave, uint32_t block_no) {
     p->pin_count = 0;
 }
 
-void pc_invalidate_dev(uint16_t port, uint8_t slave) {
-    pc_flush_dev(port, slave);
+void pc_invalidate_dev(uint32_t dev) {
+    pc_flush_dev(dev);
     for (int i = 0; i < PC_MAX_PAGES; i++) {
         struct page *p = &pool[i];
-        if ((p->flags & PC_FLAG_VALID) &&
-            p->port == port && p->slave == slave) {
+        if ((p->flags & PC_FLAG_VALID) && p->dev == dev) {
             _lru_remove(p);
             _hash_remove(p);
             kfree_page(p->data);

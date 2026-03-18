@@ -50,7 +50,6 @@ vfs_node_t *mntfs_get_ext4_root(void);
 void        mntfs_list     (void);
 
 vfs_node_t *mntfs_resolve_path  (const char *path);
-int         mntfs_resolve_device(const char *devname,
-                                  uint16_t *base_out, uint8_t *slave_out);
+int         mntfs_resolve_device(const char *devname, uint32_t *dev_out);
 
 #endif 
