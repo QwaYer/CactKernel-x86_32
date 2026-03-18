@@ -264,14 +264,13 @@ struct ext4_ctx {
     struct ext4_superblock  sb;
     uint32_t                block_size;
     struct jbd2_journal     journal;
-    uint16_t                port;
-    uint8_t                 slave;
+    uint32_t                dev;
 };
 
 
 //Public api
 void             ext4_init(void);
-vfs_node_t* ext4_mount_disk(uint16_t port, uint8_t slave);
+vfs_node_t* ext4_mount_disk(uint32_t dev);
 
 int              ext4_read_file  (vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer);
 int              ext4_write_file (vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer);
