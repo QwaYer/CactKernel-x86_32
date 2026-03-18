@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "pipe.h"
 #include "mntfs.h"
+#include "procfs.h"
 #include "vfs.h"
 #include "kernel.h"
 #include "memory.h"
@@ -19,6 +20,8 @@ vfs_node_t* current_ext4_dir  = 0;
 char             current_mnt_path[128] = "";
 vfs_node_t* shell_out         = 0;
 vfs_node_t* shell_stdin       = 0;
+
+static vfs_node_t* cached_cmd_dir = 0;
 
 
 void shell_write(const char* s)
@@ -120,7 +123,27 @@ void shell_resetdir(void) {
     copy_string(current_path, "/");
 }
 
-void shell_init(void) { shell_resetdir(); }
+void shell_init(void) {
+    shell_resetdir();
+    cached_cmd_dir = 0;
+}
+
+
+static vfs_node_t* _get_cmd_dir(void)
+{
+    if (cached_cmd_dir) return cached_cmd_dir;
+
+    vfs_node_t* pr = procfs_get_root();
+    if (pr && pr->ops && pr->ops->walk) {
+        cached_cmd_dir = pr->ops->walk(pr, "cmd");
+        if (cached_cmd_dir) return cached_cmd_dir;
+    }
+
+    vfs_node_t* n = vfs_walk_path(vfs_root, "nvme0n1/sys/proc/cmd");
+    if (n) { cached_cmd_dir = n; return n; }
+
+    return 0;
+}
 
 
 static int split_by(char* input, char sep, char* parts[], int max)
@@ -159,10 +182,10 @@ static void _run_one(char* input)
     }
     cmd_name[i] = '\0';
 
-    vfs_node_t* cmd_node = vfs_walk_path(0, "hda/sys/proc/cmd");
-    if (cmd_node) {
-        vfs_node_t* node = cmd_node->ops && cmd_node->ops->walk
-                           ? cmd_node->ops->walk(cmd_node, cmd_name) : 0;
+    vfs_node_t* cmd_dir = _get_cmd_dir();
+    if (cmd_dir) {
+        vfs_node_t* node = (cmd_dir->ops && cmd_dir->ops->walk)
+                           ? cmd_dir->ops->walk(cmd_dir, cmd_name) : 0;
         if (node) {
             write_vfs(node, 0, (uint32_t)strlen(input), (char*)input);
             return;
@@ -192,12 +215,12 @@ static void _run_pipeline(char* parts[], int n)
                 if (prev_read) close_vfs(prev_read);
                 return;
             }
-            shell_out = pipe_nodes[1];  
+            shell_out = pipe_nodes[1];
         } else {
-            shell_out = 0;              
+            shell_out = 0;
         }
 
-        shell_stdin = prev_read;        
+        shell_stdin = prev_read;
 
         _run_one(parts[step]);
 
