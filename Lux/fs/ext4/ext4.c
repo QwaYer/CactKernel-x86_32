@@ -8,10 +8,10 @@
 static void _make_node(struct ext4_ctx* ctx, vfs_node_t* n, uint32_t ino, uint8_t ft);
 
 static void _read_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
-    uint8_t* page = pc_get_page(ctx->port, ctx->slave, block, ctx->block_size);
+    uint8_t* page = pc_get_page(ctx->dev, block, ctx->block_size);
     if (page) {
         memory_copy(buf, page, ctx->block_size);
-        pc_put_page(ctx->port, ctx->slave, block);
+        pc_put_page(ctx->dev, block);
     } else {
         kprint("[ext4] _read_block: page cache miss fallback, block=");
         uint32_t spb = ctx->block_size / 512;
@@ -190,7 +190,7 @@ static void _journal_stop(struct ext4_ctx* ctx) {
     struct jbd2_journal* j = &ctx->journal;
     if (!j->j_sb || !j->j_running_transaction) return;
     _journal_commit(ctx);
-    pc_flush_dev(ctx->port, ctx->slave);
+    pc_flush_dev(ctx->dev);
     struct jbd2_buffer* b = j->j_running_transaction->t_buffers;
     while (b) { struct jbd2_buffer* nx = b->b_next; kfree_heap(b->b_data); kfree_heap(b); b = nx; }
     kfree_heap(j->j_running_transaction);
@@ -217,11 +217,11 @@ static void _journal_log(struct ext4_ctx* ctx, uint32_t blocknr, uint8_t* data) 
 static void _write_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
     _journal_log(ctx, block, buf);
 
-    uint8_t* page = pc_get_page(ctx->port, ctx->slave, block, ctx->block_size);
+    uint8_t* page = pc_get_page(ctx->dev, block, ctx->block_size);
     if (page) {
         memory_copy(page, buf, ctx->block_size);
-        pc_mark_dirty(ctx->port, ctx->slave, block);
-        pc_put_page(ctx->port, ctx->slave, block);
+        pc_mark_dirty(ctx->dev, block);
+        pc_put_page(ctx->dev, block);
     } else {
         uint32_t spb = ctx->block_size / 512;
         uint32_t lba = block * spb;
@@ -902,12 +902,11 @@ int ext4_rmdir(vfs_node_t* node, char* name) {
 }
 
 
-vfs_node_t* ext4_mount_disk(uint16_t port, uint8_t slave) {
+vfs_node_t* ext4_mount_disk(uint32_t dev) {
     struct ext4_ctx* ctx = (struct ext4_ctx*)kmalloc(sizeof(*ctx));
     if (!ctx) return 0;
     memory_set(ctx, 0, sizeof(*ctx));
-    ctx->port  = port;
-    ctx->slave = slave;
+    ctx->dev = dev;
 
     uint8_t buf[2048];
     memory_set(buf, 0, sizeof(buf));
@@ -971,5 +970,5 @@ vfs_node_t* ext4_mount_disk(uint16_t port, uint8_t slave) {
 }
 
 void ext4_init(void) {
-    vfs_root = ext4_mount_disk(0, 0);
+    vfs_root = ext4_mount_disk(0);
 }

@@ -15,14 +15,14 @@ static vfs_node_t      mntfs_root;
 static int             mntfs_ready = 0;
 
 
-typedef struct { const char *name; uint16_t base; uint8_t slave; } ata_dev_t;
-static const ata_dev_t ata_devmap[] = {
-    { "hda", 0x1F0, 0 },
-    { "hdb", 0x1F0, 1 },
-    { "hdc", 0x170, 0 },
-    { "hdd", 0x170, 1 },
+typedef struct { const char *name; uint32_t dev; } nvme_devmap_t;
+static const nvme_devmap_t nvme_devmap[] = {
+    { "nvme0n1", 0 },
+    { "nvme0n2", 1 },
+    { "nvme1n1", 2 },
+    { "nvme1n2", 3 },
 };
-#define ATA_DEV_COUNT 4
+#define NVME_DEV_COUNT 4
 
 
 static mntfs_entry_t *_find(const char *name) {
@@ -98,11 +98,11 @@ static void _mounts_mount_all(void) {
         while (li>0 && (line[li-1]==' '||line[li-1]=='\r')) line[--li]='\0';
         if (li==0 || line[0]=='#') continue;
         if (_find_disk(line)) continue;
-        uint16_t base; uint8_t slave;
-        if (mntfs_resolve_device(line, &base, &slave) < 0) {
+        uint32_t dev;
+        if (mntfs_resolve_device(line, &dev) < 0) {
             kprint("[mounts] unknown: "); kprint(line); kprint("\n"); continue;
         }
-        vfs_node_t *node = ext4_mount_disk(base, slave);
+        vfs_node_t *node = ext4_mount_disk(dev);
         if (!node) { kprint("[mounts] failed: "); kprint(line); kprint("\n"); continue; }
         mntfs_mount_disk(line, node, 0);
         kprint("[mounts] "); kprint(line); kprint(" mounted\n");
@@ -258,11 +258,10 @@ static vfs_ops_t root_ops = {
 
 
 //Public api
-int mntfs_resolve_device(const char *devname, uint16_t *base_out, uint8_t *slave_out) {
-    for (int i=0;i<ATA_DEV_COUNT;i++)
-        if (streq(ata_devmap[i].name,devname)) {
-            if (base_out)  *base_out  = ata_devmap[i].base;
-            if (slave_out) *slave_out = ata_devmap[i].slave;
+int mntfs_resolve_device(const char *devname, uint32_t *dev_out) {
+    for (int i=0;i<NVME_DEV_COUNT;i++)
+        if (streq(nvme_devmap[i].name,devname)) {
+            if (dev_out) *dev_out = nvme_devmap[i].dev;
             return 0;
         }
     return -1;
@@ -373,20 +372,20 @@ void mntfs_init(void) {
     vfs_root=&mntfs_root;
     mntfs_ready=1;
 
-    vfs_node_t *ext4=ext4_mount_disk(0x1F0,0);
-    if (!ext4) { kprint("[mntfs] WARNING: hda not found\n"); return; }
+    vfs_node_t *ext4=ext4_mount_disk(0);
+    if (!ext4) { kprint("[mntfs] WARNING: nvme0n1 not found\n"); return; }
 
-    mntfs_mount_disk("hda",ext4,0);
-    disk_entry_t *hda=_find_disk("hda");
-    hda->has_sys=1;  
+    mntfs_mount_disk("nvme0n1",ext4,0);
+    disk_entry_t *boot_disk=_find_disk("nvme0n1");
+    boot_disk->has_sys=1;
 
     etcfs_init(ext4);
-    mntfs_mount("hda/sys/etc","etcfs",etcfs_get_root(),0);
+    mntfs_mount("nvme0n1/sys/etc","etcfs",etcfs_get_root(),0);
 
     _mounts_mount_all();
 
     devfs_init();
-    mntfs_mount("hda/sys/dev","devfs",devfs_get_root(),0);
+    mntfs_mount("nvme0n1/sys/dev","devfs",devfs_get_root(),0);
     procfs_init();
-    mntfs_mount("hda/sys/proc","procfs",procfs_get_root(),0);
+    mntfs_mount("nvme0n1/sys/proc","procfs",procfs_get_root(),0);
 }

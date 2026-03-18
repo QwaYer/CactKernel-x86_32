@@ -272,15 +272,15 @@ static void cmd_mount(char* args) {
         return;
     }
 
-    uint16_t base; uint8_t slave;
-    if (mntfs_resolve_device(devname, &base, &slave) < 0) {
+    uint32_t dev;
+    if (mntfs_resolve_device(devname, &dev) < 0) {
         kprint("\nError: unknown device '"); kprint(devname);
-        kprint("'\nKnown: hda  hdb  hdc  hdd\n");
+        kprint("'\nKnown: nvme0n1  nvme0n2  nvme1n1  nvme1n2\n");
         return;
     }
 
     kprint("\nProbing "); kprint(devname); kprint("...\n");
-    vfs_node_t* root = ext4_mount_disk(base, slave);
+    vfs_node_t* root = ext4_mount_disk(dev);
     if (!root) { kprint("Error: no ext4 on "); kprint(devname); kprint("\n"); return; }
 
     if (mntfs_mount_disk(devname, root, 1) < 0) {
@@ -296,7 +296,7 @@ static void cmd_umount(char* args) {
     _trim(devname);
     int r = mntfs_umount_disk(devname);
     if (r == 0)  { kprint("\nUnmounted /"); kprint(devname); kprint("/\n"); }
-    else if (r == -2) kprint("\nError: cannot unmount master disk (hda)\n");
+    else if (r == -2) kprint("\nError: cannot unmount boot disk (nvme0n1)\n");
     else { kprint("\nError: '"); kprint(devname); kprint("' not mounted\n"); }
 }
 
