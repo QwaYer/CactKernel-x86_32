@@ -7,6 +7,7 @@
 #include "libc.h"
 
 static struct nvme_dev ndev;
+static int nvme_ready = 0;
 
 static struct buf *disk_queue      = 0;
 static struct buf *disk_queue_tail = 0;
@@ -40,13 +41,25 @@ static int admin_poll(void) {
     for (int i = 0; i < 2000000; i++) {
         volatile struct nvme_cq_entry *cqe = &q->cq[q->cq_head];
         if ((cqe->status & 1) == q->cq_phase) {
-            uint16_t status = cqe->status >> 1;
+            uint16_t raw = cqe->status;
+            uint16_t status = raw >> 1;
             q->cq_head = (q->cq_head + 1) % q->depth;
             if (q->cq_head == 0) q->cq_phase ^= 1;
             *q->cq_db = q->cq_head;
+            if (status & 0x7FF) {
+                char tmp[16];
+                kprint("[NVMe] admin err raw=");
+                kprint_hex(raw);
+                kprint(" SC=");
+                itoa(status & 0xFF, tmp); kprint(tmp);
+                kprint(" SCT=");
+                itoa((status >> 8) & 0x7, tmp); kprint(tmp);
+                kprint("\n");
+            }
             return (status & 0x7FF) ? -1 : 0;
         }
     }
+    kprint("[NVMe] admin_poll TIMEOUT\n");
     return -1;
 }
 
@@ -128,6 +141,10 @@ void bio_irq_complete(int error) {
 }
 
 static int nvme_polled_rw(uint32_t lba, uint8_t *buf, int write) {
+    if (!nvme_ready) {
+        kprint("[NVMe] read_sector but nvme not ready\n");
+        return -1;
+    }
     struct nvme_queue *q = &ndev.io_q;
 
     struct nvme_sq_entry cmd;
@@ -185,6 +202,19 @@ static void nvme_setup_admin_queues(void) {
     ndev.bar->aqa = ((NVME_ADMIN_QUEUE_SIZE - 1) << 16) | (NVME_ADMIN_QUEUE_SIZE - 1);
     ndev.bar->asq = (uint32_t)admin_sq_mem;
     ndev.bar->acq = (uint32_t)admin_cq_mem;
+}
+
+static int nvme_set_num_queues(void) {
+    struct nvme_sq_entry cmd;
+    memory_set(&cmd, 0, sizeof(cmd));
+    cmd.cdw0  = NVME_OPC_SET_FEATURES | ((uint32_t)(admin_cid++ & 0xFFFF) << 16);
+    cmd.cdw10 = 0x07;
+    cmd.cdw11 = (0 << 16) | 0;
+    if (admin_cmd(&cmd) < 0) {
+        kprint("[NVMe] Set Features (Num Queues) failed\n");
+        return -1;
+    }
+    return 0;
 }
 
 static int nvme_create_io_queues(void) {
@@ -262,6 +292,7 @@ void nvme_init(void) {
     binit();
 
     memory_set(&ndev, 0, sizeof(ndev));
+    nvme_ready = 0;
 
     int found = pci_find_nvme(&ndev.pci_bus, &ndev.pci_dev, &ndev.pci_fn);
     if (!found) {
@@ -279,8 +310,8 @@ void nvme_init(void) {
 
     ndev.bar = (volatile struct nvme_bar *)(uintptr_t)ndev.bar_phys;
 
-    uint32_t cmd = pci_read32(ndev.pci_bus, ndev.pci_dev, ndev.pci_fn, 0x04);
-    pci_write32(ndev.pci_bus, ndev.pci_dev, ndev.pci_fn, 0x04, cmd | 0x06);
+    uint32_t pcicmd = pci_read32(ndev.pci_bus, ndev.pci_dev, ndev.pci_fn, 0x04);
+    pci_write32(ndev.pci_bus, ndev.pci_dev, ndev.pci_fn, 0x04, pcicmd | 0x06);
 
     uint64_t cap = ndev.bar->cap;
     ndev.db_stride = 4 << ((cap >> 32) & 0xF);
@@ -290,20 +321,24 @@ void nvme_init(void) {
 
     nvme_setup_admin_queues();
 
-    ndev.bar->cc = (0 << 20) | (0 << 16) | (6 << 7) | (4 << 4) | 1;
+    // CC: IOCQES=4 [23:20], IOSQES=6 [19:16], MPS=0 [10:7], CSS=0 [6:4], EN=1 [0]
+    ndev.bar->cc = (4 << 20) | (6 << 16) | (0 << 7) | 1;
     nvme_wait_ready(1);
 
-    if (nvme_identify() < 0) return;
+    if (ndev.bar->csts & 0x2) {
+        kprint("[NVMe] controller fatal error (CFS)\n");
+        return;
+    }
 
+    if (nvme_identify() < 0) return;
+    if (nvme_set_num_queues() < 0) return;
     if (nvme_create_io_queues() < 0) return;
 
-    kprint("[NVMe] ready, ns1 sectors=");
-    char tmp[16];
-    itoa((int)ndev.max_lba, tmp);
-    kprint(tmp);
-    kprint("\n");
+    nvme_ready = 1;
+
 }
 
+//public api
 int nvme_read(vfs_node_t *node, uint32_t offset, uint32_t size, char *buffer) {
     (void)node;
     struct buf *b = bread(0, offset / 512);
