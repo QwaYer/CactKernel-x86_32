@@ -1,7 +1,6 @@
 #include "usb_hub.h"
 #include "usb.h"
-#include "usb_uhci.h"
-#include "usb_ohci.h"
+#include "xhci.h"
 #include "kernel.h"
 #include "memory.h"
 #include "libc.h"
@@ -62,7 +61,7 @@ static int hub_port_reset(usb_device_t *hub_dev, uint8_t port) {
 }
 
 typedef struct {
-    usb_hc_t      hc_wrapper;   
+    usb_hc_t      hc_wrapper;
     usb_device_t *hub_dev;
     uint8_t       hub_port;
 } hub_hc_wrapper_t;
@@ -178,20 +177,11 @@ static int hub_probe(usb_device_t *dev) {
         hub_handle_port(priv, p);
 
     if (priv->intr_ep) {
-        int rc;
-        if (dev->hc->name[0] == 'U') {
-            rc = uhci_register_interrupt_td(dev->hc, dev,
+        int rc = xhci_register_interrupt_ep(dev->hc, dev,
                                              priv->intr_ep,
                                              priv->status_buf,
                                              sizeof(priv->status_buf),
                                              hub_irq_notify, priv);
-        } else {
-            rc = ohci_register_interrupt_ed(dev->hc, dev,
-                                             priv->intr_ep,
-                                             priv->status_buf,
-                                             sizeof(priv->status_buf),
-                                             hub_irq_notify, priv);
-        }
         if (rc != 0)
             kprint("[HUB] Failed to register interrupt EP\n");
     }

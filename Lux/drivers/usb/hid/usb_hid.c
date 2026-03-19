@@ -1,7 +1,6 @@
 #include "usb_hid.h"
 #include "usb.h"
-#include "usb_uhci.h"
-#include "usb_ohci.h"
+#include "xhci.h"
 #include "kernel.h"
 #include "mouse.h"
 #include "memory.h"
@@ -14,7 +13,6 @@ volatile int  usb_mouse_dx     = 0;
 volatile int  usb_mouse_dy     = 0;
 volatile int  usb_mouse_buttons = 0;
 
-//Keycode → ASCII (Boot Protocol, US layout)
 static const char hid_keymap[0x80] = {
     0,0,0,0,
     'a','b','c','d','e','f','g','h','i','j','k','l','m',
@@ -58,7 +56,7 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         if (already) continue;
 
         int use_shift = shift;
-        if (kc >= 0x04 && kc <= 0x1D)   
+        if (kc >= 0x04 && kc <= 0x1D)
             use_shift = shift ^ priv->caps_lock;
 
         char c = use_shift ? hid_keymap_shift[kc] : hid_keymap[kc];
@@ -146,7 +144,7 @@ static int hid_set_idle(usb_device_t *dev, uint8_t iface) {
     usb_setup_pkt_t setup = {
         .bmRequestType = USB_RT_HOST_TO_DEV | USB_RT_CLASS | USB_RT_INTERFACE,
         .bRequest      = HID_REQ_SET_IDLE,
-        .wValue        = 0,    
+        .wValue        = 0,
         .wIndex        = iface,
         .wLength       = 0
     };
@@ -244,18 +242,10 @@ static int hid_probe(usb_device_t *dev) {
         report_buf = (void *)&priv->report_buf.mouse;
     }
 
-    int rc = -1;
-    if (dev->hc->name[0] == 'U') {   // UHCI 
-        rc = uhci_register_interrupt_td(dev->hc, dev,
+    int rc = xhci_register_interrupt_ep(dev->hc, dev,
                                          priv->intr_ep,
                                          report_buf, report_len,
                                          hid_irq_notify, priv);
-    } else {                           // OHCI 
-        rc = ohci_register_interrupt_ed(dev->hc, dev,
-                                         priv->intr_ep,
-                                         report_buf, report_len,
-                                         hid_irq_notify, priv);
-    }
 
     if (rc != 0) {
         kprint("[HID] Failed to register interrupt TD/ED\n");

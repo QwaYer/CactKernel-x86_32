@@ -233,15 +233,23 @@ void usb_init(void) {
     usb_hid_init();
     usb_hub_init();
 
-    extern void uhci_pci_init(void);
-    extern void ohci_pci_init(void);
-    uhci_pci_init();
-    ohci_pci_init();
-
+    extern void xhci_pci_init(void);
+    xhci_pci_init();
 }
 
 
-//Debug
+//public api
+int usb_register_device(usb_device_t *dev) {
+    if (!dev) return -1;
+    dev->next   = device_list;
+    device_list = dev;
+    device_count++;
+    usb_driver_t *drv = usb_find_driver(dev);
+    if (drv && drv->probe) drv->probe(dev);
+    return 0;
+}
+
+//debug
 void usb_dump_devices(void) {
     kprint("[USB] Devices (");
     kprint_hex(device_count);

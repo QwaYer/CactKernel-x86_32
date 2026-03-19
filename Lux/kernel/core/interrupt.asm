@@ -39,8 +39,8 @@ global isr30
 global isr31
 global nvme_isr
 global mouse_isr
-global ohci_isr
-global uhci_isr
+global xhci_isr
+global usb_isr
 global spurious_irq7
 global spurious_irq15
 
@@ -53,8 +53,7 @@ extern ps2_mouse_handler
 extern current_task
 extern schedule
 extern page_fault_handler
-extern uhci_irq_handler
-extern ohci_irq_handler
+extern xhci_irq_handler
 
 global timer_ticks_get
 
@@ -355,8 +354,6 @@ virtio_net_isr:
     popa
     iretd
 
-global usb_isr
-
 usb_isr:
     pusha
     push ds
@@ -364,8 +361,7 @@ usb_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    call uhci_irq_handler
-    call ohci_irq_handler
+    call xhci_irq_handler
     mov al, 0x20
     out 0xA0, al
     out 0x20, al
@@ -374,30 +370,14 @@ usb_isr:
     popa
     iretd
 
-uhci_isr:
+xhci_isr:
     pusha
     push ds
     push es
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    call uhci_irq_handler
-    mov al, 0x20
-    out 0xA0, al
-    out 0x20, al
-    pop es
-    pop ds
-    popa
-    iretd
-
-ohci_isr:
-    pusha
-    push ds
-    push es
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    call ohci_irq_handler
+    call xhci_irq_handler
     mov al, 0x20
     out 0xA0, al
     out 0x20, al

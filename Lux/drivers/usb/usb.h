@@ -170,6 +170,10 @@ typedef struct usb_device {
     struct usb_device *next;
 } usb_device_t;
 
+typedef void (*usb_irq_notify_fn_t)(struct usb_device *dev,
+                                     void *buf, uint16_t len,
+                                     void *priv);
+
 typedef struct usb_hc {
     const char *name;
     uint8_t     hc_id;
@@ -206,7 +210,7 @@ typedef struct usb_driver {
 } usb_driver_t;
 
 
-//Public api
+//public api
 void usb_init(void);
 
 int  usb_hc_register    (usb_hc_t    *hc);
@@ -214,6 +218,7 @@ int  usb_driver_register(usb_driver_t *drv);
 
 usb_device_t *usb_device_enumerate (usb_hc_t *hc, uint8_t port, uint8_t speed);
 void          usb_device_disconnect(usb_hc_t *hc, uint8_t port);
+int           usb_register_device  (usb_device_t *dev);
 
 int usb_get_descriptor    (usb_device_t *dev, uint8_t type, uint8_t idx,
                             void *buf, uint16_t len);
@@ -226,4 +231,4 @@ void usb_dump_devices(void);
 uint8_t usb_alloc_address(void);
 void    usb_free_address (uint8_t addr);
 
-#endif 
+#endif

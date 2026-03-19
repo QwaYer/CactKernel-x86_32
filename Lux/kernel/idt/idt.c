@@ -24,6 +24,7 @@ extern void syscall_isr();
 extern void usb_isr();
 extern void uhci_isr();
 extern void ohci_isr();
+extern void xhci_isr();
 extern void spurious_irq7();
 extern void spurious_irq15();
 
@@ -60,7 +61,6 @@ int init_idt(void) {
     idtp.base  = (uint32_t)&idt;
     memory_set(&idt, 0, sizeof(struct idt_entry) * 256);
 
-    // exceptions 0-31
     set_idt_gate(0,  (uint32_t)isr0);
     set_idt_gate(1,  (uint32_t)isr1);
     set_idt_gate(2,  (uint32_t)isr2);
@@ -94,7 +94,6 @@ int init_idt(void) {
     set_idt_gate(30, (uint32_t)isr30);
     set_idt_gate(31, (uint32_t)isr31);
 
-    // hardware IRQs
     set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0
     set_idt_gate(0x21, (uint32_t)keyboard_isr);      // IRQ1
     set_idt_gate(0x27, (uint32_t)spurious_irq7);     // IRQ7  — master spurious
@@ -106,7 +105,6 @@ int init_idt(void) {
     set_idt_gate(0x2E, (uint32_t)nvme_isr);           // IRQ14
     set_idt_gate(0x2F, (uint32_t)spurious_irq15);     // IRQ15 — slave spurious
 
-    // syscall
     set_idt_gate(0x80, (uint32_t)syscall_isr);
     idt[0x80].flags = 0xEE;
 
