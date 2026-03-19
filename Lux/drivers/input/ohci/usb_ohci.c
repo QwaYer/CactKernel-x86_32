@@ -462,25 +462,27 @@ static void ohci_process_done_head(usb_hc_t *hc) {
 
 static void ohci_handle_irq(usb_hc_t *hc) {
     ohci_priv_t *priv = (ohci_priv_t *)hc->priv;
-
+ 
     uint32_t ints = ohci_readl(priv, OHCI_INTSTATUS);
-    ints &= ohci_readl(priv, OHCI_INTENABLE);
+    uint32_t enabled = ohci_readl(priv, OHCI_INTENABLE);
+    ints &= enabled;
     if (!ints) return;
-
+ 
     ohci_writel(priv, OHCI_INTDISABLE, OHCI_INT_MIE);
-
+ 
     if (ints & OHCI_INT_WDH) {
         ohci_process_done_head(hc);
         ohci_writel(priv, OHCI_INTSTATUS, OHCI_INT_WDH);
     }
-
+ 
     if (ints & OHCI_INT_RHSC) {
         for (uint8_t p = 0; p < priv->num_ports; p++) {
             uint32_t ps = ohci_readl(priv, OHCI_RH_PORT_STATUS + p * 4);
             if (ps & OHCI_PORT_CSC) {
                 ohci_writel(priv, OHCI_RH_PORT_STATUS + p * 4, OHCI_PORT_CSC);
                 if (ps & OHCI_PORT_CCS) {
-                    uint8_t speed = (ps & OHCI_PORT_LSDA) ? USB_SPEED_LOW
+                    uint8_t speed = (ps & OHCI_PORT_LSDA) ?
+                                                           USB_SPEED_LOW
                                                            : USB_SPEED_FULL;
                     usb_device_enumerate(hc, p, speed);
                 } else {
@@ -490,7 +492,7 @@ static void ohci_handle_irq(usb_hc_t *hc) {
         }
         ohci_writel(priv, OHCI_INTSTATUS, OHCI_INT_RHSC);
     }
-
+ 
     if (ints & OHCI_INT_UE) {
         kprint("[OHCI] Unrecoverable Error\n");
         ohci_writel(priv, OHCI_CMDSTATUS, OHCI_CMD_HCR);
@@ -501,11 +503,21 @@ static void ohci_handle_irq(usb_hc_t *hc) {
         priv->xfer_error = 1;
         priv->xfer_done  = 1;
     }
-
+ 
+    // CLEAR ALL remaining interrupt bits to prevent IRQ storm
+    uint32_t remaining = ohci_readl(priv, OHCI_INTSTATUS);
+    if (remaining)
+        ohci_writel(priv, OHCI_INTSTATUS, remaining);
+ 
     ohci_writel(priv, OHCI_INTENABLE, OHCI_INT_MIE);
 }
 
 void ohci_irq_handler(void) {
+    if (!ohci_hc_list) {
+        // no OHCI controllers registered — try to silence the IRQ
+        // by reading PCI config or just return (EOI in asm stub will handle PIC)
+        return;
+    }
     for (usb_hc_t *hc = ohci_hc_list; hc; hc = hc->irq_next)
         ohci_handle_irq(hc);
 }

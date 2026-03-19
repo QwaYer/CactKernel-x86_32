@@ -19,11 +19,13 @@ extern void timer_isr();
 extern void keyboard_isr();
 extern void mouse_isr();
 extern void nvme_isr();
-extern void virtio_net_isr();     
+extern void virtio_net_isr();
 extern void syscall_isr();
 extern void usb_isr();
 extern void uhci_isr();
 extern void ohci_isr();
+extern void spurious_irq7();
+extern void spurious_irq15();
 
 static struct idt_entry idt[256];
 static struct idt_ptr   idtp;
@@ -37,25 +39,20 @@ void set_idt_gate(int n, uint32_t handler) {
 }
 
 void init_pic(void) {
-    // Инициализация каскадом ICW1 
     port_byte_out(0x20, 0x11);
     port_byte_out(0xA0, 0x11);
 
-    // ICW2: базовые векторы 
-    port_byte_out(0x21, 0x20);   // master: IRQ0 → INT 32 (0x20) 
-    port_byte_out(0xA1, 0x28);   // slave:  IRQ8 → INT 40 (0x28) 
+    port_byte_out(0x21, 0x20);
+    port_byte_out(0xA1, 0x28);
 
-    // ICW3: каскад 
-    port_byte_out(0x21, 0x04);   // master: slave подключён к IRQ2 
-    port_byte_out(0xA1, 0x02);   // slave:  cascade identity = 2   
+    port_byte_out(0x21, 0x04);
+    port_byte_out(0xA1, 0x02);
 
-    // ICW4: 8086 mode 
     port_byte_out(0x21, 0x01);
     port_byte_out(0xA1, 0x01);
 
-    // IMR — маски прерываний 
-    port_byte_out(0x21, 0xF8);   
-    port_byte_out(0xA1, 0x80);
+    port_byte_out(0x21, 0xF8);   // master: unmask IRQ0(timer), IRQ1(kbd), IRQ2(cascade)
+    port_byte_out(0xA1, 0x80);   // slave: mask only IRQ15, rest open for USB/mouse/nvme
 }
 
 int init_idt(void) {
@@ -63,6 +60,7 @@ int init_idt(void) {
     idtp.base  = (uint32_t)&idt;
     memory_set(&idt, 0, sizeof(struct idt_entry) * 256);
 
+    // exceptions 0-31
     set_idt_gate(0,  (uint32_t)isr0);
     set_idt_gate(1,  (uint32_t)isr1);
     set_idt_gate(2,  (uint32_t)isr2);
@@ -96,15 +94,19 @@ int init_idt(void) {
     set_idt_gate(30, (uint32_t)isr30);
     set_idt_gate(31, (uint32_t)isr31);
 
-    set_idt_gate(0x20, (uint32_t)timer_isr);
-    set_idt_gate(0x21, (uint32_t)keyboard_isr);
-    set_idt_gate(0x29, (uint32_t)usb_isr);
-    set_idt_gate(0x2A, (uint32_t)usb_isr);
-    set_idt_gate(0x2B, (uint32_t)usb_isr);
-    set_idt_gate(0x2C, (uint32_t)mouse_isr);
-    set_idt_gate(0x2D, (uint32_t)virtio_net_isr);
-    set_idt_gate(0x2E, (uint32_t)nvme_isr);
+    // hardware IRQs
+    set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0
+    set_idt_gate(0x21, (uint32_t)keyboard_isr);      // IRQ1
+    set_idt_gate(0x27, (uint32_t)spurious_irq7);     // IRQ7  — master spurious
+    set_idt_gate(0x29, (uint32_t)usb_isr);            // IRQ9
+    set_idt_gate(0x2A, (uint32_t)usb_isr);            // IRQ10
+    set_idt_gate(0x2B, (uint32_t)usb_isr);            // IRQ11
+    set_idt_gate(0x2C, (uint32_t)mouse_isr);          // IRQ12
+    set_idt_gate(0x2D, (uint32_t)virtio_net_isr);     // IRQ13
+    set_idt_gate(0x2E, (uint32_t)nvme_isr);           // IRQ14
+    set_idt_gate(0x2F, (uint32_t)spurious_irq15);     // IRQ15 — slave spurious
 
+    // syscall
     set_idt_gate(0x80, (uint32_t)syscall_isr);
     idt[0x80].flags = 0xEE;
 

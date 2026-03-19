@@ -4,30 +4,26 @@
 #include <stdint.h>
 #include "memory.h"
 
-#define PROC_MAX_PAGES 256
+#define PROC_INITIAL_PAGES 256
+#define PROC_GROW_STEP     256
 
 typedef struct proc_page_tracker_t {
-    void*    pages[PROC_MAX_PAGES]; /* физические адреса страниц данных/кода */
-    uint32_t count;                 /* реально использованных записей         */
-    uint32_t* page_dir;             /* пользовательский page directory        */
+    void**   pages;         // heap-allocated dynamic array
+    uint32_t count;
+    uint32_t capacity;
+    uint32_t* page_dir;
 } proc_page_tracker_t;
 
+// public api
 static inline void proc_tracker_init(proc_page_tracker_t* t)
 {
-    for (uint32_t i = 0; i < PROC_MAX_PAGES; i++)
-        t->pages[i] = 0;
+    t->pages    = 0;
     t->count    = 0;
+    t->capacity = 0;
     t->page_dir = 0;
 }
 
-static inline int proc_tracker_add(proc_page_tracker_t* t, void* phys)
-{
-    if (t->count >= PROC_MAX_PAGES)
-        return -1;
-    t->pages[t->count++] = phys;
-    return 0;
-}
-
+int  proc_tracker_add(proc_page_tracker_t* t, void* phys);
 void proc_free_pages(proc_page_tracker_t* t);
 
-#endif /* PROCESS_MM_H */
+#endif

@@ -12,27 +12,34 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 {
     tracker->page_dir = pd;
 
-    vfs_node_t *base1 = (path[0] == '/') ? vfs_root : vfs_root;
-    struct vfs_node* file = vfs_walk_path(base1, path);
+    // [DBG]
+    kprint("[ELF] loading: "); kprint(path); kprint("\n");
+
+    vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
+    struct vfs_node* file = vfs_walk_path(base, path);
     if (!file) {
-        kprint("ELF: file not found\n");
+        kprint("[ELF] ERR: file not found: "); kprint(path); kprint("\n");
         return 0;
     }
 
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) {
-        kprint("ELF: cannot read header\n");
+        kprint("[ELF] ERR: cannot read header\n");
         return 0;
     }
 
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
-        kprint("ELF: bad magic\n");
+        kprint("[ELF] ERR: bad magic\n");
         return 0;
     }
-    if (hdr.e_machine != 3) { /* EM_386 */
-        kprint("ELF: not i386\n");
+    if (hdr.e_machine != 3) {
+        kprint("[ELF] ERR: not i386\n");
         return 0;
     }
+
+    // [DBG]
+    kprint("[ELF] entry=0x"); kprint_hex(hdr.e_entry);
+    kprint(" phnum="); char buf[16]; itoa(hdr.e_phnum, buf); kprint(buf); kprint("\n");
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
@@ -40,68 +47,79 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
                      hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
-            kprint("ELF: cannot read phdr\n");
+            kprint("[ELF] ERR: cannot read phdr\n");
             proc_free_pages(tracker);
             return 0;
         }
 
         if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
 
-        uint32_t file_pages = (ph.p_filesz + 0xFFF) >> 12;
-        uint32_t mem_pages  = (ph.p_memsz  + 0xFFF) >> 12;
+        // [DBG]
+        kprint("[ELF] PT_LOAD vaddr=0x"); kprint_hex(ph.p_vaddr);
+        kprint(" filesz=0x"); kprint_hex(ph.p_filesz);
+        kprint(" memsz=0x"); kprint_hex(ph.p_memsz); kprint("\n");
 
-        for (uint32_t p = 0; p < file_pages; p++) {
-            uint32_t vaddr = ph.p_vaddr + p * PAGE_SIZE;
+        // page-aligned start/end
+        uint32_t seg_start = ph.p_vaddr & ~0xFFFu;
+        uint32_t seg_end   = (ph.p_vaddr + ph.p_memsz + 0xFFF) & ~0xFFFu;
+        uint32_t file_end  = ph.p_vaddr + ph.p_filesz;
 
-            void* phys = kalloc();
-            if (!phys) {
-                kprint("ELF: out of memory (code/data)\n");
-                proc_free_pages(tracker);
-                return 0;
-            }
-            if (proc_tracker_add(tracker, phys) < 0) {
-                kprint("ELF: tracker overflow\n");
-                kfree_page(phys);
-                proc_free_pages(tracker);
-                return 0;
-            }
+        for (uint32_t va = seg_start; va < seg_end; va += PAGE_SIZE) {
+            // check if this page has any file data
+            if (va < file_end) {
+                // page with file data (possibly partial)
+                void* phys = kalloc();
+                if (!phys) {
+                    kprint("[ELF] ERR: OOM at va=0x"); kprint_hex(va); kprint("\n");
+                    proc_free_pages(tracker);
+                    return 0;
+                }
+                if (proc_tracker_add(tracker, phys) < 0) {
+                    kprint("[ELF] ERR: tracker add failed\n");
+                    kfree_page(phys);
+                    proc_free_pages(tracker);
+                    return 0;
+                }
 
-            uint8_t* b = (uint8_t*)phys;
-            for (int k = 0; k < (int)PAGE_SIZE; k++) b[k] = 0;
+                // zero entire page first
+                uint8_t* p = (uint8_t*)phys;
+                for (int k = 0; k < (int)PAGE_SIZE; k++) p[k] = 0;
 
-            uint32_t file_off    = p * PAGE_SIZE;
-            uint32_t bytes_left  = ph.p_filesz - file_off;
-            uint32_t copy_size   = (bytes_left > PAGE_SIZE) ? PAGE_SIZE : bytes_left;
+                // compute file data range within this page
+                uint32_t copy_start = (va > ph.p_vaddr) ? va : ph.p_vaddr;
+                uint32_t copy_end   = ((va + PAGE_SIZE) < file_end) ? (va + PAGE_SIZE) : file_end;
 
-            if (copy_size > 0) {
-                if (read_vfs(file,
-                             ph.p_offset + file_off,
-                             copy_size,
-                             (char*)phys) <= 0) {
-                    kprint("ELF: read error\n");
+                if (copy_end > copy_start) {
+                    uint32_t page_offset = copy_start - va;
+                    uint32_t file_offset = ph.p_offset + (copy_start - ph.p_vaddr);
+                    uint32_t copy_sz     = copy_end - copy_start;
+
+                    if (read_vfs(file, file_offset, copy_sz, (char*)phys + page_offset) <= 0) {
+                        kprint("[ELF] ERR: read failed at offset 0x"); kprint_hex(file_offset); kprint("\n");
+                        proc_free_pages(tracker);
+                        return 0;
+                    }
+                }
+
+                vmm_map(pd, va, (uint32_t)phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
+            } else {
+                // pure BSS — use demand paging (zero-fill on fault)
+                if (vmm_map_zero(pd, va, PAGE_SIZE, PAGE_USER) != 0) {
+                    kprint("[ELF] ERR: vmm_map_zero failed at 0x"); kprint_hex(va); kprint("\n");
                     proc_free_pages(tracker);
                     return 0;
                 }
             }
-
-            vmm_map(pd, vaddr, (uint32_t)phys,
-                    PAGE_USER | PAGE_RW | PAGE_PRESENT);
-        }
-
-        if (mem_pages > file_pages) {
-            uint32_t bss_start = ph.p_vaddr + file_pages * PAGE_SIZE;
-            uint32_t bss_size  = (mem_pages - file_pages) * PAGE_SIZE;
-
-            if (vmm_map_zero(pd, bss_start, bss_size, PAGE_USER) != 0) {
-                kprint("ELF: vmm_map_zero failed (BSS)\n");
-                proc_free_pages(tracker);
-                return 0;
-            }
         }
     }
 
+    // [DBG]
+    kprint("[ELF] loaded ok, total pages=");
+    itoa((int)tracker->count, buf); kprint(buf); kprint("\n");
+
     return (void*)hdr.e_entry;
 }
+// Append to elf_loader.c — load_elf_dynamic function
 
 void* load_elf_dynamic(char*                path,
                         uint32_t*            pd,
@@ -110,31 +128,37 @@ void* load_elf_dynamic(char*                path,
 {
     tracker->page_dir = pd;
 
-    vfs_node_t *base2 = (path[0] == '/') ? vfs_root : vfs_root;
-    struct vfs_node* file = vfs_walk_path(base2, path);
+    // [DBG]
+    kprint("[ELF-DYN] loading: "); kprint(path); kprint("\n");
+
+    vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
+    struct vfs_node* file = vfs_walk_path(base, path);
     if (!file) {
-        kprint("ELF: file not found: ");
-        kprint(path);
-        kprint("\n");
+        kprint("[ELF-DYN] ERR: file not found: "); kprint(path); kprint("\n");
         return 0;
     }
 
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) {
-        kprint("ELF: cannot read header\n");
+        kprint("[ELF-DYN] ERR: cannot read header\n");
         return 0;
     }
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
-        kprint("ELF: bad magic\n");
+        kprint("[ELF-DYN] ERR: bad magic\n");
         return 0;
     }
-    if (hdr.e_machine != 3) { /* EM_386 */
-        kprint("ELF: not i386\n");
+    if (hdr.e_machine != 3) {
+        kprint("[ELF-DYN] ERR: not i386\n");
         return 0;
     }
 
-    Elf32_Dyn* dyn_vaddr = 0;   
+    Elf32_Dyn* dyn_vaddr = 0;
     uint32_t   dyn_size  = 0;
+
+    // [DBG]
+    char buf[16];
+    kprint("[ELF-DYN] entry=0x"); kprint_hex(hdr.e_entry);
+    kprint(" phnum="); itoa(hdr.e_phnum, buf); kprint(buf); kprint("\n");
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
@@ -142,61 +166,61 @@ void* load_elf_dynamic(char*                path,
                      hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
-            kprint("ELF: cannot read phdr\n");
+            kprint("[ELF-DYN] ERR: cannot read phdr\n");
             proc_free_pages(tracker);
             return 0;
         }
 
         if (ph.p_type == PT_LOAD && ph.p_memsz > 0) {
-            uint32_t file_pages = (ph.p_filesz + 0xFFF) >> 12;
-            uint32_t mem_pages  = (ph.p_memsz  + 0xFFF) >> 12;
+            // [DBG]
+            kprint("[ELF-DYN] PT_LOAD vaddr=0x"); kprint_hex(ph.p_vaddr);
+            kprint(" filesz=0x"); kprint_hex(ph.p_filesz);
+            kprint(" memsz=0x"); kprint_hex(ph.p_memsz); kprint("\n");
 
-            for (uint32_t p = 0; p < file_pages; p++) {
-                uint32_t vaddr = ph.p_vaddr + p * PAGE_SIZE;
+            uint32_t seg_start = ph.p_vaddr & ~0xFFFu;
+            uint32_t seg_end   = (ph.p_vaddr + ph.p_memsz + 0xFFF) & ~0xFFFu;
+            uint32_t file_end  = ph.p_vaddr + ph.p_filesz;
 
-                void* phys = kalloc();
-                if (!phys) {
-                    kprint("ELF: out of memory\n");
-                    proc_free_pages(tracker);
-                    return 0;
-                }
-                if (proc_tracker_add(tracker, phys) < 0) {
-                    kprint("ELF: tracker overflow\n");
-                    kfree_page(phys);
-                    proc_free_pages(tracker);
-                    return 0;
-                }
-
-                uint8_t* b = (uint8_t*)phys;
-                for (int k = 0; k < (int)PAGE_SIZE; k++) b[k] = 0;
-
-                uint32_t file_off  = p * PAGE_SIZE;
-                uint32_t remaining = ph.p_filesz - file_off;
-                uint32_t copy_sz   = (remaining > PAGE_SIZE) ? PAGE_SIZE : remaining;
-
-                if (copy_sz > 0) {
-                    if (read_vfs(file,
-                                 ph.p_offset + file_off,
-                                 copy_sz,
-                                 (char*)phys) <= 0) {
-                        kprint("ELF: read error\n");
+            for (uint32_t va = seg_start; va < seg_end; va += PAGE_SIZE) {
+                if (va < file_end) {
+                    void* phys = kalloc();
+                    if (!phys) {
+                        kprint("[ELF-DYN] ERR: OOM\n");
                         proc_free_pages(tracker);
                         return 0;
                     }
-                }
+                    if (proc_tracker_add(tracker, phys) < 0) {
+                        kprint("[ELF-DYN] ERR: tracker add failed\n");
+                        kfree_page(phys);
+                        proc_free_pages(tracker);
+                        return 0;
+                    }
 
-                vmm_map(pd, vaddr, (uint32_t)phys,
-                        PAGE_USER | PAGE_RW | PAGE_PRESENT);
-            }
+                    uint8_t* p = (uint8_t*)phys;
+                    for (int k = 0; k < (int)PAGE_SIZE; k++) p[k] = 0;
 
-            if (mem_pages > file_pages) {
-                uint32_t bss_start = ph.p_vaddr + file_pages * PAGE_SIZE;
-                uint32_t bss_size  = (mem_pages - file_pages) * PAGE_SIZE;
+                    uint32_t copy_start = (va > ph.p_vaddr) ? va : ph.p_vaddr;
+                    uint32_t copy_end   = ((va + PAGE_SIZE) < file_end) ? (va + PAGE_SIZE) : file_end;
 
-                if (vmm_map_zero(pd, bss_start, bss_size, PAGE_USER) != 0) {
-                    kprint("ELF: vmm_map_zero failed (BSS)\n");
-                    proc_free_pages(tracker);
-                    return 0;
+                    if (copy_end > copy_start) {
+                        uint32_t page_offset = copy_start - va;
+                        uint32_t file_offset = ph.p_offset + (copy_start - ph.p_vaddr);
+                        uint32_t copy_sz     = copy_end - copy_start;
+
+                        if (read_vfs(file, file_offset, copy_sz, (char*)phys + page_offset) <= 0) {
+                            kprint("[ELF-DYN] ERR: read failed\n");
+                            proc_free_pages(tracker);
+                            return 0;
+                        }
+                    }
+
+                    vmm_map(pd, va, (uint32_t)phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
+                } else {
+                    if (vmm_map_zero(pd, va, PAGE_SIZE, PAGE_USER) != 0) {
+                        kprint("[ELF-DYN] ERR: vmm_map_zero failed\n");
+                        proc_free_pages(tracker);
+                        return 0;
+                    }
                 }
             }
         }
@@ -214,15 +238,19 @@ void* load_elf_dynamic(char*                path,
 
         int rc = dynlink_process_dynamic(ctx, load_base, dyn_vaddr);
         if (rc != 0) {
-            kprint("ELF: dynamic linking failed\n");
+            kprint("[ELF-DYN] ERR: dynamic linking failed\n");
             proc_free_pages(tracker);
             return 0;
         }
 
-        kprint("ELF: dynamic linking complete\n");
+        kprint("[ELF-DYN] dynamic linking complete\n"); // [DBG]
     } else {
-        kprint("ELF: no PT_DYNAMIC — treating as static\n");
+        kprint("[ELF-DYN] no PT_DYNAMIC — treating as static\n"); // [DBG]
     }
+
+    // [DBG]
+    kprint("[ELF-DYN] loaded ok, total pages=");
+    itoa((int)tracker->count, buf); kprint(buf); kprint("\n");
 
     return (void*)hdr.e_entry;
 }
