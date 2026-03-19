@@ -27,11 +27,10 @@ DRIVER_PCI_DRV_DIR    = Lux/drivers/pci/driver
 DRIVER_PCI_LOADER_DIR = Lux/drivers/pci/loader
 DRIVER_NVME_DIR  = Lux/drivers/block/NVMe
 DRIVER_BUF_DIR   = Lux/drivers/block/buf
-DRIVER_USB_DIR      = Lux/drivers/usb
-DRIVER_USB_UHCI_DIR = Lux/drivers/input/uhci
-DRIVER_USB_OHCI_DIR = Lux/drivers/input/ohci
-DRIVER_USB_HID_DIR  = Lux/drivers/usb/hid
-DRIVER_USB_HUB_DIR  = Lux/drivers/usb/hub
+DRIVER_USB_DIR       = Lux/drivers/usb
+DRIVER_USB_XHCI_DIR  = Lux/drivers/usb/xHCI
+DRIVER_USB_HID_DIR   = Lux/drivers/usb/hid
+DRIVER_USB_HUB_DIR   = Lux/drivers/usb/hub
 FS_VFS_DIR       = Lux/fs/vfs
 FS_PIPE_DIR      = Lux/pipe
 FS_DEVFS_DIR     = Lux/fs/vfs/devfs
@@ -80,8 +79,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_NVME_DIR) \
          -I$(DRIVER_BUF_DIR) \
          -I$(DRIVER_USB_DIR) \
-         -I$(DRIVER_USB_UHCI_DIR) \
-         -I$(DRIVER_USB_OHCI_DIR) \
+         -I$(DRIVER_USB_XHCI_DIR) \
          -I$(DRIVER_USB_HID_DIR) \
          -I$(DRIVER_USB_HUB_DIR) \
          -I$(FS_VFS_DIR) \
@@ -150,8 +148,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/ps_2_keyboard.o \
       $(BUILD_DIR)/ps_2_mouse.o \
       $(BUILD_DIR)/usb.o \
-      $(BUILD_DIR)/usb_uhci.o \
-      $(BUILD_DIR)/usb_ohci.o \
+      $(BUILD_DIR)/xhci.o \
       $(BUILD_DIR)/usb_hid.o \
       $(BUILD_DIR)/usb_hub.o \
       $(BUILD_DIR)/net.o \
@@ -228,7 +225,6 @@ $(BUILD_DIR)/syscall.o: $(KERN_CORE_DIR)/syscall.c
 $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
-
 
 $(BUILD_DIR)/memory.o: $(KERN_MEM_DIR)/memory.c
 	@mkdir -p $(BUILD_DIR)
@@ -364,11 +360,7 @@ $(BUILD_DIR)/usb.o: $(DRIVER_USB_DIR)/usb.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/usb_uhci.o: $(DRIVER_USB_UHCI_DIR)/usb_uhci.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/usb_ohci.o: $(DRIVER_USB_OHCI_DIR)/usb_ohci.c
+$(BUILD_DIR)/xhci.o: $(DRIVER_USB_XHCI_DIR)/xhci.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
