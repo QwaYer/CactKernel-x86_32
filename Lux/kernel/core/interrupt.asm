@@ -41,6 +41,8 @@ global nvme_isr
 global mouse_isr
 global ohci_isr
 global uhci_isr
+global spurious_irq7
+global spurious_irq15
 
 extern ps2_keyboard_handler
 extern virtio_net_irq_handler
@@ -397,14 +399,14 @@ ohci_isr:
     mov es, ax
     call ohci_irq_handler
     mov al, 0x20
-    out 0xA0, al     
-    out 0x20, al       
+    out 0xA0, al
+    out 0x20, al
     pop es
     pop ds
     popa
     iretd
 
-; Syscall (INT 0x80) — DPL=3, из userspace
+; Syscall (INT 0x80)
 syscall_isr:
     pusha
     push ds
@@ -430,4 +432,37 @@ syscall_isr:
     pop es
     pop ds
     popa
+    iretd
+
+; Spurious IRQ7 (master PIC, vector 0x27)
+spurious_irq7:
+    push eax
+    mov al, 0x0B
+    out 0x20, al
+    in  al, 0x20
+    test al, 0x80
+    jz .spur7
+    mov al, 0x20
+    out 0x20, al
+.spur7:
+    pop eax
+    iretd
+
+; Spurious IRQ15 (slave PIC, vector 0x2F)
+spurious_irq15:
+    push eax
+    mov al, 0x0B
+    out 0xA0, al
+    in  al, 0xA0
+    test al, 0x80
+    jz .spur15
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    pop eax
+    iretd
+.spur15:
+    mov al, 0x20
+    out 0x20, al
+    pop eax
     iretd
