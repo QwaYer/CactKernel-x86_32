@@ -7,7 +7,6 @@ int proc_tracker_add(proc_page_tracker_t* t, void* phys)
 {
     if (!t || !phys) return -1;
 
-    // lazy init
     if (!t->pages) {
         t->pages = (void**)kmalloc(PROC_INITIAL_PAGES * sizeof(void*));
         if (!t->pages) {
@@ -19,14 +18,8 @@ int proc_tracker_add(proc_page_tracker_t* t, void* phys)
         t->capacity = PROC_INITIAL_PAGES;
     }
 
-    // grow
     if (t->count >= t->capacity) {
         uint32_t new_cap = t->capacity + PROC_GROW_STEP;
-
-        // [DBG]
-        kprint("[PROC_MM] growing tracker ");
-        char buf[16]; itoa((int)t->capacity, buf); kprint(buf);
-        kprint(" -> "); itoa((int)new_cap, buf); kprint(buf); kprint("\n");
 
         void** new_arr = (void**)kmalloc(new_cap * sizeof(void*));
         if (!new_arr) {
@@ -50,11 +43,6 @@ int proc_tracker_add(proc_page_tracker_t* t, void* phys)
 void proc_free_pages(proc_page_tracker_t* t)
 {
     if (!t) return;
-
-    // [DBG]
-    kprint("[PROC_MM] freeing ");
-    char buf[16]; itoa((int)t->count, buf); kprint(buf);
-    kprint(" pages\n");
 
     if (t->pages) {
         for (uint32_t i = 0; i < t->count; i++) {

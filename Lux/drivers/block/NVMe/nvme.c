@@ -5,12 +5,15 @@
 #include "kernel.h"
 #include "memory.h"
 #include "libc.h"
+#include "task.h"
+#include "sync.h"
 
 static struct nvme_dev ndev;
 static int nvme_ready = 0;
 
 static struct buf *disk_queue      = 0;
 static struct buf *disk_queue_tail = 0;
+static irq_spinlock_t disk_lock;
 
 static volatile uint16_t admin_cid = 0;
 static volatile uint16_t io_cid    = 0;
@@ -89,6 +92,7 @@ static void io_submit_rw(struct buf *b) {
 }
 
 void bio_enqueue_sync(struct buf *b) {
+    irq_spinlock_acquire(&disk_lock);
     b->qnext = 0;
     b->flags |= B_QUEUED;
     if (!disk_queue) {
@@ -98,6 +102,7 @@ void bio_enqueue_sync(struct buf *b) {
         disk_queue_tail->qnext = b;
         disk_queue_tail = b;
     }
+    irq_spinlock_release(&disk_lock);
 }
 
 void nvme_irq_handler(void) {
@@ -133,19 +138,32 @@ void bio_irq_complete(int error) {
         done->flags &= ~B_DIRTY;
     }
 
-    if (done->callback)
+    struct task_struct *w = (struct task_struct *)done->waiter;
+    if (w) {
+        done->waiter = 0;
+        irq_spinlock_acquire(&scheduler_lock);
+        if (w->state == TASK_SLEEPING) {
+            w->state = TASK_READY;
+            sched_queue_remove(&sleep_queue, w);
+            sched_queue_push(&ready_queue, w);
+        }
+        irq_spinlock_release(&scheduler_lock);
+    }
+
+    if (done->callback) {
         done->callback(done, error);
+        done->callback = 0;
+    }
 
     if (disk_queue)
         io_submit_rw(disk_queue);
 }
-
+/
 static int nvme_polled_rw(uint32_t lba, uint8_t *buf, int write) {
-    if (!nvme_ready) {
-        kprint("[NVMe] read_sector but nvme not ready\n");
-        return -1;
-    }
     struct nvme_queue *q = &ndev.io_q;
+
+    uint32_t fl;
+    __asm__ __volatile__("pushf; pop %0; cli" : "=r"(fl) :: "memory");
 
     struct nvme_sq_entry cmd;
     memory_set(&cmd, 0, sizeof(cmd));
@@ -162,6 +180,7 @@ static int nvme_polled_rw(uint32_t lba, uint8_t *buf, int write) {
     q->sq_tail = (q->sq_tail + 1) % q->depth;
     *q->sq_db  = q->sq_tail;
 
+    int result = -1;
     for (int i = 0; i < 2000000; i++) {
         volatile struct nvme_cq_entry *cqe = &q->cq[q->cq_head];
         if ((cqe->status & 1) == q->cq_phase) {
@@ -169,18 +188,26 @@ static int nvme_polled_rw(uint32_t lba, uint8_t *buf, int write) {
             q->cq_head = (q->cq_head + 1) % q->depth;
             if (q->cq_head == 0) q->cq_phase ^= 1;
             *q->cq_db = q->cq_head;
-            return (status & 0x7FF) ? -1 : 0;
+            result = (status & 0x7FF) ? -1 : 0;
+            break;
         }
     }
-    return -1;
+
+    if (fl & (1 << 9)) __asm__ __volatile__("sti");
+
+    if (result < 0) {
+    }
+    return result;
 }
 
 void nvme_read_sector(uint32_t lba, uint8_t *buf) {
+    if (!nvme_ready) return;
     if (nvme_polled_rw(lba, buf, 0) < 0)
         memory_set(buf, 0, NVME_SECTOR_SIZE);
 }
 
 void nvme_write_sector(uint32_t lba, uint8_t *buf) {
+    if (!nvme_ready) return;
     nvme_polled_rw(lba, buf, 1);
 }
 
@@ -234,6 +261,7 @@ static int nvme_create_io_queues(void) {
 
     struct nvme_sq_entry cmd;
 
+    /* IO CQ: IEN=1 (interrupts enabled), PC=1 (phys contiguous), IV=0 */
     memory_set(&cmd, 0, sizeof(cmd));
     cmd.cdw0  = NVME_OPC_CREATE_IOCQ | ((uint32_t)(admin_cid++ & 0xFFFF) << 16);
     cmd.prp1  = (uint32_t)io_cq_mem;
@@ -290,6 +318,7 @@ static int nvme_identify(void) {
 
 void nvme_init(void) {
     binit();
+    irq_spinlock_init(&disk_lock);
 
     memory_set(&ndev, 0, sizeof(ndev));
     nvme_ready = 0;
@@ -321,7 +350,6 @@ void nvme_init(void) {
 
     nvme_setup_admin_queues();
 
-    // CC: IOCQES=4 [23:20], IOSQES=6 [19:16], MPS=0 [10:7], CSS=0 [6:4], EN=1 [0]
     ndev.bar->cc = (4 << 20) | (6 << 16) | (0 << 7) | 1;
     nvme_wait_ready(1);
 
@@ -335,7 +363,6 @@ void nvme_init(void) {
     if (nvme_create_io_queues() < 0) return;
 
     nvme_ready = 1;
-
 }
 
 //public api
