@@ -1,4 +1,5 @@
 #include "pagecache.h"
+#include "buf.h"
 #include "nvme.h"
 #include "kernel.h"
 #include "memory.h"
@@ -123,7 +124,7 @@ static struct page *_alloc_page(void) {
 }
 
 
-//Public api
+//public api
 void pc_init(void) {
     memory_set(pool,       0, sizeof(pool));
     memory_set(hash_table, 0, sizeof(hash_table));
@@ -133,8 +134,6 @@ void pc_init(void) {
     stat_misses   = 0;
     stat_evictions = 0;
     stat_writebacks = 0;
-
-
 }
 
 uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
@@ -188,7 +187,9 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
 
 void pc_mark_dirty(uint32_t dev, uint32_t block_no) {
     struct page *p = _hash_find(dev, block_no);
-    if (p) p->flags |= PC_FLAG_DIRTY;
+    if (!p) return;
+    p->flags |= PC_FLAG_DIRTY;
+    _writeback(p);
 }
 
 void pc_put_page(uint32_t dev, uint32_t block_no) {

@@ -2,6 +2,8 @@
 #include "nvme.h"
 #include "kernel.h"
 #include "memory.h"
+#include "task.h"
+#include "sync.h"
 
 #define NBUF 30
 
@@ -10,8 +12,11 @@ struct {
     struct buf head;
 } bcache;
 
+static irq_spinlock_t bcache_lock;
+
 void binit(void) {
     struct buf* b;
+    irq_spinlock_init(&bcache_lock);
     bcache.head.prev = &bcache.head;
     bcache.head.next = &bcache.head;
     for (b = bcache.buf; b < bcache.buf + NBUF; b++) {
@@ -29,10 +34,17 @@ void binit(void) {
 static struct buf* bget(uint32_t dev, uint32_t blockno) {
     struct buf* b;
 
+    irq_spinlock_acquire(&bcache_lock);
+
     for (b = bcache.head.next; b != &bcache.head; b = b->next) {
         if (b->dev == dev && b->blockno == blockno) {
-            while (b->flags & B_BUSY) schedule();
+            while (b->flags & B_BUSY) {
+                irq_spinlock_release(&bcache_lock);
+                schedule();
+                irq_spinlock_acquire(&bcache_lock);
+            }
             b->flags |= B_BUSY;
+            irq_spinlock_release(&bcache_lock);
             return b;
         }
     }
@@ -45,12 +57,36 @@ static struct buf* bget(uint32_t dev, uint32_t blockno) {
             b->waiter   = 0;
             b->callback = 0;
             b->qnext    = 0;
+            irq_spinlock_release(&bcache_lock);
             return b;
         }
     }
 
+    irq_spinlock_release(&bcache_lock);
     kprint("[buf] bget: no free buffers!\n");
     return 0;
+}
+
+static void bio_wait(struct buf* b) {
+    if (!current_task) {
+        while (b->flags & B_QUEUED)
+            __asm__ __volatile__("sti; hlt" ::: "memory");
+        return;
+    }
+
+    while (1) {
+        irq_spinlock_acquire(&bcache_lock);
+        if (!(b->flags & B_QUEUED)) {
+            irq_spinlock_release(&bcache_lock);
+            return;
+        }
+        b->waiter = (void*)current_task;
+        irq_spinlock_acquire(&scheduler_lock);
+        current_task->state = TASK_SLEEPING;
+        irq_spinlock_release(&scheduler_lock);
+        irq_spinlock_release(&bcache_lock);
+        schedule();
+    }
 }
 
 struct buf* bread(uint32_t dev, uint32_t blockno) {
@@ -61,13 +97,10 @@ struct buf* bread(uint32_t dev, uint32_t blockno) {
         return b;
 
     bio_enqueue_sync(b);
+    bio_wait(b);
 
-    while (b->flags & B_QUEUED)
-        schedule();
-
-    if (!(b->flags & B_VALID)) {
-        nvme_read_sector(b->blockno, b->data);
-        b->flags |= B_VALID;
+    if (b->flags & B_ERROR) {
+        b->flags &= ~B_ERROR;
     }
 
     return b;
@@ -80,13 +113,10 @@ void bwrite(struct buf* b) {
     }
     b->flags |= B_DIRTY;
     bio_enqueue_sync(b);
+    bio_wait(b);
 
-    while (b->flags & B_QUEUED)
-        schedule();
-
-    if (b->flags & B_DIRTY) {
-        nvme_write_sector(b->blockno, b->data);
-        b->flags &= ~B_DIRTY;
+    if (b->flags & B_ERROR) {
+        b->flags &= ~B_ERROR;
     }
 }
 
@@ -118,6 +148,7 @@ void brelse(struct buf* b) {
         kprint("[buf] brelse: buffer not busy\n");
         return;
     }
+    irq_spinlock_acquire(&bcache_lock);
     b->next->prev = b->prev;
     b->prev->next = b->next;
     b->next = bcache.head.next;
@@ -125,4 +156,5 @@ void brelse(struct buf* b) {
     bcache.head.next->prev = b;
     bcache.head.next       = b;
     b->flags &= ~B_BUSY;
+    irq_spinlock_release(&bcache_lock);
 }

@@ -18,6 +18,7 @@
 #include "elf.h"   
 #include "dynlink.h"      
 #include "proc_mm.h"  
+#include "pagecache.h"
 
 
 //Утилиты 
@@ -162,32 +163,40 @@ static void cmd_lsraw(char* args) {
 static void cmd_mkdir(char* args) {
     char* name = _skip_token(args);
     if (!name) { kprint("\nUsage: mkdir <n>\n"); return; }
-    if (mkdir_vfs(current_dir ? current_dir : vfs_root, name) == 0)
+    if (mkdir_vfs(current_dir ? current_dir : vfs_root, name) == 0) {
+        pc_flush_dev(0);
         kprint("\nDirectory created.\n");
+    }
     else kprint("\nError: could not create directory.\n");
 }
 
 static void cmd_rmdir(char* args) {
     char* name = _skip_token(args);
     if (!name) { kprint("\nUsage: rmdir <dir>\n"); return; }
-    if (rmdir_vfs(current_dir ? current_dir : vfs_root, name) == 0)
+    if (rmdir_vfs(current_dir ? current_dir : vfs_root, name) == 0) {
+        pc_flush_dev(0);
         kprint("\nDirectory removed.\n");
+    }
     else kprint("\nError: not found or not empty.\n");
 }
 
 static void cmd_tch(char* args) {
     char* name = _skip_token(args);
     if (!name) { kprint("\nUsage: tch <file>\n"); return; }
-    if (create_vfs(current_dir ? current_dir : vfs_root, name) == 0)
+    if (create_vfs(current_dir ? current_dir : vfs_root, name) == 0) {
+        pc_flush_dev(0);
         kprint("\nFile created.\n");
+    }
     else kprint("\nError: could not create file.\n");
 }
 
 static void cmd_rm(char* args) {
     char* name = _skip_token(args);
     if (!name) { kprint("\nUsage: rm <file>\n"); return; }
-    if (delete_vfs(current_dir ? current_dir : vfs_root, name) == 0)
+    if (delete_vfs(current_dir ? current_dir : vfs_root, name) == 0) {
+        pc_flush_dev(0);
         kprint("\nFile deleted.\n");
+    }
     else kprint("\nError: file not found.\n");
 }
 
@@ -241,6 +250,7 @@ static void cmd_wrt(char* args) {
         if (buf && len > 0) {
             write_vfs(node, 0, (unsigned int)len, buf);
             kfree_heap(buf);
+            pc_flush_dev(0);
             kprint("\nWritten.\n");
         } else {
             if (buf) kfree_heap(buf);
@@ -251,7 +261,10 @@ static void cmd_wrt(char* args) {
 
     char* text = _skip_token(name);
     if (!text) { kprint("\nUsage: wrt <file> <text>\n"); return; }
-    if (write_vfs(node, 0, strlen(text), text) > 0) kprint("\nWritten.\n");
+    if (write_vfs(node, 0, strlen(text), text) > 0) {
+        pc_flush_dev(0);
+        kprint("\nWritten.\n");
+    }
     else kprint("\nError: write failed.\n");
 }
 
@@ -353,7 +366,9 @@ static void cmd_clear(char* args)  { (void)args; clear_screen(); }
 
 static void cmd_reboot(char* args) {
     (void)args;
-    kprint("\nRebooting...\n");
+    kprint("\nSyncing disks...\n");
+    pc_flush_dev(0);
+    kprint("Rebooting...\n");
     unsigned char good = 0x02;
     while (good & 0x02) good = port_byte_in(0x64);
     port_byte_out(0x64, 0xFE);

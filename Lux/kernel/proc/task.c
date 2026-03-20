@@ -10,13 +10,13 @@
 struct task_struct* volatile current_task   = 0;
 struct task_struct* volatile task_list_head = 0;
 uint32_t            next_pid                = 1;
-spinlock_t          scheduler_lock;
+irq_spinlock_t      scheduler_lock;
 
 sched_queue_t ready_queue;
 sched_queue_t sleep_queue;
 sched_queue_t zombie_queue;
 
-static volatile int schedule_in_progress = 0; // reentrancy guard
+static volatile int schedule_in_progress = 0;
 
 extern void vmm_fork_address_space(uint32_t* src_pd, uint32_t* dst_pd);
 
@@ -69,11 +69,10 @@ void task_init() {
     task_list_head = 0;
     next_pid       = 1;
     schedule_in_progress = 0;
-    spinlock_init(&scheduler_lock);
+    irq_spinlock_init(&scheduler_lock);
     sched_queue_init(&ready_queue);
     sched_queue_init(&sleep_queue);
     sched_queue_init(&zombie_queue);
-    kprint("[SCHED] task_init done\n"); // [DBG]
 }
 
 
@@ -86,11 +85,11 @@ struct task_struct* create_task(void (*entry_point)()) {
 
     uint32_t* esp = (uint32_t*)((uint32_t)stack + 4096);
 
-    // iret frame for kernel task: eflags, cs, eip
+    // iret frame for kernel task (ring0→ring0, no ss/useresp)
     *(--esp) = 0x00000202;           // eflags (IF=1)
     *(--esp) = 0x08;                 // cs
     *(--esp) = (uint32_t)entry_point;// eip
-    // pusha: eax ecx edx ebx esp ebp esi edi
+    // pusha order: eax ecx edx ebx esp ebp esi edi
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     // ds, es
@@ -110,14 +109,11 @@ struct task_struct* create_task(void (*entry_point)()) {
     t->dyn_ctx        = 0;
     proc_tracker_init(&t->mm);
 
-    // [DBG]
-    kprint("[SCHED] create_task pid=");
-    char buf[16]; itoa((int)t->pid, buf); kprint(buf); kprint("\n");
 
-    spinlock_acquire(&scheduler_lock);
+    irq_spinlock_acquire(&scheduler_lock);
     task_list_add(t);
     sched_queue_push(&ready_queue, t);
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
     return t;
 }
 
@@ -144,7 +140,7 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     *(--esp) = 0x00000202;                    // eflags (IF=1)
     *(--esp) = 0x1B;                          // cs (user code)
     *(--esp) = (uint32_t)entry_point;         // eip
-    // pusha order: eax ecx edx ebx esp ebp esi edi (8 regs)
+    // pusha order: eax ecx edx ebx esp ebp esi edi
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     // ds, es
@@ -166,10 +162,10 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     for (int i = 0; i < MAX_FD; i++) t->fd_table[i] = 0;
 
     if (add_to_list) {
-        spinlock_acquire(&scheduler_lock);
+        irq_spinlock_acquire(&scheduler_lock);
         task_list_add(t);
         sched_queue_push(&ready_queue, t);
-        spinlock_release(&scheduler_lock);
+        irq_spinlock_release(&scheduler_lock);
     }
     return t;
 }
@@ -182,40 +178,27 @@ struct task_struct* create_task_with_entry(void*                entry,
                                             uint32_t*            pd,
                                             proc_page_tracker_t* tracker)
 {
-    __asm__ __volatile__("cli");
-
     struct task_struct* t = create_user_task_internal(entry, 0);
-    if (!t) { __asm__ __volatile__("sti"); return 0; }
+    if (!t) return 0;
 
     t->mm = *tracker;
-    // tracker ownership transferred — caller must not free
 
     t->page_directory = pd;
 
-    // fix eip in the stack frame — entry is at offset 10 from bottom
-    // stack layout (bottom to top): es ds edi esi ebp esp_dummy ebx edx ecx eax eip cs eflags useresp ss
-    // esp points at es, so eip = esp[10]
     uint32_t* stk = (uint32_t*)t->esp;
     stk[10] = (uint32_t)entry;
 
-    // [DBG]
-    kprint("[SCHED] create_task_with_entry pid=");
-    char buf[16]; itoa((int)t->pid, buf); kprint(buf);
-    kprint(" entry=0x"); kprint_hex((uint32_t)entry); kprint("\n");
 
     vmm_map(pd, t->ustack_virt, (uint32_t)t->ustack_phys,
             PAGE_USER | PAGE_RW | PAGE_PRESENT);
 
-    tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
-
     task_setup_sigreturn(t);
 
-    spinlock_acquire(&scheduler_lock);
+    irq_spinlock_acquire(&scheduler_lock);
     task_list_add(t);
     sched_queue_push(&ready_queue, t);
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
 
-    __asm__ __volatile__("sti");
     return t;
 }
 
@@ -227,32 +210,28 @@ struct task_struct* create_task_dynamic(void*                entry,
     struct task_struct* t = create_task_with_entry(entry, pd, tracker);
     if (!t) return 0;
 
-    spinlock_acquire(&scheduler_lock);
+    irq_spinlock_acquire(&scheduler_lock);
     t->dyn_ctx = ctx;
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
 
     return t;
 }
 
 
 struct task_struct* create_elf_task(char* path) {
-    __asm__ __volatile__("cli");
-
     uint32_t* pd = vmm_create_address_space();
-    if (!pd) { __asm__ __volatile__("sti"); return 0; }
+    if (!pd) return 0;
 
     struct task_struct* t = create_user_task_internal((void*)0, 0);
-    if (!t) { kfree_page(pd); __asm__ __volatile__("sti"); return 0; }
+    if (!t) { kfree_page(pd); return 0; }
 
     proc_tracker_init(&t->mm);
     void* entry_point = load_elf(path, pd, &t->mm);
     if (!entry_point) {
-        kprint("[SCHED] ELF load failed for: "); kprint(path); kprint("\n"); // [DBG]
         kfree_page(t->stack_base);
         kfree_page(t->ustack_phys);
         kfree_heap(t);
         kfree_page(pd);
-        __asm__ __volatile__("sti");
         return 0;
     }
 
@@ -267,14 +246,11 @@ struct task_struct* create_elf_task(char* path) {
 
     task_setup_sigreturn(t);
 
-    tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
-
-    spinlock_acquire(&scheduler_lock);
+    irq_spinlock_acquire(&scheduler_lock);
     task_list_add(t);
     sched_queue_push(&ready_queue, t);
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
 
-    __asm__ __volatile__("sti");
     return t;
 }
 
@@ -282,7 +258,7 @@ struct task_struct* create_elf_task(char* path) {
 int init_scheduler() {
     current_task = (struct task_struct*)kmalloc(sizeof(struct task_struct));
     if (!current_task) {
-        kprint("[SCHED] FATAL: cannot alloc idle task\n"); // [DBG]
+        kprint("[SCHED] FATAL: cannot alloc idle task\n");
         return -1;
     }
 
@@ -300,7 +276,6 @@ int init_scheduler() {
     proc_tracker_init(&current_task->mm);
     task_list_head = current_task;
 
-    kprint("[SCHED] init_scheduler: idle pid=0 ok\n"); // [DBG]
 
     create_task(terminal_task);
     return 0;
@@ -309,9 +284,6 @@ int init_scheduler() {
 static void task_reap_internal() {
     struct task_struct* t;
     while ((t = sched_queue_pop(&zombie_queue)) != 0) {
-        // [DBG]
-        kprint("[SCHED] reaping pid=");
-        char buf[16]; itoa((int)t->pid, buf); kprint(buf); kprint("\n");
 
         task_list_remove(t);
 
@@ -337,22 +309,20 @@ static void task_reap_internal() {
 }
 
 void task_reap() {
-    spinlock_acquire(&scheduler_lock);
+    irq_spinlock_acquire(&scheduler_lock);
     task_reap_internal();
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
 }
 
-// public api
 void schedule() {
-    // reentrancy guard — if timer fires while we're already in schedule(), bail
     if (__sync_lock_test_and_set(&schedule_in_progress, 1)) {
         return;
     }
 
-    spinlock_acquire(&scheduler_lock);
+    irq_spinlock_acquire(&scheduler_lock);
 
     if (!task_list_head || !current_task) {
-        spinlock_release(&scheduler_lock);
+        irq_spinlock_release(&scheduler_lock);
         __sync_lock_release(&schedule_in_progress);
         return;
     }
@@ -364,43 +334,42 @@ void schedule() {
         sched_queue_push(&zombie_queue, current_task);
         struct task_struct* next = sched_queue_pop(&ready_queue);
         if (!next) {
-            // CRITICAL: no runnable task — we CANNOT continue as zombie
-            // Force state back to RUNNING so we at least don't crash
-            // The idle loop (pid 0) should always be in the list
-            kprint_color("[SCHED] WARN: zombie but no ready task!\n", 12); // [DBG]
+            kprint_color("[SCHED] WARN: zombie but no ready task!\n", 12);
             current_task->state = TASK_RUNNING;
-            sched_queue_pop(&zombie_queue); // remove ourselves back
-            spinlock_release(&scheduler_lock);
+            sched_queue_pop(&zombie_queue);
+            irq_spinlock_release(&scheduler_lock);
             __sync_lock_release(&schedule_in_progress);
             return;
         }
         current_task = next;
         current_task->state = TASK_RUNNING;
-        goto do_switch;
+        irq_spinlock_release(&scheduler_lock);
+        __sync_lock_release(&schedule_in_progress);
+        return;
     }
 
     if (current_task->state == TASK_SLEEPING) {
         sched_queue_push(&sleep_queue, current_task);
         struct task_struct* next = sched_queue_pop(&ready_queue);
         if (!next) {
-            // no runnable task — stay current (sleeping task becomes running again)
-            kprint_color("[SCHED] WARN: sleeping but no ready task!\n", 14); // [DBG]
+            kprint_color("[SCHED] WARN: sleeping but no ready task!\n", 14);
             sched_queue_remove(&sleep_queue, current_task);
             current_task->state = TASK_RUNNING;
-            spinlock_release(&scheduler_lock);
+            irq_spinlock_release(&scheduler_lock);
             __sync_lock_release(&schedule_in_progress);
             return;
         }
         current_task = next;
         current_task->state = TASK_RUNNING;
-        goto do_switch;
+        irq_spinlock_release(&scheduler_lock);
+        __sync_lock_release(&schedule_in_progress);
+        return;
     }
 
     {
         struct task_struct* next = sched_queue_pop(&ready_queue);
         if (!next) {
-            // only one task (us) — no switch needed
-            spinlock_release(&scheduler_lock);
+            irq_spinlock_release(&scheduler_lock);
             __sync_lock_release(&schedule_in_progress);
             return;
         }
@@ -410,22 +379,14 @@ void schedule() {
         current_task->state = TASK_RUNNING;
     }
 
-do_switch:
-    if (current_task->page_directory)
-        switch_paging(current_task->page_directory);
-    else {
-        extern uint32_t page_directory[1024];
-        switch_paging(page_directory);
-    }
-    tss_entry.esp0 = (uint32_t)current_task->stack_base + 4096;
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
     __sync_lock_release(&schedule_in_progress);
 }
 
 
 void list_tasks() {
-    spinlock_acquire(&scheduler_lock);
-    if (!task_list_head) { spinlock_release(&scheduler_lock); return; }
+    irq_spinlock_acquire(&scheduler_lock);
+    if (!task_list_head) { irq_spinlock_release(&scheduler_lock); return; }
 
     int count = 0;
     struct task_struct* tmp = task_list_head;
@@ -439,7 +400,7 @@ void list_tasks() {
         tasks[i].is_kernel = tmp->is_kernel;
         tmp = tmp->next;
     }
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
 
     kprint("\nPID  STATE     TYPE\n");
     kprint("---  --------  --------\n");
@@ -461,16 +422,15 @@ void list_tasks() {
 
 void task_kill(uint32_t pid) {
     if (pid == 0) {
-        kprint("[SCHED] cannot kill pid 0\n"); // [DBG]
         return;
     }
     task_signal(pid, SIGKILL);
 }
 
 void task_signal(uint32_t pid, uint32_t signal) {
-    spinlock_acquire(&scheduler_lock);
+    irq_spinlock_acquire(&scheduler_lock);
     struct task_struct* t = task_list_head;
-    if (!t) { spinlock_release(&scheduler_lock); return; }
+    if (!t) { irq_spinlock_release(&scheduler_lock); return; }
 
     do {
         if (t->pid == pid) {
@@ -486,7 +446,7 @@ void task_signal(uint32_t pid, uint32_t signal) {
         t = t->next;
     } while (t != task_list_head);
 
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
 }
 
 void task_handle_signals(struct task_struct* t) {
@@ -495,7 +455,6 @@ void task_handle_signals(struct task_struct* t) {
     if (t->pending_signals & SIGKILL) {
         t->pending_signals = 0;
         t->state = TASK_ZOMBIE;
-        // [DBG]
         kprint("[SCHED] SIGKILL pid=");
         char buf[16]; itoa((int)t->pid, buf); kprint(buf); kprint("\n");
         return;
@@ -526,7 +485,7 @@ void task_handle_signals(struct task_struct* t) {
 
 int task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler) {
     if (!t || signum >= NSIG) return -1;
-    if (signum == 0) return -1; // SIGKILL cannot be caught
+    if (signum == 0) return -1;
     t->signal_handlers[signum] = handler;
     return 0;
 }
@@ -553,22 +512,22 @@ void task_setup_sigreturn(struct task_struct* t) {
 
 
 struct task_struct* task_fork(struct context_frame* regs) {
-    __asm__ __volatile__("cli");
+    irq_spinlock_acquire(&scheduler_lock);
 
     struct task_struct* parent = (struct task_struct*)current_task;
-    if (!parent) { __asm__ __volatile__("sti"); return 0; }
+    if (!parent) { irq_spinlock_release(&scheduler_lock); return 0; }
 
     uint32_t* child_pd = vmm_create_address_space();
-    if (!child_pd) { __asm__ __volatile__("sti"); return 0; }
+    if (!child_pd) { irq_spinlock_release(&scheduler_lock); return 0; }
 
     struct task_struct* child = (struct task_struct*)kmalloc(sizeof(struct task_struct));
-    if (!child) { kfree_page(child_pd); __asm__ __volatile__("sti"); return 0; }
+    if (!child) { kfree_page(child_pd); irq_spinlock_release(&scheduler_lock); return 0; }
 
     uint32_t* kstack = (uint32_t*)kalloc();
-    if (!kstack) { kfree_heap(child); kfree_page(child_pd); __asm__ __volatile__("sti"); return 0; }
+    if (!kstack) { kfree_heap(child); kfree_page(child_pd); irq_spinlock_release(&scheduler_lock); return 0; }
 
     uint32_t* ustack_phys = (uint32_t*)kalloc();
-    if (!ustack_phys) { kfree_page(kstack); kfree_heap(child); kfree_page(child_pd); __asm__ __volatile__("sti"); return 0; }
+    if (!ustack_phys) { kfree_page(kstack); kfree_heap(child); kfree_page(child_pd); irq_spinlock_release(&scheduler_lock); return 0; }
 
     child->pid            = next_pid++;
     child->state          = TASK_READY;
@@ -618,16 +577,11 @@ struct task_struct* task_fork(struct context_frame* regs) {
 
     child->esp = (uint32_t)esp;
 
-    // [DBG]
-    kprint("[SCHED] fork: child pid=");
-    char buf[16]; itoa((int)child->pid, buf); kprint(buf); kprint("\n");
 
-    spinlock_acquire(&scheduler_lock);
     task_list_add(child);
     sched_queue_push(&ready_queue, child);
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
 
-    __asm__ __volatile__("sti");
     return child;
 }
 
@@ -637,16 +591,16 @@ struct task_struct* task_fork(struct context_frame* regs) {
 #endif
 
 int task_exec(char* path, struct context_frame* regs) {
-    __asm__ __volatile__("cli");
     (void)regs;
 
     if (!path || (uint32_t)path >= KERNEL_BASE) {
-        __asm__ __volatile__("sti");
         return -1;
     }
 
     struct task_struct* t = current_task;
-    if (!t || t->is_kernel) { __asm__ __volatile__("sti"); return -1; }
+    if (!t || t->is_kernel) return -1;
+
+    irq_spinlock_acquire(&scheduler_lock);
 
     if (t->dyn_ctx) {
         dynlink_unload_all(t->dyn_ctx);
@@ -655,16 +609,20 @@ int task_exec(char* path, struct context_frame* regs) {
     }
 
     uint32_t* new_pd = vmm_create_address_space();
-    if (!new_pd) { __asm__ __volatile__("sti"); return -1; }
+    if (!new_pd) { irq_spinlock_release(&scheduler_lock); return -1; }
 
     proc_page_tracker_t new_mm;
     proc_tracker_init(&new_mm);
+
+    irq_spinlock_release(&scheduler_lock);
+
     void* entry = load_elf(path, new_pd, &new_mm);
     if (!entry) {
         kfree_page(new_pd);
-        __asm__ __volatile__("sti");
         return -1;
     }
+
+    irq_spinlock_acquire(&scheduler_lock);
 
     if (t->page_directory) {
         proc_free_pages(&t->mm);
@@ -672,7 +630,6 @@ int task_exec(char* path, struct context_frame* regs) {
     }
 
     t->mm = new_mm;
-
     t->page_directory = new_pd;
     t->pending_signals = 0;
     for (int i = 0; i < NSIG; i++) t->signal_handlers[i] = SIG_DFL;
@@ -696,14 +653,10 @@ int task_exec(char* path, struct context_frame* regs) {
 
     tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
 
+    irq_spinlock_release(&scheduler_lock);
+
     switch_paging(new_pd);
 
-    // [DBG]
-    kprint("[SCHED] exec pid=");
-    char buf[16]; itoa((int)t->pid, buf); kprint(buf);
-    kprint(" -> "); kprint(path); kprint("\n");
-
-    __asm__ __volatile__("sti");
 
     __asm__ __volatile__(
         "mov $0x23, %%eax\n\t"
@@ -721,5 +674,5 @@ int task_exec(char* path, struct context_frame* regs) {
         : "eax"
     );
 
-    return 0; // never reached
+    return 0;
 }

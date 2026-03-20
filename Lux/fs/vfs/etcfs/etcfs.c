@@ -215,8 +215,6 @@ static void _load_all(void) {
 
         slot->next = etc_list;
         etc_list   = slot;
-
-        kprint("[etcfs] loaded: /etc/"); kprint(de->name); kprint("\n");
     }
 }
 

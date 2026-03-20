@@ -30,14 +30,16 @@ void irq_spinlock_init(irq_spinlock_t* lock) {
 }
 
 void irq_spinlock_acquire(irq_spinlock_t* lock) {
-    lock->saved_flags = read_eflags();
+    uint32_t flags = read_eflags();
     __asm__ __volatile__("cli");
     spinlock_acquire(&lock->spin);
+    lock->saved_flags = flags;
 }
 
 void irq_spinlock_release(irq_spinlock_t* lock) {
+    uint32_t flags = lock->saved_flags;
     spinlock_release(&lock->spin);
-    if (lock->saved_flags & (1 << 9))   /* IF = бит 9 в EFLAGS */
+    if (flags & (1 << 9))
         __asm__ __volatile__("sti");
 }
 
@@ -62,9 +64,9 @@ void mutex_lock(mutex_t* m) {
         if (current_task && m->waiter_count < MUTEX_WAIT_QUEUE_MAX) {
             m->waiters[m->waiter_count++] = current_task;
 
-            spinlock_acquire(&scheduler_lock);
+            irq_spinlock_acquire(&scheduler_lock);
             current_task->state = TASK_SLEEPING;
-            spinlock_release(&scheduler_lock);
+            irq_spinlock_release(&scheduler_lock);
 
             spinlock_release(&m->guard);
 
@@ -114,10 +116,10 @@ void mutex_unlock(mutex_t* m) {
 
         spinlock_release(&m->guard);
 
-        spinlock_acquire(&scheduler_lock);
+        irq_spinlock_acquire(&scheduler_lock);
         if (woken && woken->state == TASK_SLEEPING)
             woken->state = TASK_READY;
-        spinlock_release(&scheduler_lock);
+        irq_spinlock_release(&scheduler_lock);
     } else {
         spinlock_release(&m->guard);
     }
@@ -134,9 +136,9 @@ void sema_down(semaphore_t* s) {
         if (current_task && s->waiter_count < MUTEX_WAIT_QUEUE_MAX) {
             s->waiters[s->waiter_count++] = current_task;
             
-            spinlock_acquire(&scheduler_lock);
+            irq_spinlock_acquire(&scheduler_lock);
             current_task->state = TASK_SLEEPING;
-            spinlock_release(&scheduler_lock);
+            irq_spinlock_release(&scheduler_lock);
             
             spinlock_release(&s->guard);
             schedule();
@@ -156,10 +158,10 @@ void sema_up(semaphore_t* s) {
         s->waiter_count--;
         spinlock_release(&s->guard);
 
-        spinlock_acquire(&scheduler_lock);
+        irq_spinlock_acquire(&scheduler_lock);
         if (woken && woken->state == TASK_SLEEPING)
             woken->state = TASK_READY;
-        spinlock_release(&scheduler_lock);
+        irq_spinlock_release(&scheduler_lock);
     } else {
         spinlock_release(&s->guard);
     }
