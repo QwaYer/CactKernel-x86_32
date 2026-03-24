@@ -16,6 +16,7 @@
 #include "font.h"
 #include "swap.h"
 #include "pagecache.h"
+#include "blkdev.h"
 
 extern uint32_t page_directory[1024];
 
@@ -143,46 +144,29 @@ void exception_handler(struct context_frame* regs) {
     char buf[32];
 
     if (current_task && !current_task->is_kernel) {
-        kprint_color("\n[KERNEL] User process crashed. Exception ID: ", COLOR_LIGHT_RED);
-        itoa(regs->int_no, buf);
-        kprint_color(buf, COLOR_LIGHT_RED);
-        kprint_color(" PID: ", COLOR_LIGHT_RED);
-        itoa(current_task->pid, buf);
-        kprint_color(buf, COLOR_LIGHT_RED);
+        kprint_color("\n[KERNEL] User process crashed.", COLOR_LIGHT_RED);
+        kprint(" int="); itoa((int)regs->int_no, buf); kprint(buf);
+        kprint(" err="); hex_to_ascii(regs->err_code, buf); kprint(buf);
+        kprint(" eip="); hex_to_ascii(regs->eip, buf); kprint(buf);
         kprint("\n");
-
-        task_signal(current_task->pid, SIGKILL);
+        task_kill(current_task->pid);
         schedule();
         return;
     }
 
-    clear_screen();
-    kprint_color("!!! KERNEL FATAL ERROR !!!\n", COLOR_LIGHT_RED);
-
-    kprint("Exception ID: ");
-    itoa(regs->int_no, buf);
-    kprint_color(buf, COLOR_LIGHT_RED);
-
-    kprint("\nError Code: 0x");
-    hex_to_ascii(regs->err_code, buf);
-    kprint_color(buf, COLOR_LIGHT_RED);
-
-    kprint("\nEIP (Address): 0x");
-    hex_to_ascii(regs->eip, buf);
-    kprint_color(buf, COLOR_LIGHT_RED);
-
-    kprint("\nEAX: 0x"); hex_to_ascii(regs->eax, buf); kprint(buf);
-    kprint("  EBX: 0x"); hex_to_ascii(regs->ebx, buf); kprint(buf);
-    kprint("\nECX: 0x"); hex_to_ascii(regs->ecx, buf); kprint(buf);
-    kprint("  EDX: 0x"); hex_to_ascii(regs->edx, buf); kprint(buf);
-    kprint("\nESI: 0x"); hex_to_ascii(regs->esi, buf); kprint(buf);
-    kprint("  EDI: 0x"); hex_to_ascii(regs->edi, buf); kprint(buf);
-    kprint("\nEBP: 0x"); hex_to_ascii(regs->ebp, buf); kprint(buf);
-
-    kprint("\nEFLAGS: 0x");
-    hex_to_ascii(regs->eflags, buf); kprint(buf);
-
-    kprint_color("\nSystem Halted.", COLOR_LIGHT_RED);
+    kprint_color("\n=== KERNEL PANIC ===\n", COLOR_LIGHT_RED);
+    kprint("Exception: "); itoa((int)regs->int_no, buf); kprint(buf);
+    kprint(" Error code: "); hex_to_ascii(regs->err_code, buf); kprint(buf);
+    kprint("\nEIP: "); hex_to_ascii(regs->eip, buf); kprint(buf);
+    kprint(" CS: "); hex_to_ascii(regs->cs, buf); kprint(buf);
+    kprint("\nEAX: "); hex_to_ascii(regs->eax, buf); kprint(buf);
+    kprint(" EBX: "); hex_to_ascii(regs->ebx, buf); kprint(buf);
+    kprint(" ECX: "); hex_to_ascii(regs->ecx, buf); kprint(buf);
+    kprint(" EDX: "); hex_to_ascii(regs->edx, buf); kprint(buf);
+    kprint("\nESP: "); hex_to_ascii(regs->esp_dummy, buf); kprint(buf);
+    kprint(" EBP: "); hex_to_ascii(regs->ebp, buf); kprint(buf);
+    kprint("\n");
+    kprint_color("System halted.", COLOR_LIGHT_RED);
     while(1);
 }
 
@@ -289,7 +273,7 @@ static int swap_disk_read(uint32_t lba, void* buf, uint32_t sectors)
 {
     uint8_t* ptr = (uint8_t*)buf;
     for (uint32_t i = 0; i < sectors; i++) {
-        nvme_read_sector(lba + i, ptr);
+        blkdev_read_sector(lba + i, ptr);
         ptr += 512;
     }
     return 0;
@@ -299,7 +283,7 @@ static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
 {
     const uint8_t* ptr = (const uint8_t*)buf;
     for (uint32_t i = 0; i < sectors; i++) {
-        nvme_write_sector(lba + i, (uint8_t*)ptr);
+        blkdev_write_sector(lba + i, (uint8_t*)ptr);
         ptr += 512;
     }
     return 0;
@@ -347,8 +331,8 @@ void kernel_setup_hardware(multiboot_info_t *mbi) {
     usb_init();
     boot_log("USB Stack", 0);
 
-    nvme_init();
-    boot_log("NVMe Storage", 0);
+    blkdev_init();
+    boot_log("Block Device Layer", blkdev_get_boot() ? 0 : 1);
 
     pc_init();
     boot_log("Page Cache", 0);

@@ -1,6 +1,6 @@
 #include "pagecache.h"
 #include "buf.h"
-#include "nvme.h"
+#include "blkdev.h"
 #include "kernel.h"
 #include "memory.h"
 
@@ -92,7 +92,7 @@ static void _writeback(struct page *p) {
     uint32_t spb = p->block_size / 512;
     uint32_t lba = p->block_no * spb;
     for (uint32_t i = 0; i < spb; i++)
-        nvme_write_sector(lba + i, p->data + i * 512);
+        blkdev_write_sector(lba + i, p->data + i * 512);
     p->flags &= (uint8_t)~PC_FLAG_DIRTY;
     stat_writebacks++;
 }
@@ -176,7 +176,7 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     uint32_t lba = block_no * spb;
     memory_set(p->data, 0, block_size);
     for (uint32_t i = 0; i < spb; i++)
-        nvme_read_sector(lba + i, p->data + i * 512);
+        blkdev_read_sector(lba + i, p->data + i * 512);
     p->flags |= PC_FLAG_VALID;
 
     _hash_insert(p);

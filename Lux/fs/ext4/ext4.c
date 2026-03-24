@@ -1,5 +1,5 @@
 #include "ext4.h"
-#include "nvme.h"
+#include "blkdev.h"
 #include "libc.h"
 #include "memory.h"
 #include "kernel.h"
@@ -17,7 +17,7 @@ static void _read_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
         uint32_t spb = ctx->block_size / 512;
         uint32_t lba = block * spb;
         for (uint32_t i = 0; i < spb; i++)
-            nvme_read_sector(lba + i, buf + i * 512);
+            blkdev_read_sector(lba + i, buf + i * 512);
     }
 }
 
@@ -68,7 +68,7 @@ static void _jwrite_phys(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
     uint32_t spb = ctx->block_size / 512;
     uint32_t lba = block * spb;
     for (uint32_t i = 0; i < spb; i++)
-        nvme_write_sector(lba + i, buf + i * 512);
+        blkdev_write_sector(lba + i, buf + i * 512);
 }
 
 static uint32_t _jwrite(struct ext4_ctx* ctx, uint32_t jblock, uint8_t* buf) {
@@ -226,7 +226,7 @@ static void _write_block(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
         uint32_t spb = ctx->block_size / 512;
         uint32_t lba = block * spb;
         for (uint32_t i = 0; i < spb; i++)
-            nvme_write_sector(lba + i, buf + i * 512);
+            blkdev_write_sector(lba + i, buf + i * 512);
     }
 }
 
@@ -235,8 +235,8 @@ static void _write_sb(struct ext4_ctx* ctx) {
     uint8_t buf[1024];
     memory_set(buf, 0, sizeof(buf));
     memory_copy(buf, &ctx->sb, sizeof(struct ext4_superblock));
-    nvme_write_sector(2, buf);
-    nvme_write_sector(3, buf + 512);
+    blkdev_write_sector(2, buf);
+    blkdev_write_sector(3, buf + 512);
 }
 
 
@@ -910,13 +910,13 @@ vfs_node_t* ext4_mount_disk(uint32_t dev) {
 
     uint8_t buf[2048];
     memory_set(buf, 0, sizeof(buf));
-    nvme_read_sector(2, buf);
-    nvme_read_sector(3, buf + 512);
+    blkdev_read_sector(2, buf);
+    blkdev_read_sector(3, buf + 512);
     memory_copy(&ctx->sb, buf, 1024);
 
     if (ctx->sb.s_magic != EXT4_SUPER_MAGIC) {
-        nvme_read_sector(0, buf);
-        nvme_read_sector(1, buf + 512);
+        blkdev_read_sector(0, buf);
+        blkdev_read_sector(1, buf + 512);
         memory_copy(&ctx->sb, buf, 1024);
     }
 
