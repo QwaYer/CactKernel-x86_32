@@ -176,6 +176,10 @@ extern void nvme_init        (void);
 extern void nvme_read_sector (uint32_t lba, uint8_t* buf);
 extern void nvme_write_sector(uint32_t lba, uint8_t* buf);
 
+// Block Device Abstraction
+extern void blkdev_read_sector (uint32_t lba, uint8_t* buf);
+extern void blkdev_write_sector(uint32_t lba, uint8_t* buf);
+
 // Kernel Entry Point Helpers
 void kernel_setup_hardware(multiboot_info_t *mbi);
 

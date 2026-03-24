@@ -5,15 +5,14 @@
 #include "libc.h"
 #include "task.h"
 
-/* ── узел linked list для файлов /proc ──────────────────────────────── */
+
 typedef struct proc_file {
     char            name[64];
-    procfs_read_fn  read_fn;    /* NULL допустим — читать нечего */
+    procfs_read_fn  read_fn;    
     vfs_node_t      node;
     struct proc_file *next;
 } proc_file_t;
 
-/* ── узел linked list для команд /proc/cmd ──────────────────────────── */
 typedef struct proc_cmd {
     char            name[64];
     procfs_read_fn  help_fn;    /* NULL → "no help\n" */
@@ -29,10 +28,6 @@ static vfs_node_t procfs_root;
 static vfs_node_t cmd_dir;
 static int        procfs_ready = 0;
 
-/* ── хелперы ────────────────────────────────────────────────────────── */
-
-
-/* ── ops для файла данных ───────────────────────────────────────────── */
 
 static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     proc_file_t *f = (proc_file_t *)node->priv;
@@ -42,19 +37,16 @@ static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 
 static vfs_ops_t file_ops = { .read = _file_read };
 
-/* ── ops для cmd-узла ───────────────────────────────────────────────── */
 
 static int _cmd_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     proc_cmd_t *c = (proc_cmd_t *)node->priv;
     if (!c) return 0;
 
-    /* справка либо через help_fn, либо синтетическая */
     char tmp[256];
     int  n;
     if (c->help_fn) {
         n = c->help_fn(0, sizeof(tmp) - 1, tmp);
     } else {
-        /* "cmd: <name>\n" */
         int p = 0;
         const char *pfx = "cmd: ";
         for (int i = 0; pfx[i]; i++) tmp[p++] = pfx[i];
@@ -80,7 +72,6 @@ static int _cmd_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 
 static vfs_ops_t cmd_ops = { .read = _cmd_read, .write = _cmd_write };
 
-/* ── ops для /proc/cmd (директория) ────────────────────────────────── */
 
 static vfs_node_t *_cmd_dir_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
@@ -117,11 +108,9 @@ static vfs_ops_t cmd_dir_ops = {
     .listdir = _cmd_dir_listdir,
 };
 
-/* ── ops для /proc (корневая директория) ────────────────────────────── */
 
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
-    /* специальная поддиректория cmd */
     if (streq(name, "cmd")) return &cmd_dir;
 
     for (proc_file_t *f = file_list; f; f = f->next)
@@ -133,7 +122,6 @@ static vfs_dirent_t _root_de;
 
 static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     (void)dir;
-    /* index 0 — всегда "cmd/" */
     if (index == 0) {
         strlcpy(_root_de.name, "cmd", 128);
         _root_de.inode = 0;
@@ -164,9 +152,6 @@ static vfs_ops_t root_ops = {
     .listdir = _root_listdir,
 };
 
-/* ── встроенные файлы данных ────────────────────────────────────────── */
-
-/* ── CPUID helpers ──────────────────────────────────────────────────── */
 static void _cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
                    uint32_t *ecx, uint32_t *edx) {
     __asm__ volatile("cpuid"
@@ -182,15 +167,12 @@ static void _cpuid_ext(uint32_t leaf, uint32_t subleaf,
         : "a"(leaf), "c"(subleaf) : );
 }
 
-/* читаем TSC два раза с паузой ~1M циклов для оценки MHz */
 static uint32_t _tsc_mhz(void) {
     uint32_t lo1, hi1, lo2, hi2;
     __asm__ volatile("rdtsc" : "=a"(lo1), "=d"(hi1));
-    /* busy wait ~10M iterations */
     volatile uint32_t c = 10000000;
     while (c--) __asm__ volatile("nop");
     __asm__ volatile("rdtsc" : "=a"(lo2), "=d"(hi2));
-    /* только lo32: за ~10M nop дельта << 2^32 даже на 4 ГГц */
     uint32_t delta = lo2 - lo1;
     return delta / 10000u;
 }
@@ -199,7 +181,6 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[512];
     int  p = 0;
 
-    /* vendor string: EBX EDX ECX из leaf 0 */
     uint32_t eax, ebx, ecx, edx;
     _cpuid(0, &eax, &ebx, &ecx, &edx);
     uint32_t max_leaf = eax;
@@ -209,7 +190,6 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     ((uint32_t*)vendor)[2] = ecx;
     vendor[12] = '\0';
 
-    /* brand string: листья 0x80000002-4 */
     char brand[49];
     memset(brand, 0, sizeof(brand));
     uint32_t max_ext;
@@ -220,7 +200,6 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
         _cpuid(0x80000003, &bp[4],  &bp[5],  &bp[6],  &bp[7]);
         _cpuid(0x80000004, &bp[8],  &bp[9],  &bp[10], &bp[11]);
     } else {
-        /* leaf 1: family/model */
         if (max_leaf >= 1) {
             _cpuid(1, &eax, &ebx, &ecx, &edx);
             uint32_t family = (eax >> 8) & 0xF;
@@ -242,31 +221,26 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
         }
     }
 
-    /* MHz из TSC */
     uint32_t mhz = _tsc_mhz();
 
-    /* flags из leaf 1 EDX */
     uint32_t flags_edx = 0, flags_ecx = 0;
     if (max_leaf >= 1) {
         _cpuid(1, &eax, &ebx, &flags_ecx, &flags_edx);
     }
 
-    /* cache size из leaf 2 или 0x80000006 */
     uint32_t cache_kb = 0;
     if (max_ext >= 0x80000006) {
         uint32_t c6;
         _cpuid(0x80000006, &eax, &ebx, &c6, &edx);
-        cache_kb = (c6 >> 16) & 0xFFFF;  /* L2 cache в KB */
+        cache_kb = (c6 >> 16) & 0xFFFF;  
     }
 
-    /* строим строку */
     #define _APP(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
     #define _APPN(n) { char _nb[16]; itoa((int)(n),_nb); _APP(_nb); }
 
     _APP("processor   : 0\n");
     _APP("vendor_id   : "); _APP(vendor); _APP("\n");
     _APP("model name  : ");
-    /* trim leading spaces from brand */
     { int bi=0; while(brand[bi]==' ') bi++;
       const char *b=brand+bi; while(*b) tmp[p++]=*b++; }
     _APP("\n");
@@ -277,7 +251,6 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
         _APP("cache size  : unknown\n");
     }
 
-    /* flags */
     _APP("flags       :");
     if (flags_edx & (1<<0))  _APP(" fpu");
     if (flags_edx & (1<<1))  _APP(" vme");
@@ -315,7 +288,6 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
-/* multiboot mem_lower/mem_upper — сохраняются при старте ядра */
 static uint32_t _mb_mem_lower_kb = 0;
 static uint32_t _mb_mem_upper_kb = 0;
 
@@ -387,8 +359,6 @@ typedef struct { uint32_t pid; task_state state; uint8_t is_kernel; } task_snap_
 #define TASKS_SNAP_MAX 64
 
 static int _tasks_read(uint32_t off, uint32_t size, char *buf) {
-    /* Снапшот под блокировкой — копируем только POD-поля,
-     * не держим lock во время форматирования строк */
     task_snap_t snap[TASKS_SNAP_MAX];
     int count = 0;
 
@@ -439,13 +409,12 @@ static int _tasks_read(uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
-/* ── public API ─────────────────────────────────────────────────────── */
 
+//Public api
 vfs_node_t *procfs_get_root(void) { return &procfs_root; }
 
 int procfs_register_file(const char *name, procfs_read_fn read_fn) {
     if (!name) return -1;
-    /* нет дублей */
     for (proc_file_t *f = file_list; f; f = f->next)
         if (streq(f->name, name)) return -1;
 
@@ -523,20 +492,16 @@ int procfs_unregister_cmd(const char *name) {
 
 void procfs_init(void) {
     if (procfs_ready) return;
-
-    /* /proc/cmd директория */
     memset(&cmd_dir, 0, sizeof(vfs_node_t));
     strlcpy(cmd_dir.name, "cmd", 128);
     cmd_dir.type = VFS_DIRECTORY;
     cmd_dir.ops  = &cmd_dir_ops;
 
-    /* /proc корень */
     memset(&procfs_root, 0, sizeof(vfs_node_t));
     strlcpy(procfs_root.name, "proc", 128);
     procfs_root.type = VFS_DIRECTORY;
     procfs_root.ops  = &root_ops;
 
-    /* встроенные файлы данных */
     procfs_register_file("cpuinfo", _cpuinfo_read);
     procfs_register_file("meminfo", _meminfo_read);
     procfs_register_file("uptime",  _uptime_read);

@@ -7,22 +7,14 @@
 #include "memory.h"
 #include "libc.h"
 #include "kernel.h"
+#include "blkdev.h"
 
 
 static mntfs_entry_t  *mnt_list   = 0;
 static disk_entry_t   *disk_list  = 0;
 static vfs_node_t      mntfs_root;
 static int             mntfs_ready = 0;
-
-
-typedef struct { const char *name; uint32_t dev; } nvme_devmap_t;
-static const nvme_devmap_t nvme_devmap[] = {
-    { "nvme0n1", 0 },
-    { "nvme0n2", 1 },
-    { "nvme1n1", 2 },
-    { "nvme1n2", 3 },
-};
-#define NVME_DEV_COUNT 4
+static char            boot_devname[32];
 
 
 static mntfs_entry_t *_find(const char *name) {
@@ -259,11 +251,11 @@ static vfs_ops_t root_ops = {
 
 //Public api
 int mntfs_resolve_device(const char *devname, uint32_t *dev_out) {
-    for (int i=0;i<NVME_DEV_COUNT;i++)
-        if (streq(nvme_devmap[i].name,devname)) {
-            if (dev_out) *dev_out = nvme_devmap[i].dev;
-            return 0;
-        }
+    blkdev_t *bd = blkdev_find(devname);
+    if (bd) {
+        if (dev_out) *dev_out = 0;
+        return 0;
+    }
     return -1;
 }
 
@@ -324,7 +316,7 @@ int mntfs_umount_disk(const char *devname) {
     if (!devname) return -1;
     disk_entry_t *d=_find_disk(devname);
     if (!d) return -1;
-    if (d->has_sys) return -2;  
+    if (d->has_sys) return -2;
     disk_entry_t **pp=&disk_list;
     while (*pp) {
         if (streq((*pp)->devname,devname)) {
@@ -372,20 +364,44 @@ void mntfs_init(void) {
     vfs_root=&mntfs_root;
     mntfs_ready=1;
 
-    vfs_node_t *ext4=ext4_mount_disk(0);
-    if (!ext4) { kprint("[mntfs] WARNING: nvme0n1 not found\n"); return; }
+    blkdev_t *boot = blkdev_get_boot();
+    if (!boot) {
+        kprint("[mntfs] WARNING: no boot block device\n");
+        devfs_init();
+        return;
+    }
 
-    mntfs_mount_disk("nvme0n1",ext4,0);
-    disk_entry_t *boot_disk=_find_disk("nvme0n1");
-    boot_disk->has_sys=1;
+    strlcpy(boot_devname, boot->name, 32);
+
+    vfs_node_t *ext4 = ext4_mount_disk(0);
+    if (!ext4) {
+        kprint("[mntfs] WARNING: no ext4 on "); kprint(boot_devname); kprint("\n");
+        devfs_init();
+        return;
+    }
+
+    mntfs_mount_disk(boot_devname, ext4, 0);
+    disk_entry_t *boot_disk = _find_disk(boot_devname);
+    boot_disk->has_sys = 1;
 
     etcfs_init(ext4);
-    mntfs_mount("nvme0n1/sys/etc","etcfs",etcfs_get_root(),0);
+
+    char sys_etc[64];
+    strlcpy(sys_etc, boot_devname, 64);
+    strlcpy(sys_etc + strlen(boot_devname), "/sys/etc", 64 - strlen(boot_devname));
+    mntfs_mount(sys_etc, "etcfs", etcfs_get_root(), 0);
 
     _mounts_mount_all();
 
     devfs_init();
-    mntfs_mount("nvme0n1/sys/dev","devfs",devfs_get_root(),0);
+    char sys_dev[64];
+    strlcpy(sys_dev, boot_devname, 64);
+    strlcpy(sys_dev + strlen(boot_devname), "/sys/dev", 64 - strlen(boot_devname));
+    mntfs_mount(sys_dev, "devfs", devfs_get_root(), 0);
+
     procfs_init();
-    mntfs_mount("nvme0n1/sys/proc","procfs",procfs_get_root(),0);
+    char sys_proc[64];
+    strlcpy(sys_proc, boot_devname, 64);
+    strlcpy(sys_proc + strlen(boot_devname), "/sys/proc", 64 - strlen(boot_devname));
+    mntfs_mount(sys_proc, "procfs", procfs_get_root(), 0);
 }

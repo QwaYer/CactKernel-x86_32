@@ -1,5 +1,6 @@
 #include "nvme.h"
 #include "pci.h"
+#include "pci_enum.h"
 #include "buf.h"
 #include "vfs.h"
 #include "kernel.h"
@@ -323,11 +324,13 @@ void nvme_init(void) {
     memory_set(&ndev, 0, sizeof(ndev));
     nvme_ready = 0;
 
-    int found = pci_find_nvme(&ndev.pci_bus, &ndev.pci_dev, &ndev.pci_fn);
-    if (!found) {
-        kprint("[NVMe] no NVMe controller found\n");
+    pci_device_t *d = pci_find_by_class(0x01, 0x08);
+    if (!d || d->prog_if != 0x02) {
         return;
     }
+    ndev.pci_bus = d->bus;
+    ndev.pci_dev = d->dev;
+    ndev.pci_fn  = d->fn;
 
     uint32_t bar0 = pci_read32(ndev.pci_bus, ndev.pci_dev, ndev.pci_fn, 0x10);
     ndev.bar_phys = bar0 & 0xFFFFF000;
@@ -364,6 +367,9 @@ void nvme_init(void) {
 
     nvme_ready = 1;
 }
+
+int nvme_is_ready(void) { return nvme_ready; }
+uint32_t nvme_get_max_lba(void) { return ndev.max_lba; }
 
 //public api
 int nvme_read(vfs_node_t *node, uint32_t offset, uint32_t size, char *buffer) {

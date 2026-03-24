@@ -4,6 +4,7 @@
 #include "libc.h"
 #include "kernel.h"
 #include "pipe.h"
+#include "blkdev.h"
 
 static vfs_node_t    devfs_root;
 static devfs_entry_t *dev_list   = 0;   
@@ -215,46 +216,54 @@ static int _rand_read(void *p, uint32_t o, uint32_t s, char *b) {
 }
 static devfs_driver_t drv_random = { .read=_rand_read, .write=_null_write };
 
-static int _nvme_read(void *p, uint32_t off, uint32_t size, char *buf) {
+static int _disk_read(void *p, uint32_t off, uint32_t size, char *buf) {
     (void)p;
     uint8_t sector_buf[512];
     uint32_t lba=off/512, written=0;
     while(written<size){
-        nvme_read_sector(lba,sector_buf);
+        blkdev_read_sector(lba,(uint8_t*)sector_buf);
         uint32_t c=512; if(c>size-written)c=size-written;
         memcpy(buf+written,sector_buf,c);
         written+=c; lba++;
     }
     return (int)written;
 }
-static int _nvme_write(void *p, uint32_t off, uint32_t size, char *buf) {
+static int _disk_write(void *p, uint32_t off, uint32_t size, char *buf) {
     (void)p;
     uint8_t sector_buf[512];
     uint32_t lba=off/512, written=0;
     while(written<size){
-        nvme_read_sector(lba,sector_buf);
+        blkdev_read_sector(lba,(uint8_t*)sector_buf);
         uint32_t c=512; if(c>size-written)c=size-written;
         memcpy(sector_buf,buf+written,c);
-        nvme_write_sector(lba,sector_buf);
+        blkdev_write_sector(lba,(uint8_t*)sector_buf);
         written+=c; lba++;
     }
     return (int)written;
 }
-static int _nvme_ctl(void *p, const char *cmd, uint32_t len) {
+static int _disk_ctl(void *p, const char *cmd, uint32_t len) {
     (void)p;(void)len;
-    if(cmd[0]=='f'&&cmd[1]=='l') { kprint("[nvme] flush (noop)\n"); return 0; }
-    kprint("[nvme] unknown ctl: "); kprint((char*)cmd); kprint("\n");
+    if(cmd[0]=='f'&&cmd[1]=='l') { kprint("[disk] flush (noop)\n"); return 0; }
+    kprint("[disk] unknown ctl: "); kprint((char*)cmd); kprint("\n");
     return -1;
 }
-static int _nvme_status(void *p, char *buf, uint32_t size) {
+static int _disk_status(void *p, char *buf, uint32_t size) {
     (void)p;
-    const char *s = "device: nvme0n1\ntype: NVMe\n";
-    uint32_t n=0; while(s[n]&&n<size-1){buf[n]=s[n];n++;} buf[n]='\0';
+    blkdev_t *boot = blkdev_get_boot();
+    const char *h = "device: ";
+    uint32_t n=0;
+    while(h[n]&&n<size-1){buf[n]=h[n];n++;}
+    if (boot) { for(int i=0;boot->name[i]&&n<size-1;i++) buf[n++]=boot->name[i]; }
+    else { const char *u="none"; for(int i=0;u[i]&&n<size-1;i++) buf[n++]=u[i]; }
+    if(n<size-1) buf[n++]='\n';
+    const char *t = "type: block (via blkdev)\n";
+    for(int i=0;t[i]&&n<size-1;i++) buf[n++]=t[i];
+    buf[n]='\0';
     return (int)n;
 }
-static devfs_driver_t drv_nvme = {
-    .read=_nvme_read, .write=_nvme_write,
-    .ctl=_nvme_ctl,   .status=_nvme_status
+static devfs_driver_t drv_disk = {
+    .read=_disk_read, .write=_disk_write,
+    .ctl=_disk_ctl,   .status=_disk_status
 };
 
 extern volatile char last_char;
@@ -351,7 +360,9 @@ void devfs_init(void) {
     devfs_register("random",  DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
     devfs_register("urandom", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
 
-    devfs_register("nvme0n1", DEVFS_F_BLOCK, &drv_nvme, 0);
+    blkdev_t *boot = blkdev_get_boot();
+    if (boot)
+        devfs_register(boot->name, DEVFS_F_BLOCK, &drv_disk, 0);
     devfs_register("tty", DEVFS_F_CHAR,  &drv_tty, 0);
 
     devfs_ready = 1;

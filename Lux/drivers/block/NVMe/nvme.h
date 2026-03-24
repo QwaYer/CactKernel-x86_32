@@ -94,4 +94,7 @@ struct buf;
 void bio_enqueue_sync(struct buf *b);
 void bio_irq_complete(int error);
 
+int      nvme_is_ready   (void);
+uint32_t nvme_get_max_lba(void);
+
 #endif
