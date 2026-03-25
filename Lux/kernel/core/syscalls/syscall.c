@@ -113,7 +113,6 @@ static int sys_exit(struct syscall_frame* regs) {
     current_task->exit_code = (int)regs->ebx;
     current_task->state = TASK_ZOMBIE;
 
-    // wake parent if waiting for us
     irq_spinlock_acquire(&scheduler_lock);
     struct task_struct* t = task_list_head;
     if (t) {
@@ -124,6 +123,27 @@ static int sys_exit(struct syscall_frame* regs) {
                 sched_queue_remove(&wait_queue, t);
                 t->state = TASK_READY;
                 sched_queue_push(&ready_queue, t);
+
+                // patch parent's saved syscall frame: eax = child pid
+                // parent kernel stack: [es][ds][edi][esi][ebp][esp_d][ebx][edx][ecx][eax]...
+                // eax is at offset 9 from saved esp
+                uint32_t* parent_frame = (uint32_t*)t->esp;
+                parent_frame[9] = current_task->pid;  // eax = child pid
+
+                int* status_ptr = (int*)parent_frame[8];
+                if (status_ptr && (uint32_t)status_ptr < 0xC0000000u) {
+                    uint32_t va = (uint32_t)status_ptr;
+                    uint32_t pdi = PD_INDEX(va);
+                    uint32_t pti = PT_INDEX(va);
+                    if (t->page_directory &&
+                        (t->page_directory[pdi] & PAGE_PRESENT)) {
+                        uint32_t* pt = (uint32_t*)(t->page_directory[pdi] & ~0xFFFu);
+                        if (pt[pti] & PAGE_PRESENT) {
+                            uint32_t phys = (pt[pti] & ~0xFFFu) + (va & 0xFFFu);
+                            *(int*)phys = current_task->exit_code;
+                        }
+                    }
+                }
                 break;
             }
             t = t->next;
@@ -308,8 +328,8 @@ static int sys_sigreturn(struct syscall_frame* regs) {
     return 0;
 }
 
-//public api — new syscalls
 
+//public api 
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -358,7 +378,6 @@ static int sys_waitpid(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (status && !validate_user_ptr(status, sizeof(int))) return -1;
 
-    // check if target already zombie
     irq_spinlock_acquire(&scheduler_lock);
     struct task_struct* t = task_list_head;
     if (t) {
@@ -370,46 +389,17 @@ static int sys_waitpid(struct syscall_frame* regs) {
                 int child_exit = t->exit_code;
                 irq_spinlock_release(&scheduler_lock);
                 if (status) *status = child_exit;
-                kprint("[WAITPID] reaped zombie pid=");
-                char buf[16]; itoa((int)child_pid, buf); kprint(buf); kprint("\n");
                 return (int)child_pid;
             }
             t = t->next;
         } while (t != task_list_head);
     }
 
-    // no zombie found — block
     current_task->wait_for_pid = (target_pid > 0) ? (uint32_t)target_pid : 0;
     current_task->state = TASK_WAITING;
     irq_spinlock_release(&scheduler_lock);
 
-    schedule();
-
-    // woke up — find the zombie child
-    irq_spinlock_acquire(&scheduler_lock);
-    t = task_list_head;
-    int found_pid = -1;
-    int found_exit = 0;
-    if (t) {
-        do {
-            if (t->state == TASK_ZOMBIE &&
-                t->parent_pid == current_task->pid &&
-                (target_pid <= 0 || t->pid == (uint32_t)target_pid)) {
-                found_pid = (int)t->pid;
-                found_exit = t->exit_code;
-                break;
-            }
-            t = t->next;
-        } while (t != task_list_head);
-    }
-    irq_spinlock_release(&scheduler_lock);
-
-    if (status && found_pid > 0) *status = found_exit;
-    if (found_pid > 0) {
-        kprint("[WAITPID] reaped child pid=");
-        char buf[16]; itoa(found_pid, buf); kprint(buf); kprint("\n");
-    }
-    return found_pid;
+    return -2;
 }
 
 static int sys_sleep(struct syscall_frame* regs) {
@@ -417,16 +407,11 @@ static int sys_sleep(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (ms == 0) return 0;
 
-    // PIT at 100Hz => 1 tick = 10ms
     uint32_t ticks = (ms + 9) / 10;
     uint32_t now = timer_ticks_get();
     current_task->sleep_until = now + ticks;
 
-    irq_spinlock_acquire(&scheduler_lock);
     current_task->state = TASK_SLEEPING;
-    irq_spinlock_release(&scheduler_lock);
-
-    schedule();
     return 0;
 }
 
@@ -434,21 +419,18 @@ static int sys_brk(struct syscall_frame* regs) {
     uint32_t new_brk = regs->ebx;
     if (!current_task) return -1;
 
-    // query current brk
     if (new_brk == 0)
         return (int)current_task->brk_current;
 
     if (new_brk < current_task->brk_start)
         return -1;
 
-    // max 16MB heap
     if (new_brk - current_task->brk_start > 16 * 1024 * 1024)
         return -1;
 
     uint32_t old_end = (current_task->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     uint32_t new_end = (new_brk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
-    // grow — map new pages
     if (new_end > old_end) {
         for (uint32_t va = old_end; va < new_end; va += PAGE_SIZE) {
             void* phys = kalloc();
@@ -460,7 +442,6 @@ static int sys_brk(struct syscall_frame* regs) {
             proc_tracker_add(&current_task->mm, phys);
         }
     }
-    // shrink — we don't unmap for simplicity (like Linux for small shrinks)
 
     current_task->brk_current = new_brk;
     return (int)new_brk;

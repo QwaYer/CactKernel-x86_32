@@ -391,7 +391,7 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
     }
 
     clear_screen();
-    kprint_color("Lux Kernel Version 0.8.5\n", COLOR_LIGHT_BROWN);
+    kprint_color("Lux Kernel Version 0.8.8\n", COLOR_LIGHT_BROWN);
     kprint_color("--------------------------\n", COLOR_DARK_GREY);
 
     if (magic != 0x2BADB002) {

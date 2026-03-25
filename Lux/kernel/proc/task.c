@@ -418,6 +418,7 @@ void task_reap() {
     irq_spinlock_release(&scheduler_lock);
 }
 
+// wake sleeping tasks whose timer expired
 static void task_wake_sleepers(void) {
     uint32_t now = timer_ticks_get();
     struct task_struct* cur = sleep_queue.head;
@@ -695,6 +696,20 @@ struct task_struct* task_fork(struct context_frame* regs) {
 
     if (parent->page_directory) {
         vmm_fork_address_space(parent->page_directory, child_pd);
+
+        // restore parent user stack to RW — fork already copies stack physically,
+        // so CoW on the stack page is unnecessary and causes faults after waitpid
+        uint32_t stack_va = parent->ustack_virt;
+        uint32_t pdi = PD_INDEX(stack_va);
+        uint32_t pti = PT_INDEX(stack_va);
+        if (parent->page_directory[pdi] & PAGE_PRESENT) {
+            uint32_t* pt = (uint32_t*)(parent->page_directory[pdi] & ~0xFFFu);
+            if (pt[pti] & PAGE_PRESENT) {
+                pt[pti] = (pt[pti] | PAGE_RW) & ~(uint32_t)PAGE_COW;
+            }
+        }
+        // flush TLB for stack page
+        __asm__ __volatile__("invlpg (%0)" :: "r"(stack_va) : "memory");
     }
 
     vmm_map(child_pd, child->ustack_virt, (uint32_t)ustack_phys,

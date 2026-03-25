@@ -344,7 +344,7 @@ static int _uptime_read(uint32_t off, uint32_t size, char *buf) {
 
 static int _version_read(uint32_t off, uint32_t size, char *buf) {
     static const char data[] =
-        "Lux Kernel 0.8.5\n"
+        "Lux Kernel 0.8.8\n"
         "Arch: x86 (i686)\n"
         "Compiler: GCC\n"
         "Build: " __DATE__ " " __TIME__ "\n";
