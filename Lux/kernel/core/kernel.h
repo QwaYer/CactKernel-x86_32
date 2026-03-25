@@ -185,7 +185,9 @@ void kernel_setup_hardware(multiboot_info_t *mbi);
 
 // ELF Loader
 struct proc_page_tracker_t;
+struct vfs_node;
 void* load_elf(char* path, uint32_t* pd, struct proc_page_tracker_t* tracker);
+uint32_t elf_get_brk_start(struct vfs_node* file);
 
 // Networking
 void net_init             (void);

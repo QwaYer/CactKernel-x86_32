@@ -38,7 +38,8 @@ typedef enum {
     TASK_READY,
     TASK_RUNNING,
     TASK_SLEEPING,
-    TASK_ZOMBIE
+    TASK_ZOMBIE,
+    TASK_WAITING
 } task_state;
 
 struct context_frame {
@@ -68,10 +69,20 @@ struct task_struct {
     uint32_t signal_handlers[NSIG]; 
     uint32_t sigreturn_trampoline;  
     struct vfs_node* fd_table[MAX_FD];
+    uint32_t fd_offset[MAX_FD];
     proc_page_tracker_t mm;
 
     mmap_table_t mmap_table;
     dyn_ctx_t* dyn_ctx;
+
+    uint32_t parent_pid;
+    int      exit_code;
+    uint32_t wait_for_pid;
+
+    uint32_t brk_start;
+    uint32_t brk_current;
+
+    uint32_t sleep_until;
 };
 
 typedef struct sched_queue {
@@ -127,6 +138,7 @@ static inline void sched_queue_remove(sched_queue_t* q, struct task_struct* t) {
 extern sched_queue_t ready_queue;
 extern sched_queue_t sleep_queue;
 extern sched_queue_t zombie_queue;
+extern sched_queue_t wait_queue;
 
 void task_init();
 struct task_struct* create_task(void (*entry_point)());

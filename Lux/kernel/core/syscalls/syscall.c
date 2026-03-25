@@ -54,6 +54,7 @@ static int sys_open(char* name) {
     for (int i = 3; i < MAX_FD; i++) {
         if (!current_task->fd_table[i]) {
             current_task->fd_table[i] = node;
+            current_task->fd_offset[i] = 0;
             return i;
         }
     }
@@ -67,7 +68,10 @@ static int sys_read(int fd, char* buf, unsigned int size) {
     if (fd < 0 || fd >= MAX_FD)        return -1;
     struct vfs_node* node = current_task->fd_table[fd];
     if (!node) return -1;
-    return read_vfs(node, 0, size, buf);
+    int ret = read_vfs(node, current_task->fd_offset[fd], size, buf);
+    if (ret > 0)
+        current_task->fd_offset[fd] += (uint32_t)ret;
+    return ret;
 }
 
 static int sys_write(int fd, char* buf, unsigned int size) {
@@ -77,7 +81,10 @@ static int sys_write(int fd, char* buf, unsigned int size) {
     if (fd < 0 || fd >= MAX_FD)        return -1;
     struct vfs_node* node = current_task->fd_table[fd];
     if (!node) return -1;
-    return write_vfs(node, 0, size, buf);
+    int ret = write_vfs(node, current_task->fd_offset[fd], size, buf);
+    if (ret > 0)
+        current_task->fd_offset[fd] += (uint32_t)ret;
+    return ret;
 }
 
 static int sys_close(int fd) {
@@ -86,6 +93,7 @@ static int sys_close(int fd) {
     struct vfs_node* node = current_task->fd_table[fd];
     if (!node) return -1;
     current_task->fd_table[fd] = 0;
+    current_task->fd_offset[fd] = 0;
     close_vfs(node);   
     return 0;
 }
@@ -100,8 +108,28 @@ static int sys_delete(char* name) {
     return delete_vfs(vfs_root, name);
 }
 
-static int sys_exit() {
-    if (current_task) current_task->state = TASK_ZOMBIE;
+static int sys_exit(struct syscall_frame* regs) {
+    if (!current_task) return -1;
+    current_task->exit_code = (int)regs->ebx;
+    current_task->state = TASK_ZOMBIE;
+
+    // wake parent if waiting for us
+    irq_spinlock_acquire(&scheduler_lock);
+    struct task_struct* t = task_list_head;
+    if (t) {
+        do {
+            if (t->state == TASK_WAITING &&
+                (t->wait_for_pid == current_task->pid || t->wait_for_pid == 0) &&
+                t->pid == current_task->parent_pid) {
+                sched_queue_remove(&wait_queue, t);
+                t->state = TASK_READY;
+                sched_queue_push(&ready_queue, t);
+                break;
+            }
+            t = t->next;
+        } while (t != task_list_head);
+    }
+    irq_spinlock_release(&scheduler_lock);
     return 0;
 }
 
@@ -207,6 +235,8 @@ static int sys_pipe(struct syscall_frame* regs) {
 
     current_task->fd_table[rfd] = pipefd[0];
     current_task->fd_table[wfd] = pipefd[1];
+    current_task->fd_offset[rfd] = 0;
+    current_task->fd_offset[wfd] = 0;
 
     user_fds[0] = rfd;
     user_fds[1] = wfd;
@@ -229,6 +259,7 @@ static int sys_dup2(struct syscall_frame* regs) {
     }
 
     current_task->fd_table[newfd] = node;
+    current_task->fd_offset[newfd] = current_task->fd_offset[oldfd];
     open_vfs(node);   
     return newfd;
 }
@@ -277,6 +308,164 @@ static int sys_sigreturn(struct syscall_frame* regs) {
     return 0;
 }
 
+//public api — new syscalls
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
+static int sys_lseek(struct syscall_frame* regs) {
+    int fd          = (int)regs->ebx;
+    int offset      = (int)regs->ecx;
+    int whence      = (int)regs->edx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) return -1;
+
+    uint32_t new_off;
+    switch (whence) {
+        case SEEK_SET:
+            if (offset < 0) return -1;
+            new_off = (uint32_t)offset;
+            break;
+        case SEEK_CUR: {
+            int cur = (int)current_task->fd_offset[fd] + offset;
+            if (cur < 0) return -1;
+            new_off = (uint32_t)cur;
+            break;
+        }
+        case SEEK_END: {
+            int end = (int)node->size + offset;
+            if (end < 0) return -1;
+            new_off = (uint32_t)end;
+            break;
+        }
+        default:
+            return -1;
+    }
+    current_task->fd_offset[fd] = new_off;
+    return (int)new_off;
+}
+
+extern uint32_t timer_ticks_get(void);
+
+static int sys_waitpid(struct syscall_frame* regs) {
+    int target_pid = (int)regs->ebx;
+    int* status    = (int*)regs->ecx;
+
+    if (!current_task) return -1;
+    if (status && !validate_user_ptr(status, sizeof(int))) return -1;
+
+    // check if target already zombie
+    irq_spinlock_acquire(&scheduler_lock);
+    struct task_struct* t = task_list_head;
+    if (t) {
+        do {
+            if (t->state == TASK_ZOMBIE &&
+                t->parent_pid == current_task->pid &&
+                (target_pid <= 0 || t->pid == (uint32_t)target_pid)) {
+                uint32_t child_pid = t->pid;
+                int child_exit = t->exit_code;
+                irq_spinlock_release(&scheduler_lock);
+                if (status) *status = child_exit;
+                kprint("[WAITPID] reaped zombie pid=");
+                char buf[16]; itoa((int)child_pid, buf); kprint(buf); kprint("\n");
+                return (int)child_pid;
+            }
+            t = t->next;
+        } while (t != task_list_head);
+    }
+
+    // no zombie found — block
+    current_task->wait_for_pid = (target_pid > 0) ? (uint32_t)target_pid : 0;
+    current_task->state = TASK_WAITING;
+    irq_spinlock_release(&scheduler_lock);
+
+    schedule();
+
+    // woke up — find the zombie child
+    irq_spinlock_acquire(&scheduler_lock);
+    t = task_list_head;
+    int found_pid = -1;
+    int found_exit = 0;
+    if (t) {
+        do {
+            if (t->state == TASK_ZOMBIE &&
+                t->parent_pid == current_task->pid &&
+                (target_pid <= 0 || t->pid == (uint32_t)target_pid)) {
+                found_pid = (int)t->pid;
+                found_exit = t->exit_code;
+                break;
+            }
+            t = t->next;
+        } while (t != task_list_head);
+    }
+    irq_spinlock_release(&scheduler_lock);
+
+    if (status && found_pid > 0) *status = found_exit;
+    if (found_pid > 0) {
+        kprint("[WAITPID] reaped child pid=");
+        char buf[16]; itoa(found_pid, buf); kprint(buf); kprint("\n");
+    }
+    return found_pid;
+}
+
+static int sys_sleep(struct syscall_frame* regs) {
+    uint32_t ms = regs->ebx;
+    if (!current_task) return -1;
+    if (ms == 0) return 0;
+
+    // PIT at 100Hz => 1 tick = 10ms
+    uint32_t ticks = (ms + 9) / 10;
+    uint32_t now = timer_ticks_get();
+    current_task->sleep_until = now + ticks;
+
+    irq_spinlock_acquire(&scheduler_lock);
+    current_task->state = TASK_SLEEPING;
+    irq_spinlock_release(&scheduler_lock);
+
+    schedule();
+    return 0;
+}
+
+static int sys_brk(struct syscall_frame* regs) {
+    uint32_t new_brk = regs->ebx;
+    if (!current_task) return -1;
+
+    // query current brk
+    if (new_brk == 0)
+        return (int)current_task->brk_current;
+
+    if (new_brk < current_task->brk_start)
+        return -1;
+
+    // max 16MB heap
+    if (new_brk - current_task->brk_start > 16 * 1024 * 1024)
+        return -1;
+
+    uint32_t old_end = (current_task->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    uint32_t new_end = (new_brk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    // grow — map new pages
+    if (new_end > old_end) {
+        for (uint32_t va = old_end; va < new_end; va += PAGE_SIZE) {
+            void* phys = kalloc();
+            if (!phys) return -1;
+            uint8_t* p = (uint8_t*)phys;
+            for (int i = 0; i < (int)PAGE_SIZE; i++) p[i] = 0;
+            vmm_map(current_task->page_directory, va, (uint32_t)phys,
+                    PAGE_USER | PAGE_RW | PAGE_PRESENT);
+            proc_tracker_add(&current_task->mm, phys);
+        }
+    }
+    // shrink — we don't unmap for simplicity (like Linux for small shrinks)
+
+    current_task->brk_current = new_brk;
+    return (int)new_brk;
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -298,7 +487,11 @@ static syscall_fn syscall_table[] = {
     [16] = (syscall_fn)sys_sigreturn,   
     [17] = (syscall_fn)sys_sigaction,   
     [18] = (syscall_fn)sys_pipe,     
-    [19] = (syscall_fn)sys_dup2,      
+    [19] = (syscall_fn)sys_dup2,
+    [20] = (syscall_fn)sys_lseek,
+    [21] = (syscall_fn)sys_waitpid,
+    [22] = (syscall_fn)sys_sleep,
+    [23] = (syscall_fn)sys_brk,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -310,7 +503,9 @@ void syscall_handler(struct syscall_frame* regs) {
     }
 
     int ret;
-    if (num == 9 || num == 10 || num == 13 || num == 14 || num == 15 || num == 16 || num == 17 || num == 18 || num == 19) {
+    if (num == 7 || num == 9 || num == 10 || num == 13 || num == 14 ||
+        num == 15 || num == 16 || num == 17 || num == 18 || num == 19 ||
+        num == 20 || num == 21 || num == 22 || num == 23) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](

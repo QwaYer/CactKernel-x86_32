@@ -15,10 +15,12 @@ irq_spinlock_t      scheduler_lock;
 sched_queue_t ready_queue;
 sched_queue_t sleep_queue;
 sched_queue_t zombie_queue;
+sched_queue_t wait_queue;
 
 static volatile int schedule_in_progress = 0;
 
 extern void vmm_fork_address_space(uint32_t* src_pd, uint32_t* dst_pd);
+extern uint32_t timer_ticks_get(void);
 
 
 static sched_queue_t* queue_for_state(task_state s) {
@@ -26,6 +28,7 @@ static sched_queue_t* queue_for_state(task_state s) {
         case TASK_READY:    return &ready_queue;
         case TASK_SLEEPING: return &sleep_queue;
         case TASK_ZOMBIE:   return &zombie_queue;
+        case TASK_WAITING:  return &wait_queue;
         default:            return 0;
     }
 }
@@ -70,9 +73,11 @@ void task_init() {
     next_pid       = 1;
     schedule_in_progress = 0;
     irq_spinlock_init(&scheduler_lock);
+
     sched_queue_init(&ready_queue);
     sched_queue_init(&sleep_queue);
     sched_queue_init(&zombie_queue);
+    sched_queue_init(&wait_queue);
 }
 
 
@@ -85,14 +90,11 @@ struct task_struct* create_task(void (*entry_point)()) {
 
     uint32_t* esp = (uint32_t*)((uint32_t)stack + 4096);
 
-    // iret frame for kernel task (ring0→ring0, no ss/useresp)
-    *(--esp) = 0x00000202;           // eflags (IF=1)
-    *(--esp) = 0x08;                 // cs
-    *(--esp) = (uint32_t)entry_point;// eip
-    // pusha order: eax ecx edx ebx esp ebp esi edi
+    *(--esp) = 0x00000202;
+    *(--esp) = 0x08;
+    *(--esp) = (uint32_t)entry_point;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    // ds, es
     *(--esp) = 0x10;
     *(--esp) = 0x10;
 
@@ -107,8 +109,17 @@ struct task_struct* create_task(void (*entry_point)()) {
     t->pending_signals= 0;
     t->queue_next     = 0;
     t->dyn_ctx        = 0;
+    t->parent_pid     = 0;
+    t->exit_code      = 0;
+    t->wait_for_pid   = 0;
+    t->brk_start      = 0;
+    t->brk_current    = 0;
+    t->sleep_until    = 0;
     proc_tracker_init(&t->mm);
-
+    for (int i = 0; i < MAX_FD; i++) {
+        t->fd_table[i] = 0;
+        t->fd_offset[i] = 0;
+    }
 
     irq_spinlock_acquire(&scheduler_lock);
     task_list_add(t);
@@ -134,16 +145,13 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
 
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + 4096);
 
-    // iret frame for ring3: ss, useresp, eflags, cs, eip
-    *(--esp) = 0x23;                          // ss (user data)
+    *(--esp) = 0x23;                          // ss
     *(--esp) = ustack_virt + 4096 - 4;       // useresp
-    *(--esp) = 0x00000202;                    // eflags (IF=1)
-    *(--esp) = 0x1B;                          // cs (user code)
+    *(--esp) = 0x00000202;                    // eflags
+    *(--esp) = 0x1B;                          // cs
     *(--esp) = (uint32_t)entry_point;         // eip
-    // pusha order: eax ecx edx ebx esp ebp esi edi
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
     *(--esp) = 0; *(--esp) = 0; *(--esp) = 0; *(--esp) = 0;
-    // ds, es
     *(--esp) = 0x23;
     *(--esp) = 0x23;
 
@@ -157,9 +165,18 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     t->queue_next      = 0;
     t->dyn_ctx         = 0;
     t->sigreturn_trampoline = 0;
+    t->parent_pid      = current_task ? current_task->pid : 0;
+    t->exit_code       = 0;
+    t->wait_for_pid    = 0;
+    t->brk_start       = 0;
+    t->brk_current     = 0;
+    t->sleep_until     = 0;
     for (int i = 0; i < NSIG; i++) t->signal_handlers[i] = SIG_DFL;
     proc_tracker_init(&t->mm);
-    for (int i = 0; i < MAX_FD; i++) t->fd_table[i] = 0;
+    for (int i = 0; i < MAX_FD; i++) {
+        t->fd_table[i] = 0;
+        t->fd_offset[i] = 0;
+    }
 
     if (add_to_list) {
         irq_spinlock_acquire(&scheduler_lock);
@@ -191,6 +208,47 @@ struct task_struct* create_task_with_entry(void*                entry,
 
     vmm_map(pd, t->ustack_virt, (uint32_t)t->ustack_phys,
             PAGE_USER | PAGE_RW | PAGE_PRESENT);
+
+    // compute brk from highest mapped user page (below stack region)
+    {
+        uint32_t highest = 0;
+        for (int i = 1; i < 768; i++) {  // skip entry 0, scan user space
+            if (!(pd[i] & PAGE_PRESENT)) continue;
+            uint32_t* pt = (uint32_t*)(pd[i] & ~0xFFFu);
+            for (int j = 1023; j >= 0; j--) {
+                if (pt[j] & PAGE_PRESENT) {
+                    uint32_t va = ((uint32_t)i << 22) | ((uint32_t)j << 12);
+                    if (va < 0xBF000000u && va + PAGE_SIZE > highest)
+                        highest = va + PAGE_SIZE;
+                    break;
+                }
+            }
+        }
+        t->brk_start   = highest;
+        t->brk_current = highest;
+    }
+
+    // push argc/argv onto user stack (physical)
+    uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
+    uint8_t* phys = (uint8_t*)t->ustack_phys;
+
+    uint32_t sp = ustack_top - 4;
+
+    // argv[0] = NULL
+    sp -= 4;
+    *(uint32_t*)(phys + (sp - t->ustack_virt)) = 0;
+    uint32_t argv_vaddr = sp;
+
+    // argv pointer
+    sp -= 4;
+    *(uint32_t*)(phys + (sp - t->ustack_virt)) = argv_vaddr;
+
+    // argc = 0
+    sp -= 4;
+    *(uint32_t*)(phys + (sp - t->ustack_virt)) = 0;
+
+    // patch useresp in iret frame
+    stk[13] = sp;
 
     task_setup_sigreturn(t);
 
@@ -244,6 +302,42 @@ struct task_struct* create_elf_task(char* path) {
     vmm_map(pd, t->ustack_virt, (uint32_t)t->ustack_phys,
             PAGE_USER | PAGE_RW | PAGE_PRESENT);
 
+    // compute brk from highest mapped user page
+    {
+        uint32_t highest = 0;
+        for (int i = 1; i < 768; i++) {
+            if (!(pd[i] & PAGE_PRESENT)) continue;
+            uint32_t* pt = (uint32_t*)(pd[i] & ~0xFFFu);
+            for (int j = 1023; j >= 0; j--) {
+                if (pt[j] & PAGE_PRESENT) {
+                    uint32_t va = ((uint32_t)i << 22) | ((uint32_t)j << 12);
+                    if (va < 0xBF000000u && va + PAGE_SIZE > highest)
+                        highest = va + PAGE_SIZE;
+                    break;
+                }
+            }
+        }
+        t->brk_start   = highest;
+        t->brk_current = highest;
+    }
+
+    // push argc/argv onto user stack (physical)
+    uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
+    uint8_t* phys = (uint8_t*)t->ustack_phys;
+    uint32_t sp = ustack_top - 4;
+
+    sp -= 4;
+    *(uint32_t*)(phys + (sp - t->ustack_virt)) = 0;  // argv[0]=NULL
+    uint32_t argv_vaddr = sp;
+
+    sp -= 4;
+    *(uint32_t*)(phys + (sp - t->ustack_virt)) = argv_vaddr;  // argv ptr
+
+    sp -= 4;
+    *(uint32_t*)(phys + (sp - t->ustack_virt)) = 0;  // argc=0
+
+    stk[13] = sp;  // patch useresp
+
     task_setup_sigreturn(t);
 
     irq_spinlock_acquire(&scheduler_lock);
@@ -273,7 +367,17 @@ int init_scheduler() {
     current_task->pending_signals = 0;
     current_task->queue_next      = 0;
     current_task->dyn_ctx         = 0;
+    current_task->parent_pid      = 0;
+    current_task->exit_code       = 0;
+    current_task->wait_for_pid    = 0;
+    current_task->brk_start       = 0;
+    current_task->brk_current     = 0;
+    current_task->sleep_until     = 0;
     proc_tracker_init(&current_task->mm);
+    for (int i = 0; i < MAX_FD; i++) {
+        current_task->fd_table[i] = 0;
+        current_task->fd_offset[i] = 0;
+    }
     task_list_head = current_task;
 
 
@@ -314,6 +418,21 @@ void task_reap() {
     irq_spinlock_release(&scheduler_lock);
 }
 
+static void task_wake_sleepers(void) {
+    uint32_t now = timer_ticks_get();
+    struct task_struct* cur = sleep_queue.head;
+    while (cur) {
+        struct task_struct* next = cur->queue_next;
+        if (cur->sleep_until != 0 && now >= cur->sleep_until) {
+            cur->sleep_until = 0;
+            sched_queue_remove(&sleep_queue, cur);
+            cur->state = TASK_READY;
+            sched_queue_push(&ready_queue, cur);
+        }
+        cur = next;
+    }
+}
+
 void schedule() {
     if (__sync_lock_test_and_set(&schedule_in_progress, 1)) {
         return;
@@ -328,6 +447,7 @@ void schedule() {
     }
 
     task_reap_internal();
+    task_wake_sleepers();
     task_handle_signals(current_task);
 
     if (current_task->state == TASK_ZOMBIE) {
@@ -354,6 +474,24 @@ void schedule() {
         if (!next) {
             kprint_color("[SCHED] WARN: sleeping but no ready task!\n", 14);
             sched_queue_remove(&sleep_queue, current_task);
+            current_task->state = TASK_RUNNING;
+            irq_spinlock_release(&scheduler_lock);
+            __sync_lock_release(&schedule_in_progress);
+            return;
+        }
+        current_task = next;
+        current_task->state = TASK_RUNNING;
+        irq_spinlock_release(&scheduler_lock);
+        __sync_lock_release(&schedule_in_progress);
+        return;
+    }
+
+    if (current_task->state == TASK_WAITING) {
+        sched_queue_push(&wait_queue, current_task);
+        struct task_struct* next = sched_queue_pop(&ready_queue);
+        if (!next) {
+            kprint_color("[SCHED] WARN: waiting but no ready task!\n", 14);
+            sched_queue_remove(&wait_queue, current_task);
             current_task->state = TASK_RUNNING;
             irq_spinlock_release(&scheduler_lock);
             __sync_lock_release(&schedule_in_progress);
@@ -414,6 +552,7 @@ void list_tasks() {
             case TASK_RUNNING:  kprint("running   "); break;
             case TASK_READY:    kprint("ready     "); break;
             case TASK_ZOMBIE:   kprint("zombie    "); break;
+            case TASK_WAITING:  kprint("waiting   "); break;
             default:            kprint("sleeping  "); break;
         }
         kprint(tasks[i].is_kernel ? "kernel\n" : "user\n");
@@ -438,6 +577,11 @@ void task_signal(uint32_t pid, uint32_t signal) {
 
             if ((signal & SIGKILL) && t->state == TASK_SLEEPING) {
                 sched_queue_remove(&sleep_queue, t);
+                t->state = TASK_READY;
+                sched_queue_push(&ready_queue, t);
+            }
+            if ((signal & SIGKILL) && t->state == TASK_WAITING) {
+                sched_queue_remove(&wait_queue, t);
                 t->state = TASK_READY;
                 sched_queue_push(&ready_queue, t);
             }
@@ -500,7 +644,6 @@ void task_setup_sigreturn(struct task_struct* t) {
     uint8_t* p = (uint8_t*)phys;
     for (int i = 0; i < (int)PAGE_SIZE; i++) p[i] = 0;
 
-    // mov eax, 119 (sigreturn syscall); int 0x80; hlt
     p[0] = 0xB8; p[1] = 0x77; p[2] = 0x00; p[3] = 0x00; p[4] = 0x00;
     p[5] = 0xCD; p[6] = 0x80;
     p[7] = 0xF4;
@@ -540,6 +683,12 @@ struct task_struct* task_fork(struct context_frame* regs) {
     child->queue_next     = 0;
     child->dyn_ctx        = 0;
     child->sigreturn_trampoline = parent->sigreturn_trampoline;
+    child->parent_pid     = parent->pid;
+    child->exit_code      = 0;
+    child->wait_for_pid   = 0;
+    child->brk_start      = parent->brk_start;
+    child->brk_current    = parent->brk_current;
+    child->sleep_until    = 0;
     for (int i = 0; i < NSIG; i++) child->signal_handlers[i] = parent->signal_handlers[i];
     proc_tracker_init(&child->mm);
     mmap_table_init(&child->mmap_table);
@@ -554,6 +703,7 @@ struct task_struct* task_fork(struct context_frame* regs) {
 
     for (int i = 0; i < MAX_FD; i++) {
         child->fd_table[i] = parent->fd_table[i];
+        child->fd_offset[i] = parent->fd_offset[i];
         if (child->fd_table[i])
             open_vfs(child->fd_table[i]);
     }
@@ -640,6 +790,7 @@ int task_exec(char* path, struct context_frame* regs) {
         if (t->fd_table[i]) {
             close_vfs(t->fd_table[i]);
             t->fd_table[i] = 0;
+            t->fd_offset[i] = 0;
         }
     }
 
@@ -649,14 +800,53 @@ int task_exec(char* path, struct context_frame* regs) {
     uint8_t* us = (uint8_t*)t->ustack_phys;
     for (uint32_t i = 0; i < PAGE_SIZE; i++) us[i] = 0;
 
+    // set up brk at end of loaded segments (page-aligned)
+    // scan ELF phdrs to find highest vaddr
+    {
+        extern void* load_elf(char*, uint32_t*, proc_page_tracker_t*);
+        // re-read ELF header to find segment end for brk
+        vfs_node_t* file = vfs_walk_path(vfs_root, path);
+        if (file) {
+            extern uint32_t elf_get_brk_start(vfs_node_t* f);
+            uint32_t brk = elf_get_brk_start(file);
+            t->brk_start   = brk;
+            t->brk_current = brk;
+        }
+    }
+
     task_setup_sigreturn(t);
 
     tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
 
+    // push argc/argv onto user stack via physical pointer (before switch_paging)
+    uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
+    uint32_t* phys_base = (uint32_t*)t->ustack_phys;
+
+    uint32_t sp = ustack_top - 4;
+
+    // argv[0] = NULL
+    sp -= 4;
+    *(uint32_t*)((uint8_t*)phys_base + (sp - t->ustack_virt)) = 0;
+    uint32_t argv_vaddr = sp;
+
+    // push argv pointer
+    sp -= 4;
+    *(uint32_t*)((uint8_t*)phys_base + (sp - t->ustack_virt)) = argv_vaddr;
+
+    // push argc
+    sp -= 4;
+    *(uint32_t*)((uint8_t*)phys_base + (sp - t->ustack_virt)) = 0;
+
+    kprint("[EXEC] pid=");
+    char buf[16]; itoa((int)t->pid, buf); kprint(buf);
+    kprint(" entry="); hex_to_ascii((uint32_t)entry, buf); kprint(buf);
+    kprint(" brk="); hex_to_ascii(t->brk_start, buf); kprint(buf);
+    kprint(" sp="); hex_to_ascii(sp, buf); kprint(buf);
+    kprint("\n");
+
     irq_spinlock_release(&scheduler_lock);
 
     switch_paging(new_pd);
-
 
     __asm__ __volatile__(
         "mov $0x23, %%eax\n\t"
@@ -670,7 +860,7 @@ int task_exec(char* path, struct context_frame* regs) {
         "pushl %1\n\t"
         "iret\n\t"
         :
-        : "r"(t->ustack_virt + PAGE_SIZE - 4), "r"((uint32_t)entry)
+        : "r"(sp), "r"((uint32_t)entry)
         : "eax"
     );
 
