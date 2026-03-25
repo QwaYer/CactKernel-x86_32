@@ -3,6 +3,7 @@
 # ==============================================================================
 
 KERN_CORE_DIR    = Lux/kernel/core
+KERN_SYSCALLS_DIR    = Lux/kernel/core/syscalls
 KERN_GDT_DIR     = Lux/kernel/gdt
 KERN_ELF_DIR     = Lux/kernel/elf
 KERN_DYNLINK_DIR = Lux/kernel/elf/dynlink
@@ -56,6 +57,7 @@ BUILD_DIR        = build
 
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
+		 -I$(KERN_SYSCALLS_DIR) \
          -I$(KERN_GDT_DIR) \
          -I$(KERN_ELF_DIR) \
          -I$(KERN_DYNLINK_DIR) \
@@ -224,7 +226,7 @@ $(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/syscall.o: $(KERN_CORE_DIR)/syscall.c
+$(BUILD_DIR)/syscall.o: $(KERN_SYSCALLS_DIR)/syscall.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

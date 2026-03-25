@@ -205,3 +205,25 @@ void* load_elf_dynamic(char*                path,
 
     return (void*)hdr.e_entry;
 }
+
+uint32_t elf_get_brk_start(struct vfs_node* file) {
+    if (!file) return 0;
+ 
+    Elf32_Ehdr hdr;
+    if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) return 0;
+    if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) return 0;
+ 
+    uint32_t highest = 0;
+    for (int i = 0; i < hdr.e_phnum; i++) {
+        Elf32_Phdr ph;
+        if (read_vfs(file,
+                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     sizeof(Elf32_Phdr), (char*)&ph) <= 0)
+            break;
+        if (ph.p_type != PT_LOAD) continue;
+        uint32_t end = ph.p_vaddr + ph.p_memsz;
+        if (end > highest) highest = end;
+    }
+ 
+    return (highest + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+}
