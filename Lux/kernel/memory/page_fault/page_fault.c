@@ -71,12 +71,6 @@ void page_fault_handler(struct context_frame* regs)
     uint32_t* pd = (t && t->page_directory) ? t->page_directory
                                              : get_current_pd();
 
-    if (err & PF_RESERVED) {
-        g_stats.invalid_access++;
-        kill_current(fault_addr, err, eip);
-        return;
-    }
-
     if ((err & PF_PRESENT) && (err & PF_WRITE)) {
         uint32_t* pte = pte_get(pd, fault_addr);
         if (pte && (*pte & PAGE_COW)) {
@@ -120,6 +114,20 @@ void page_fault_handler(struct context_frame* regs)
             return;
         }
 
+        if (pte && (*pte & PAGE_COW)) {
+            void* phys = kalloc();
+            if (!phys) { kill_current(fault_addr, err, eip); return; }
+            zero_page(phys);
+
+            uint32_t flags = (*pte & 0xFFFu) & ~(uint32_t)PAGE_COW;
+            flags |= PAGE_PRESENT | PAGE_RW;
+            *pte = ((uint32_t)phys & ~0xFFFu) | flags;
+            tlb_flush(page_va);
+
+            g_stats.demand_allocs++;
+            return;
+        }
+
         if (vmm_is_valid_stack_addr(fault_addr)) {
             void* phys = kalloc();
             if (!phys) { kill_current(fault_addr, err, eip); return; }
@@ -132,6 +140,18 @@ void page_fault_handler(struct context_frame* regs)
             g_stats.stack_grows++;
             return;
         }
+
+        if (fault_addr < 0xC0000000u && (err & PF_USER)) {
+            uint32_t pdi = PD_INDEX(fault_addr);
+            if (!(pd[pdi] & PAGE_PRESENT)) {
+                kprint("[PF] DBG: no PDE for addr=0x"); kprint_hex(fault_addr); kprint("\n");
+            } else if (!pte) {
+                kprint("[PF] DBG: pte_get returned null for addr=0x"); kprint_hex(fault_addr); kprint("\n");
+            } else {
+                kprint("[PF] DBG: PTE=0x"); kprint_hex(*pte); kprint(" addr=0x"); kprint_hex(fault_addr); kprint("\n");
+            }
+        }
+
         g_stats.invalid_access++;
         kill_current(fault_addr, err, eip);
         return;

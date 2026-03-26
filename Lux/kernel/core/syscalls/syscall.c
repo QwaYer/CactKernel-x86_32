@@ -36,6 +36,71 @@ static int validate_user_str(const char* str) {
     return 0;
 }
 
+// resolve user path (absolute or relative to CWD) -> vfs_node
+static vfs_node_t* _resolve_path(const char* path) {
+    if (!path || !current_task) return 0;
+    if (path[0] == '/') {
+        return vfs_walk_path(vfs_root, path);
+    }
+    char abs[512];
+    int p = 0;
+    for (int i = 0; current_task->cwd[i] && p < 510; i++)
+        abs[p++] = current_task->cwd[i];
+    if (p > 0 && abs[p-1] != '/') abs[p++] = '/';
+    for (int i = 0; path[i] && p < 511; i++)
+        abs[p++] = path[i];
+    abs[p] = '\0';
+    return vfs_walk_path(vfs_root, abs);
+}
+
+// resolve parent directory and extract basename for create/delete
+static vfs_node_t* _resolve_parent(const char* path, char* basename_out, int basename_max) {
+    if (!path || !current_task) return 0;
+
+    char abs[512];
+    if (path[0] == '/') {
+        int i = 0;
+        while (path[i] && i < 511) { abs[i] = path[i]; i++; }
+        abs[i] = '\0';
+    } else {
+        int p = 0;
+        for (int i = 0; current_task->cwd[i] && p < 510; i++)
+            abs[p++] = current_task->cwd[i];
+        if (p > 0 && abs[p-1] != '/') abs[p++] = '/';
+        for (int i = 0; path[i] && p < 511; i++)
+            abs[p++] = path[i];
+        abs[p] = '\0';
+    }
+
+    int last_slash = -1;
+    for (int i = 0; abs[i]; i++) {
+        if (abs[i] == '/') last_slash = i;
+    }
+
+    if (last_slash < 0) {
+        int i = 0;
+        while (path[i] && i < basename_max - 1) { basename_out[i] = path[i]; i++; }
+        basename_out[i] = '\0';
+        return vfs_walk_path(vfs_root, current_task->cwd);
+    }
+
+    const char* bn = abs + last_slash + 1;
+    int i = 0;
+    while (bn[i] && i < basename_max - 1) { basename_out[i] = bn[i]; i++; }
+    basename_out[i] = '\0';
+
+    if (last_slash == 0) {
+        return vfs_root;
+    }
+
+    char parent_path[512];
+    for (int j = 0; j < last_slash && j < 511; j++)
+        parent_path[j] = abs[j];
+    parent_path[last_slash] = '\0';
+
+    return vfs_walk_path(vfs_root, parent_path);
+}
+
 static int sys_print(char* msg) {
     if (!validate_user_str(msg)) return -1;
     kprint(msg);
@@ -49,12 +114,20 @@ static int sys_get_pid() {
 static int sys_open(char* name) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
-    struct vfs_node* node = finddir_vfs(vfs_root, name);
-    if (!node) return -1;
+
+    vfs_node_t* node = _resolve_path(name);
+    if (!node) {
+        kprint("[DBG] sys_open: not found: "); kprint(name); kprint("\n");
+        return -1;
+    }
+
     for (int i = 3; i < MAX_FD; i++) {
         if (!current_task->fd_table[i]) {
             current_task->fd_table[i] = node;
             current_task->fd_offset[i] = 0;
+            kprint("[DBG] sys_open: fd=");
+            char tmp[16]; itoa(i, tmp); kprint(tmp);
+            kprint(" path="); kprint(name); kprint("\n");
             return i;
         }
     }
@@ -101,12 +174,41 @@ static int sys_close(int fd) {
 
 static int sys_create(char* name) {
     if (!validate_user_str(name)) return -1;
-    return create_vfs(vfs_root, name);
+    if (!current_task) return -1;
+
+    char basename[128];
+    vfs_node_t* parent = _resolve_parent(name, basename, 128);
+    if (!parent) {
+        kprint("[DBG] sys_create: parent not found for: "); kprint(name); kprint("\n");
+        return -1;
+    }
+    if (!basename[0]) {
+        kprint("[DBG] sys_create: empty basename\n");
+        return -1;
+    }
+
+    kprint("[DBG] sys_create: parent="); kprint(parent->name);
+    kprint(" basename="); kprint(basename); kprint("\n");
+
+    return create_vfs(parent, basename);
 }
 
 static int sys_delete(char* name) {
     if (!validate_user_str(name)) return -1;
-    return delete_vfs(vfs_root, name);
+    if (!current_task) return -1;
+
+    char basename[128];
+    vfs_node_t* parent = _resolve_parent(name, basename, 128);
+    if (!parent) {
+        kprint("[DBG] sys_delete: parent not found for: "); kprint(name); kprint("\n");
+        return -1;
+    }
+    if (!basename[0]) return -1;
+
+    kprint("[DBG] sys_delete: parent="); kprint(parent->name);
+    kprint(" basename="); kprint(basename); kprint("\n");
+
+    return delete_vfs(parent, basename);
 }
 
 static int sys_exit(struct syscall_frame* regs) {
@@ -693,6 +795,9 @@ void syscall_handler(struct syscall_frame* regs) {
             (void*)regs->edx
         );
     }
+
+    // sys_exit (7): task is ZOMBIE, don't touch its frame
+    if (num == 7) return;
 
     regs->eax = (uint32_t)ret;
 }
