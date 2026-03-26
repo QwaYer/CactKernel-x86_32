@@ -56,6 +56,13 @@ static unsigned char _bcd_to_bin(unsigned char b) {
     return ((b >> 4) * 10) + (b & 0x0F);
 }
 
+static void _copy_cwd_to_task(struct task_struct* t) {
+    if (!t) return;
+    int i = 0;
+    while (current_path[i] && i < 255) { t->cwd[i] = current_path[i]; i++; }
+    t->cwd[i] = '\0';
+}
+
 // Навигация 
 static void cmd_cd(char* args) {
     char* path = _skip_token(args);
@@ -448,11 +455,11 @@ static void cmd_run(char* args) {
         kprint("\nError: not an ELF file\n");
         return;
     }
-    if (hdr.e_machine != 3) { /* EM_386 */
+    if (hdr.e_machine != 3) {
         kprint("\nError: ELF is not i386\n");
         return;
     }
-    if (hdr.e_type != 2 && hdr.e_type != 3) { /* ET_EXEC=2, ET_DYN=3 */
+    if (hdr.e_type != 2 && hdr.e_type != 3) {
         kprint("\nError: ELF is not executable (ET_EXEC/ET_DYN)\n");
         return;
     }
@@ -519,14 +526,19 @@ static void cmd_run(char* args) {
             return;
         }
 
-        if (create_task_dynamic(entry, pd, tracker, ctx)) {
-            kprint("[run] task created (dynamic)\n");
-        } else {
-            dynlink_unload_all(ctx);
-            kfree_heap(ctx);
-            proc_free_pages(tracker);
-            kfree_heap(tracker);
-            kprint("[run] Error: scheduler refused task\n");
+        {
+            struct task_struct* _newtask = create_task_dynamic(entry, pd, tracker, ctx);
+            if (_newtask) {
+                _copy_cwd_to_task(_newtask);
+                kprint("[run] task created (dynamic), cwd=");
+                kprint(_newtask->cwd); kprint("\n");
+            } else {
+                dynlink_unload_all(ctx);
+                kfree_heap(ctx);
+                proc_free_pages(tracker);
+                kfree_heap(tracker);
+                kprint("[run] Error: scheduler refused task\n");
+            }
         }
 
     } else {
@@ -552,12 +564,17 @@ static void cmd_run(char* args) {
             return;
         }
 
-        if (create_task_with_entry(entry, pd, tracker)) {
-            kprint("[run] task created (static)\n");
-        } else {
-            proc_free_pages(tracker);
-            kfree_heap(tracker);
-            kprint("[run] Error: scheduler refused task\n");
+        {
+            struct task_struct* _newtask = create_task_with_entry(entry, pd, tracker);
+            if (_newtask) {
+                _copy_cwd_to_task(_newtask);
+                kprint("[run] task created (static), cwd=");
+                kprint(_newtask->cwd); kprint("\n");
+            } else {
+                proc_free_pages(tracker);
+                kfree_heap(tracker);
+                kprint("[run] Error: scheduler refused task\n");
+            }
         }
     }
 }
