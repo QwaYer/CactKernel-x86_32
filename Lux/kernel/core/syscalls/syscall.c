@@ -66,6 +66,7 @@ static int sys_read(int fd, char* buf, unsigned int size) {
     if (!validate_user_ptr(buf, size)) return -1;
     if (!current_task)                 return -1;
     if (fd < 0 || fd >= MAX_FD)        return -1;
+
     struct vfs_node* node = current_task->fd_table[fd];
     if (!node) return -1;
     int ret = read_vfs(node, current_task->fd_offset[fd], size, buf);
@@ -124,9 +125,6 @@ static int sys_exit(struct syscall_frame* regs) {
                 t->state = TASK_READY;
                 sched_queue_push(&ready_queue, t);
 
-                // patch parent's saved syscall frame: eax = child pid
-                // parent kernel stack: [es][ds][edi][esi][ebp][esp_d][ebx][edx][ecx][eax]...
-                // eax is at offset 9 from saved esp
                 uint32_t* parent_frame = (uint32_t*)t->esp;
                 parent_frame[9] = current_task->pid;  // eax = child pid
 
@@ -168,16 +166,40 @@ static int sys_fork(struct syscall_frame* regs) {
     return (int)child->pid;
 }
 
+#define EXEC_VALIDATE_MAX 256
+
 static int sys_exec(struct syscall_frame* regs) {
     char* path = (char*)regs->ebx;
     if (!validate_user_str(path)) return -1;
+
+    char** argv = (char**)regs->ecx;
+    char** envp = (char**)regs->edx;
+
+    if (argv) {
+        if (!validate_user_ptr(argv, sizeof(char*))) return -1;
+        for (int i = 0; i < EXEC_VALIDATE_MAX; i++) {
+            if ((uint32_t)&argv[i] >= KERNEL_BASE) return -1;
+            if (!argv[i]) break;
+            if (!validate_user_str(argv[i])) return -1;
+        }
+    }
+
+    if (envp) {
+        if (!validate_user_ptr(envp, sizeof(char*))) return -1;
+        for (int i = 0; i < EXEC_VALIDATE_MAX; i++) {
+            if ((uint32_t)&envp[i] >= KERNEL_BASE) return -1;
+            if (!envp[i]) break;
+            if (!validate_user_str(envp[i])) return -1;
+        }
+    }
+
     struct context_frame cf;
     cf.eip     = regs->eip;
     cf.cs      = regs->cs;
     cf.eflags  = regs->eflags;
     cf.useresp = regs->useresp;
     cf.ss      = regs->ss;
-    return task_exec(path, &cf);
+    return task_exec(path, argv, envp, &cf);
 }
 
 static int sys_kill(uint32_t pid) {

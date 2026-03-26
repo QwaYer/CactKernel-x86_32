@@ -145,7 +145,7 @@ struct task_struct* create_task(void (*entry_point)());
 struct task_struct* create_user_task(void* entry_point);
 struct task_struct* create_elf_task(char* path);
 struct task_struct* task_fork(struct context_frame* regs);
-int task_exec(char* path, struct context_frame* regs);
+int task_exec(char* path, char** argv, char** envp, struct context_frame* regs);
 void task_kill(uint32_t pid);
 void task_signal(uint32_t pid, uint32_t signal);
 void task_handle_signals(struct task_struct* t);
