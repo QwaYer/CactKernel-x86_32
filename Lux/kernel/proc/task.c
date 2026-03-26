@@ -115,6 +115,8 @@ struct task_struct* create_task(void (*entry_point)()) {
     t->brk_start      = 0;
     t->brk_current    = 0;
     t->sleep_until    = 0;
+    t->cwd[0] = '/';
+    t->cwd[1] = '\0';
     proc_tracker_init(&t->mm);
     for (int i = 0; i < MAX_FD; i++) {
         t->fd_table[i] = 0;
@@ -171,6 +173,8 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     t->brk_start       = 0;
     t->brk_current     = 0;
     t->sleep_until     = 0;
+    t->cwd[0] = '/';
+    t->cwd[1] = '\0';
     for (int i = 0; i < NSIG; i++) t->signal_handlers[i] = SIG_DFL;
     proc_tracker_init(&t->mm);
     for (int i = 0; i < MAX_FD; i++) {
@@ -191,19 +195,15 @@ struct task_struct* create_user_task(void* entry_point) {
     return create_user_task_internal(entry_point, 1);
 }
 
-// push argc/argv/envp={NULL} onto user stack for tasks without arguments
 static void _push_empty_args(uint8_t* phys, uint32_t ustack_virt, uint32_t* sp) {
-    // envp[] = { NULL }
     *sp -= 4;
     *(uint32_t*)(phys + (*sp - ustack_virt)) = 0;
     uint32_t envp_vaddr = *sp;
 
-    // argv[] = { NULL }
     *sp -= 4;
     *(uint32_t*)(phys + (*sp - ustack_virt)) = 0;
     uint32_t argv_vaddr = *sp;
 
-    // push envp, argv, argc
     *sp -= 4;
     *(uint32_t*)(phys + (*sp - ustack_virt)) = envp_vaddr;
     *sp -= 4;
@@ -230,7 +230,6 @@ struct task_struct* create_task_with_entry(void*                entry,
     vmm_map(pd, t->ustack_virt, (uint32_t)t->ustack_phys,
             PAGE_USER | PAGE_RW | PAGE_PRESENT);
 
-    // compute brk from highest mapped user page (below stack region)
     {
         uint32_t highest = 0;
         for (int i = 1; i < 768; i++) {
@@ -249,7 +248,6 @@ struct task_struct* create_task_with_entry(void*                entry,
         t->brk_current = highest;
     }
 
-    // push argc/argv/envp onto user stack (physical)
     uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
     uint8_t* phys = (uint8_t*)t->ustack_phys;
     uint32_t sp = ustack_top - 4;
@@ -310,7 +308,6 @@ struct task_struct* create_elf_task(char* path) {
     vmm_map(pd, t->ustack_virt, (uint32_t)t->ustack_phys,
             PAGE_USER | PAGE_RW | PAGE_PRESENT);
 
-    // compute brk from highest mapped user page
     {
         uint32_t highest = 0;
         for (int i = 1; i < 768; i++) {
@@ -329,14 +326,13 @@ struct task_struct* create_elf_task(char* path) {
         t->brk_current = highest;
     }
 
-    // push argc/argv/envp onto user stack (physical)
     uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
     uint8_t* phys = (uint8_t*)t->ustack_phys;
     uint32_t sp = ustack_top - 4;
 
     _push_empty_args(phys, t->ustack_virt, &sp);
 
-    stk[13] = sp;  // patch useresp
+    stk[13] = sp;
 
     task_setup_sigreturn(t);
 
@@ -373,6 +369,8 @@ int init_scheduler() {
     current_task->brk_start       = 0;
     current_task->brk_current     = 0;
     current_task->sleep_until     = 0;
+    current_task->cwd[0] = '/';
+    current_task->cwd[1] = '\0';
     proc_tracker_init(&current_task->mm);
     for (int i = 0; i < MAX_FD; i++) {
         current_task->fd_table[i] = 0;
@@ -418,7 +416,6 @@ void task_reap() {
     irq_spinlock_release(&scheduler_lock);
 }
 
-// wake sleeping tasks whose timer expired
 static void task_wake_sleepers(void) {
     uint32_t now = timer_ticks_get();
     struct task_struct* cur = sleep_queue.head;
@@ -690,6 +687,7 @@ struct task_struct* task_fork(struct context_frame* regs) {
     child->brk_start      = parent->brk_start;
     child->brk_current    = parent->brk_current;
     child->sleep_until    = 0;
+    for (int i = 0; i < 256; i++) child->cwd[i] = parent->cwd[i];
     for (int i = 0; i < NSIG; i++) child->signal_handlers[i] = parent->signal_handlers[i];
     proc_tracker_init(&child->mm);
     mmap_table_init(&child->mmap_table);
@@ -756,7 +754,6 @@ struct task_struct* task_fork(struct context_frame* regs) {
 #define EXEC_MAX_ENVS    256
 #define EXEC_MAX_STRLEN  4096
 
-// copy string array from caller's address space to new user stack via physical pointer
 static int _copy_strings_to_ustack(const char** arr, int max,
                                     uint8_t* phys_base, uint32_t ustack_virt,
                                     uint32_t* sp, uint32_t* vaddrs)
@@ -855,7 +852,6 @@ int task_exec(char* path, char** argv, char** envp, struct context_frame* regs) 
 
     tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
 
-    // copy argv/envp strings to user stack (old address space still active)
     uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
     uint8_t* phys_base = (uint8_t*)t->ustack_phys;
     uint32_t sp = ustack_top - 4;
@@ -868,7 +864,7 @@ int task_exec(char* path, char** argv, char** envp, struct context_frame* regs) 
     int envc = _copy_strings_to_ustack((const char**)envp, EXEC_MAX_ENVS,
                                         phys_base, t->ustack_virt, &sp, envp_vaddrs);
 
-    // build envp[] array: envp[0]..envp[envc-1], NULL
+    // build envp[] array
     sp -= 4;
     *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = 0;
     for (int i = envc - 1; i >= 0; i--) {
@@ -877,7 +873,7 @@ int task_exec(char* path, char** argv, char** envp, struct context_frame* regs) 
     }
     uint32_t envp_arr_vaddr = sp;
 
-    // build argv[] array: argv[0]..argv[argc-1], NULL
+    // build argv[] array
     sp -= 4;
     *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = 0;
     for (int i = argc - 1; i >= 0; i--) {
@@ -886,7 +882,7 @@ int task_exec(char* path, char** argv, char** envp, struct context_frame* regs) 
     }
     uint32_t argv_arr_vaddr = sp;
 
-    // push main(argc, argv, envp): envp, argv, argc
+    // push main(argc, argv, envp)
     sp -= 4;
     *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = envp_arr_vaddr;
     sp -= 4;
@@ -894,7 +890,6 @@ int task_exec(char* path, char** argv, char** envp, struct context_frame* regs) 
     sp -= 4;
     *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = (uint32_t)argc;
 
-    // debug
     {
         char buf[16];
         kprint("[EXEC] pid=");

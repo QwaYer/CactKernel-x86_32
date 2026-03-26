@@ -469,6 +469,109 @@ static int sys_brk(struct syscall_frame* regs) {
     return (int)new_brk;
 }
 
+static int sys_getcwd(struct syscall_frame* regs) {
+    char*    buf  = (char*)regs->ebx;
+    uint32_t size = regs->ecx;
+
+    if (!current_task) return -1;
+    if (!buf || size == 0) return -1;
+    if (!validate_user_ptr(buf, size)) return -1;
+
+    uint32_t len = 0;
+    while (current_task->cwd[len]) len++;
+    len++;
+
+    if (len > size) return -1;
+
+    for (uint32_t i = 0; i < len; i++)
+        buf[i] = current_task->cwd[i];
+
+    kprint("[DBG] sys_getcwd: pid=");
+    char tmp[16]; itoa(current_task->pid, tmp); kprint(tmp);
+    kprint(" cwd="); kprint(current_task->cwd); kprint("\n");
+
+    return (int)buf;
+}
+
+static int sys_chdir(struct syscall_frame* regs) {
+    char* path = (char*)regs->ebx;
+
+    if (!current_task) return -1;
+    if (!validate_user_str(path)) return -1;
+
+    char abs[256];
+    if (path[0] == '/') {
+        int i = 0;
+        while (path[i] && i < 255) { abs[i] = path[i]; i++; }
+        abs[i] = '\0';
+    } else {
+        int p = 0;
+        for (int i = 0; current_task->cwd[i] && p < 254; i++)
+            abs[p++] = current_task->cwd[i];
+        if (p > 0 && abs[p-1] != '/') abs[p++] = '/';
+        for (int i = 0; path[i] && p < 255; i++)
+            abs[p++] = path[i];
+        abs[p] = '\0';
+    }
+
+    // normalize "." and ".."
+    int  segs_start[64];
+    int  segs_len[64];
+    int  nseg = 0;
+
+    const char* s = abs;
+    while (*s == '/') s++;
+    while (*s) {
+        const char* seg = s;
+        int slen = 0;
+        while (*s && *s != '/') { s++; slen++; }
+        while (*s == '/') s++;
+
+        if (slen == 1 && seg[0] == '.') continue;
+        if (slen == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (nseg > 0) nseg--;
+            continue;
+        }
+        segs_start[nseg] = (int)(seg - abs);
+        segs_len[nseg]   = slen;
+        nseg++;
+        if (nseg >= 64) break;
+    }
+
+    char norm[256];
+    if (nseg == 0) {
+        norm[0] = '/'; norm[1] = '\0';
+    } else {
+        int p = 0;
+        for (int i = 0; i < nseg && p < 254; i++) {
+            norm[p++] = '/';
+            for (int j = 0; j < segs_len[i] && p < 255; j++)
+                norm[p++] = abs[segs_start[i] + j];
+        }
+        norm[p] = '\0';
+    }
+
+    vfs_node_t* node = vfs_walk_path(vfs_root, norm);
+    if (!node) {
+        kprint("[DBG] sys_chdir: not found: "); kprint(norm); kprint("\n");
+        return -1;
+    }
+    if (node->type != VFS_DIRECTORY) {
+        kprint("[DBG] sys_chdir: not a dir: "); kprint(norm); kprint("\n");
+        return -1;
+    }
+
+    int i = 0;
+    while (norm[i] && i < 255) { current_task->cwd[i] = norm[i]; i++; }
+    current_task->cwd[i] = '\0';
+
+    kprint("[DBG] sys_chdir: pid=");
+    char tmp[16]; itoa(current_task->pid, tmp); kprint(tmp);
+    kprint(" -> "); kprint(current_task->cwd); kprint("\n");
+
+    return 0;
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -495,6 +598,8 @@ static syscall_fn syscall_table[] = {
     [21] = (syscall_fn)sys_waitpid,
     [22] = (syscall_fn)sys_sleep,
     [23] = (syscall_fn)sys_brk,
+    [24] = (syscall_fn)sys_getcwd,
+    [25] = (syscall_fn)sys_chdir,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -508,7 +613,8 @@ void syscall_handler(struct syscall_frame* regs) {
     int ret;
     if (num == 7 || num == 9 || num == 10 || num == 13 || num == 14 ||
         num == 15 || num == 16 || num == 17 || num == 18 || num == 19 ||
-        num == 20 || num == 21 || num == 22 || num == 23) {
+        num == 20 || num == 21 || num == 22 || num == 23 ||
+        num == 24 || num == 25) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](

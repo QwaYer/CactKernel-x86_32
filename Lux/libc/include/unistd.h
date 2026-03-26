@@ -27,5 +27,7 @@ unsigned int sleep(unsigned int seconds);
 int usleep(unsigned int usec);
 void *sbrk(int increment);
 int brk(void *addr);
+char *getcwd(char *buf, int size);
+int chdir(const char *path);
 
 #endif

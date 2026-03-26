@@ -83,6 +83,8 @@ struct task_struct {
     uint32_t brk_current;
 
     uint32_t sleep_until;
+
+    char cwd[256];
 };
 
 typedef struct sched_queue {
