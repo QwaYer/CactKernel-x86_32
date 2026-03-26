@@ -347,9 +347,9 @@ static void cmd_fetch(char* args) {
     kprint_color(" | |__| |_| |>  <   \n", COLOR_LIGHT_CYAN);
     kprint_color(" |_____\\__,_/_/\\_\\  \n", COLOR_LIGHT_CYAN);
     kprint("\n");
-    kprint_color(" Kernel:  ", COLOR_LIGHT_BROWN); kprint("Lux Kernel 0.8.0\n");
+    kprint_color(" Kernel:  ", COLOR_LIGHT_BROWN); kprint("Lux Kernel 0.8.8\n");
     kprint_color(" Arch:    ", COLOR_LIGHT_BROWN); kprint("x86_32\n");
-    kprint_color(" Shell:   ", COLOR_LIGHT_BROWN); kprint("v0.8.0\n");
+    kprint_color(" Shell:   ", COLOR_LIGHT_BROWN); kprint("v0.8.8\n");
     char buf[32];
     unsigned int free_mem = get_free_heap_memory();
     kprint_color(" Memory:  ", COLOR_LIGHT_BROWN);
