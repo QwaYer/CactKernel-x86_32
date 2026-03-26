@@ -417,7 +417,8 @@ static int sys_waitpid(struct syscall_frame* regs) {
         } while (t != task_list_head);
     }
 
-    current_task->wait_for_pid = (target_pid > 0) ? (uint32_t)target_pid : 0;
+    current_task->wait_for_pid = (target_pid > 0) ?
+        (uint32_t)target_pid : 0;
     current_task->state = TASK_WAITING;
     irq_spinlock_release(&scheduler_lock);
 
@@ -515,19 +516,17 @@ static int sys_chdir(struct syscall_frame* regs) {
     }
 
     // normalize "." and ".."
-    int  segs_start[64];
-    int  segs_len[64];
-    int  nseg = 0;
-
+    int segs_start[64], segs_len[64];
+    int nseg = 0;
     const char* s = abs;
-    while (*s == '/') s++;
     while (*s) {
+        while (*s == '/') s++;
+        if (!*s) break;
         const char* seg = s;
         int slen = 0;
         while (*s && *s != '/') { s++; slen++; }
-        while (*s == '/') s++;
-
-        if (slen == 1 && seg[0] == '.') continue;
+        if (slen == 1 && seg[0] == '.')
+            continue;
         if (slen == 2 && seg[0] == '.' && seg[1] == '.') {
             if (nseg > 0) nseg--;
             continue;
@@ -572,6 +571,75 @@ static int sys_chdir(struct syscall_frame* regs) {
     return 0;
 }
 
+static uint32_t _vfs_type_to_mode(uint32_t type) {
+    switch (type) {
+    case VFS_FILE:        return 0x8000;
+    case VFS_DIRECTORY:   return 0x4000;
+    case VFS_CHARDEVICE:  return 0x2000;
+    case VFS_BLOCKDEVICE: return 0x6000;
+    case VFS_PIPE:        return 0x1000;
+    default:              return 0;
+    }
+}
+
+static void _fill_stat(struct vfs_node* node, uint32_t* ubuf) {
+    ubuf[0] = node->inode;
+    ubuf[1] = _vfs_type_to_mode(node->type);
+    ubuf[2] = node->size;
+    ubuf[3] = node->type;
+}
+
+static int sys_stat(struct syscall_frame* regs) {
+    char*     path = (char*)regs->ebx;
+    uint32_t* ubuf = (uint32_t*)regs->ecx;
+
+    if (!current_task) return -1;
+    if (!validate_user_str(path)) return -1;
+    if (!validate_user_ptr(ubuf, 16)) return -1;
+
+    struct vfs_node* node = vfs_walk_path(vfs_root, path);
+    if (!node) {
+        kprint("[DBG] sys_stat: not found: "); kprint(path); kprint("\n");
+        return -1;
+    }
+
+    _fill_stat(node, ubuf);
+
+    kprint("[DBG] sys_stat: "); kprint(path);
+    kprint(" type=");
+    char tmp[16]; itoa((int)node->type, tmp); kprint(tmp);
+    kprint(" size="); itoa((int)node->size, tmp); kprint(tmp);
+    kprint("\n");
+
+    return 0;
+}
+
+static int sys_fstat(struct syscall_frame* regs) {
+    int       fd   = (int)regs->ebx;
+    uint32_t* ubuf = (uint32_t*)regs->ecx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(ubuf, 16)) return -1;
+
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) {
+        kprint("[DBG] sys_fstat: bad fd=");
+        char tmp[16]; itoa(fd, tmp); kprint(tmp); kprint("\n");
+        return -1;
+    }
+
+    _fill_stat(node, ubuf);
+
+    kprint("[DBG] sys_fstat: fd=");
+    char tmp[16]; itoa(fd, tmp); kprint(tmp);
+    kprint(" type="); itoa((int)node->type, tmp); kprint(tmp);
+    kprint(" size="); itoa((int)node->size, tmp); kprint(tmp);
+    kprint("\n");
+
+    return 0;
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -600,6 +668,8 @@ static syscall_fn syscall_table[] = {
     [23] = (syscall_fn)sys_brk,
     [24] = (syscall_fn)sys_getcwd,
     [25] = (syscall_fn)sys_chdir,
+    [26] = (syscall_fn)sys_stat,
+    [27] = (syscall_fn)sys_fstat,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -614,7 +684,7 @@ void syscall_handler(struct syscall_frame* regs) {
     if (num == 7 || num == 9 || num == 10 || num == 13 || num == 14 ||
         num == 15 || num == 16 || num == 17 || num == 18 || num == 19 ||
         num == 20 || num == 21 || num == 22 || num == 23 ||
-        num == 24 || num == 25) {
+        num == 24 || num == 25 || num == 26 || num == 27) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](

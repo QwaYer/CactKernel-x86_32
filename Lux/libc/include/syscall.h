@@ -28,6 +28,8 @@
 #define SYS_BRK     23
 #define SYS_GETCWD  24
 #define SYS_CHDIR   25
+#define SYS_STAT    26
+#define SYS_FSTAT   27
 
 
 #define STDIN_FILENO  0
