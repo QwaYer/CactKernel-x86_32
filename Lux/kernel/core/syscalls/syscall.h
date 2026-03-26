@@ -25,6 +25,8 @@
 #define SYS_WAITPID 21
 #define SYS_SLEEP   22
 #define SYS_BRK     23
+#define SYS_GETCWD  24
+#define SYS_CHDIR   25
 
 int syscall(int num, int p1, int p2, int p3);
 

@@ -58,3 +58,13 @@ int brk(void *addr) {
     int ret = syscall(SYS_BRK, (int)addr, 0, 0);
     return (ret < 0) ? -1 : 0;
 }
+
+char *getcwd(char *buf, int size) {
+    int ret = syscall(SYS_GETCWD, (int)buf, size, 0);
+    if (ret < 0) return 0;
+    return buf;
+}
+
+int chdir(const char *path) {
+    return syscall(SYS_CHDIR, (int)path, 0, 0);
+}
