@@ -191,6 +191,27 @@ struct task_struct* create_user_task(void* entry_point) {
     return create_user_task_internal(entry_point, 1);
 }
 
+// push argc/argv/envp={NULL} onto user stack for tasks without arguments
+static void _push_empty_args(uint8_t* phys, uint32_t ustack_virt, uint32_t* sp) {
+    // envp[] = { NULL }
+    *sp -= 4;
+    *(uint32_t*)(phys + (*sp - ustack_virt)) = 0;
+    uint32_t envp_vaddr = *sp;
+
+    // argv[] = { NULL }
+    *sp -= 4;
+    *(uint32_t*)(phys + (*sp - ustack_virt)) = 0;
+    uint32_t argv_vaddr = *sp;
+
+    // push envp, argv, argc
+    *sp -= 4;
+    *(uint32_t*)(phys + (*sp - ustack_virt)) = envp_vaddr;
+    *sp -= 4;
+    *(uint32_t*)(phys + (*sp - ustack_virt)) = argv_vaddr;
+    *sp -= 4;
+    *(uint32_t*)(phys + (*sp - ustack_virt)) = 0; // argc=0
+}
+
 struct task_struct* create_task_with_entry(void*                entry,
                                             uint32_t*            pd,
                                             proc_page_tracker_t* tracker)
@@ -212,7 +233,7 @@ struct task_struct* create_task_with_entry(void*                entry,
     // compute brk from highest mapped user page (below stack region)
     {
         uint32_t highest = 0;
-        for (int i = 1; i < 768; i++) {  // skip entry 0, scan user space
+        for (int i = 1; i < 768; i++) {
             if (!(pd[i] & PAGE_PRESENT)) continue;
             uint32_t* pt = (uint32_t*)(pd[i] & ~0xFFFu);
             for (int j = 1023; j >= 0; j--) {
@@ -228,27 +249,14 @@ struct task_struct* create_task_with_entry(void*                entry,
         t->brk_current = highest;
     }
 
-    // push argc/argv onto user stack (physical)
+    // push argc/argv/envp onto user stack (physical)
     uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
     uint8_t* phys = (uint8_t*)t->ustack_phys;
-
     uint32_t sp = ustack_top - 4;
 
-    // argv[0] = NULL
-    sp -= 4;
-    *(uint32_t*)(phys + (sp - t->ustack_virt)) = 0;
-    uint32_t argv_vaddr = sp;
+    _push_empty_args(phys, t->ustack_virt, &sp);
 
-    // argv pointer
-    sp -= 4;
-    *(uint32_t*)(phys + (sp - t->ustack_virt)) = argv_vaddr;
-
-    // argc = 0
-    sp -= 4;
-    *(uint32_t*)(phys + (sp - t->ustack_virt)) = 0;
-
-    // patch useresp in iret frame
-    stk[13] = sp;
+    stk[13] = sp;  // patch useresp
 
     task_setup_sigreturn(t);
 
@@ -321,20 +329,12 @@ struct task_struct* create_elf_task(char* path) {
         t->brk_current = highest;
     }
 
-    // push argc/argv onto user stack (physical)
+    // push argc/argv/envp onto user stack (physical)
     uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
     uint8_t* phys = (uint8_t*)t->ustack_phys;
     uint32_t sp = ustack_top - 4;
 
-    sp -= 4;
-    *(uint32_t*)(phys + (sp - t->ustack_virt)) = 0;  // argv[0]=NULL
-    uint32_t argv_vaddr = sp;
-
-    sp -= 4;
-    *(uint32_t*)(phys + (sp - t->ustack_virt)) = argv_vaddr;  // argv ptr
-
-    sp -= 4;
-    *(uint32_t*)(phys + (sp - t->ustack_virt)) = 0;  // argc=0
+    _push_empty_args(phys, t->ustack_virt, &sp);
 
     stk[13] = sp;  // patch useresp
 
@@ -697,8 +697,6 @@ struct task_struct* task_fork(struct context_frame* regs) {
     if (parent->page_directory) {
         vmm_fork_address_space(parent->page_directory, child_pd);
 
-        // restore parent user stack to RW — fork already copies stack physically,
-        // so CoW on the stack page is unnecessary and causes faults after waitpid
         uint32_t stack_va = parent->ustack_virt;
         uint32_t pdi = PD_INDEX(stack_va);
         uint32_t pti = PT_INDEX(stack_va);
@@ -708,7 +706,6 @@ struct task_struct* task_fork(struct context_frame* regs) {
                 pt[pti] = (pt[pti] | PAGE_RW) & ~(uint32_t)PAGE_COW;
             }
         }
-        // flush TLB for stack page
         __asm__ __volatile__("invlpg (%0)" :: "r"(stack_va) : "memory");
     }
 
@@ -755,7 +752,34 @@ struct task_struct* task_fork(struct context_frame* regs) {
 #define KERNEL_BASE 0xC0000000U
 #endif
 
-int task_exec(char* path, struct context_frame* regs) {
+#define EXEC_MAX_ARGS    256
+#define EXEC_MAX_ENVS    256
+#define EXEC_MAX_STRLEN  4096
+
+// copy string array from caller's address space to new user stack via physical pointer
+static int _copy_strings_to_ustack(const char** arr, int max,
+                                    uint8_t* phys_base, uint32_t ustack_virt,
+                                    uint32_t* sp, uint32_t* vaddrs)
+{
+    if (!arr) return 0;
+    int count = 0;
+    for (int i = 0; i < max; i++) {
+        if (!arr[i]) break;
+        int len = 0;
+        while (arr[i][len] && len < EXEC_MAX_STRLEN) len++;
+        len++; // '\0'
+
+        *sp -= (uint32_t)len;
+        *sp &= ~3u; // align 4
+        uint32_t off = *sp - ustack_virt;
+        for (int j = 0; j < len; j++)
+            phys_base[off + j] = (uint8_t)arr[i][j];
+        vaddrs[count++] = *sp;
+    }
+    return count;
+}
+
+int task_exec(char* path, char** argv, char** envp, struct context_frame* regs) {
     (void)regs;
 
     if (!path || (uint32_t)path >= KERNEL_BASE) {
@@ -815,11 +839,9 @@ int task_exec(char* path, struct context_frame* regs) {
     uint8_t* us = (uint8_t*)t->ustack_phys;
     for (uint32_t i = 0; i < PAGE_SIZE; i++) us[i] = 0;
 
-    // set up brk at end of loaded segments (page-aligned)
-    // scan ELF phdrs to find highest vaddr
+    // set up brk
     {
         extern void* load_elf(char*, uint32_t*, proc_page_tracker_t*);
-        // re-read ELF header to find segment end for brk
         vfs_node_t* file = vfs_walk_path(vfs_root, path);
         if (file) {
             extern uint32_t elf_get_brk_start(vfs_node_t* f);
@@ -833,31 +855,75 @@ int task_exec(char* path, struct context_frame* regs) {
 
     tss_entry.esp0 = (uint32_t)t->stack_base + 4096;
 
-    // push argc/argv onto user stack via physical pointer (before switch_paging)
+    // copy argv/envp strings to user stack (old address space still active)
     uint32_t ustack_top = t->ustack_virt + PAGE_SIZE;
-    uint32_t* phys_base = (uint32_t*)t->ustack_phys;
-
+    uint8_t* phys_base = (uint8_t*)t->ustack_phys;
     uint32_t sp = ustack_top - 4;
 
-    // argv[0] = NULL
-    sp -= 4;
-    *(uint32_t*)((uint8_t*)phys_base + (sp - t->ustack_virt)) = 0;
-    uint32_t argv_vaddr = sp;
+    uint32_t argv_vaddrs[EXEC_MAX_ARGS];
+    uint32_t envp_vaddrs[EXEC_MAX_ENVS];
 
-    // push argv pointer
-    sp -= 4;
-    *(uint32_t*)((uint8_t*)phys_base + (sp - t->ustack_virt)) = argv_vaddr;
+    int argc = _copy_strings_to_ustack((const char**)argv, EXEC_MAX_ARGS,
+                                        phys_base, t->ustack_virt, &sp, argv_vaddrs);
+    int envc = _copy_strings_to_ustack((const char**)envp, EXEC_MAX_ENVS,
+                                        phys_base, t->ustack_virt, &sp, envp_vaddrs);
 
-    // push argc
+    // build envp[] array: envp[0]..envp[envc-1], NULL
     sp -= 4;
-    *(uint32_t*)((uint8_t*)phys_base + (sp - t->ustack_virt)) = 0;
+    *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = 0;
+    for (int i = envc - 1; i >= 0; i--) {
+        sp -= 4;
+        *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = envp_vaddrs[i];
+    }
+    uint32_t envp_arr_vaddr = sp;
 
-    kprint("[EXEC] pid=");
-    char buf[16]; itoa((int)t->pid, buf); kprint(buf);
-    kprint(" entry="); hex_to_ascii((uint32_t)entry, buf); kprint(buf);
-    kprint(" brk="); hex_to_ascii(t->brk_start, buf); kprint(buf);
-    kprint(" sp="); hex_to_ascii(sp, buf); kprint(buf);
-    kprint("\n");
+    // build argv[] array: argv[0]..argv[argc-1], NULL
+    sp -= 4;
+    *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = 0;
+    for (int i = argc - 1; i >= 0; i--) {
+        sp -= 4;
+        *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = argv_vaddrs[i];
+    }
+    uint32_t argv_arr_vaddr = sp;
+
+    // push main(argc, argv, envp): envp, argv, argc
+    sp -= 4;
+    *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = envp_arr_vaddr;
+    sp -= 4;
+    *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = argv_arr_vaddr;
+    sp -= 4;
+    *(uint32_t*)(phys_base + (sp - t->ustack_virt)) = (uint32_t)argc;
+
+    // debug
+    {
+        char buf[16];
+        kprint("[EXEC] pid=");
+        itoa((int)t->pid, buf); kprint(buf);
+        kprint(" entry="); hex_to_ascii((uint32_t)entry, buf); kprint(buf);
+        kprint(" argc="); itoa(argc, buf); kprint(buf);
+        kprint(" envc="); itoa(envc, buf); kprint(buf);
+        kprint(" sp="); hex_to_ascii(sp, buf); kprint(buf);
+        kprint(" brk="); hex_to_ascii(t->brk_start, buf); kprint(buf);
+        kprint("\n");
+        for (int i = 0; i < argc && i < 4; i++) {
+            kprint("  argv["); itoa(i, buf); kprint(buf);
+            kprint("]="); hex_to_ascii(argv_vaddrs[i], buf); kprint(buf);
+            kprint(" \"");
+            uint32_t soff = argv_vaddrs[i] - t->ustack_virt;
+            char* s = (char*)(phys_base + soff);
+            for (int j = 0; s[j] && j < 64; j++) { char c[2]={s[j],0}; kprint(c); }
+            kprint("\"\n");
+        }
+        for (int i = 0; i < envc && i < 4; i++) {
+            kprint("  envp["); itoa(i, buf); kprint(buf);
+            kprint("]="); hex_to_ascii(envp_vaddrs[i], buf); kprint(buf);
+            kprint(" \"");
+            uint32_t soff = envp_vaddrs[i] - t->ustack_virt;
+            char* s = (char*)(phys_base + soff);
+            for (int j = 0; s[j] && j < 64; j++) { char c[2]={s[j],0}; kprint(c); }
+            kprint("\"\n");
+        }
+    }
 
     irq_spinlock_release(&scheduler_lock);
 
