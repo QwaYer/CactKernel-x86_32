@@ -34,6 +34,8 @@
 #define SYS_GETDENTS 29
 #define SYS_RENAME   30
 #define SYS_IOCTL    31
+#define SYS_MKDIR    32
+#define SYS_RMDIR    33
 
 
 #define STDIN_FILENO  0
