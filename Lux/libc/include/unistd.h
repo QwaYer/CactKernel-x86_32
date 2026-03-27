@@ -30,5 +30,6 @@ void *sbrk(int increment);
 int brk(void *addr);
 char *getcwd(char *buf, int size);
 int chdir(const char *path);
+int ioctl(int fd, unsigned long cmd, void *arg);
 
 #endif
