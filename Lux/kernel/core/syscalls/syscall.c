@@ -574,6 +574,8 @@ static int sys_sigreturn(struct syscall_frame* regs) {
 /* POSIX signal mask, pending, sigsuspend, alarm, setitimer           */
 /* ------------------------------------------------------------------ */
 
+extern uint32_t timer_ticks_get(void);
+
 static int sys_sigprocmask(struct syscall_frame* regs) {
     int      how    = (int)regs->ebx;
     uint32_t* set    = (uint32_t*)regs->ecx;
@@ -731,8 +733,6 @@ static int sys_lseek(struct syscall_frame* regs) {
     current_task->fd_offset[fd] = new_off;
     return (int)new_off;
 }
-
-extern uint32_t timer_ticks_get(void);
 
 static int sys_waitpid(struct syscall_frame* regs) {
     int target_pid = (int)regs->ebx;
