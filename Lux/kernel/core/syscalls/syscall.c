@@ -1198,7 +1198,6 @@ static int sys_bind(struct syscall_frame *regs) {
     if (ks->kind == KS_TCP) {
         /* tcp_listen needs a port; we store it now — actual LISTEN on sys_listen */
         tcp_socket_t *s = 0;
-        extern tcp_socket_t tcp_sockets[];
         if (ks->proto_idx >= 0 && ks->proto_idx < TCP_MAX_SOCKETS)
             s = &tcp_sockets[ks->proto_idx];
         if (!s) return -1;
@@ -1381,8 +1380,7 @@ static int sys_recvfrom(struct syscall_frame *regs) {
     if (ks->kind == KS_TCP) {
         ret = tcp_recv(ks->proto_idx, (uint8_t *)buf, (uint16_t)len);
         if (ret > 0 && src) {
-            extern tcp_socket_t tcp_sockets[];
-            tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
+                tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
             src->sin_family = AF_INET;
             src->sin_port   = htons(s->remote_port);
             src->sin_addr   = s->remote_ip;

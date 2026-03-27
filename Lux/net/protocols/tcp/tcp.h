@@ -85,6 +85,8 @@ typedef struct tcp_socket {
    Public API — skeleton stubs
    ─────────────────────────────────────────────── */
 
+extern tcp_socket_t tcp_sockets[TCP_MAX_SOCKETS];
+
 /* Create a socket, returns socket id or -1 */
 int  tcp_socket(void);
 

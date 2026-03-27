@@ -103,7 +103,6 @@ vfs_node_t *ksock_tcp_accept(vfs_node_t *listen_node,
     int listen_proto = lks->proto_idx;
 
     /* Search for a TCP socket that completed handshake on this listener */
-    extern tcp_socket_t tcp_sockets[];  /* defined in tcp.c */
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
         tcp_socket_t *s = &tcp_sockets[i];
         if (!s->used)               continue;
