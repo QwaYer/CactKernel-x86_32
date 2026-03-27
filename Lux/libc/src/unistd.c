@@ -25,6 +25,10 @@ pid_t getpid(void) {
     return syscall(SYS_GETPID, 0, 0, 0);
 }
 
+pid_t getppid(void) {
+    return syscall(SYS_GETPPID, 0, 0, 0);
+}
+
 off_t lseek(int fd, off_t offset, int whence) {
     return (off_t)syscall(SYS_LSEEK, fd, offset, whence);
 }

@@ -30,6 +30,7 @@
 #define SYS_CHDIR   25
 #define SYS_STAT    26
 #define SYS_FSTAT   27
+#define SYS_GETPPID 28
 
 
 #define STDIN_FILENO  0
