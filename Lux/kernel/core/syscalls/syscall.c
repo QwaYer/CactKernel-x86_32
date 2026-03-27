@@ -807,6 +807,22 @@ static int sys_fstat(struct syscall_frame* regs) {
     return 0;
 }
 
+static int sys_ioctl(struct syscall_frame* regs) {
+    int       fd  = (int)regs->ebx;
+    uint32_t  cmd = regs->ecx;
+    void*     arg = (void*)regs->edx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) return -1;
+
+    if (arg && !validate_user_ptr(arg, 1)) return -1;
+
+    return ioctl_vfs(node, cmd, arg);
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -840,6 +856,7 @@ static syscall_fn syscall_table[] = {
     [28] = (syscall_fn)sys_getppid,
     [29] = (syscall_fn)sys_getdents,
     [30] = (syscall_fn)sys_rename,
+    [31] = (syscall_fn)sys_ioctl,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -855,7 +872,7 @@ void syscall_handler(struct syscall_frame* regs) {
         num == 15 || num == 16 || num == 17 || num == 18 || num == 19 ||
         num == 20 || num == 21 || num == 22 || num == 23 ||
         num == 24 || num == 25 || num == 26 || num == 27 ||
-        num == 29) {
+        num == 29 || num == 31) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](

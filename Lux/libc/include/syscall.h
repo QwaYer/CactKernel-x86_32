@@ -33,6 +33,7 @@
 #define SYS_GETPPID 28
 #define SYS_GETDENTS 29
 #define SYS_RENAME   30
+#define SYS_IOCTL    31
 
 
 #define STDIN_FILENO  0
