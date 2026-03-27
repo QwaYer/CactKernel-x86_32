@@ -32,6 +32,7 @@
 #define SYS_FSTAT   27
 #define SYS_GETPPID 28
 #define SYS_GETDENTS 29
+#define SYS_RENAME   30
 
 
 #define STDIN_FILENO  0
