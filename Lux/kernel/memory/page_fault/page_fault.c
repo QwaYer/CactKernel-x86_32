@@ -4,6 +4,7 @@
 #include "task.h"
 #include "libc.h"
 #include "swap.h"
+#include "oom.h"
 
 static pf_stats_t g_stats;
 
@@ -98,6 +99,8 @@ void page_fault_handler(struct context_frame* regs)
 
         if (pte && (*pte & PAGE_DEMAND)) {
             void* phys = kalloc();
+            if (!phys && oom_kill() == 0)
+                phys = kalloc();
             if (!phys) { kill_current(fault_addr, err, eip); return; }
 
             if (*pte & PAGE_ZERO) {
@@ -116,6 +119,8 @@ void page_fault_handler(struct context_frame* regs)
 
         if (pte && (*pte & PAGE_COW)) {
             void* phys = kalloc();
+            if (!phys && oom_kill() == 0)
+                phys = kalloc();
             if (!phys) { kill_current(fault_addr, err, eip); return; }
             zero_page(phys);
 
@@ -130,6 +135,8 @@ void page_fault_handler(struct context_frame* regs)
 
         if (vmm_is_valid_stack_addr(fault_addr)) {
             void* phys = kalloc();
+            if (!phys && oom_kill() == 0)
+                phys = kalloc();
             if (!phys) { kill_current(fault_addr, err, eip); return; }
 
             zero_page(phys);

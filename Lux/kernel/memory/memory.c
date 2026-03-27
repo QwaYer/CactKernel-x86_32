@@ -2,6 +2,7 @@
 #include "libc.h"
 #include "kernel.h"
 #include "sync.h"
+#include "oom.h"
 
 uint8_t memory_bitmap[BITMAP_SIZE];
 struct heap_block* heap_start = (struct heap_block*)HEAP_START;
@@ -171,6 +172,10 @@ void* kalloc() {
         if (pd && swap_evict_page(pd) == 0) {
             return kalloc();  
         }
+    }
+
+    if (oom_kill() == 0) {
+        return kalloc();
     }
 
     kprint("[PMM] kalloc: OUT OF MEMORY\n");

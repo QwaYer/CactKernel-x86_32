@@ -14,6 +14,7 @@ KERN_PROCMM_DIR  = Lux/kernel/memory/proc_mm
 KERN_SLABMM_DIR  = Lux/kernel/memory/slab_mm
 KERN_PF_DIR      = Lux/kernel/memory/page_fault
 KERN_SWAP_DIR    = Lux/kernel/memory/swap_mm
+KERN_OOM_DIR     = Lux/kernel/memory/oom
 KERN_MMAP_DIR    = Lux/kernel/memory/mmap_mm
 KERN_PROC_DIR    = Lux/kernel/proc
 KERN_SYNC_DIR    = Lux/kernel/sync
@@ -68,6 +69,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_PROCMM_DIR) \
          -I$(KERN_SLABMM_DIR) \
          -I$(KERN_SWAP_DIR) \
+         -I$(KERN_OOM_DIR) \
          -I$(KERN_MMAP_DIR) \
          -I$(KERN_PROC_DIR) \
          -I$(KERN_SYNC_DIR) \
@@ -125,6 +127,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/slab.o \
       $(BUILD_DIR)/page_fault.o \
       $(BUILD_DIR)/swap.o \
+      $(BUILD_DIR)/oom.o \
       $(BUILD_DIR)/mmap.o \
       $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/elf_loader.o \
@@ -255,6 +258,10 @@ $(BUILD_DIR)/slab.o: $(KERN_SLABMM_DIR)/slab.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/swap.o: $(KERN_SWAP_DIR)/swap.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/oom.o: $(KERN_OOM_DIR)/oom.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
