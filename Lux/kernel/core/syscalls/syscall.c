@@ -116,6 +116,49 @@ static int sys_getppid() {
     return (int)current_task->parent_pid;
 }
 
+struct lux_dirent {
+    uint32_t d_ino;
+    char     d_name[124];
+};
+
+static int sys_getdents(struct syscall_frame* regs) {
+    int       fd    = (int)regs->ebx;
+    char*     buf   = (char*)regs->ecx;
+    uint32_t  count = regs->edx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) return -1;
+    if (node->type != VFS_DIRECTORY) return -1;
+
+    uint32_t entry_size = sizeof(struct lux_dirent);
+    if (!validate_user_ptr(buf, count)) return -1;
+    if (count < entry_size) return -1;
+
+    uint32_t written = 0;
+    uint32_t index = current_task->fd_offset[fd];
+
+    while (written + entry_size <= count) {
+        struct vfs_dirent* de = readdir_vfs(node, index);
+        if (!de) break;
+
+        struct lux_dirent* out = (struct lux_dirent*)(buf + written);
+        out->d_ino = de->inode;
+
+        int i = 0;
+        while (de->name[i] && i < 123) { out->d_name[i] = de->name[i]; i++; }
+        out->d_name[i] = '\0';
+
+        written += entry_size;
+        index++;
+    }
+
+    current_task->fd_offset[fd] = index;
+    return (int)written;
+}
+
 static int sys_open(char* name) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
@@ -778,6 +821,7 @@ static syscall_fn syscall_table[] = {
     [26] = (syscall_fn)sys_stat,
     [27] = (syscall_fn)sys_fstat,
     [28] = (syscall_fn)sys_getppid,
+    [29] = (syscall_fn)sys_getdents,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -792,7 +836,8 @@ void syscall_handler(struct syscall_frame* regs) {
     if (num == 7 || num == 9 || num == 10 || num == 13 || num == 14 ||
         num == 15 || num == 16 || num == 17 || num == 18 || num == 19 ||
         num == 20 || num == 21 || num == 22 || num == 23 ||
-        num == 24 || num == 25 || num == 26 || num == 27) {
+        num == 24 || num == 25 || num == 26 || num == 27 ||
+        num == 29) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](

@@ -30,6 +30,7 @@
 #define SYS_STAT    26
 #define SYS_FSTAT   27
 #define SYS_GETPPID 28
+#define SYS_GETDENTS 29
 
 int syscall(int num, int p1, int p2, int p3);
 
