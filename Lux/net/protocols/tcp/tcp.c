@@ -30,6 +30,59 @@ void tcp_set_callbacks(int sock, tcp_data_fn on_data, tcp_event_fn on_event) {
 }
 
 /* ─────────────────────────────────────────────── */
+/*   Send RST to a peer (no socket needed)         */
+/* ─────────────────────────────────────────────── */
+static void tcp_send_rst(skb_t* in_skb) {
+    tcp_header_t* in_tcp = in_skb->tcp;
+    uint8_t  in_flags = in_tcp->flags;
+
+    /* Never RST a RST */
+    if (in_flags & TCP_RST) return;
+
+    skb_t* skb = skb_alloc();
+    if (!skb) return;
+
+    tcp_header_t* rst = (tcp_header_t*)skb_push(skb, sizeof(tcp_header_t));
+
+    rst->src_port   = in_tcp->dst_port;          /* already network order */
+    rst->dst_port   = in_tcp->src_port;
+    rst->data_offset= (5 << 4);
+    rst->window     = 0;
+    rst->urgent_ptr = 0;
+    rst->checksum   = 0;
+
+    if (in_flags & TCP_ACK) {
+        /* ACK of incoming → use its ack as our seq */
+        rst->seq_num = in_tcp->ack_num;
+        rst->ack_num = 0;
+        rst->flags   = TCP_RST;
+    } else {
+        /* Otherwise ACK the incoming segment */
+        uint32_t seg_len = ntohs(in_skb->ip->total_len)
+                         - IP_HDR_LEN(in_skb->ip)
+                         - ((in_tcp->data_offset >> 4) & 0xF) * 4;
+        if (in_flags & TCP_SYN) seg_len++;
+        if (in_flags & TCP_FIN) seg_len++;
+        rst->seq_num = 0;
+        rst->ack_num = htonl(ntohl(in_tcp->seq_num) + seg_len);
+        rst->flags   = TCP_RST | TCP_ACK;
+    }
+
+    uint32_t dst_ip = in_skb->ip->src_ip;        /* network order */
+    uint16_t tcp_total = sizeof(tcp_header_t);
+    uint16_t pseudo = ip_pseudo_checksum(
+        htonl(MY_IP), dst_ip,
+        IP_PROTO_TCP, tcp_total
+    );
+    uint32_t sum = (uint32_t)(~pseudo) + (uint32_t)inet_checksum(rst, tcp_total);
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    rst->checksum = (uint16_t)(~sum);
+
+    ip_output(skb, dst_ip, IP_PROTO_TCP);
+    skb_free(skb);
+}
+
+/* ─────────────────────────────────────────────── */
 /*   Low-level TX helper                           */
 /* ─────────────────────────────────────────────── */
 static int tcp_send_segment(tcp_socket_t* s, uint8_t flags,
@@ -173,7 +226,7 @@ void tcp_input(skb_t* skb) {
 
     if (!s) {
         /* Send RST for unknown connection */
-        /* TODO: build a RST skb */
+        tcp_send_rst(skb);
         goto drop;
     }
 
@@ -191,6 +244,13 @@ void tcp_input(skb_t* skb) {
         break;
 
     case TCP_SYN_SENT:
+        if (flags & TCP_RST) {
+            if ((flags & TCP_ACK) && ack == s->snd_nxt) {
+                s->state = TCP_CLOSED; s->used = 0;
+                if (s->on_event) s->on_event((int)(s - tcp_sockets), TCP_CLOSED);
+            }
+            break;
+        }
         if ((flags & (TCP_SYN | TCP_ACK)) == (TCP_SYN | TCP_ACK)) {
             s->rcv_nxt  = seq + 1;
             s->snd_una  = ack;
@@ -201,6 +261,7 @@ void tcp_input(skb_t* skb) {
         break;
 
     case TCP_SYN_RECEIVED:
+        if (flags & TCP_RST) { s->state = TCP_LISTEN; break; }
         if ((flags & TCP_ACK) && ack == s->snd_nxt) {
             s->snd_una = ack;
             s->state   = TCP_ESTABLISHED;
@@ -233,10 +294,12 @@ void tcp_input(skb_t* skb) {
         break;
 
     case TCP_FIN_WAIT_1:
+        if (flags & TCP_RST) { s->state = TCP_CLOSED; s->used = 0; break; }
         if (flags & TCP_ACK) { s->state = TCP_FIN_WAIT_2; }
         break;
 
     case TCP_FIN_WAIT_2:
+        if (flags & TCP_RST) { s->state = TCP_CLOSED; s->used = 0; break; }
         if (flags & TCP_FIN) {
             s->rcv_nxt++;
             tcp_send_segment(s, TCP_ACK, NULL, 0);
@@ -248,6 +311,7 @@ void tcp_input(skb_t* skb) {
         break;
 
     case TCP_CLOSE_WAIT:
+        if (flags & TCP_RST) { s->state = TCP_CLOSED; s->used = 0; break; }
         /* Application should call tcp_close() to send FIN */
         break;
 
