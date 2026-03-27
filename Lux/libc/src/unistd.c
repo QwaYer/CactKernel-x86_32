@@ -72,3 +72,7 @@ char *getcwd(char *buf, int size) {
 int chdir(const char *path) {
     return syscall(SYS_CHDIR, (int)path, 0, 0);
 }
+
+int ioctl(int fd, unsigned long cmd, void *arg) {
+    return syscall(SYS_IOCTL, fd, (int)cmd, (int)arg);
+}
