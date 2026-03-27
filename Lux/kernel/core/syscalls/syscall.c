@@ -570,7 +570,129 @@ static int sys_sigreturn(struct syscall_frame* regs) {
 }
 
 
-//public api 
+/* ------------------------------------------------------------------ */
+/* POSIX signal mask, pending, sigsuspend, alarm, setitimer           */
+/* ------------------------------------------------------------------ */
+
+static int sys_sigprocmask(struct syscall_frame* regs) {
+    int      how    = (int)regs->ebx;
+    uint32_t* set    = (uint32_t*)regs->ecx;
+    uint32_t* oldset = (uint32_t*)regs->edx;
+
+    if (!current_task) return -1;
+    if (set    && !validate_user_ptr(set,    sizeof(uint32_t))) return -1;
+    if (oldset && !validate_user_ptr(oldset, sizeof(uint32_t))) return -1;
+
+    return task_sigprocmask(current_task, how, set, oldset);
+}
+
+static int sys_sigpending(struct syscall_frame* regs) {
+    uint32_t* set = (uint32_t*)regs->ebx;
+
+    if (!current_task) return -1;
+    if (!validate_user_ptr(set, sizeof(uint32_t))) return -1;
+
+    /* Pending = sent but blocked */
+    *set = current_task->pending_signals & current_task->signal_mask;
+    return 0;
+}
+
+static int sys_sigsuspend(struct syscall_frame* regs) {
+    uint32_t* mask = (uint32_t*)regs->ebx;
+
+    if (!current_task || current_task->is_kernel) return -1;
+    if (!validate_user_ptr(mask, sizeof(uint32_t))) return -1;
+
+    /* Atomically save current mask, apply new mask, and sleep */
+    current_task->saved_signal_mask = current_task->signal_mask;
+    current_task->signal_mask = *mask & ~SIG_UNCATCHABLE;
+    current_task->in_sigsuspend = 1;
+    current_task->state = TASK_SLEEPING;
+
+    /* Return -1 (EINTR) — the scheduler will wake us when a signal arrives */
+    return -1;
+}
+
+#define TIMER_HZ_SIGNALS 100   /* must match TIMER_HZ in timer section */
+
+static int sys_alarm(struct syscall_frame* regs) {
+    uint32_t seconds = (uint32_t)regs->ebx;
+
+    if (!current_task) return -1;
+
+    uint32_t now = timer_ticks_get();
+    uint32_t remaining = 0;
+
+    /* Return remaining time from previous alarm */
+    if (current_task->alarm_ticks) {
+        uint32_t left_ticks = (current_task->alarm_ticks > now)
+                              ? (current_task->alarm_ticks - now) : 0;
+        remaining = (left_ticks + TIMER_HZ_SIGNALS - 1) / TIMER_HZ_SIGNALS;
+    }
+
+    if (seconds == 0) {
+        current_task->alarm_ticks = 0;
+    } else {
+        current_task->alarm_ticks = now + seconds * TIMER_HZ_SIGNALS;
+    }
+
+    return (int)remaining;
+}
+
+struct itimerval_k {
+    struct { long tv_sec; long tv_usec; } it_interval;
+    struct { long tv_sec; long tv_usec; } it_value;
+};
+
+static int sys_setitimer(struct syscall_frame* regs) {
+    int which                    = (int)regs->ebx;
+    struct itimerval_k* newval   = (struct itimerval_k*)regs->ecx;
+    struct itimerval_k* oldval   = (struct itimerval_k*)regs->edx;
+
+    if (!current_task) return -1;
+    /* Only ITIMER_REAL (0) is supported */
+    if (which != 0) return -1;
+    if (newval && !validate_user_ptr(newval, sizeof(struct itimerval_k))) return -1;
+    if (oldval && !validate_user_ptr(oldval, sizeof(struct itimerval_k))) return -1;
+
+    uint32_t now = timer_ticks_get();
+
+    if (oldval) {
+        /* Return current timer state */
+        if (current_task->itimer_value && current_task->itimer_value > now) {
+            uint32_t left = current_task->itimer_value - now;
+            oldval->it_value.tv_sec  = left / TIMER_HZ_SIGNALS;
+            oldval->it_value.tv_usec = (long)((left % TIMER_HZ_SIGNALS) *
+                                               (1000000 / TIMER_HZ_SIGNALS));
+        } else {
+            oldval->it_value.tv_sec  = 0;
+            oldval->it_value.tv_usec = 0;
+        }
+        oldval->it_interval.tv_sec  = current_task->itimer_interval / TIMER_HZ_SIGNALS;
+        oldval->it_interval.tv_usec = (long)((current_task->itimer_interval % TIMER_HZ_SIGNALS) *
+                                              (1000000 / TIMER_HZ_SIGNALS));
+    }
+
+    if (newval) {
+        /* Convert timeval to ticks */
+        uint32_t val_ticks = (uint32_t)(newval->it_value.tv_sec * TIMER_HZ_SIGNALS) +
+                             (uint32_t)((newval->it_value.tv_usec * TIMER_HZ_SIGNALS) / 1000000);
+        uint32_t int_ticks = (uint32_t)(newval->it_interval.tv_sec * TIMER_HZ_SIGNALS) +
+                             (uint32_t)((newval->it_interval.tv_usec * TIMER_HZ_SIGNALS) / 1000000);
+
+        if (val_ticks == 0) {
+            current_task->itimer_value    = 0;
+            current_task->itimer_interval = 0;
+        } else {
+            current_task->itimer_value    = now + val_ticks;
+            current_task->itimer_interval = int_ticks;
+        }
+    }
+
+    return 0;
+}
+
+//public api
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -1054,6 +1176,11 @@ static syscall_fn syscall_table[] = {
     [35] = (syscall_fn)sys_gettimeofday,
     [36] = (syscall_fn)sys_clock_gettime,
     [37] = (syscall_fn)sys_nanosleep,
+    [38] = (syscall_fn)sys_sigprocmask,
+    [39] = (syscall_fn)sys_sigpending,
+    [40] = (syscall_fn)sys_sigsuspend,
+    [41] = (syscall_fn)sys_alarm,
+    [42] = (syscall_fn)sys_setitimer,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -1070,7 +1197,8 @@ void syscall_handler(struct syscall_frame* regs) {
         num == 20 || num == 21 || num == 22 || num == 23 ||
         num == 24 || num == 25 || num == 26 || num == 27 ||
         num == 29 || num == 31 ||
-        num == 35 || num == 36 || num == 37) {
+        num == 35 || num == 36 || num == 37 ||
+        num == 38 || num == 39 || num == 40 || num == 41 || num == 42) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](
@@ -1080,8 +1208,9 @@ void syscall_handler(struct syscall_frame* regs) {
         );
     }
 
-    // sys_exit (7): task is ZOMBIE, don't touch its frame
+    /* sys_exit (7): task is ZOMBIE, don't touch its frame */
     if (num == 7) return;
-
+    /* sys_sigsuspend (40): task is now SLEEPING, eax will be set to -1 (EINTR)
+       when it wakes up — write -1 now so it's in the frame */
     regs->eax = (uint32_t)ret;
 }
