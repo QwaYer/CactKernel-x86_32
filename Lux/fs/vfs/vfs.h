@@ -9,6 +9,7 @@
 #define VFS_CHARDEVICE  0x03
 #define VFS_BLOCKDEVICE 0x04
 #define VFS_PIPE        0x05
+#define VFS_SOCKET      0x06
 
 struct vfs_node;
 struct vfs_dirent;
