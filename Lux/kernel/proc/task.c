@@ -446,6 +446,7 @@ void schedule() {
 
     task_reap_internal();
     task_wake_sleepers();
+    task_check_timers();
     task_handle_signals(current_task);
 
     if (current_task->state == TASK_ZOMBIE) {
@@ -573,13 +574,24 @@ void task_signal(uint32_t pid, uint32_t signal) {
         if (t->pid == pid) {
             t->pending_signals |= signal;
 
-            if ((signal & SIGKILL) && t->state == TASK_SLEEPING) {
-                sched_queue_remove(&sleep_queue, t);
-                t->state = TASK_READY;
-                sched_queue_push(&ready_queue, t);
+            /* SIGKILL/SIGSTOP wake sleeping/waiting tasks unconditionally */
+            if (signal & (SIGKILL | SIGSTOP)) {
+                if (t->state == TASK_SLEEPING) {
+                    sched_queue_remove(&sleep_queue, t);
+                    t->state = TASK_READY;
+                    sched_queue_push(&ready_queue, t);
+                } else if (t->state == TASK_WAITING) {
+                    sched_queue_remove(&wait_queue, t);
+                    t->state = TASK_READY;
+                    sched_queue_push(&ready_queue, t);
+                }
+                break;
             }
-            if ((signal & SIGKILL) && t->state == TASK_WAITING) {
-                sched_queue_remove(&wait_queue, t);
+
+            /* Wake a sigsuspend-sleeping task when a deliverable signal arrives */
+            if (t->in_sigsuspend && t->state == TASK_SLEEPING &&
+                (signal & ~t->signal_mask)) {
+                sched_queue_remove(&sleep_queue, t);
                 t->state = TASK_READY;
                 sched_queue_push(&ready_queue, t);
             }
@@ -594,6 +606,13 @@ void task_signal(uint32_t pid, uint32_t signal) {
 void task_handle_signals(struct task_struct* t) {
     if (!t || !t->pending_signals) return;
 
+    /* Restore signal mask after sigsuspend wakeup */
+    if (t->in_sigsuspend) {
+        t->signal_mask  = t->saved_signal_mask;
+        t->in_sigsuspend = 0;
+    }
+
+    /* SIGKILL cannot be blocked */
     if (t->pending_signals & SIGKILL) {
         t->pending_signals = 0;
         t->state = TASK_ZOMBIE;
@@ -602,7 +621,18 @@ void task_handle_signals(struct task_struct* t) {
         return;
     }
 
-    if (t->pending_signals & SIGTERM) {
+    /* SIGSTOP cannot be blocked */
+    if (t->pending_signals & SIGSTOP) {
+        t->pending_signals &= ~(uint32_t)SIGSTOP;
+        t->state = TASK_SLEEPING;
+        return;
+    }
+
+    /* Remaining signals are subject to the signal mask */
+    uint32_t deliverable = t->pending_signals & ~t->signal_mask;
+    if (!deliverable) return;
+
+    if (deliverable & SIGTERM) {
         t->pending_signals &= ~(uint32_t)SIGTERM;
         uint32_t handler = t->signal_handlers[1];
         if (handler == SIG_DFL || handler == SIG_IGN) {
@@ -611,16 +641,22 @@ void task_handle_signals(struct task_struct* t) {
         }
     }
 
-    if (t->pending_signals & SIGSTOP) {
-        t->pending_signals &= ~(uint32_t)SIGSTOP;
-        t->state = TASK_SLEEPING;
-        return;
-    }
-
-    if (t->pending_signals & SIGCONT) {
+    if (deliverable & SIGCONT) {
         t->pending_signals &= ~(uint32_t)SIGCONT;
         if (t->state == TASK_SLEEPING) {
             t->state = TASK_READY;
+        }
+    }
+
+    if (deliverable & SIGALRM) {
+        t->pending_signals &= ~(uint32_t)SIGALRM;
+        uint32_t handler = t->signal_handlers[5];
+        if (handler == SIG_IGN) {
+            /* ignored — discard */
+        } else {
+            /* SIG_DFL for SIGALRM is termination */
+            t->state = TASK_ZOMBIE;
+            return;
         }
     }
 }
@@ -630,6 +666,54 @@ int task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler) {
     if (signum == 0) return -1;
     t->signal_handlers[signum] = handler;
     return 0;
+}
+
+int task_sigprocmask(struct task_struct* t, int how, const uint32_t* set, uint32_t* oldset) {
+    if (!t) return -1;
+    if (oldset) *oldset = t->signal_mask;
+    if (!set)   return 0;
+
+    uint32_t new_mask = *set & ~SIG_UNCATCHABLE; /* SIGKILL/SIGSTOP cannot be blocked */
+    switch (how) {
+        case 0: /* SIG_BLOCK   */ t->signal_mask |=  new_mask; break;
+        case 1: /* SIG_UNBLOCK */ t->signal_mask &= ~new_mask; break;
+        case 2: /* SIG_SETMASK */ t->signal_mask  =  new_mask; break;
+        default: return -1;
+    }
+    return 0;
+}
+
+/* Called from schedule() to fire alarm/setitimer for all tasks */
+void task_check_timers(void) {
+    uint32_t now = timer_ticks_get();
+    struct task_struct* t = task_list_head;
+    if (!t) return;
+
+    do {
+        /* alarm() timer */
+        if (t->alarm_ticks && now >= t->alarm_ticks) {
+            t->alarm_ticks = 0;
+            t->pending_signals |= SIGALRM;
+            if (t->in_sigsuspend && t->state == TASK_SLEEPING &&
+                (SIGALRM & ~t->signal_mask)) {
+                sched_queue_remove(&sleep_queue, t);
+                t->state = TASK_READY;
+                sched_queue_push(&ready_queue, t);
+            }
+        }
+        /* setitimer(ITIMER_REAL) */
+        if (t->itimer_value && now >= t->itimer_value) {
+            t->pending_signals |= SIGALRM;
+            t->itimer_value = t->itimer_interval ? (now + t->itimer_interval) : 0;
+            if (t->in_sigsuspend && t->state == TASK_SLEEPING &&
+                (SIGALRM & ~t->signal_mask)) {
+                sched_queue_remove(&sleep_queue, t);
+                t->state = TASK_READY;
+                sched_queue_push(&ready_queue, t);
+            }
+        }
+        t = t->next;
+    } while (t != task_list_head);
 }
 
 void task_setup_sigreturn(struct task_struct* t) {

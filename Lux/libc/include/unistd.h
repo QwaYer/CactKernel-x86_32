@@ -21,6 +21,7 @@ int close(int fd);
 pid_t fork(void);
 int execve(const char *pathname, char *const argv[], char *const envp[]);
 pid_t getpid(void);
+pid_t getppid(void);
 off_t lseek(int fd, off_t offset, int whence);
 pid_t waitpid(pid_t pid, int *status, int options);
 unsigned int sleep(unsigned int seconds);
@@ -29,5 +30,10 @@ void *sbrk(int increment);
 int brk(void *addr);
 char *getcwd(char *buf, int size);
 int chdir(const char *path);
+int ioctl(int fd, unsigned long cmd, void *arg);
+int mkdir(const char *pathname, int mode);
+int rmdir(const char *pathname);
+int pipe(int pipefd[2]);
+int dup2(int oldfd, int newfd);
 
 #endif

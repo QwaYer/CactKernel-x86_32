@@ -4,6 +4,10 @@
 #include "memory.h"
 #include "mmap.h"
 #include "pipe.h"
+#include "socket.h"
+#include "tcp.h"
+#include "udp.h"
+#include "net.h"
 
 struct syscall_frame {
     uint32_t es, ds;
@@ -111,7 +115,72 @@ static int sys_get_pid() {
     return (int)current_task->pid;
 }
 
-static int sys_open(char* name) {
+static int sys_getppid() {
+    if (!current_task) return -1;
+    return (int)current_task->parent_pid;
+}
+
+struct lux_dirent {
+    uint32_t d_ino;
+    char     d_name[124];
+};
+
+static int sys_getdents(struct syscall_frame* regs) {
+    int       fd    = (int)regs->ebx;
+    char*     buf   = (char*)regs->ecx;
+    uint32_t  count = regs->edx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) return -1;
+    if (node->type != VFS_DIRECTORY) return -1;
+
+    uint32_t entry_size = sizeof(struct lux_dirent);
+    if (!validate_user_ptr(buf, count)) return -1;
+    if (count < entry_size) return -1;
+
+    uint32_t written = 0;
+    uint32_t index = current_task->fd_offset[fd];
+
+    while (written + entry_size <= count) {
+        struct vfs_dirent* de = readdir_vfs(node, index);
+        if (!de) break;
+
+        struct lux_dirent* out = (struct lux_dirent*)(buf + written);
+        out->d_ino = de->inode;
+
+        int i = 0;
+        while (de->name[i] && i < 123) { out->d_name[i] = de->name[i]; i++; }
+        out->d_name[i] = '\0';
+
+        written += entry_size;
+        index++;
+    }
+
+    current_task->fd_offset[fd] = index;
+    return (int)written;
+}
+
+static int sys_rename(char* oldpath, char* newpath) {
+    if (!validate_user_str(oldpath)) return -1;
+    if (!validate_user_str(newpath)) return -1;
+    if (!current_task) return -1;
+
+    char old_base[128], new_base[128];
+    vfs_node_t* old_parent = _resolve_parent(oldpath, old_base, 128);
+    vfs_node_t* new_parent = _resolve_parent(newpath, new_base, 128);
+
+    if (!old_parent || !new_parent) return -1;
+    if (!old_base[0] || !new_base[0]) return -1;
+
+    if (old_parent != new_parent) return -1;
+
+    return rename_vfs(old_parent, old_base, new_base);
+}
+
+static int sys_open(char* name, int flags) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
 
@@ -125,6 +194,8 @@ static int sys_open(char* name) {
         if (!current_task->fd_table[i]) {
             current_task->fd_table[i] = node;
             current_task->fd_offset[i] = 0;
+            current_task->fd_flags[i]   = (uint32_t)flags;
+            current_task->fd_cloexec[i] = 0;
             kprint("[DBG] sys_open: fd=");
             char tmp[16]; itoa(i, tmp); kprint(tmp);
             kprint(" path="); kprint(name); kprint("\n");
@@ -166,9 +237,11 @@ static int sys_close(int fd) {
     if (fd < 3 || fd >= MAX_FD) return -1;
     struct vfs_node* node = current_task->fd_table[fd];
     if (!node) return -1;
-    current_task->fd_table[fd] = 0;
-    current_task->fd_offset[fd] = 0;
-    close_vfs(node);   
+    current_task->fd_table[fd]   = 0;
+    current_task->fd_offset[fd]  = 0;
+    current_task->fd_flags[fd]   = 0;
+    current_task->fd_cloexec[fd] = 0;
+    close_vfs(node);
     return 0;
 }
 
@@ -209,6 +282,48 @@ static int sys_delete(char* name) {
     kprint(" basename="); kprint(basename); kprint("\n");
 
     return delete_vfs(parent, basename);
+}
+
+static int sys_mkdir(char* pathname) {
+    if (!validate_user_str(pathname)) return -1;
+    if (!current_task) return -1;
+
+    char basename[128];
+    vfs_node_t* parent = _resolve_parent(pathname, basename, 128);
+    if (!parent) {
+        kprint("[DBG] sys_mkdir: parent not found for: "); kprint(pathname); kprint("\n");
+        return -1;
+    }
+    if (!basename[0]) {
+        kprint("[DBG] sys_mkdir: empty basename\n");
+        return -1;
+    }
+
+    kprint("[DBG] sys_mkdir: parent="); kprint(parent->name);
+    kprint(" basename="); kprint(basename); kprint("\n");
+
+    return mkdir_vfs(parent, basename);
+}
+
+static int sys_rmdir(char* pathname) {
+    if (!validate_user_str(pathname)) return -1;
+    if (!current_task) return -1;
+
+    char basename[128];
+    vfs_node_t* parent = _resolve_parent(pathname, basename, 128);
+    if (!parent) {
+        kprint("[DBG] sys_rmdir: parent not found for: "); kprint(pathname); kprint("\n");
+        return -1;
+    }
+    if (!basename[0]) {
+        kprint("[DBG] sys_rmdir: empty basename\n");
+        return -1;
+    }
+
+    kprint("[DBG] sys_rmdir: parent="); kprint(parent->name);
+    kprint(" basename="); kprint(basename); kprint("\n");
+
+    return rmdir_vfs(parent, basename);
 }
 
 static int sys_exit(struct syscall_frame* regs) {
@@ -377,10 +492,14 @@ static int sys_pipe(struct syscall_frame* regs) {
         return -1;
     }
 
-    current_task->fd_table[rfd] = pipefd[0];
-    current_task->fd_table[wfd] = pipefd[1];
-    current_task->fd_offset[rfd] = 0;
-    current_task->fd_offset[wfd] = 0;
+    current_task->fd_table[rfd]   = pipefd[0];
+    current_task->fd_table[wfd]   = pipefd[1];
+    current_task->fd_offset[rfd]  = 0;
+    current_task->fd_offset[wfd]  = 0;
+    current_task->fd_flags[rfd]   = 0; /* O_RDONLY */
+    current_task->fd_flags[wfd]   = 1; /* O_WRONLY */
+    current_task->fd_cloexec[rfd] = 0;
+    current_task->fd_cloexec[wfd] = 0;
 
     user_fds[0] = rfd;
     user_fds[1] = wfd;
@@ -402,9 +521,11 @@ static int sys_dup2(struct syscall_frame* regs) {
         close_vfs(current_task->fd_table[newfd]);
     }
 
-    current_task->fd_table[newfd] = node;
-    current_task->fd_offset[newfd] = current_task->fd_offset[oldfd];
-    open_vfs(node);   
+    current_task->fd_table[newfd]   = node;
+    current_task->fd_offset[newfd]  = current_task->fd_offset[oldfd];
+    current_task->fd_flags[newfd]   = current_task->fd_flags[oldfd];
+    current_task->fd_cloexec[newfd] = 0; /* FD_CLOEXEC не наследуется через dup2 */
+    open_vfs(node);
     return newfd;
 }
 
@@ -453,7 +574,131 @@ static int sys_sigreturn(struct syscall_frame* regs) {
 }
 
 
-//public api 
+/* ------------------------------------------------------------------ */
+/* POSIX signal mask, pending, sigsuspend, alarm, setitimer           */
+/* ------------------------------------------------------------------ */
+
+extern uint32_t timer_ticks_get(void);
+
+static int sys_sigprocmask(struct syscall_frame* regs) {
+    int      how    = (int)regs->ebx;
+    uint32_t* set    = (uint32_t*)regs->ecx;
+    uint32_t* oldset = (uint32_t*)regs->edx;
+
+    if (!current_task) return -1;
+    if (set    && !validate_user_ptr(set,    sizeof(uint32_t))) return -1;
+    if (oldset && !validate_user_ptr(oldset, sizeof(uint32_t))) return -1;
+
+    return task_sigprocmask(current_task, how, set, oldset);
+}
+
+static int sys_sigpending(struct syscall_frame* regs) {
+    uint32_t* set = (uint32_t*)regs->ebx;
+
+    if (!current_task) return -1;
+    if (!validate_user_ptr(set, sizeof(uint32_t))) return -1;
+
+    /* Pending = sent but blocked */
+    *set = current_task->pending_signals & current_task->signal_mask;
+    return 0;
+}
+
+static int sys_sigsuspend(struct syscall_frame* regs) {
+    uint32_t* mask = (uint32_t*)regs->ebx;
+
+    if (!current_task || current_task->is_kernel) return -1;
+    if (!validate_user_ptr(mask, sizeof(uint32_t))) return -1;
+
+    /* Atomically save current mask, apply new mask, and sleep */
+    current_task->saved_signal_mask = current_task->signal_mask;
+    current_task->signal_mask = *mask & ~SIG_UNCATCHABLE;
+    current_task->in_sigsuspend = 1;
+    current_task->state = TASK_SLEEPING;
+
+    /* Return -1 (EINTR) — the scheduler will wake us when a signal arrives */
+    return -1;
+}
+
+#define TIMER_HZ_SIGNALS 100   /* must match TIMER_HZ in timer section */
+
+static int sys_alarm(struct syscall_frame* regs) {
+    uint32_t seconds = (uint32_t)regs->ebx;
+
+    if (!current_task) return -1;
+
+    uint32_t now = timer_ticks_get();
+    uint32_t remaining = 0;
+
+    /* Return remaining time from previous alarm */
+    if (current_task->alarm_ticks) {
+        uint32_t left_ticks = (current_task->alarm_ticks > now)
+                              ? (current_task->alarm_ticks - now) : 0;
+        remaining = (left_ticks + TIMER_HZ_SIGNALS - 1) / TIMER_HZ_SIGNALS;
+    }
+
+    if (seconds == 0) {
+        current_task->alarm_ticks = 0;
+    } else {
+        current_task->alarm_ticks = now + seconds * TIMER_HZ_SIGNALS;
+    }
+
+    return (int)remaining;
+}
+
+struct itimerval_k {
+    struct { long tv_sec; long tv_usec; } it_interval;
+    struct { long tv_sec; long tv_usec; } it_value;
+};
+
+static int sys_setitimer(struct syscall_frame* regs) {
+    int which                    = (int)regs->ebx;
+    struct itimerval_k* newval   = (struct itimerval_k*)regs->ecx;
+    struct itimerval_k* oldval   = (struct itimerval_k*)regs->edx;
+
+    if (!current_task) return -1;
+    /* Only ITIMER_REAL (0) is supported */
+    if (which != 0) return -1;
+    if (newval && !validate_user_ptr(newval, sizeof(struct itimerval_k))) return -1;
+    if (oldval && !validate_user_ptr(oldval, sizeof(struct itimerval_k))) return -1;
+
+    uint32_t now = timer_ticks_get();
+
+    if (oldval) {
+        /* Return current timer state */
+        if (current_task->itimer_value && current_task->itimer_value > now) {
+            uint32_t left = current_task->itimer_value - now;
+            oldval->it_value.tv_sec  = left / TIMER_HZ_SIGNALS;
+            oldval->it_value.tv_usec = (long)((left % TIMER_HZ_SIGNALS) *
+                                               (1000000 / TIMER_HZ_SIGNALS));
+        } else {
+            oldval->it_value.tv_sec  = 0;
+            oldval->it_value.tv_usec = 0;
+        }
+        oldval->it_interval.tv_sec  = current_task->itimer_interval / TIMER_HZ_SIGNALS;
+        oldval->it_interval.tv_usec = (long)((current_task->itimer_interval % TIMER_HZ_SIGNALS) *
+                                              (1000000 / TIMER_HZ_SIGNALS));
+    }
+
+    if (newval) {
+        /* Convert timeval to ticks */
+        uint32_t val_ticks = (uint32_t)(newval->it_value.tv_sec * TIMER_HZ_SIGNALS) +
+                             (uint32_t)((newval->it_value.tv_usec * TIMER_HZ_SIGNALS) / 1000000);
+        uint32_t int_ticks = (uint32_t)(newval->it_interval.tv_sec * TIMER_HZ_SIGNALS) +
+                             (uint32_t)((newval->it_interval.tv_usec * TIMER_HZ_SIGNALS) / 1000000);
+
+        if (val_ticks == 0) {
+            current_task->itimer_value    = 0;
+            current_task->itimer_interval = 0;
+        } else {
+            current_task->itimer_value    = now + val_ticks;
+            current_task->itimer_interval = int_ticks;
+        }
+    }
+
+    return 0;
+}
+
+//public api
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -492,8 +737,6 @@ static int sys_lseek(struct syscall_frame* regs) {
     current_task->fd_offset[fd] = new_off;
     return (int)new_off;
 }
-
-extern uint32_t timer_ticks_get(void);
 
 static int sys_waitpid(struct syscall_frame* regs) {
     int target_pid = (int)regs->ebx;
@@ -742,6 +985,422 @@ static int sys_fstat(struct syscall_frame* regs) {
     return 0;
 }
 
+static int sys_ioctl(struct syscall_frame* regs) {
+    int       fd  = (int)regs->ebx;
+    uint32_t  cmd = regs->ecx;
+    void*     arg = (void*)regs->edx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) return -1;
+
+    if (arg && !validate_user_ptr(arg, 1)) return -1;
+
+    return ioctl_vfs(node, cmd, arg);
+}
+
+/* Маска изменяемых файловых статус-флагов через F_SETFL */
+#define SETFL_MASK  (0x0800 /* O_NONBLOCK */ | 0x0400 /* O_APPEND */)
+
+static int sys_fcntl(int fd, int cmd, int arg) {
+    if (!current_task)          return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) return -1;
+
+    switch (cmd) {
+
+    /* --- F_DUPFD: дублировать fd, назначив первый свободный >= arg --- */
+    case 0: { /* F_DUPFD */
+        if (arg < 0 || arg >= MAX_FD) return -1;
+        for (int i = arg; i < MAX_FD; i++) {
+            if (!current_task->fd_table[i]) {
+                current_task->fd_table[i]   = node;
+                current_task->fd_offset[i]  = current_task->fd_offset[fd];
+                current_task->fd_flags[i]   = current_task->fd_flags[fd];
+                current_task->fd_cloexec[i] = 0; /* FD_CLOEXEC не наследуется */
+                open_vfs(node);
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /* --- F_GETFD: получить флаги дескриптора (FD_CLOEXEC) --- */
+    case 1: /* F_GETFD */
+        return (int)current_task->fd_cloexec[fd]; /* 0 или FD_CLOEXEC(1) */
+
+    /* --- F_SETFD: установить флаги дескриптора (FD_CLOEXEC) --- */
+    case 2: /* F_SETFD */
+        current_task->fd_cloexec[fd] = (arg & 1) ? 1 : 0;
+        return 0;
+
+    /* --- F_GETFL: получить файловые статус-флаги --- */
+    case 3: /* F_GETFL */
+        return (int)current_task->fd_flags[fd];
+
+    /* --- F_SETFL: изменить изменяемые файловые статус-флаги --- */
+    case 4: { /* F_SETFL */
+        uint32_t new_flags = (current_task->fd_flags[fd] & ~(uint32_t)SETFL_MASK)
+                           | ((uint32_t)arg & SETFL_MASK);
+        current_task->fd_flags[fd] = new_flags;
+
+        /* Для пайпов синхронизируем O_NONBLOCK внутри pipe_t */
+        if (node->type == VFS_PIPE && node->priv) {
+            pipe_t* p = (pipe_t*)node->priv;
+            if (new_flags & 0x0800 /* O_NONBLOCK */)
+                p->flags |=  O_NONBLOCK;
+            else
+                p->flags &= ~O_NONBLOCK;
+        }
+        return 0;
+    }
+
+    default:
+        return -1;
+    }
+}
+
+/* Timer runs at 100 Hz → 1 tick = 10 ms */
+#define TIMER_HZ 100
+
+struct timeval {
+    long tv_sec;
+    long tv_usec;
+};
+
+struct timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
+
+static int sys_gettimeofday(struct syscall_frame* regs) {
+    struct timeval* tv = (struct timeval*)regs->ebx;
+    /* tz argument (ecx) is ignored per POSIX */
+
+    if (!tv) return 0;
+    if (!validate_user_ptr(tv, sizeof(struct timeval))) return -1;
+
+    uint32_t ticks = timer_ticks_get();
+    tv->tv_sec  = (long)(ticks / TIMER_HZ);
+    tv->tv_usec = (long)((ticks % TIMER_HZ) * (1000000 / TIMER_HZ));
+    return 0;
+}
+
+static int sys_clock_gettime(struct syscall_frame* regs) {
+    int clkid             = (int)regs->ebx;
+    struct timespec* tp   = (struct timespec*)regs->ecx;
+
+    if (!tp) return -1;
+    if (!validate_user_ptr(tp, sizeof(struct timespec))) return -1;
+    /* Both CLOCK_REALTIME and CLOCK_MONOTONIC map to ticks since boot */
+    if (clkid != CLOCK_REALTIME && clkid != CLOCK_MONOTONIC) return -1;
+
+    uint32_t ticks = timer_ticks_get();
+    tp->tv_sec  = (long)(ticks / TIMER_HZ);
+    tp->tv_nsec = (long)((ticks % TIMER_HZ) * (1000000000 / TIMER_HZ));
+    return 0;
+}
+
+static int sys_nanosleep(struct syscall_frame* regs) {
+    struct timespec* req = (struct timespec*)regs->ebx;
+    struct timespec* rem = (struct timespec*)regs->ecx;
+
+    if (!req) return -1;
+    if (!validate_user_ptr(req, sizeof(struct timespec))) return -1;
+    if (rem && !validate_user_ptr(rem, sizeof(struct timespec))) return -1;
+
+    if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000)
+        return -1;
+
+    if (!current_task) return -1;
+
+    /* Convert to milliseconds, then to ticks (ceiling) */
+    uint32_t ms   = (uint32_t)(req->tv_sec * 1000) +
+                    (uint32_t)((req->tv_nsec + 999999) / 1000000);
+    uint32_t ticks = (ms + (1000 / TIMER_HZ) - 1) / (1000 / TIMER_HZ);
+
+    if (ticks == 0) {
+        if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+        return 0;
+    }
+
+    uint32_t now = timer_ticks_get();
+    current_task->sleep_until = now + ticks;
+    current_task->state = TASK_SLEEPING;
+
+    /* rem is zeroed — sleep ran to completion (no signal support yet) */
+    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════
+   Socket syscall helpers
+   ═══════════════════════════════════════════════ */
+
+/* Allocate the next free FD (>= 3) for the current task. */
+static int alloc_fd(vfs_node_t *node) {
+    for (int i = 3; i < MAX_FD; i++) {
+        if (!current_task->fd_table[i]) {
+            current_task->fd_table[i]   = node;
+            current_task->fd_offset[i]  = 0;
+            current_task->fd_flags[i]   = 0;
+            current_task->fd_cloexec[i] = 0;
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* SYS_SOCKET — create a socket, return fd */
+static int sys_socket(struct syscall_frame *regs) {
+    int domain   = (int)regs->ebx;
+    int type     = (int)regs->ecx;
+    int protocol = (int)regs->edx;
+    if (!current_task) return -1;
+
+    vfs_node_t *node = ksock_create(domain, type, protocol);
+    if (!node) return -1;
+
+    int fd = alloc_fd(node);
+    if (fd < 0) {
+        /* close_vfs will free the node via socket_close_op */
+        close_vfs(node);
+        return -1;
+    }
+    return fd;
+}
+
+/* SYS_BIND — bind socket to a local address */
+static int sys_bind(struct syscall_frame *regs) {
+    int fd = (int)regs->ebx;
+    struct sockaddr_in *addr = (struct sockaddr_in *)regs->ecx;
+    /* addrlen in edx — not strictly needed here */
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(addr, sizeof(struct sockaddr_in))) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    uint16_t port = ntohs(addr->sin_port);
+
+    if (ks->kind == KS_TCP) {
+        /* tcp_listen needs a port; we store it now — actual LISTEN on sys_listen */
+        tcp_socket_t *s = 0;
+        if (ks->proto_idx >= 0 && ks->proto_idx < TCP_MAX_SOCKETS)
+            s = &tcp_sockets[ks->proto_idx];
+        if (!s) return -1;
+        s->local_port = port;
+        s->local_ip   = htonl(MY_IP);
+        return 0;
+    }
+
+    if (ks->kind == KS_UDP) {
+        udp_sock_t *s = udp_sock_find_by_port(port);
+        /* port already in use by another socket? */
+        if (s && s != &udp_socks[ks->proto_idx]) return -1;
+        udp_socks[ks->proto_idx].local_port = port;
+        udp_socks[ks->proto_idx].local_ip   = ntohl(addr->sin_addr);
+        return 0;
+    }
+
+    return -1;
+}
+
+/* SYS_CONNECT — initiate a TCP connection */
+static int sys_connect(struct syscall_frame *regs) {
+    int fd = (int)regs->ebx;
+    struct sockaddr_in *addr = (struct sockaddr_in *)regs->ecx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(addr, sizeof(struct sockaddr_in))) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks || ks->kind != KS_TCP) return -1;
+
+    uint32_t dst_ip   = addr->sin_addr;           /* already network order */
+    uint16_t dst_port = ntohs(addr->sin_port);
+    return tcp_connect(ks->proto_idx, dst_ip, dst_port);
+}
+
+/* SYS_LISTEN — mark TCP socket as passive */
+static int sys_listen(struct syscall_frame *regs) {
+    int fd      = (int)regs->ebx;
+    /* backlog in ecx — ignored for now */
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks || ks->kind != KS_TCP) return -1;
+
+    extern tcp_socket_t tcp_sockets[];
+    tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
+    return tcp_listen(ks->proto_idx, s->local_port);
+}
+
+/* SYS_ACCEPT — accept a pending TCP connection */
+static int sys_accept(struct syscall_frame *regs) {
+    int fd = (int)regs->ebx;
+    struct sockaddr_in *peer_addr    = (struct sockaddr_in *)regs->ecx;
+    uint32_t           *peer_addrlen = (uint32_t *)regs->edx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (peer_addr && !validate_user_ptr(peer_addr, sizeof(struct sockaddr_in)))
+        return -1;
+    if (peer_addrlen && !validate_user_ptr(peer_addrlen, sizeof(uint32_t)))
+        return -1;
+
+    vfs_node_t *listen_node = current_task->fd_table[fd];
+    if (!listen_node || listen_node->type != VFS_SOCKET) return -1;
+
+    vfs_node_t *conn_node = ksock_tcp_accept(listen_node, peer_addr);
+    if (!conn_node) return -1;  /* no connection ready (would block) */
+
+    if (peer_addrlen) *peer_addrlen = sizeof(struct sockaddr_in);
+
+    int new_fd = alloc_fd(conn_node);
+    if (new_fd < 0) {
+        close_vfs(conn_node);
+        return -1;
+    }
+    return new_fd;
+}
+
+/* SYS_SEND — send data on a connected socket */
+static int sys_send(struct syscall_frame *regs) {
+    int      fd   = (int)regs->ebx;
+    char    *buf  = (char *)regs->ecx;
+    uint32_t len  = regs->edx;
+    /* flags ignored */
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(buf, len)) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    return write_vfs(node, 0, len, buf);
+}
+
+/* SYS_RECV — receive data from a connected socket */
+static int sys_recv(struct syscall_frame *regs) {
+    int      fd   = (int)regs->ebx;
+    char    *buf  = (char *)regs->ecx;
+    uint32_t len  = regs->edx;
+    /* flags ignored */
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(buf, len)) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    return read_vfs(node, 0, len, buf);
+}
+
+/* SYS_SENDTO — send a UDP datagram to a specific address */
+static int sys_sendto(struct syscall_frame *regs) {
+    sendto_args_t *args = (sendto_args_t *)regs->ebx;
+    if (!validate_user_ptr(args, sizeof(sendto_args_t))) return -1;
+    if (!current_task) return -1;
+
+    int     fd    = args->fd;
+    const void *buf = args->buf;
+    uint32_t len  = args->len;
+    const struct sockaddr_in *dest = args->dest;
+
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(buf, len)) return -1;
+    if (!validate_user_ptr(dest, sizeof(struct sockaddr_in))) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    if (ks->kind == KS_TCP)
+        return tcp_send(ks->proto_idx, (uint8_t *)buf, (uint16_t)len);
+
+    if (ks->kind == KS_UDP) {
+        uint32_t dst_ip   = dest->sin_addr;
+        uint16_t dst_port = ntohs(dest->sin_port);
+        return udp_sock_send(ks->proto_idx, dst_ip, dst_port,
+                             (const uint8_t *)buf, (uint16_t)len);
+    }
+    return -1;
+}
+
+/* SYS_RECVFROM — receive a UDP datagram and capture source address */
+static int sys_recvfrom(struct syscall_frame *regs) {
+    recvfrom_args_t *args = (recvfrom_args_t *)regs->ebx;
+    if (!validate_user_ptr(args, sizeof(recvfrom_args_t))) return -1;
+    if (!current_task) return -1;
+
+    int    fd  = args->fd;
+    void  *buf = args->buf;
+    uint32_t len = args->len;
+    struct sockaddr_in *src  = args->src;
+    uint32_t           *addrlen = args->addrlen;
+
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(buf, len)) return -1;
+    if (src && !validate_user_ptr(src, sizeof(struct sockaddr_in))) return -1;
+    if (addrlen && !validate_user_ptr(addrlen, sizeof(uint32_t))) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    int ret = -1;
+    if (ks->kind == KS_TCP) {
+        ret = tcp_recv(ks->proto_idx, (uint8_t *)buf, (uint16_t)len);
+        if (ret > 0 && src) {
+                tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
+            src->sin_family = AF_INET;
+            src->sin_port   = htons(s->remote_port);
+            src->sin_addr   = s->remote_ip;
+            if (addrlen) *addrlen = sizeof(struct sockaddr_in);
+        }
+    } else if (ks->kind == KS_UDP) {
+        uint32_t src_ip   = 0;
+        uint16_t src_port = 0;
+        ret = udp_sock_recv(ks->proto_idx, (uint8_t *)buf, (uint16_t)len,
+                            &src_ip, &src_port);
+        if (ret > 0 && src) {
+            src->sin_family = AF_INET;
+            src->sin_port   = htons(src_port);
+            src->sin_addr   = htonl(src_ip);
+            if (addrlen) *addrlen = sizeof(struct sockaddr_in);
+        }
+    }
+    return ret;
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -772,6 +1431,30 @@ static syscall_fn syscall_table[] = {
     [25] = (syscall_fn)sys_chdir,
     [26] = (syscall_fn)sys_stat,
     [27] = (syscall_fn)sys_fstat,
+    [28] = (syscall_fn)sys_getppid,
+    [29] = (syscall_fn)sys_getdents,
+    [30] = (syscall_fn)sys_rename,
+    [31] = (syscall_fn)sys_ioctl,
+    [32] = (syscall_fn)sys_mkdir,
+    [33] = (syscall_fn)sys_rmdir,
+    [34] = (syscall_fn)sys_fcntl,
+    [35] = (syscall_fn)sys_gettimeofday,
+    [36] = (syscall_fn)sys_clock_gettime,
+    [37] = (syscall_fn)sys_nanosleep,
+    [38] = (syscall_fn)sys_sigprocmask,
+    [39] = (syscall_fn)sys_sigpending,
+    [40] = (syscall_fn)sys_sigsuspend,
+    [41] = (syscall_fn)sys_alarm,
+    [42] = (syscall_fn)sys_setitimer,
+    [43] = (syscall_fn)sys_socket,
+    [44] = (syscall_fn)sys_bind,
+    [45] = (syscall_fn)sys_connect,
+    [46] = (syscall_fn)sys_listen,
+    [47] = (syscall_fn)sys_accept,
+    [48] = (syscall_fn)sys_send,
+    [49] = (syscall_fn)sys_recv,
+    [50] = (syscall_fn)sys_sendto,
+    [51] = (syscall_fn)sys_recvfrom,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -786,7 +1469,13 @@ void syscall_handler(struct syscall_frame* regs) {
     if (num == 7 || num == 9 || num == 10 || num == 13 || num == 14 ||
         num == 15 || num == 16 || num == 17 || num == 18 || num == 19 ||
         num == 20 || num == 21 || num == 22 || num == 23 ||
-        num == 24 || num == 25 || num == 26 || num == 27) {
+        num == 24 || num == 25 || num == 26 || num == 27 ||
+        num == 29 || num == 31 ||
+        num == 35 || num == 36 || num == 37 ||
+        num == 38 || num == 39 || num == 40 || num == 41 || num == 42 ||
+        /* socket syscalls */
+        num == 43 || num == 44 || num == 45 || num == 46 || num == 47 ||
+        num == 48 || num == 49 || num == 50 || num == 51) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](
@@ -796,8 +1485,9 @@ void syscall_handler(struct syscall_frame* regs) {
         );
     }
 
-    // sys_exit (7): task is ZOMBIE, don't touch its frame
+    /* sys_exit (7): task is ZOMBIE, don't touch its frame */
     if (num == 7) return;
-
+    /* sys_sigsuspend (40): task is now SLEEPING, eax will be set to -1 (EINTR)
+       when it wakes up — write -1 now so it's in the frame */
     regs->eax = (uint32_t)ret;
 }

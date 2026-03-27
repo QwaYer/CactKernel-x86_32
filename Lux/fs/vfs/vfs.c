@@ -168,3 +168,8 @@ int rmdir_vfs(vfs_node_t *dir, char *name) {
     if (!dir || dir->type != VFS_DIRECTORY || !dir->ops || !dir->ops->rmdir) return -1;
     return dir->ops->rmdir(dir, name);
 }
+
+int rename_vfs(vfs_node_t *dir, const char *oldname, const char *newname) {
+    if (!dir || dir->type != VFS_DIRECTORY || !dir->ops || !dir->ops->rename) return -1;
+    return dir->ops->rename(dir, oldname, newname);
+}

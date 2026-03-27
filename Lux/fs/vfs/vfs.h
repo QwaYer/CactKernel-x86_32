@@ -9,6 +9,7 @@
 #define VFS_CHARDEVICE  0x03
 #define VFS_BLOCKDEVICE 0x04
 #define VFS_PIPE        0x05
+#define VFS_SOCKET      0x06
 
 struct vfs_node;
 struct vfs_dirent;
@@ -28,6 +29,7 @@ typedef struct vfs_ops {
     int (*delete)(struct vfs_node *dir, const char *name);
     int (*mkdir) (struct vfs_node *dir, const char *name);
     int (*rmdir) (struct vfs_node *dir, const char *name);
+    int (*rename)(struct vfs_node *dir, const char *oldname, const char *newname);
 
     int (*ioctl) (struct vfs_node *node, uint32_t cmd, void *arg);
 } vfs_ops_t;
@@ -74,5 +76,6 @@ int           create_vfs   (vfs_node_t *dir, char *name);
 int           delete_vfs   (vfs_node_t *dir, char *name);
 int           mkdir_vfs    (vfs_node_t *dir, char *name);
 int           rmdir_vfs    (vfs_node_t *dir, char *name);
+int           rename_vfs   (vfs_node_t *dir, const char *oldname, const char *newname);
 
 #endif 
