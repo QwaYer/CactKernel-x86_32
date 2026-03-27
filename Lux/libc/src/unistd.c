@@ -25,6 +25,10 @@ pid_t getpid(void) {
     return syscall(SYS_GETPID, 0, 0, 0);
 }
 
+pid_t getppid(void) {
+    return syscall(SYS_GETPPID, 0, 0, 0);
+}
+
 off_t lseek(int fd, off_t offset, int whence) {
     return (off_t)syscall(SYS_LSEEK, fd, offset, whence);
 }
@@ -67,4 +71,25 @@ char *getcwd(char *buf, int size) {
 
 int chdir(const char *path) {
     return syscall(SYS_CHDIR, (int)path, 0, 0);
+}
+
+int ioctl(int fd, unsigned long cmd, void *arg) {
+    return syscall(SYS_IOCTL, fd, (int)cmd, (int)arg);
+}
+
+int mkdir(const char *pathname, int mode) {
+    (void)mode;
+    return syscall(SYS_MKDIR, (int)pathname, 0, 0);
+}
+
+int rmdir(const char *pathname) {
+    return syscall(SYS_RMDIR, (int)pathname, 0, 0);
+}
+
+int pipe(int pipefd[2]) {
+    return syscall(SYS_PIPE, (int)pipefd, 0, 0);
+}
+
+int dup2(int oldfd, int newfd) {
+    return syscall(SYS_DUP2, oldfd, newfd, 0);
 }

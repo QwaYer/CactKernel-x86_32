@@ -29,6 +29,32 @@
 #define SYS_CHDIR   25
 #define SYS_STAT    26
 #define SYS_FSTAT   27
+#define SYS_GETPPID 28
+#define SYS_GETDENTS 29
+#define SYS_RENAME   30
+#define SYS_IOCTL    31
+#define SYS_MKDIR    32
+#define SYS_RMDIR    33
+#define SYS_FCNTL         34
+#define SYS_GETTIMEOFDAY  35
+#define SYS_CLOCK_GETTIME 36
+#define SYS_NANOSLEEP     37
+#define SYS_SIGPROCMASK   38
+#define SYS_SIGPENDING    39
+#define SYS_SIGSUSPEND    40
+#define SYS_ALARM         41
+#define SYS_SETITIMER     42
+
+/* Socket syscalls */
+#define SYS_SOCKET        43
+#define SYS_BIND          44
+#define SYS_CONNECT       45
+#define SYS_LISTEN        46
+#define SYS_ACCEPT        47
+#define SYS_SEND          48
+#define SYS_RECV          49
+#define SYS_SENDTO        50
+#define SYS_RECVFROM      51
 
 int syscall(int num, int p1, int p2, int p3);
 

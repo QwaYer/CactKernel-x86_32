@@ -75,11 +75,17 @@ typedef struct tcp_socket {
 
     tcp_data_fn  on_data;
     tcp_event_fn on_event;
+
+    /* Accept support */
+    int8_t  listen_parent;  /* index of parent LISTEN socket, or -1 */
+    uint8_t accept_ready;   /* 1 when this connection is ready for accept() */
 } tcp_socket_t;
 
 /* ───────────────────────────────────────────────
    Public API — skeleton stubs
    ─────────────────────────────────────────────── */
+
+extern tcp_socket_t tcp_sockets[TCP_MAX_SOCKETS];
 
 /* Create a socket, returns socket id or -1 */
 int  tcp_socket(void);
@@ -98,6 +104,9 @@ int  tcp_close(int sock);
 
 /* Register callbacks */
 void tcp_set_callbacks(int sock, tcp_data_fn on_data, tcp_event_fn on_event);
+
+/* Read buffered RX data; returns bytes copied, 0 if nothing available */
+int tcp_recv(int sock, uint8_t* buf, uint16_t max_len);
 
 /* Called by ip_input() */
 void tcp_input(skb_t* skb);

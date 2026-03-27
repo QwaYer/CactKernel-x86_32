@@ -13,16 +13,20 @@
 #define USER_DATA_SEL 0x23
 #define MAX_FD        256
 
-#define SIGKILL  (1 << 0)
-#define SIGTERM  (1 << 1)
-#define SIGSTOP  (1 << 2)
-#define SIGCONT  (1 << 3)
-#define SIGPIPE  (1 << 4)
+#define SIGKILL  (1u << 0)
+#define SIGTERM  (1u << 1)
+#define SIGSTOP  (1u << 2)
+#define SIGCONT  (1u << 3)
+#define SIGPIPE  (1u << 4)
+#define SIGALRM  (1u << 5)
 
-#define NSIG     5   
+#define NSIG     6
 
 #define SIG_DFL  ((uint32_t)0)
 #define SIG_IGN  ((uint32_t)1)
+
+/* Signals that cannot be blocked or caught */
+#define SIG_UNCATCHABLE  (SIGKILL | SIGSTOP)
 
 
 typedef struct {
@@ -66,10 +70,20 @@ struct task_struct {
     struct task_struct* queue_next;
 
     uint32_t pending_signals;
-    uint32_t signal_handlers[NSIG]; 
-    uint32_t sigreturn_trampoline;  
+    uint32_t signal_mask;           /* blocked signals (sigprocmask) */
+    uint32_t saved_signal_mask;     /* mask saved across sigsuspend */
+    uint8_t  in_sigsuspend;         /* task is sleeping in sigsuspend */
+    uint32_t signal_handlers[NSIG];
+    uint32_t sigreturn_trampoline;
+
+    /* alarm / setitimer (ITIMER_REAL) */
+    uint32_t alarm_ticks;           /* absolute tick when SIGALRM fires (0=none) */
+    uint32_t itimer_value;          /* absolute tick for next interval fire (0=none) */
+    uint32_t itimer_interval;       /* reload interval in ticks (0=one-shot) */
     struct vfs_node* fd_table[MAX_FD];
     uint32_t fd_offset[MAX_FD];
+    uint32_t fd_flags[MAX_FD];    /* file status flags: O_RDONLY/WRONLY/RDWR, O_NONBLOCK, O_APPEND */
+    uint32_t fd_cloexec[MAX_FD];  /* FD_CLOEXEC per descriptor (1 = close-on-exec) */
     proc_page_tracker_t mm;
 
     mmap_table_t mmap_table;
@@ -153,6 +167,8 @@ void task_signal(uint32_t pid, uint32_t signal);
 void task_handle_signals(struct task_struct* t);
 int  task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler);
 void task_setup_sigreturn(struct task_struct* t);
+int  task_sigprocmask(struct task_struct* t, int how, const uint32_t* set, uint32_t* oldset);
+void task_check_timers(void);
 void task_reap();
 void schedule();
 int init_scheduler();

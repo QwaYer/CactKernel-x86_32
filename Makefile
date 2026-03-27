@@ -14,6 +14,7 @@ KERN_PROCMM_DIR  = Lux/kernel/memory/proc_mm
 KERN_SLABMM_DIR  = Lux/kernel/memory/slab_mm
 KERN_PF_DIR      = Lux/kernel/memory/page_fault
 KERN_SWAP_DIR    = Lux/kernel/memory/swap_mm
+KERN_OOM_DIR     = Lux/kernel/memory/oom
 KERN_MMAP_DIR    = Lux/kernel/memory/mmap_mm
 KERN_PROC_DIR    = Lux/kernel/proc
 KERN_SYNC_DIR    = Lux/kernel/sync
@@ -49,6 +50,7 @@ NET_IP_DIR       = Lux/net/ip
 NET_ICMP_DIR     = Lux/net/icmp
 NET_UDP_DIR      = Lux/net/protocols/udp
 NET_TCP_DIR      = Lux/net/protocols/tcp
+NET_SOCKET_DIR   = Lux/net/socket
 DRIVER_NET_DIR   = Lux/drivers/network/virtio_net
 DRIVER_FB_DIR    = Lux/drivers/video/fb
 DRIVER_FONT_DIR  = Lux/drivers/video/font
@@ -68,6 +70,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_PROCMM_DIR) \
          -I$(KERN_SLABMM_DIR) \
          -I$(KERN_SWAP_DIR) \
+         -I$(KERN_OOM_DIR) \
          -I$(KERN_MMAP_DIR) \
          -I$(KERN_PROC_DIR) \
          -I$(KERN_SYNC_DIR) \
@@ -103,6 +106,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(NET_ICMP_DIR) \
          -I$(NET_UDP_DIR) \
          -I$(NET_TCP_DIR) \
+         -I$(NET_SOCKET_DIR) \
          -I$(DRIVER_NET_DIR) \
          -I$(DRIVER_FB_DIR) \
          -I$(DRIVER_FONT_DIR) \
@@ -125,6 +129,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/slab.o \
       $(BUILD_DIR)/page_fault.o \
       $(BUILD_DIR)/swap.o \
+      $(BUILD_DIR)/oom.o \
       $(BUILD_DIR)/mmap.o \
       $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/elf_loader.o \
@@ -166,6 +171,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/icmp.o \
       $(BUILD_DIR)/udp.o \
       $(BUILD_DIR)/tcp.o \
+      $(BUILD_DIR)/ksocket.o \
       $(BUILD_DIR)/virtio_net.o \
       $(BUILD_DIR)/fb.o \
       $(BUILD_DIR)/font.o
@@ -255,6 +261,10 @@ $(BUILD_DIR)/slab.o: $(KERN_SLABMM_DIR)/slab.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/swap.o: $(KERN_SWAP_DIR)/swap.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/oom.o: $(KERN_OOM_DIR)/oom.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -426,6 +436,10 @@ $(BUILD_DIR)/udp.o: $(NET_UDP_DIR)/udp.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/tcp.o: $(NET_TCP_DIR)/tcp.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ksocket.o: $(NET_SOCKET_DIR)/socket.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

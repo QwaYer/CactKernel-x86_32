@@ -19,6 +19,7 @@
 #include "dynlink.h"      
 #include "proc_mm.h"  
 #include "pagecache.h"
+#include "oom.h"
 
 
 //Утилиты 
@@ -388,6 +389,11 @@ static void cmd_free(char* args) {
     itoa(get_free_heap_memory(), buf); kprint(buf); kprint(" bytes\n");
 }
 
+static void cmd_oom(char* args) {
+    (void)args;
+    oom_print_stats();
+}
+
 static void cmd_date(char* args) {
     (void)args;
     port_byte_out(0x70,0x00); unsigned char sec  =_bcd_to_bin(port_byte_in(0x71));
@@ -661,6 +667,7 @@ void commands_init(void) {
     procfs_register_cmd("clear", 0, cmd_clear);
     procfs_register_cmd("reboot", 0, cmd_reboot);
     procfs_register_cmd("free", 0, cmd_free);
+    procfs_register_cmd("oom", 0, cmd_oom);
     procfs_register_cmd("date", 0, cmd_date);
     procfs_register_cmd("uptime", 0, cmd_uptime);
     procfs_register_cmd("ps", 0, cmd_ps);
