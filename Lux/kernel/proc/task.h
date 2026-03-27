@@ -70,6 +70,8 @@ struct task_struct {
     uint32_t sigreturn_trampoline;  
     struct vfs_node* fd_table[MAX_FD];
     uint32_t fd_offset[MAX_FD];
+    uint32_t fd_flags[MAX_FD];    /* file status flags: O_RDONLY/WRONLY/RDWR, O_NONBLOCK, O_APPEND */
+    uint32_t fd_cloexec[MAX_FD];  /* FD_CLOEXEC per descriptor (1 = close-on-exec) */
     proc_page_tracker_t mm;
 
     mmap_table_t mmap_table;
