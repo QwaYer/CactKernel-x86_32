@@ -176,7 +176,7 @@ static int sys_rename(char* oldpath, char* newpath) {
     return rename_vfs(old_parent, old_base, new_base);
 }
 
-static int sys_open(char* name) {
+static int sys_open(char* name, int flags) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
 
@@ -190,6 +190,8 @@ static int sys_open(char* name) {
         if (!current_task->fd_table[i]) {
             current_task->fd_table[i] = node;
             current_task->fd_offset[i] = 0;
+            current_task->fd_flags[i]   = (uint32_t)flags;
+            current_task->fd_cloexec[i] = 0;
             kprint("[DBG] sys_open: fd=");
             char tmp[16]; itoa(i, tmp); kprint(tmp);
             kprint(" path="); kprint(name); kprint("\n");
@@ -231,9 +233,11 @@ static int sys_close(int fd) {
     if (fd < 3 || fd >= MAX_FD) return -1;
     struct vfs_node* node = current_task->fd_table[fd];
     if (!node) return -1;
-    current_task->fd_table[fd] = 0;
-    current_task->fd_offset[fd] = 0;
-    close_vfs(node);   
+    current_task->fd_table[fd]   = 0;
+    current_task->fd_offset[fd]  = 0;
+    current_task->fd_flags[fd]   = 0;
+    current_task->fd_cloexec[fd] = 0;
+    close_vfs(node);
     return 0;
 }
 
@@ -484,10 +488,14 @@ static int sys_pipe(struct syscall_frame* regs) {
         return -1;
     }
 
-    current_task->fd_table[rfd] = pipefd[0];
-    current_task->fd_table[wfd] = pipefd[1];
-    current_task->fd_offset[rfd] = 0;
-    current_task->fd_offset[wfd] = 0;
+    current_task->fd_table[rfd]   = pipefd[0];
+    current_task->fd_table[wfd]   = pipefd[1];
+    current_task->fd_offset[rfd]  = 0;
+    current_task->fd_offset[wfd]  = 0;
+    current_task->fd_flags[rfd]   = 0; /* O_RDONLY */
+    current_task->fd_flags[wfd]   = 1; /* O_WRONLY */
+    current_task->fd_cloexec[rfd] = 0;
+    current_task->fd_cloexec[wfd] = 0;
 
     user_fds[0] = rfd;
     user_fds[1] = wfd;
@@ -509,9 +517,11 @@ static int sys_dup2(struct syscall_frame* regs) {
         close_vfs(current_task->fd_table[newfd]);
     }
 
-    current_task->fd_table[newfd] = node;
-    current_task->fd_offset[newfd] = current_task->fd_offset[oldfd];
-    open_vfs(node);   
+    current_task->fd_table[newfd]   = node;
+    current_task->fd_offset[newfd]  = current_task->fd_offset[oldfd];
+    current_task->fd_flags[newfd]   = current_task->fd_flags[oldfd];
+    current_task->fd_cloexec[newfd] = 0; /* FD_CLOEXEC не наследуется через dup2 */
+    open_vfs(node);
     return newfd;
 }
 
@@ -865,6 +875,69 @@ static int sys_ioctl(struct syscall_frame* regs) {
     return ioctl_vfs(node, cmd, arg);
 }
 
+/* Маска изменяемых файловых статус-флагов через F_SETFL */
+#define SETFL_MASK  (0x0800 /* O_NONBLOCK */ | 0x0400 /* O_APPEND */)
+
+static int sys_fcntl(int fd, int cmd, int arg) {
+    if (!current_task)          return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    struct vfs_node* node = current_task->fd_table[fd];
+    if (!node) return -1;
+
+    switch (cmd) {
+
+    /* --- F_DUPFD: дублировать fd, назначив первый свободный >= arg --- */
+    case 0: { /* F_DUPFD */
+        if (arg < 0 || arg >= MAX_FD) return -1;
+        for (int i = arg; i < MAX_FD; i++) {
+            if (!current_task->fd_table[i]) {
+                current_task->fd_table[i]   = node;
+                current_task->fd_offset[i]  = current_task->fd_offset[fd];
+                current_task->fd_flags[i]   = current_task->fd_flags[fd];
+                current_task->fd_cloexec[i] = 0; /* FD_CLOEXEC не наследуется */
+                open_vfs(node);
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /* --- F_GETFD: получить флаги дескриптора (FD_CLOEXEC) --- */
+    case 1: /* F_GETFD */
+        return (int)current_task->fd_cloexec[fd]; /* 0 или FD_CLOEXEC(1) */
+
+    /* --- F_SETFD: установить флаги дескриптора (FD_CLOEXEC) --- */
+    case 2: /* F_SETFD */
+        current_task->fd_cloexec[fd] = (arg & 1) ? 1 : 0;
+        return 0;
+
+    /* --- F_GETFL: получить файловые статус-флаги --- */
+    case 3: /* F_GETFL */
+        return (int)current_task->fd_flags[fd];
+
+    /* --- F_SETFL: изменить изменяемые файловые статус-флаги --- */
+    case 4: { /* F_SETFL */
+        uint32_t new_flags = (current_task->fd_flags[fd] & ~(uint32_t)SETFL_MASK)
+                           | ((uint32_t)arg & SETFL_MASK);
+        current_task->fd_flags[fd] = new_flags;
+
+        /* Для пайпов синхронизируем O_NONBLOCK внутри pipe_t */
+        if (node->type == VFS_PIPE && node->priv) {
+            pipe_t* p = (pipe_t*)node->priv;
+            if (new_flags & 0x0800 /* O_NONBLOCK */)
+                p->flags |=  O_NONBLOCK;
+            else
+                p->flags &= ~O_NONBLOCK;
+        }
+        return 0;
+    }
+
+    default:
+        return -1;
+    }
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -901,6 +974,7 @@ static syscall_fn syscall_table[] = {
     [31] = (syscall_fn)sys_ioctl,
     [32] = (syscall_fn)sys_mkdir,
     [33] = (syscall_fn)sys_rmdir,
+    [34] = (syscall_fn)sys_fcntl,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
