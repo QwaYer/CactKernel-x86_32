@@ -32,6 +32,7 @@
 #define SYS_GETPPID 28
 #define SYS_GETDENTS 29
 #define SYS_RENAME   30
+#define SYS_IOCTL    31
 
 int syscall(int num, int p1, int p2, int p3);
 
