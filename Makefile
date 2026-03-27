@@ -50,6 +50,7 @@ NET_IP_DIR       = Lux/net/ip
 NET_ICMP_DIR     = Lux/net/icmp
 NET_UDP_DIR      = Lux/net/protocols/udp
 NET_TCP_DIR      = Lux/net/protocols/tcp
+NET_SOCKET_DIR   = Lux/net/socket
 DRIVER_NET_DIR   = Lux/drivers/network/virtio_net
 DRIVER_FB_DIR    = Lux/drivers/video/fb
 DRIVER_FONT_DIR  = Lux/drivers/video/font
@@ -105,6 +106,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(NET_ICMP_DIR) \
          -I$(NET_UDP_DIR) \
          -I$(NET_TCP_DIR) \
+         -I$(NET_SOCKET_DIR) \
          -I$(DRIVER_NET_DIR) \
          -I$(DRIVER_FB_DIR) \
          -I$(DRIVER_FONT_DIR) \
@@ -169,6 +171,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/icmp.o \
       $(BUILD_DIR)/udp.o \
       $(BUILD_DIR)/tcp.o \
+      $(BUILD_DIR)/ksocket.o \
       $(BUILD_DIR)/virtio_net.o \
       $(BUILD_DIR)/fb.o \
       $(BUILD_DIR)/font.o
@@ -433,6 +436,10 @@ $(BUILD_DIR)/udp.o: $(NET_UDP_DIR)/udp.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/tcp.o: $(NET_TCP_DIR)/tcp.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ksocket.o: $(NET_SOCKET_DIR)/socket.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

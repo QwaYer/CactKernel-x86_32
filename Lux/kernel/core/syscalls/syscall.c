@@ -4,6 +4,10 @@
 #include "memory.h"
 #include "mmap.h"
 #include "pipe.h"
+#include "socket.h"
+#include "tcp.h"
+#include "udp.h"
+#include "net.h"
 
 struct syscall_frame {
     uint32_t es, ds;
@@ -1136,6 +1140,269 @@ static int sys_nanosleep(struct syscall_frame* regs) {
     return 0;
 }
 
+/* ═══════════════════════════════════════════════
+   Socket syscall helpers
+   ═══════════════════════════════════════════════ */
+
+/* Allocate the next free FD (>= 3) for the current task. */
+static int alloc_fd(vfs_node_t *node) {
+    for (int i = 3; i < MAX_FD; i++) {
+        if (!current_task->fd_table[i]) {
+            current_task->fd_table[i]   = node;
+            current_task->fd_offset[i]  = 0;
+            current_task->fd_flags[i]   = 0;
+            current_task->fd_cloexec[i] = 0;
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* SYS_SOCKET — create a socket, return fd */
+static int sys_socket(struct syscall_frame *regs) {
+    int domain   = (int)regs->ebx;
+    int type     = (int)regs->ecx;
+    int protocol = (int)regs->edx;
+    if (!current_task) return -1;
+
+    vfs_node_t *node = ksock_create(domain, type, protocol);
+    if (!node) return -1;
+
+    int fd = alloc_fd(node);
+    if (fd < 0) {
+        /* close_vfs will free the node via socket_close_op */
+        close_vfs(node);
+        return -1;
+    }
+    return fd;
+}
+
+/* SYS_BIND — bind socket to a local address */
+static int sys_bind(struct syscall_frame *regs) {
+    int fd = (int)regs->ebx;
+    struct sockaddr_in *addr = (struct sockaddr_in *)regs->ecx;
+    /* addrlen in edx — not strictly needed here */
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(addr, sizeof(struct sockaddr_in))) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    uint16_t port = ntohs(addr->sin_port);
+
+    if (ks->kind == KS_TCP) {
+        /* tcp_listen needs a port; we store it now — actual LISTEN on sys_listen */
+        tcp_socket_t *s = 0;
+        extern tcp_socket_t tcp_sockets[];
+        if (ks->proto_idx >= 0 && ks->proto_idx < TCP_MAX_SOCKETS)
+            s = &tcp_sockets[ks->proto_idx];
+        if (!s) return -1;
+        s->local_port = port;
+        s->local_ip   = htonl(MY_IP);
+        return 0;
+    }
+
+    if (ks->kind == KS_UDP) {
+        udp_sock_t *s = udp_sock_find_by_port(port);
+        /* port already in use by another socket? */
+        if (s && s != &udp_socks[ks->proto_idx]) return -1;
+        udp_socks[ks->proto_idx].local_port = port;
+        udp_socks[ks->proto_idx].local_ip   = ntohl(addr->sin_addr);
+        return 0;
+    }
+
+    return -1;
+}
+
+/* SYS_CONNECT — initiate a TCP connection */
+static int sys_connect(struct syscall_frame *regs) {
+    int fd = (int)regs->ebx;
+    struct sockaddr_in *addr = (struct sockaddr_in *)regs->ecx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(addr, sizeof(struct sockaddr_in))) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks || ks->kind != KS_TCP) return -1;
+
+    uint32_t dst_ip   = addr->sin_addr;           /* already network order */
+    uint16_t dst_port = ntohs(addr->sin_port);
+    return tcp_connect(ks->proto_idx, dst_ip, dst_port);
+}
+
+/* SYS_LISTEN — mark TCP socket as passive */
+static int sys_listen(struct syscall_frame *regs) {
+    int fd      = (int)regs->ebx;
+    /* backlog in ecx — ignored for now */
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks || ks->kind != KS_TCP) return -1;
+
+    extern tcp_socket_t tcp_sockets[];
+    tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
+    return tcp_listen(ks->proto_idx, s->local_port);
+}
+
+/* SYS_ACCEPT — accept a pending TCP connection */
+static int sys_accept(struct syscall_frame *regs) {
+    int fd = (int)regs->ebx;
+    struct sockaddr_in *peer_addr    = (struct sockaddr_in *)regs->ecx;
+    uint32_t           *peer_addrlen = (uint32_t *)regs->edx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (peer_addr && !validate_user_ptr(peer_addr, sizeof(struct sockaddr_in)))
+        return -1;
+    if (peer_addrlen && !validate_user_ptr(peer_addrlen, sizeof(uint32_t)))
+        return -1;
+
+    vfs_node_t *listen_node = current_task->fd_table[fd];
+    if (!listen_node || listen_node->type != VFS_SOCKET) return -1;
+
+    vfs_node_t *conn_node = ksock_tcp_accept(listen_node, peer_addr);
+    if (!conn_node) return -1;  /* no connection ready (would block) */
+
+    if (peer_addrlen) *peer_addrlen = sizeof(struct sockaddr_in);
+
+    int new_fd = alloc_fd(conn_node);
+    if (new_fd < 0) {
+        close_vfs(conn_node);
+        return -1;
+    }
+    return new_fd;
+}
+
+/* SYS_SEND — send data on a connected socket */
+static int sys_send(struct syscall_frame *regs) {
+    int      fd   = (int)regs->ebx;
+    char    *buf  = (char *)regs->ecx;
+    uint32_t len  = regs->edx;
+    /* flags ignored */
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(buf, len)) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    return write_vfs(node, 0, len, buf);
+}
+
+/* SYS_RECV — receive data from a connected socket */
+static int sys_recv(struct syscall_frame *regs) {
+    int      fd   = (int)regs->ebx;
+    char    *buf  = (char *)regs->ecx;
+    uint32_t len  = regs->edx;
+    /* flags ignored */
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(buf, len)) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    return read_vfs(node, 0, len, buf);
+}
+
+/* SYS_SENDTO — send a UDP datagram to a specific address */
+static int sys_sendto(struct syscall_frame *regs) {
+    sendto_args_t *args = (sendto_args_t *)regs->ebx;
+    if (!validate_user_ptr(args, sizeof(sendto_args_t))) return -1;
+    if (!current_task) return -1;
+
+    int     fd    = args->fd;
+    const void *buf = args->buf;
+    uint32_t len  = args->len;
+    const struct sockaddr_in *dest = args->dest;
+
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(buf, len)) return -1;
+    if (!validate_user_ptr(dest, sizeof(struct sockaddr_in))) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    if (ks->kind == KS_TCP)
+        return tcp_send(ks->proto_idx, (uint8_t *)buf, (uint16_t)len);
+
+    if (ks->kind == KS_UDP) {
+        uint32_t dst_ip   = dest->sin_addr;
+        uint16_t dst_port = ntohs(dest->sin_port);
+        return udp_sock_send(ks->proto_idx, dst_ip, dst_port,
+                             (const uint8_t *)buf, (uint16_t)len);
+    }
+    return -1;
+}
+
+/* SYS_RECVFROM — receive a UDP datagram and capture source address */
+static int sys_recvfrom(struct syscall_frame *regs) {
+    recvfrom_args_t *args = (recvfrom_args_t *)regs->ebx;
+    if (!validate_user_ptr(args, sizeof(recvfrom_args_t))) return -1;
+    if (!current_task) return -1;
+
+    int    fd  = args->fd;
+    void  *buf = args->buf;
+    uint32_t len = args->len;
+    struct sockaddr_in *src  = args->src;
+    uint32_t           *addrlen = args->addrlen;
+
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!validate_user_ptr(buf, len)) return -1;
+    if (src && !validate_user_ptr(src, sizeof(struct sockaddr_in))) return -1;
+    if (addrlen && !validate_user_ptr(addrlen, sizeof(uint32_t))) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    int ret = -1;
+    if (ks->kind == KS_TCP) {
+        ret = tcp_recv(ks->proto_idx, (uint8_t *)buf, (uint16_t)len);
+        if (ret > 0 && src) {
+            extern tcp_socket_t tcp_sockets[];
+            tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
+            src->sin_family = AF_INET;
+            src->sin_port   = htons(s->remote_port);
+            src->sin_addr   = s->remote_ip;
+            if (addrlen) *addrlen = sizeof(struct sockaddr_in);
+        }
+    } else if (ks->kind == KS_UDP) {
+        uint32_t src_ip   = 0;
+        uint16_t src_port = 0;
+        ret = udp_sock_recv(ks->proto_idx, (uint8_t *)buf, (uint16_t)len,
+                            &src_ip, &src_port);
+        if (ret > 0 && src) {
+            src->sin_family = AF_INET;
+            src->sin_port   = htons(src_port);
+            src->sin_addr   = htonl(src_ip);
+            if (addrlen) *addrlen = sizeof(struct sockaddr_in);
+        }
+    }
+    return ret;
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -1181,6 +1448,15 @@ static syscall_fn syscall_table[] = {
     [40] = (syscall_fn)sys_sigsuspend,
     [41] = (syscall_fn)sys_alarm,
     [42] = (syscall_fn)sys_setitimer,
+    [43] = (syscall_fn)sys_socket,
+    [44] = (syscall_fn)sys_bind,
+    [45] = (syscall_fn)sys_connect,
+    [46] = (syscall_fn)sys_listen,
+    [47] = (syscall_fn)sys_accept,
+    [48] = (syscall_fn)sys_send,
+    [49] = (syscall_fn)sys_recv,
+    [50] = (syscall_fn)sys_sendto,
+    [51] = (syscall_fn)sys_recvfrom,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -1198,7 +1474,10 @@ void syscall_handler(struct syscall_frame* regs) {
         num == 24 || num == 25 || num == 26 || num == 27 ||
         num == 29 || num == 31 ||
         num == 35 || num == 36 || num == 37 ||
-        num == 38 || num == 39 || num == 40 || num == 41 || num == 42) {
+        num == 38 || num == 39 || num == 40 || num == 41 || num == 42 ||
+        /* socket syscalls */
+        num == 43 || num == 44 || num == 45 || num == 46 || num == 47 ||
+        num == 48 || num == 49 || num == 50 || num == 51) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](

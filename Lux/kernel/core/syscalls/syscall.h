@@ -45,6 +45,17 @@
 #define SYS_ALARM         41
 #define SYS_SETITIMER     42
 
+/* Socket syscalls */
+#define SYS_SOCKET        43
+#define SYS_BIND          44
+#define SYS_CONNECT       45
+#define SYS_LISTEN        46
+#define SYS_ACCEPT        47
+#define SYS_SEND          48
+#define SYS_RECV          49
+#define SYS_SENDTO        50
+#define SYS_RECVFROM      51
+
 int syscall(int num, int p1, int p2, int p3);
 
 #endif
