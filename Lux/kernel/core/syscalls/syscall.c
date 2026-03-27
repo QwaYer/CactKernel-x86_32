@@ -938,6 +938,82 @@ static int sys_fcntl(int fd, int cmd, int arg) {
     }
 }
 
+/* Timer runs at 100 Hz → 1 tick = 10 ms */
+#define TIMER_HZ 100
+
+struct timeval {
+    long tv_sec;
+    long tv_usec;
+};
+
+struct timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
+
+static int sys_gettimeofday(struct syscall_frame* regs) {
+    struct timeval* tv = (struct timeval*)regs->ebx;
+    /* tz argument (ecx) is ignored per POSIX */
+
+    if (!tv) return 0;
+    if (!validate_user_ptr(tv, sizeof(struct timeval))) return -1;
+
+    uint32_t ticks = timer_ticks_get();
+    tv->tv_sec  = (long)(ticks / TIMER_HZ);
+    tv->tv_usec = (long)((ticks % TIMER_HZ) * (1000000 / TIMER_HZ));
+    return 0;
+}
+
+static int sys_clock_gettime(struct syscall_frame* regs) {
+    int clkid             = (int)regs->ebx;
+    struct timespec* tp   = (struct timespec*)regs->ecx;
+
+    if (!tp) return -1;
+    if (!validate_user_ptr(tp, sizeof(struct timespec))) return -1;
+    /* Both CLOCK_REALTIME and CLOCK_MONOTONIC map to ticks since boot */
+    if (clkid != CLOCK_REALTIME && clkid != CLOCK_MONOTONIC) return -1;
+
+    uint32_t ticks = timer_ticks_get();
+    tp->tv_sec  = (long)(ticks / TIMER_HZ);
+    tp->tv_nsec = (long)((ticks % TIMER_HZ) * (1000000000 / TIMER_HZ));
+    return 0;
+}
+
+static int sys_nanosleep(struct syscall_frame* regs) {
+    struct timespec* req = (struct timespec*)regs->ebx;
+    struct timespec* rem = (struct timespec*)regs->ecx;
+
+    if (!req) return -1;
+    if (!validate_user_ptr(req, sizeof(struct timespec))) return -1;
+    if (rem && !validate_user_ptr(rem, sizeof(struct timespec))) return -1;
+
+    if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000)
+        return -1;
+
+    if (!current_task) return -1;
+
+    /* Convert to milliseconds, then to ticks (ceiling) */
+    uint32_t ms   = (uint32_t)(req->tv_sec * 1000) +
+                    (uint32_t)((req->tv_nsec + 999999) / 1000000);
+    uint32_t ticks = (ms + (1000 / TIMER_HZ) - 1) / (1000 / TIMER_HZ);
+
+    if (ticks == 0) {
+        if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+        return 0;
+    }
+
+    uint32_t now = timer_ticks_get();
+    current_task->sleep_until = now + ticks;
+    current_task->state = TASK_SLEEPING;
+
+    /* rem is zeroed — sleep ran to completion (no signal support yet) */
+    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+    return 0;
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -975,6 +1051,9 @@ static syscall_fn syscall_table[] = {
     [32] = (syscall_fn)sys_mkdir,
     [33] = (syscall_fn)sys_rmdir,
     [34] = (syscall_fn)sys_fcntl,
+    [35] = (syscall_fn)sys_gettimeofday,
+    [36] = (syscall_fn)sys_clock_gettime,
+    [37] = (syscall_fn)sys_nanosleep,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -990,7 +1069,8 @@ void syscall_handler(struct syscall_frame* regs) {
         num == 15 || num == 16 || num == 17 || num == 18 || num == 19 ||
         num == 20 || num == 21 || num == 22 || num == 23 ||
         num == 24 || num == 25 || num == 26 || num == 27 ||
-        num == 29 || num == 31) {
+        num == 29 || num == 31 ||
+        num == 35 || num == 36 || num == 37) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](
