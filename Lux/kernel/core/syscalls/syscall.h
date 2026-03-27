@@ -35,7 +35,10 @@
 #define SYS_IOCTL    31
 #define SYS_MKDIR    32
 #define SYS_RMDIR    33
-#define SYS_FCNTL    34
+#define SYS_FCNTL         34
+#define SYS_GETTIMEOFDAY  35
+#define SYS_CLOCK_GETTIME 36
+#define SYS_NANOSLEEP     37
 
 int syscall(int num, int p1, int p2, int p3);
 
