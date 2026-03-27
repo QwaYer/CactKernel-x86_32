@@ -33,5 +33,7 @@ int chdir(const char *path);
 int ioctl(int fd, unsigned long cmd, void *arg);
 int mkdir(const char *pathname, int mode);
 int rmdir(const char *pathname);
+int pipe(int pipefd[2]);
+int dup2(int oldfd, int newfd);
 
 #endif
