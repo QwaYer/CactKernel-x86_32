@@ -111,6 +111,11 @@ static int sys_get_pid() {
     return (int)current_task->pid;
 }
 
+static int sys_getppid() {
+    if (!current_task) return -1;
+    return (int)current_task->parent_pid;
+}
+
 static int sys_open(char* name) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
@@ -772,6 +777,7 @@ static syscall_fn syscall_table[] = {
     [25] = (syscall_fn)sys_chdir,
     [26] = (syscall_fn)sys_stat,
     [27] = (syscall_fn)sys_fstat,
+    [28] = (syscall_fn)sys_getppid,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 

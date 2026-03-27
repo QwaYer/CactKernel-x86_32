@@ -21,6 +21,7 @@ int close(int fd);
 pid_t fork(void);
 int execve(const char *pathname, char *const argv[], char *const envp[]);
 pid_t getpid(void);
+pid_t getppid(void);
 off_t lseek(int fd, off_t offset, int whence);
 pid_t waitpid(pid_t pid, int *status, int options);
 unsigned int sleep(unsigned int seconds);
