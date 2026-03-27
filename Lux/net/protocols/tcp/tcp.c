@@ -3,7 +3,7 @@
 #include "kernel.h"
 #include "memory.h"
 
-static tcp_socket_t tcp_sockets[TCP_MAX_SOCKETS];
+tcp_socket_t tcp_sockets[TCP_MAX_SOCKETS];
 
 /* ─────────────────────────────────────────────── */
 /*   Socket management                             */
