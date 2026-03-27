@@ -11,12 +11,16 @@ static tcp_socket_t tcp_sockets[TCP_MAX_SOCKETS];
 int tcp_socket(void) {
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
         if (!tcp_sockets[i].used) {
-            tcp_sockets[i].used     = 1;
-            tcp_sockets[i].state    = TCP_CLOSED;
-            tcp_sockets[i].rx_head  = 0;
-            tcp_sockets[i].rx_tail  = 0;
-            tcp_sockets[i].snd_nxt  = 0xC0FFEE00;  /* arbitrary ISN */
-            tcp_sockets[i].rcv_wnd  = TCP_RX_BUF_SIZE;
+            tcp_sockets[i].used          = 1;
+            tcp_sockets[i].state         = TCP_CLOSED;
+            tcp_sockets[i].rx_head       = 0;
+            tcp_sockets[i].rx_tail       = 0;
+            tcp_sockets[i].snd_nxt       = 0xC0FFEE00;  /* arbitrary ISN */
+            tcp_sockets[i].rcv_wnd       = TCP_RX_BUF_SIZE;
+            tcp_sockets[i].on_data       = 0;
+            tcp_sockets[i].on_event      = 0;
+            tcp_sockets[i].listen_parent = -1;
+            tcp_sockets[i].accept_ready  = 0;
             return i;
         }
     }
@@ -184,6 +188,26 @@ int tcp_close(int sock) {
 }
 
 /* ─────────────────────────────────────────────── */
+/*   Userspace receive                             */
+/* ─────────────────────────────────────────────── */
+int tcp_recv(int sock, uint8_t* buf, uint16_t max_len) {
+    if (sock < 0 || sock >= TCP_MAX_SOCKETS) return -1;
+    tcp_socket_t* s = &tcp_sockets[sock];
+    if (!s->used) return -1;
+    if (s->state != TCP_ESTABLISHED && s->state != TCP_CLOSE_WAIT) return -1;
+
+    uint16_t avail = s->rx_tail - s->rx_head;
+    if (avail == 0) return 0;
+
+    uint16_t to_read = (avail < max_len) ? avail : max_len;
+    for (uint16_t i = 0; i < to_read; i++) {
+        buf[i] = s->rx_buf[s->rx_head % TCP_RX_BUF_SIZE];
+        s->rx_head++;
+    }
+    return (int)to_read;
+}
+
+/* ─────────────────────────────────────────────── */
 /*   RX: state machine                             */
 /* ─────────────────────────────────────────────── */
 void tcp_input(skb_t* skb) {
@@ -205,22 +229,29 @@ void tcp_input(skb_t* skb) {
     uint16_t  payload_len = skb_len(skb) > hdr_len
                             ? skb_len(skb) - hdr_len : 0;
 
-    /* Find matching socket */
+    /* Find matching socket — prefer exact 4-tuple over LISTEN */
     tcp_socket_t* s = NULL;
+
+    /* Pass 1: exact match (established / half-open connections) */
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
         tcp_socket_t* c = &tcp_sockets[i];
         if (!c->used) continue;
-
-        if (c->state == TCP_LISTEN && c->local_port == dst_port) {
-            /* Accept new connection: fill in remote info */
-            c->remote_ip   = skb->ip->src_ip;
-            c->remote_port = src_port;
-            s = c; break;
-        }
+        if (c->state == TCP_LISTEN) continue;
         if (c->local_port  == dst_port &&
             c->remote_port == src_port &&
             c->remote_ip   == skb->ip->src_ip) {
             s = c; break;
+        }
+    }
+
+    /* Pass 2: fall back to a LISTEN socket on the same port */
+    if (!s) {
+        for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
+            tcp_socket_t* c = &tcp_sockets[i];
+            if (!c->used) continue;
+            if (c->state == TCP_LISTEN && c->local_port == dst_port) {
+                s = c; break;
+            }
         }
     }
 
@@ -235,11 +266,23 @@ void tcp_input(skb_t* skb) {
 
     case TCP_LISTEN:
         if (flags & TCP_SYN) {
-            s->rcv_nxt  = seq + 1;
-            s->snd_una  = s->snd_nxt;
-            s->state    = TCP_SYN_RECEIVED;
-            /* Send SYN-ACK */
-            tcp_send_segment(s, TCP_SYN | TCP_ACK, NULL, 0);
+            /* Allocate a child socket for this connection.
+               The listen socket remains in TCP_LISTEN for future connections. */
+            int child_idx = tcp_socket();
+            if (child_idx < 0) { tcp_send_rst(skb); goto drop; }
+            tcp_socket_t* child   = &tcp_sockets[child_idx];
+            child->local_port     = s->local_port;
+            child->local_ip       = htonl(MY_IP);
+            child->remote_ip      = skb->ip->src_ip;
+            child->remote_port    = src_port;
+            child->rcv_nxt        = seq + 1;
+            child->snd_una        = child->snd_nxt;
+            child->state          = TCP_SYN_RECEIVED;
+            child->listen_parent  = (int8_t)(s - tcp_sockets);
+            child->accept_ready   = 0;
+            child->on_data        = s->on_data;
+            child->on_event       = s->on_event;
+            tcp_send_segment(child, TCP_SYN | TCP_ACK, NULL, 0);
         }
         break;
 
@@ -261,10 +304,14 @@ void tcp_input(skb_t* skb) {
         break;
 
     case TCP_SYN_RECEIVED:
-        if (flags & TCP_RST) { s->state = TCP_LISTEN; break; }
+        if (flags & TCP_RST) {
+            s->state = TCP_CLOSED; s->used = 0;
+            break;
+        }
         if ((flags & TCP_ACK) && ack == s->snd_nxt) {
-            s->snd_una = ack;
-            s->state   = TCP_ESTABLISHED;
+            s->snd_una       = ack;
+            s->state         = TCP_ESTABLISHED;
+            s->accept_ready  = 1;  /* signal sys_accept() */
             if (s->on_event) s->on_event((int)(s - tcp_sockets), TCP_ESTABLISHED);
         }
         break;
