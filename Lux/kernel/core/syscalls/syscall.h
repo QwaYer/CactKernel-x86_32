@@ -35,6 +35,7 @@
 #define SYS_IOCTL    31
 #define SYS_MKDIR    32
 #define SYS_RMDIR    33
+#define SYS_FCNTL    34
 
 int syscall(int num, int p1, int p2, int p3);
 

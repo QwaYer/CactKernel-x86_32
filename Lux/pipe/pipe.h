@@ -6,7 +6,7 @@
 #include "sync.h"
 
 #define PIPE_BUF_SIZE   4096
-#define O_NONBLOCK      0x0001
+#define O_NONBLOCK      0x0800
 #define PIPE_MAGIC      0x50495045
 
 #ifndef EAGAIN
