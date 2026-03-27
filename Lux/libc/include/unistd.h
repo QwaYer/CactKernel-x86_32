@@ -31,5 +31,7 @@ int brk(void *addr);
 char *getcwd(char *buf, int size);
 int chdir(const char *path);
 int ioctl(int fd, unsigned long cmd, void *arg);
+int mkdir(const char *pathname, int mode);
+int rmdir(const char *pathname);
 
 #endif
