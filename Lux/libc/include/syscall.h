@@ -40,6 +40,11 @@
 #define SYS_GETTIMEOFDAY  35
 #define SYS_CLOCK_GETTIME 36
 #define SYS_NANOSLEEP     37
+#define SYS_SIGPROCMASK   38
+#define SYS_SIGPENDING    39
+#define SYS_SIGSUSPEND    40
+#define SYS_ALARM         41
+#define SYS_SETITIMER     42
 
 
 #define STDIN_FILENO  0
