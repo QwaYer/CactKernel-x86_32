@@ -276,6 +276,48 @@ static int sys_delete(char* name) {
     return delete_vfs(parent, basename);
 }
 
+static int sys_mkdir(char* pathname) {
+    if (!validate_user_str(pathname)) return -1;
+    if (!current_task) return -1;
+
+    char basename[128];
+    vfs_node_t* parent = _resolve_parent(pathname, basename, 128);
+    if (!parent) {
+        kprint("[DBG] sys_mkdir: parent not found for: "); kprint(pathname); kprint("\n");
+        return -1;
+    }
+    if (!basename[0]) {
+        kprint("[DBG] sys_mkdir: empty basename\n");
+        return -1;
+    }
+
+    kprint("[DBG] sys_mkdir: parent="); kprint(parent->name);
+    kprint(" basename="); kprint(basename); kprint("\n");
+
+    return mkdir_vfs(parent, basename);
+}
+
+static int sys_rmdir(char* pathname) {
+    if (!validate_user_str(pathname)) return -1;
+    if (!current_task) return -1;
+
+    char basename[128];
+    vfs_node_t* parent = _resolve_parent(pathname, basename, 128);
+    if (!parent) {
+        kprint("[DBG] sys_rmdir: parent not found for: "); kprint(pathname); kprint("\n");
+        return -1;
+    }
+    if (!basename[0]) {
+        kprint("[DBG] sys_rmdir: empty basename\n");
+        return -1;
+    }
+
+    kprint("[DBG] sys_rmdir: parent="); kprint(parent->name);
+    kprint(" basename="); kprint(basename); kprint("\n");
+
+    return rmdir_vfs(parent, basename);
+}
+
 static int sys_exit(struct syscall_frame* regs) {
     if (!current_task) return -1;
     current_task->exit_code = (int)regs->ebx;
@@ -857,6 +899,8 @@ static syscall_fn syscall_table[] = {
     [29] = (syscall_fn)sys_getdents,
     [30] = (syscall_fn)sys_rename,
     [31] = (syscall_fn)sys_ioctl,
+    [32] = (syscall_fn)sys_mkdir,
+    [33] = (syscall_fn)sys_rmdir,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
