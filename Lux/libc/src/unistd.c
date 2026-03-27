@@ -76,3 +76,12 @@ int chdir(const char *path) {
 int ioctl(int fd, unsigned long cmd, void *arg) {
     return syscall(SYS_IOCTL, fd, (int)cmd, (int)arg);
 }
+
+int mkdir(const char *pathname, int mode) {
+    (void)mode;
+    return syscall(SYS_MKDIR, (int)pathname, 0, 0);
+}
+
+int rmdir(const char *pathname) {
+    return syscall(SYS_RMDIR, (int)pathname, 0, 0);
+}
