@@ -159,6 +159,23 @@ static int sys_getdents(struct syscall_frame* regs) {
     return (int)written;
 }
 
+static int sys_rename(char* oldpath, char* newpath) {
+    if (!validate_user_str(oldpath)) return -1;
+    if (!validate_user_str(newpath)) return -1;
+    if (!current_task) return -1;
+
+    char old_base[128], new_base[128];
+    vfs_node_t* old_parent = _resolve_parent(oldpath, old_base, 128);
+    vfs_node_t* new_parent = _resolve_parent(newpath, new_base, 128);
+
+    if (!old_parent || !new_parent) return -1;
+    if (!old_base[0] || !new_base[0]) return -1;
+
+    if (old_parent != new_parent) return -1;
+
+    return rename_vfs(old_parent, old_base, new_base);
+}
+
 static int sys_open(char* name) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
@@ -822,6 +839,7 @@ static syscall_fn syscall_table[] = {
     [27] = (syscall_fn)sys_fstat,
     [28] = (syscall_fn)sys_getppid,
     [29] = (syscall_fn)sys_getdents,
+    [30] = (syscall_fn)sys_rename,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 

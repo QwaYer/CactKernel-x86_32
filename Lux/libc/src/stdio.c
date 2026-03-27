@@ -56,3 +56,7 @@ int printf(const char* format, ...) {
     va_end(args);
     return count;
 }
+
+int rename(const char *oldpath, const char *newpath) {
+    return syscall(SYS_RENAME, (int)oldpath, (int)newpath, 0);
+}
