@@ -114,13 +114,22 @@ extern void isr27(); extern void isr28(); extern void isr29();
 extern void isr30(); extern void isr31();
 extern void isr_common_stub();
 
+// Log levels
+typedef enum {
+    LOG_OK    = 0,
+    LOG_WARN  = 1,
+    LOG_ERROR = 2,
+    LOG_FAIL  = 3,
+} log_level_t;
+
 // Video / Console
 void kprint      (char* message);
 void kprint_color(char* message, uint32_t color);
 void kprint_at   (char* message, int x, int y);
 void clear_screen(void);
 void scroll      (void);
-void boot_log    (char* component, int status);
+void boot_log    (char* component, log_level_t level);
+void klog        (log_level_t level, const char* message);
 int  get_cursor_x(void);
 int  get_cursor_y(void);
 
@@ -147,9 +156,9 @@ static inline uint32_t* get_current_pd(void) {
 }
 
 // Hardware Initialization
-int  init_framebuffer(void);
-int  probe_io_ports  (void);
-int  detect_memory   (void);
+log_level_t init_framebuffer(void);
+int         probe_io_ports  (void);
+int         detect_memory   (void);
 void init_timer      (uint32_t frequency);
 
 // Task Management & Scheduling

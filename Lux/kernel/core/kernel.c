@@ -123,8 +123,38 @@ void kprint_at(char* message, int x, int y) {
     kprint(message);
 }
 
-int init_framebuffer() {
-    return (fb_get_width() > 0) ? 0 : 1;
+log_level_t init_framebuffer() {
+    fb_init_result_t status = fb_get_init_status();
+
+    if (status != FB_INIT_OK) {
+        static const char* fb_errors[] = {
+            [FB_INIT_NO_FLAG]    = "multiboot flag bit 12 not set",
+            [FB_INIT_HIGH_ADDR]  = "framebuffer address above 4 GB (not mappable)",
+            [FB_INIT_BAD_TYPE]   = "framebuffer type != 1 (not RGB direct-color)",
+            [FB_INIT_BAD_BPP]    = "bpp != 32 (only 32-bit color supported)",
+            [FB_INIT_NULL_PARAM] = "null address or zero width/height",
+        };
+        klog(LOG_ERROR, fb_errors[status]);
+        return LOG_FAIL;
+    }
+
+    char buf[16];
+    kprint("        ");
+    kprint_color("addr=0x", COLOR_DARK_GREY);
+    hex_to_ascii((uint32_t)fb_get_buffer(), buf);
+    kprint_color(buf, COLOR_LIGHT_GREY);
+    kprint("  ");
+    itoa((int)fb_get_width(),  buf); kprint_color(buf, COLOR_WHITE);
+    kprint("x");
+    itoa((int)fb_get_height(), buf); kprint_color(buf, COLOR_WHITE);
+    kprint("  ");
+    itoa((int)fb_get_pitch() / (32 / 8), buf);
+    kprint_color("32bpp", COLOR_LIGHT_CYAN);
+    kprint("  pitch=");
+    itoa((int)fb_get_pitch(), buf); kprint_color(buf, COLOR_LIGHT_GREY);
+    kprint("\n");
+
+    return LOG_OK;
 }
 
 int probe_io_ports() {
@@ -246,24 +276,56 @@ void terminal_task() {
     kfree_heap(cmd_buffer);
 }
 
-void boot_log(char* component, int status) {
+void boot_log(char* component, log_level_t level) {
     kprint("  [ ] ");
     kprint(component);
 
     int len = strlen(component);
-    for (int i = 0; i < 35 - len; i++) {
+    for (int i = len; i < 35; i++)
         kprint(".");
-    }
 
-    if (status == 0) {
+    switch (level) {
+    case LOG_OK:
         kprint(" [  ");
         kprint_color("OK", COLOR_LIGHT_GREEN);
         kprint("  ]\n");
-    } else {
+        break;
+    case LOG_WARN:
+        kprint(" [ ");
+        kprint_color("WARN", COLOR_LIGHT_BROWN);
+        kprint(" ]\n");
+        break;
+    case LOG_ERROR:
+        kprint(" [");
+        kprint_color("ERROR", COLOR_LIGHT_RED);
+        kprint("]\n");
+        break;
+    case LOG_FAIL:
         kprint(" [ ");
         kprint_color("FAIL", COLOR_LIGHT_RED);
         kprint(" ]\n");
+        break;
     }
+}
+
+void klog(log_level_t level, const char* message) {
+    kprint("        ");
+    switch (level) {
+    case LOG_OK:
+        kprint_color("[  OK  ] ", COLOR_LIGHT_GREEN);
+        break;
+    case LOG_WARN:
+        kprint_color("[ WARN ] ", COLOR_LIGHT_BROWN);
+        break;
+    case LOG_ERROR:
+        kprint_color("[ERROR ] ", COLOR_LIGHT_RED);
+        break;
+    case LOG_FAIL:
+        kprint_color("[ FAIL ] ", COLOR_LIGHT_RED);
+        break;
+    }
+    kprint((char*)message);
+    kprint("\n");
 }
 
 int get_cursor_x() { return cursor_x; }
@@ -308,42 +370,67 @@ void kernel_setup_hardware(multiboot_info_t *mbi) {
 
     init_paging();
     slab_init();
-    boot_log("Memory Manager & Heap", 0);
+    boot_log("Memory Manager & Heap", LOG_OK);
 
     page_fault_init();
-    boot_log("Page Fault Handler", 0);
+    boot_log("Page Fault Handler", LOG_OK);
 
     init_pic();
     init_idt();
-    boot_log("IDT & PIC (Interrupts)", 0);
+    boot_log("IDT & PIC (Interrupts)", LOG_OK);
 
     boot_log("Framebuffer", init_framebuffer());
-    boot_log("PS/2 Keyboard", ps2_keyboard_init());
+    boot_log("PS/2 Keyboard", ps2_keyboard_init() ? LOG_FAIL : LOG_OK);
     ps2_mouse_init();
-    boot_log("PS/2 Mouse", 0);
-    boot_log("I/O Ports Probe", probe_io_ports());
-    boot_log("Base Memory Detect", detect_memory());
-    boot_log("PCI Bus Scan",  search_pci());
+    boot_log("PS/2 Mouse", LOG_OK);
+
+    {
+        int io_status = probe_io_ports();
+        boot_log("I/O Ports Probe", io_status ? LOG_WARN : LOG_OK);
+        if (io_status)
+            klog(LOG_WARN, "port 0x64 returned 0xFF — no PS/2 controller?");
+    }
+
+    {
+        int mem_status = detect_memory();
+        boot_log("Base Memory Detect", mem_status ? LOG_WARN : LOG_OK);
+        if (mem_status)
+            klog(LOG_WARN, "CMOS extended memory read returned 0 KB");
+    }
+
+    boot_log("PCI Bus Scan", search_pci() ? LOG_FAIL : LOG_OK);
     pci_enumerate();
-    boot_log("PCI Enumerate", pci_device_count > 0 ? 0 : 1);
+    {
+        log_level_t pci_level = pci_device_count > 0 ? LOG_OK : LOG_WARN;
+        boot_log("PCI Enumerate", pci_level);
+        if (pci_level == LOG_WARN)
+            klog(LOG_WARN, "no PCI devices found");
+    }
 
     extern void usb_init(void);
     usb_init();
-    boot_log("USB Stack", 0);
+    boot_log("USB Stack", LOG_OK);
 
     blkdev_init();
-    boot_log("Block Device Layer", blkdev_get_boot() ? 0 : 1);
+    {
+        log_level_t blk_level = blkdev_get_boot() ? LOG_OK : LOG_WARN;
+        boot_log("Block Device Layer", blk_level);
+        if (blk_level == LOG_WARN)
+            klog(LOG_WARN, "no boot disk found — filesystem mounts will fail");
+    }
 
     pc_init();
-    boot_log("Page Cache", 0);
+    boot_log("Page Cache", LOG_OK);
 
     {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
-        boot_log("Swap (Page Eviction)", swap_status);
+        boot_log("Swap (Page Eviction)", swap_status ? LOG_WARN : LOG_OK);
+        if (swap_status)
+            klog(LOG_WARN, "swap disabled — OOM may kill processes");
     }
 
     vfs_init();
-    boot_log("Virtual File System mount", 0);
+    boot_log("Virtual File System", LOG_OK);
 
     extern void mntfs_init();
     mntfs_init();
@@ -353,33 +440,34 @@ void kernel_setup_hardware(multiboot_info_t *mbi) {
         procfs_set_meminfo(mbi->mem_lower, mbi->mem_upper);
     }
 
-    boot_log("EXT4 File System mount", 0);
-    boot_log("Device File System mount", 0);
-    boot_log("Process File System mount", 0);
-    boot_log("Mount manager", 0);
+    boot_log("EXT4 File System mount", LOG_OK);
+    boot_log("Device File System mount", LOG_OK);
+    boot_log("Process File System mount", LOG_OK);
+    boot_log("Mount manager", LOG_OK);
 
     net_init();
-    boot_log("Network Stack", 0);
+    boot_log("Network Stack", LOG_OK);
 
     task_init();
     init_scheduler();
     init_timer(100);
-    boot_log("Scheduler & PIT Timer", 0);
+    boot_log("Scheduler & PIT Timer", LOG_OK);
 
     extern void commands_init();
     commands_init();
-    boot_log("Terminal Commands", 0);
+    boot_log("Terminal Commands", LOG_OK);
 
     extern void shell_init();
     shell_init();
 
     key_buffer = (char*)kmalloc(2048);
     if (key_buffer != 0) {
-        boot_log("System Buffers", 0);
+        boot_log("System Buffers", LOG_OK);
     } else {
         static char key_buffer_fallback[2048];
         key_buffer = key_buffer_fallback;
-        boot_log("System Buffers (fallback)", 1);
+        boot_log("System Buffers", LOG_WARN);
+        klog(LOG_WARN, "heap alloc failed — using static fallback buffer");
     }
 }
 
@@ -387,6 +475,7 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
     fb_init(mbi);
 
     if (fb_get_width() == 0) {
+        /* No display available — cannot print, just halt */
         while(1) __asm__ __volatile__("hlt");
     }
 
@@ -395,13 +484,18 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
     kprint_color("--------------------------\n", COLOR_DARK_GREY);
 
     if (magic != 0x2BADB002) {
-        kprint_color("ERROR: Bad multiboot magic!\n", COLOR_LIGHT_RED);
+        kprint_color("[FAIL] Bad multiboot magic (got 0x", COLOR_LIGHT_RED);
+        char buf[16];
+        hex_to_ascii(magic, buf);
+        kprint_color(buf, COLOR_LIGHT_RED);
+        kprint_color(", expected 0x2BADB002)\n", COLOR_LIGHT_RED);
         while(1) __asm__ __volatile__("hlt");
     }
 
     kernel_setup_hardware(mbi);
 
-    kprint("\nKernel is ready. Starting terminal...\n");
+    kprint("\n");
+    kprint_color("Kernel is ready. Starting terminal...\n", COLOR_LIGHT_GREEN);
 
     system_ready = 1;
     __asm__ __volatile__("sti");
