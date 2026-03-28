@@ -68,9 +68,10 @@ static void task_list_remove(struct task_struct* t) {
 
 
 void task_init() {
-    current_task   = 0;
-    task_list_head = 0;
-    next_pid       = 1;
+    kprint("[SCHED] initializing queues: ready  sleep  zombie  wait\n");
+    current_task         = 0;
+    task_list_head       = 0;
+    next_pid             = 1;
     schedule_in_progress = 0;
     irq_spinlock_init(&scheduler_lock);
 
@@ -78,6 +79,7 @@ void task_init() {
     sched_queue_init(&sleep_queue);
     sched_queue_init(&zombie_queue);
     sched_queue_init(&wait_queue);
+    kprint("[SCHED] scheduler lock initialized  next_pid=1\n");
 }
 
 

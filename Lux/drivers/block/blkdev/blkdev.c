@@ -31,7 +31,10 @@ static void _probe_nvme(void) {
     extern uint32_t nvme_get_max_lba(void);
 
     nvme_init();
-    if (!nvme_is_ready()) return;
+    if (!nvme_is_ready()) {
+        kprint("[BLKDEV] NVMe controller not ready\n");
+        return;
+    }
 
     blkdev_t *d = _add("nvme0", nvme_read_sector, nvme_write_sector,
                         nvme_get_max_lba());
@@ -48,7 +51,10 @@ static void _ahci_wr(uint32_t lba, uint8_t *buf) {
 
 static void _probe_ahci(void) {
     ahci_init();
-    if (ahci_first_port() < 0) return;
+    if (ahci_first_port() < 0) {
+        kprint("[BLKDEV] AHCI: no active ports\n");
+        return;
+    }
 
     extern uint32_t ahci_get_max_lba(int port);
     int port = ahci_first_port();
@@ -60,15 +66,29 @@ static void _probe_ahci(void) {
 
 //public api
 void blkdev_init(void) {
+    kprint("[BLKDEV] probing AHCI (SATA)\n");
     dev_count = 0;
     boot_dev  = 0;
     memset(devices, 0, sizeof(devices));
 
     _probe_ahci();
-    _probe_nvme();
+    if (dev_count > 0)
+        kprint("[BLKDEV] AHCI: sda registered\n");
+    else
+        kprint("[BLKDEV] AHCI: no drives found\n");
 
-    if (!boot_dev) {
-        kprint("[blkdev] no boot device found!\n");
+    kprint("[BLKDEV] probing NVMe\n");
+    _probe_nvme();
+    if (boot_dev && boot_dev->read_sector == nvme_read_sector)
+        kprint("[BLKDEV] NVMe: nvme0 registered\n");
+
+    if (boot_dev) {
+        kprint("[BLKDEV] boot device: "); kprint(boot_dev->name);
+        kprint("  max_lba="); char buf[16]; hex_to_ascii(boot_dev->max_lba, buf); kprint(buf);
+        kprint("\n");
+    } else {
+        kprint_color("[BLKDEV] no boot device found — filesystem mounts will fail\n",
+                     COLOR_LIGHT_RED);
     }
 }
 

@@ -56,6 +56,7 @@ static void kill_current(uint32_t fault_addr, uint32_t err, uint32_t eip)
 
 void page_fault_init(void)
 {
+    kprint("[PF] clearing stats  handlers: COW demand-paging stack-grow swap-in SEGFAULT\n");
     uint8_t* p = (uint8_t*)&g_stats;
     for (uint32_t i = 0; i < sizeof(g_stats); i++) p[i] = 0;
 }

@@ -25,16 +25,20 @@ static uint8_t ps2_read(void) {
 }
 
 void ps2_mouse_init(void) {
+    kprint("[MOUSE] enabling auxiliary PS/2 device (cmd 0xA8)\n");
     ps2_wait(1); port_byte_out(0x64, 0xA8);
 
+    kprint("[MOUSE] enabling IRQ12 in controller config\n");
     ps2_wait(1); port_byte_out(0x64, 0x20);
     ps2_wait(0);
     uint8_t status = port_byte_in(0x60) | 2;
     ps2_wait(1); port_byte_out(0x64, 0x60);
     ps2_wait(1); port_byte_out(0x60, status);
 
+    kprint("[MOUSE] sending 0xF6 (set defaults)  0xF4 (enable data reporting)\n");
     ps2_write(0xF6); ps2_read();
     ps2_write(0xF4); ps2_read();
+    kprint("[MOUSE] ready — 3-byte packets on IRQ12\n");
 }
 
 void ps2_mouse_handler(void) {
