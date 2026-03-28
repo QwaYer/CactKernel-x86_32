@@ -19,12 +19,21 @@ void bitmap_set(int page_idx) {
 }
 
 void init_memory_manager() {
+    char buf[16];
+    kprint("[PMM] bitmap at 0x"); hex_to_ascii((uint32_t)memory_bitmap, buf); kprint(buf);
+    kprint("  size="); itoa(BITMAP_SIZE, buf); kprint(buf); kprint(" B"
+           "  total_pages="); itoa(TOTAL_PAGES, buf); kprint(buf); kprint("\n");
+
     irq_spinlock_init(&page_lock);
     for (int i = 0; i < BITMAP_SIZE; i++) memory_bitmap[i] = 0;
-    
+
     uint32_t reserved_end = HEAP_START + HEAP_SIZE;
     int reserved_pages = (reserved_end - MEM_START + PAGE_SIZE - 1) / PAGE_SIZE;
-    
+
+    kprint("[PMM] reserving pages 0.."); itoa(reserved_pages - 1, buf); kprint(buf);
+    kprint("  (kernel + heap region ends at 0x");
+    hex_to_ascii(reserved_end, buf); kprint(buf); kprint(")\n");
+
     for (int i = 0; i < reserved_pages; i++) {
         bitmap_set(i);
     }
@@ -32,19 +41,32 @@ void init_memory_manager() {
 }
 
 void init_heap() {
+    char buf[16];
+    kprint("[HEAP] base=0x"); hex_to_ascii(HEAP_START, buf); kprint(buf);
+    kprint("  size=16 MB"
+           "  header="); itoa((int)sizeof(struct heap_block), buf); kprint(buf);
+    kprint(" B  magic=0x"); hex_to_ascii(HEAP_MAGIC, buf); kprint(buf); kprint("\n");
+
     irq_spinlock_init(&heap_lock);
     heap_start = (struct heap_block*)HEAP_START;
-    
-    heap_start->magic = HEAP_MAGIC;
-    heap_start->size = HEAP_SIZE - sizeof(struct heap_block);
+
+    heap_start->magic   = HEAP_MAGIC;
+    heap_start->size    = HEAP_SIZE - sizeof(struct heap_block);
     heap_start->is_free = 1;
-    heap_start->next = 0;
+    heap_start->next    = 0;
+
+    kprint("[HEAP] single free block: usable=");
+    itoa((int)heap_start->size / 1024, buf); kprint(buf); kprint(" KB\n");
 }
 
 void init_paging() {
+    char buf[16];
+    kprint("[PAGING] page_directory at 0x"); hex_to_ascii((uint32_t)page_directory, buf); kprint(buf);
+    kprint("  identity-mapping first 128 MB (32 page tables x 1024 pages)\n");
+
     for(int i = 0; i < 1024; i++) {
         if (page_directory[i] == 0) {
-            page_directory[i] = 0x00000002; 
+            page_directory[i] = 0x00000002;
         }
     }
 
@@ -55,8 +77,11 @@ void init_paging() {
         page_directory[j] = ((uint32_t)page_tables[j]) | 3;
     }
 
+    kprint("[PAGING] loading CR3=0x"); hex_to_ascii((uint32_t)page_directory, buf); kprint(buf);
+    kprint("  setting CR0.PG\n");
     load_page_directory(page_directory);
     enable_paging();
+    kprint("[PAGING] paging enabled — virtual address space active\n");
 }
 
 

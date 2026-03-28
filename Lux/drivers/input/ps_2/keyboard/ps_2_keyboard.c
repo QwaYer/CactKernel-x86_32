@@ -20,26 +20,32 @@ static int shift_pressed    = 0;
 static int caps_lock_active = 0;
 
 int ps2_keyboard_init(void) {
+    kprint("[KBD] flushing output buffer (port 0x60)\n");
     while (port_byte_in(0x64) & 0x01)
         port_byte_in(0x60);
 
+    kprint("[KBD] enabling first PS/2 port (cmd 0xAE)\n");
     while (port_byte_in(0x64) & 0x02);
     port_byte_out(0x64, 0xAE);
 
+    kprint("[KBD] reading controller config byte (cmd 0x20)\n");
     while (port_byte_in(0x64) & 0x02);
     port_byte_out(0x64, 0x20);
     while (!(port_byte_in(0x64) & 0x01));
     unsigned char config = port_byte_in(0x60);
-    config |= 0x01;
+    config |= 0x01;  // enable IRQ1
 
+    kprint("[KBD] writing config byte (IRQ1 enabled) via cmd 0x60\n");
     while (port_byte_in(0x64) & 0x02);
     port_byte_out(0x64, 0x60);
     while (port_byte_in(0x64) & 0x02);
     port_byte_out(0x60, config);
 
+    kprint("[KBD] flushing residual bytes\n");
     while (port_byte_in(0x64) & 0x01)
         port_byte_in(0x60);
 
+    kprint("[KBD] ready — IRQ1 will fire on each keypress\n");
     return 0;
 }
 
