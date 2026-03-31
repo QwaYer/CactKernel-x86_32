@@ -203,6 +203,20 @@ void net_init             (void);
 void net_poll             (void);
 void virtio_net_irq_handler(void);
 
+// Terminal Window Size
+#define TIOCGWINSZ 0x5413
+#define TIOCSWINSZ 0x5414
+
+struct winsize {
+    uint16_t ws_row;
+    uint16_t ws_col;
+    uint16_t ws_xpixel;
+    uint16_t ws_ypixel;
+};
+
+extern struct winsize terminal_winsize;
+extern uint32_t       terminal_fg_pid;
+
 // Global State
 extern volatile int    keyboard_irq_count;
 extern volatile uint8_t last_scancode_raw;
