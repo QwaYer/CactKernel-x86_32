@@ -565,6 +565,27 @@ void task_kill(uint32_t pid) {
     task_signal(pid, SIGKILL);
 }
 
+/* Send signal to a task by PID without acquiring scheduler_lock.
+   Must only be called when scheduler_lock is already held. */
+void task_signal_locked(uint32_t pid, uint32_t signal) {
+    if (!task_list_head || pid == 0) return;
+    struct task_struct* t = task_list_head;
+    do {
+        if (t->pid == pid) {
+            t->pending_signals |= signal;
+            /* Wake sigsuspend-sleeping task if the signal is unblocked */
+            if (t->in_sigsuspend && t->state == TASK_SLEEPING &&
+                (signal & ~t->signal_mask)) {
+                sched_queue_remove(&sleep_queue, t);
+                t->state = TASK_READY;
+                sched_queue_push(&ready_queue, t);
+            }
+            break;
+        }
+        t = t->next;
+    } while (t != task_list_head);
+}
+
 void task_signal(uint32_t pid, uint32_t signal) {
     irq_spinlock_acquire(&scheduler_lock);
     struct task_struct* t = task_list_head;
@@ -615,6 +636,7 @@ void task_handle_signals(struct task_struct* t) {
     /* SIGKILL cannot be blocked */
     if (t->pending_signals & SIGKILL) {
         t->pending_signals = 0;
+        task_signal_locked(t->parent_pid, SIGCHLD);
         t->state = TASK_ZOMBIE;
         kprint("[SCHED] SIGKILL pid=");
         char buf[16]; itoa((int)t->pid, buf); kprint(buf); kprint("\n");
@@ -636,6 +658,7 @@ void task_handle_signals(struct task_struct* t) {
         t->pending_signals &= ~(uint32_t)SIGTERM;
         uint32_t handler = t->signal_handlers[1];
         if (handler == SIG_DFL || handler == SIG_IGN) {
+            task_signal_locked(t->parent_pid, SIGCHLD);
             t->state = TASK_ZOMBIE;
             return;
         }
@@ -655,33 +678,15 @@ void task_handle_signals(struct task_struct* t) {
             /* ignored — discard */
         } else {
             /* SIG_DFL for SIGALRM is termination */
+            task_signal_locked(t->parent_pid, SIGCHLD);
             t->state = TASK_ZOMBIE;
             return;
         }
     }
 
-    if (deliverable & SIGSEGV) {
-        t->pending_signals &= ~(uint32_t)SIGSEGV;
-        uint32_t handler = t->signal_handlers[6];
-        if (handler == SIG_IGN) {
-            /* ignored — discard (non-standard; re-faulting is likely) */
-        } else {
-            /* SIG_DFL: terminate the process */
-            t->state = TASK_ZOMBIE;
-            return;
-        }
-    }
-
-    if (deliverable & SIGFPE) {
-        t->pending_signals &= ~(uint32_t)SIGFPE;
-        uint32_t handler = t->signal_handlers[7];
-        if (handler == SIG_IGN) {
-            /* ignored — discard */
-        } else {
-            /* SIG_DFL: terminate the process */
-            t->state = TASK_ZOMBIE;
-            return;
-        }
+    if (deliverable & SIGCHLD) {
+        t->pending_signals &= ~(uint32_t)SIGCHLD;
+        /* SIG_DFL for SIGCHLD is to ignore */
     }
 }
 
