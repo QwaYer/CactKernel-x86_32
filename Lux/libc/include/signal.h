@@ -25,6 +25,18 @@ typedef uint32_t sigset_t;
 #define SIGCHLD  (1u << 6)
 #define SIGFPE   (1u << 7)
 #define SIGSEGV  (1u << 8)
+#define SIGWINCH (1u << 9)
+
+/* ioctl requests for terminal window size */
+#define TIOCGWINSZ 0x5413
+#define TIOCSWINSZ 0x5414
+
+struct winsize {
+    uint16_t ws_row;
+    uint16_t ws_col;
+    uint16_t ws_xpixel;
+    uint16_t ws_ypixel;
+};
 
 /* itimer types for setitimer/getitimer */
 #define ITIMER_REAL    0

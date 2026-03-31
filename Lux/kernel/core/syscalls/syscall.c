@@ -331,6 +331,10 @@ static int sys_exit(struct syscall_frame* regs) {
     current_task->exit_code = (int)regs->ebx;
     current_task->state = TASK_ZOMBIE;
 
+    /* If this was the foreground terminal process, clear the fg pid */
+    if (terminal_fg_pid == current_task->pid)
+        terminal_fg_pid = 0;
+
     irq_spinlock_acquire(&scheduler_lock);
 
     /* Notify parent that a child has exited */
@@ -997,6 +1001,29 @@ static int sys_ioctl(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
+    /* Handle terminal window-size ioctls directly, independent of fd type */
+    if (cmd == TIOCGWINSZ) {
+        if (!arg || !validate_user_ptr(arg, sizeof(struct winsize))) return -1;
+        struct winsize* ws = (struct winsize*)arg;
+        ws->ws_row    = terminal_winsize.ws_row;
+        ws->ws_col    = terminal_winsize.ws_col;
+        ws->ws_xpixel = terminal_winsize.ws_xpixel;
+        ws->ws_ypixel = terminal_winsize.ws_ypixel;
+        return 0;
+    }
+
+    if (cmd == TIOCSWINSZ) {
+        if (!arg || !validate_user_ptr(arg, sizeof(struct winsize))) return -1;
+        struct winsize* ws = (struct winsize*)arg;
+        terminal_winsize.ws_row    = ws->ws_row;
+        terminal_winsize.ws_col    = ws->ws_col;
+        terminal_winsize.ws_xpixel = ws->ws_xpixel;
+        terminal_winsize.ws_ypixel = ws->ws_ypixel;
+        if (terminal_fg_pid)
+            task_signal(terminal_fg_pid, SIGWINCH);
+        return 0;
+    }
+
     struct vfs_node* node = current_task->fd_table[fd];
     if (!node) return -1;
 
@@ -1405,6 +1432,80 @@ static int sys_recvfrom(struct syscall_frame *regs) {
     return ret;
 }
 
+/*
+ * deliver_pending_signal — set up a signal frame on the user stack and
+ * redirect EIP to the registered handler, so the signal is delivered when
+ * the kernel returns to user space after the current syscall.
+ *
+ * Signal frame layout on user stack (low → high address):
+ *   [new_esp + 0 ]  signal_frame_t.ret_addr  = sigreturn trampoline address
+ *   [new_esp + 4 ]  signal_frame_t.signum    = bit position of the signal
+ *   [new_esp + 8 ]  signal_frame_t.eax       = saved eax
+ *   ...             (rest of saved register context)
+ *
+ * The handler is called with EIP = handler, ESP = new_esp.
+ * cdecl convention: [esp+0] = return addr (trampoline), [esp+4] = signum arg.
+ * On handler ret: esp = new_esp + 4, EIP = trampoline.
+ * Trampoline does: sub esp, 4  (restore to new_esp), then sys_sigreturn (16).
+ * sys_sigreturn reads signal_frame_t from new_esp and restores all registers.
+ */
+static void deliver_pending_signal(struct task_struct* t,
+                                   struct syscall_frame* regs) {
+    uint32_t deliverable = t->pending_signals & ~t->signal_mask;
+    if (!deliverable) return;
+
+    /* Find the lowest-numbered pending deliverable signal with a user handler */
+    for (int bit = 0; bit < NSIG; bit++) {
+        uint32_t mask = (1u << bit);
+        if (!(deliverable & mask)) continue;
+        uint32_t handler = t->signal_handlers[bit];
+        if (handler <= SIG_IGN) continue;  /* SIG_DFL or SIG_IGN — handled by task_handle_signals */
+        if (handler >= KERNEL_BASE) continue; /* Reject kernel-space handler pointers */
+
+        /* Allocate signal_frame_t on the user stack */
+        uint32_t new_esp = regs->useresp - sizeof(signal_frame_t);
+
+        /* Ensure the frame fits inside a single page and is in user space */
+        if (new_esp >= KERNEL_BASE) continue;
+        uint32_t page_off = new_esp & 0xFFFu;
+        if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) continue;
+
+        /* Translate virtual address → physical */
+        uint32_t* pd  = t->page_directory;
+        if (!pd) continue;
+        uint32_t  pdi = PD_INDEX(new_esp);
+        uint32_t  pti = PT_INDEX(new_esp);
+        if (!(pd[pdi] & PAGE_PRESENT)) continue;
+        uint32_t* pt = (uint32_t*)(pd[pdi] & ~0xFFFu);
+        if (!(pt[pti] & PAGE_PRESENT)) continue;
+
+        uint32_t phys_page = pt[pti] & ~0xFFFu;
+        signal_frame_t* frame = (signal_frame_t*)(phys_page + page_off);
+
+        /* Save current user register context into the frame */
+        frame->ret_addr = t->sigreturn_trampoline;
+        frame->signum   = (uint32_t)bit;
+        frame->eax      = regs->eax;
+        frame->ecx      = regs->ecx;
+        frame->edx      = regs->edx;
+        frame->ebx      = regs->ebx;
+        frame->esp      = regs->useresp;
+        frame->ebp      = regs->ebp;
+        frame->esi      = regs->esi;
+        frame->edi      = regs->edi;
+        frame->eip      = regs->eip;
+        frame->eflags   = regs->eflags;
+
+        /* Redirect execution to the signal handler */
+        regs->useresp = new_esp;
+        regs->eip     = handler;
+
+        /* Clear the signal so it is not re-delivered */
+        t->pending_signals &= ~mask;
+        return; /* deliver one signal per syscall return */
+    }
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -1494,4 +1595,8 @@ void syscall_handler(struct syscall_frame* regs) {
     /* sys_sigsuspend (40): task is now SLEEPING, eax will be set to -1 (EINTR)
        when it wakes up — write -1 now so it's in the frame */
     regs->eax = (uint32_t)ret;
+
+    /* Deliver any pending signal with a user handler before returning to user space */
+    if (current_task && !current_task->is_kernel)
+        deliver_pending_signal(current_task, regs);
 }

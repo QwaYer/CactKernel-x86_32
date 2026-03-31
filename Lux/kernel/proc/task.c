@@ -708,6 +708,17 @@ void task_handle_signals(struct task_struct* t) {
             return;
         }
     }
+
+    if (deliverable & SIGWINCH) {
+        uint32_t handler = t->signal_handlers[9];
+        if (handler == SIG_DFL || handler == SIG_IGN) {
+            /* Default action for SIGWINCH is to ignore */
+            t->pending_signals &= ~(uint32_t)SIGWINCH;
+        }
+        /* If a user handler is registered, leave SIGWINCH pending so that
+           syscall_handler delivers it via signal frame before returning to
+           user space. */
+    }
 }
 
 int task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler) {
@@ -775,9 +786,14 @@ void task_setup_sigreturn(struct task_struct* t) {
     uint8_t* p = (uint8_t*)phys;
     for (int i = 0; i < (int)PAGE_SIZE; i++) p[i] = 0;
 
-    p[0] = 0xB8; p[1] = 0x77; p[2] = 0x00; p[3] = 0x00; p[4] = 0x00;
-    p[5] = 0xCD; p[6] = 0x80;
-    p[7] = 0xF4;
+    /* sub esp, 4          — restore ESP to base of signal_frame_t after handler ret */
+    p[0] = 0x83; p[1] = 0xEC; p[2] = 0x04;
+    /* mov eax, SYS_SIGRETURN (16) */
+    p[3] = 0xB8; p[4] = 0x10; p[5] = 0x00; p[6] = 0x00; p[7] = 0x00;
+    /* int 0x80 */
+    p[8] = 0xCD; p[9] = 0x80;
+    /* hlt */
+    p[10] = 0xF4;
 
     vmm_map(t->page_directory, tramp_vaddr, (uint32_t)phys,
             PAGE_USER | PAGE_PRESENT);
@@ -1045,6 +1061,9 @@ int task_exec(char* path, char** argv, char** envp, struct context_frame* regs) 
     irq_spinlock_release(&scheduler_lock);
 
     switch_paging(new_pd);
+
+    /* This process is now the terminal foreground process */
+    terminal_fg_pid = t->pid;
 
     __asm__ __volatile__(
         "mov $0x23, %%eax\n\t"

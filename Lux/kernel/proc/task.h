@@ -22,8 +22,9 @@
 #define SIGCHLD  (1u << 6)
 #define SIGFPE   (1u << 7)
 #define SIGSEGV  (1u << 8)
+#define SIGWINCH (1u << 9)
 
-#define NSIG     9
+#define NSIG     10
 
 #define SIG_DFL  ((uint32_t)0)
 #define SIG_IGN  ((uint32_t)1)
