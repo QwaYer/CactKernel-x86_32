@@ -22,6 +22,7 @@ typedef uint32_t sigset_t;
 #define SIGCONT  (1u << 3)
 #define SIGPIPE  (1u << 4)
 #define SIGALRM  (1u << 5)
+#define SIGCHLD  (1u << 6)
 
 /* itimer types for setitimer/getitimer */
 #define ITIMER_REAL    0

@@ -19,8 +19,9 @@
 #define SIGCONT  (1u << 3)
 #define SIGPIPE  (1u << 4)
 #define SIGALRM  (1u << 5)
+#define SIGCHLD  (1u << 6)
 
-#define NSIG     6
+#define NSIG     7
 
 #define SIG_DFL  ((uint32_t)0)
 #define SIG_IGN  ((uint32_t)1)
@@ -164,6 +165,7 @@ struct task_struct* task_fork(struct context_frame* regs);
 int task_exec(char* path, char** argv, char** envp, struct context_frame* regs);
 void task_kill(uint32_t pid);
 void task_signal(uint32_t pid, uint32_t signal);
+void task_signal_locked(uint32_t pid, uint32_t signal);
 void task_handle_signals(struct task_struct* t);
 int  task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler);
 void task_setup_sigreturn(struct task_struct* t);
