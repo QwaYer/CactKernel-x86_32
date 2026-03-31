@@ -174,12 +174,32 @@ void exception_handler(struct context_frame* regs) {
     char buf[32];
 
     if (current_task && !current_task->is_kernel) {
-        kprint_color("\n[KERNEL] User process crashed.", COLOR_LIGHT_RED);
-        kprint(" int="); itoa((int)regs->int_no, buf); kprint(buf);
-        kprint(" err="); hex_to_ascii(regs->err_code, buf); kprint(buf);
-        kprint(" eip="); hex_to_ascii(regs->eip, buf); kprint(buf);
+        /* Map CPU exception to the appropriate POSIX signal:
+         *   #0  Divide Error          -> SIGFPE
+         *   #13 General Protection    -> SIGSEGV
+         *   #16 x87 FPU Exception     -> SIGFPE
+         *   everything else           -> SIGKILL (unrecoverable) */
+        uint32_t sig;
+        switch (regs->int_no) {
+        case 0:  /* #DE Divide Error */
+        case 16: /* #MF x87 FPU Floating-Point Exception */
+            sig = SIGFPE;
+            kprint_color("\n[KERNEL] User process: FPE (int=", COLOR_LIGHT_RED);
+            break;
+        case 13: /* #GP General Protection Fault */
+            sig = SIGSEGV;
+            kprint_color("\n[KERNEL] User process: SEGV (int=", COLOR_LIGHT_RED);
+            break;
+        default:
+            sig = SIGKILL;
+            kprint_color("\n[KERNEL] User process crashed (int=", COLOR_LIGHT_RED);
+            break;
+        }
+        itoa((int)regs->int_no, buf); kprint_color(buf, COLOR_LIGHT_RED);
+        kprint_color(") err=", COLOR_LIGHT_RED); hex_to_ascii(regs->err_code, buf); kprint_color(buf, COLOR_LIGHT_RED);
+        kprint_color(" eip=", COLOR_LIGHT_RED); hex_to_ascii(regs->eip, buf); kprint_color(buf, COLOR_LIGHT_RED);
         kprint("\n");
-        task_kill(current_task->pid);
+        task_signal(current_task->pid, sig);
         schedule();
         return;
     }
