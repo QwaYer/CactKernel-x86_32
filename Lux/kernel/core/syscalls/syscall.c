@@ -332,6 +332,10 @@ static int sys_exit(struct syscall_frame* regs) {
     current_task->state = TASK_ZOMBIE;
 
     irq_spinlock_acquire(&scheduler_lock);
+
+    /* Notify parent that a child has exited */
+    task_signal_locked(current_task->parent_pid, SIGCHLD);
+
     struct task_struct* t = task_list_head;
     if (t) {
         do {
