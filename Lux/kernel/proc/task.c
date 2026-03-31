@@ -659,6 +659,30 @@ void task_handle_signals(struct task_struct* t) {
             return;
         }
     }
+
+    if (deliverable & SIGSEGV) {
+        t->pending_signals &= ~(uint32_t)SIGSEGV;
+        uint32_t handler = t->signal_handlers[6];
+        if (handler == SIG_IGN) {
+            /* ignored — discard (non-standard; re-faulting is likely) */
+        } else {
+            /* SIG_DFL: terminate the process */
+            t->state = TASK_ZOMBIE;
+            return;
+        }
+    }
+
+    if (deliverable & SIGFPE) {
+        t->pending_signals &= ~(uint32_t)SIGFPE;
+        uint32_t handler = t->signal_handlers[7];
+        if (handler == SIG_IGN) {
+            /* ignored — discard */
+        } else {
+            /* SIG_DFL: terminate the process */
+            t->state = TASK_ZOMBIE;
+            return;
+        }
+    }
 }
 
 int task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler) {
