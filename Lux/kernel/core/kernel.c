@@ -31,6 +31,9 @@ char* key_buffer;
 int buffer_idx = 0;
 volatile int system_ready = 0;
 
+struct winsize terminal_winsize;
+uint32_t       terminal_fg_pid = 0;
+
 static void fb_draw_char_scaled(char c, int px, int py, uint32_t color) {
     if ((unsigned char)c >= 128) return;
     const uint8_t* glyph = font8x8_basic[(unsigned char)c];
@@ -239,6 +242,14 @@ void terminal_task() {
     int idx = 0;
 
     while (!system_ready);
+
+    /* Compute initial terminal size from framebuffer dimensions */
+    uint32_t fb_w = fb_get_width();
+    uint32_t fb_h = fb_get_height();
+    terminal_winsize.ws_col    = (uint16_t)(fb_w / CHAR_W);
+    terminal_winsize.ws_row    = (uint16_t)(fb_h / CHAR_H);
+    terminal_winsize.ws_xpixel = (uint16_t)fb_w;
+    terminal_winsize.ws_ypixel = (uint16_t)fb_h;
 
     kprint("\n");
     kprint_color("Lux Shell", COLOR_LIGHT_CYAN);
