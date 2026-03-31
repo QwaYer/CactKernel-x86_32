@@ -45,7 +45,7 @@ static void kill_current(uint32_t fault_addr, uint32_t err, uint32_t eip)
     g_stats.protection_faults++;
 
     if (t && !t->is_kernel) {
-        task_signal(t->pid, SIGKILL);
+        task_signal(t->pid, SIGSEGV);
         schedule();
         return;
     }
