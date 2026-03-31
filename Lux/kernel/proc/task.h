@@ -20,8 +20,10 @@
 #define SIGPIPE  (1u << 4)
 #define SIGALRM  (1u << 5)
 #define SIGCHLD  (1u << 6)
+#define SIGFPE   (1u << 7)
+#define SIGSEGV  (1u << 8)
 
-#define NSIG     7
+#define NSIG     9
 
 #define SIG_DFL  ((uint32_t)0)
 #define SIG_IGN  ((uint32_t)1)
