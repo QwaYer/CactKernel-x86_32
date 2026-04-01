@@ -1242,7 +1242,7 @@ static int sys_bind(struct syscall_frame *regs) {
     if (ks->kind == KS_UDP) {
         udp_sock_t *s = udp_sock_find_by_port(port);
         /* port already in use by another socket? */
-        if (s && s != &udp_socks[ks->proto_idx]) return -1;
+        if (s && s != &udp_socks[ks->proto_idx] && !ks->so_reuseaddr) return -1;
         udp_socks[ks->proto_idx].local_port = port;
         udp_socks[ks->proto_idx].local_ip   = ntohl(addr->sin_addr);
         return 0;
@@ -1432,6 +1432,138 @@ static int sys_recvfrom(struct syscall_frame *regs) {
         }
     }
     return ret;
+}
+
+/* ── setsockopt / getsockopt args structs ─────────────────────────────────── */
+
+typedef struct {
+    int         fd;
+    int         level;
+    int         optname;
+    const void *optval;
+    uint32_t    optlen;
+} setsockopt_args_t;
+
+typedef struct {
+    int       fd;
+    int       level;
+    int       optname;
+    void     *optval;
+    uint32_t *optlen;
+} getsockopt_args_t;
+
+/* SYS_SHUTDOWN — shut down part of a full-duplex connection */
+static int sys_shutdown(struct syscall_frame *regs) {
+    int fd  = (int)regs->ebx;
+    int how = (int)regs->ecx;
+
+    if (!current_task) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    return ksock_shutdown(node, how);
+}
+
+/* SYS_SETSOCKOPT — set a socket option */
+static int sys_setsockopt(struct syscall_frame *regs) {
+    setsockopt_args_t *args = (setsockopt_args_t *)regs->ebx;
+    if (!validate_user_ptr(args, sizeof(setsockopt_args_t))) return -1;
+    if (!current_task) return -1;
+
+    int         fd      = args->fd;
+    int         level   = args->level;
+    int         optname = args->optname;
+    const void *optval  = args->optval;
+    uint32_t    optlen  = args->optlen;
+
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!optval || optlen < sizeof(int)) return -1;
+    if (!validate_user_ptr(optval, optlen)) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    int ival = *(const int *)optval;
+
+    if (level == SOL_SOCKET) {
+        switch (optname) {
+        case SO_REUSEADDR:
+            ks->so_reuseaddr = (uint8_t)!!ival;
+            return 0;
+        case SO_KEEPALIVE:
+            ks->so_keepalive = (uint8_t)!!ival;
+            if (ks->kind == KS_TCP && ks->proto_idx >= 0 &&
+                ks->proto_idx < TCP_MAX_SOCKETS)
+                tcp_sockets[ks->proto_idx].keepalive = ks->so_keepalive;
+            return 0;
+        case SO_ERROR:
+            return -1;  /* SO_ERROR is read-only */
+        }
+    } else if (level == IPPROTO_TCP) {
+        switch (optname) {
+        case TCP_NODELAY:
+            ks->tcp_nodelay = (uint8_t)!!ival;
+            if (ks->kind == KS_TCP && ks->proto_idx >= 0 &&
+                ks->proto_idx < TCP_MAX_SOCKETS)
+                tcp_sockets[ks->proto_idx].nodelay = ks->tcp_nodelay;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* SYS_GETSOCKOPT — retrieve a socket option */
+static int sys_getsockopt(struct syscall_frame *regs) {
+    getsockopt_args_t *args = (getsockopt_args_t *)regs->ebx;
+    if (!validate_user_ptr(args, sizeof(getsockopt_args_t))) return -1;
+    if (!current_task) return -1;
+
+    int       fd      = args->fd;
+    int       level   = args->level;
+    int       optname = args->optname;
+    void     *optval  = args->optval;
+    uint32_t *optlen  = args->optlen;
+
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!optval || !optlen) return -1;
+    if (!validate_user_ptr(optlen, sizeof(uint32_t))) return -1;
+    if (*optlen < sizeof(int)) return -1;
+    if (!validate_user_ptr(optval, *optlen)) return -1;
+
+    vfs_node_t *node = current_task->fd_table[fd];
+    if (!node || node->type != VFS_SOCKET) return -1;
+
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    int ival = 0;
+    if (level == SOL_SOCKET) {
+        switch (optname) {
+        case SO_REUSEADDR: ival = ks->so_reuseaddr; break;
+        case SO_KEEPALIVE: ival = ks->so_keepalive; break;
+        case SO_ERROR:
+            ival = ks->so_error;
+            ks->so_error = 0;  /* clear on read */
+            break;
+        default: return -1;
+        }
+    } else if (level == IPPROTO_TCP) {
+        switch (optname) {
+        case TCP_NODELAY: ival = ks->tcp_nodelay; break;
+        default: return -1;
+        }
+    } else {
+        return -1;
+    }
+
+    *(int *)optval = ival;
+    *optlen = sizeof(int);
+    return 0;
 }
 
 /*
@@ -1874,12 +2006,15 @@ static syscall_fn syscall_table[] = {
     [49] = (syscall_fn)sys_recv,
     [50] = (syscall_fn)sys_sendto,
     [51] = (syscall_fn)sys_recvfrom,
+    [52] = (syscall_fn)sys_shutdown,
+    [53] = (syscall_fn)sys_setsockopt,
     [54] = (syscall_fn)sys_symlink,
     [55] = (syscall_fn)sys_readlink,
     [56] = (syscall_fn)sys_link,
     [57] = (syscall_fn)sys_unlink,
     [58] = (syscall_fn)sys_select,
     [59] = (syscall_fn)sys_poll,
+    [60] = (syscall_fn)sys_getsockopt,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -1901,6 +2036,7 @@ void syscall_handler(struct syscall_frame* regs) {
         /* socket syscalls */
         num == 43 || num == 44 || num == 45 || num == 46 || num == 47 ||
         num == 48 || num == 49 || num == 50 || num == 51 ||
+        num == 52 || num == 53 || num == 60 ||
         /* symlink syscalls (54-56 need full frame; 57 uses direct args) */
         num == 54 || num == 55 || num == 56 ||
         /* I/O multiplexing */

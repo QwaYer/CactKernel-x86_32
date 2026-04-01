@@ -56,7 +56,9 @@
 #define SYS_RECV          49
 #define SYS_SENDTO        50
 #define SYS_RECVFROM      51
-
+#define SYS_SHUTDOWN      52
+#define SYS_SETSOCKOPT    53
+#define SYS_GETSOCKOPT    60
 
 /* VFS symlink / hard-link syscalls */
 #define SYS_SYMLINK       54

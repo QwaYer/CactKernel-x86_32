@@ -57,3 +57,31 @@ int recvfrom(int fd, void *buf, uint32_t len, int flags,
     };
     return __syscall1(SYS_RECVFROM, (int)&args);
 }
+
+int shutdown(int fd, int how) {
+    return __syscall2(SYS_SHUTDOWN, fd, how);
+}
+
+int setsockopt(int fd, int level, int optname,
+               const void *optval, uint32_t optlen) {
+    setsockopt_args_t args = {
+        .fd      = fd,
+        .level   = level,
+        .optname = optname,
+        .optval  = optval,
+        .optlen  = optlen,
+    };
+    return __syscall1(SYS_SETSOCKOPT, (int)&args);
+}
+
+int getsockopt(int fd, int level, int optname,
+               void *optval, uint32_t *optlen) {
+    getsockopt_args_t args = {
+        .fd      = fd,
+        .level   = level,
+        .optname = optname,
+        .optval  = optval,
+        .optlen  = optlen,
+    };
+    return __syscall1(SYS_GETSOCKOPT, (int)&args);
+}
