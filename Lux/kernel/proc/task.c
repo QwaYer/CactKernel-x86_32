@@ -719,6 +719,39 @@ void task_handle_signals(struct task_struct* t) {
            syscall_handler delivers it via signal frame before returning to
            user space. */
     }
+
+    if (deliverable & SIGHUP) {
+        t->pending_signals &= ~(uint32_t)SIGHUP;
+        uint32_t handler = t->signal_handlers[10];
+        if (handler == SIG_DFL || handler == SIG_IGN) {
+            /* Default action for SIGHUP is termination */
+            task_signal_locked(t->parent_pid, SIGCHLD);
+            t->state = TASK_ZOMBIE;
+            return;
+        }
+    }
+
+    if (deliverable & SIGINT) {
+        t->pending_signals &= ~(uint32_t)SIGINT;
+        uint32_t handler = t->signal_handlers[11];
+        if (handler == SIG_DFL || handler == SIG_IGN) {
+            /* Default action for SIGINT is termination */
+            task_signal_locked(t->parent_pid, SIGCHLD);
+            t->state = TASK_ZOMBIE;
+            return;
+        }
+    }
+
+    if (deliverable & SIGQUIT) {
+        t->pending_signals &= ~(uint32_t)SIGQUIT;
+        uint32_t handler = t->signal_handlers[12];
+        if (handler == SIG_DFL || handler == SIG_IGN) {
+            /* Default action for SIGQUIT is termination */
+            task_signal_locked(t->parent_pid, SIGCHLD);
+            t->state = TASK_ZOMBIE;
+            return;
+        }
+    }
 }
 
 int task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler) {
