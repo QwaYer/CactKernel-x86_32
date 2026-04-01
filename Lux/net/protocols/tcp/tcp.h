@@ -79,6 +79,10 @@ typedef struct tcp_socket {
     /* Accept support */
     int8_t  listen_parent;  /* index of parent LISTEN socket, or -1 */
     uint8_t accept_ready;   /* 1 when this connection is ready for accept() */
+
+    /* Socket options */
+    uint8_t nodelay;        /* TCP_NODELAY: skip Nagle-style coalescing */
+    uint8_t keepalive;      /* SO_KEEPALIVE: send keep-alive probes */
 } tcp_socket_t;
 
 /* ───────────────────────────────────────────────
@@ -99,8 +103,11 @@ int  tcp_listen(int sock, uint16_t local_port);
 /* Send data on an established connection */
 int  tcp_send(int sock, uint8_t* data, uint16_t len);
 
-/* Close (sends FIN) */
+/* Close (sends FIN, marks socket unused) */
 int  tcp_close(int sock);
+
+/* Half-close: send FIN to peer without freeing the socket (for shutdown(SHUT_WR)) */
+int  tcp_shutdown_wr(int sock);
 
 /* Register callbacks */
 void tcp_set_callbacks(int sock, tcp_data_fn on_data, tcp_event_fn on_event);

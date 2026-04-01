@@ -18,6 +18,23 @@
 /* ── INADDR_ANY ───────────────────────────────────────────────────────────── */
 #define INADDR_ANY  0
 
+/* ── shutdown(2) — how values ─────────────────────────────────────────────── */
+#define SHUT_RD    0
+#define SHUT_WR    1
+#define SHUT_RDWR  2
+
+/* ── Socket option levels ─────────────────────────────────────────────────── */
+#define SOL_SOCKET   1
+/* IPPROTO_TCP (6) also used as option level */
+
+/* ── SOL_SOCKET option names ──────────────────────────────────────────────── */
+#define SO_REUSEADDR  2
+#define SO_KEEPALIVE  9
+#define SO_ERROR      4
+
+/* ── IPPROTO_TCP option names ─────────────────────────────────────────────── */
+#define TCP_NODELAY   1
+
 /* ── sockaddr structures ──────────────────────────────────────────────────── */
 struct sockaddr {
     uint16_t sa_family;
@@ -42,6 +59,23 @@ static inline uint32_t htonl(uint32_t x) {
 }
 static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
 
+/* ── setsockopt / getsockopt args structs (passed via pointer to kernel) ──── */
+typedef struct {
+    int         fd;
+    int         level;
+    int         optname;
+    const void *optval;
+    uint32_t    optlen;
+} setsockopt_args_t;
+
+typedef struct {
+    int       fd;
+    int       level;
+    int       optname;
+    void     *optval;
+    uint32_t *optlen;
+} getsockopt_args_t;
+
 /* ── sendto / recvfrom args struct (mirrors the kernel's definition) ──────── */
 typedef struct {
     int                       fd;
@@ -63,16 +97,21 @@ typedef struct {
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
 
-int socket  (int domain, int type, int protocol);
-int bind    (int fd, const struct sockaddr_in *addr, uint32_t addrlen);
-int connect (int fd, const struct sockaddr_in *addr, uint32_t addrlen);
-int listen  (int fd, int backlog);
-int accept  (int fd, struct sockaddr_in *peer, uint32_t *addrlen);
-int send    (int fd, const void *buf, uint32_t len, int flags);
-int recv    (int fd, void *buf, uint32_t len, int flags);
-int sendto  (int fd, const void *buf, uint32_t len, int flags,
-             const struct sockaddr_in *dest, uint32_t addrlen);
-int recvfrom(int fd, void *buf, uint32_t len, int flags,
-             struct sockaddr_in *src, uint32_t *addrlen);
+int socket    (int domain, int type, int protocol);
+int bind      (int fd, const struct sockaddr_in *addr, uint32_t addrlen);
+int connect   (int fd, const struct sockaddr_in *addr, uint32_t addrlen);
+int listen    (int fd, int backlog);
+int accept    (int fd, struct sockaddr_in *peer, uint32_t *addrlen);
+int send      (int fd, const void *buf, uint32_t len, int flags);
+int recv      (int fd, void *buf, uint32_t len, int flags);
+int sendto    (int fd, const void *buf, uint32_t len, int flags,
+               const struct sockaddr_in *dest, uint32_t addrlen);
+int recvfrom  (int fd, void *buf, uint32_t len, int flags,
+               struct sockaddr_in *src, uint32_t *addrlen);
+int shutdown  (int fd, int how);
+int setsockopt(int fd, int level, int optname,
+               const void *optval, uint32_t optlen);
+int getsockopt(int fd, int level, int optname,
+               void *optval, uint32_t *optlen);
 
 #endif /* _SOCKET_H */
