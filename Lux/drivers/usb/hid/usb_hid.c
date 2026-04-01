@@ -2,9 +2,14 @@
 #include "usb.h"
 #include "xhci.h"
 #include "kernel.h"
+#include "task.h"
 #include "mouse.h"
 #include "memory.h"
 #include "libc.h"
+
+/* HID usage IDs for Ctrl-combo keys */
+#define HID_KEY_C      0x06   /* 'c'  — Ctrl-C → SIGINT  */
+#define HID_KEY_BSLASH 0x31   /* '\'  — Ctrl-\ → SIGQUIT */
 
 
 volatile char usb_last_char    = 0;
@@ -37,6 +42,7 @@ static const char hid_keymap_shift[0x80] = {
 
 static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
     uint8_t shift = (rep->modifier & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) ? 1 : 0;
+    uint8_t ctrl  = (rep->modifier & (HID_MOD_LCTRL  | HID_MOD_RCTRL))  ? 1 : 0;
 
     for (int i = 0; i < 6; i++) {
         if (rep->keycode[i] != HID_KEY_CAPSLOCK) continue;
@@ -54,6 +60,21 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         for (int j = 0; j < 6; j++)
             if (priv->prev_kbd.keycode[j] == kc) { already = 1; break; }
         if (already) continue;
+
+        /* TTY-level signal generation: Ctrl-C → SIGINT, Ctrl-\ → SIGQUIT */
+        if (ctrl) {
+            uint32_t fg = terminal_fg_pid;
+            if (fg) {
+                if (kc == HID_KEY_C) {
+                    task_signal(fg, SIGINT);
+                    continue;
+                }
+                if (kc == HID_KEY_BSLASH) {
+                    task_signal(fg, SIGQUIT);
+                    continue;
+                }
+            }
+        }
 
         int use_shift = shift;
         if (kc >= 0x04 && kc <= 0x1D)
