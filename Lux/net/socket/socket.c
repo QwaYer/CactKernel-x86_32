@@ -138,6 +138,7 @@ static int socket_read_op(struct vfs_node *node, uint32_t off,
     (void)off;
     ksock_t *ks = ksock_from_node(node);
     if (!ks) return -1;
+    if (ks->shutdown_rd) return -1;  /* read direction shut down */
 
     if (ks->kind == KS_TCP)
         return tcp_recv(ks->proto_idx, (uint8_t *)buf, (uint16_t)size);
@@ -153,6 +154,7 @@ static int socket_write_op(struct vfs_node *node, uint32_t off,
     (void)off;
     ksock_t *ks = ksock_from_node(node);
     if (!ks) return -1;
+    if (ks->shutdown_wr) return -1;  /* write direction shut down */
 
     if (ks->kind == KS_TCP)
         return tcp_send(ks->proto_idx, (uint8_t *)buf, (uint16_t)size);
@@ -171,4 +173,27 @@ static void socket_close_op(struct vfs_node *node) {
     ks->used = 0;
     /* The VFS node itself was kmalloc'd; free it. */
     kfree_heap(node);
+}
+
+/* ── shutdown ─────────────────────────────────────────────────────────────── */
+
+int ksock_shutdown(vfs_node_t *node, int how) {
+    ksock_t *ks = ksock_from_node(node);
+    if (!ks) return -1;
+
+    if (how != SHUT_RD && how != SHUT_WR && how != SHUT_RDWR) return -1;
+
+    if (how == SHUT_RD || how == SHUT_RDWR)
+        ks->shutdown_rd = 1;
+
+    if (how == SHUT_WR || how == SHUT_RDWR) {
+        if (!ks->shutdown_wr) {
+            ks->shutdown_wr = 1;
+            /* For TCP, send FIN to peer (half-close the send stream) */
+            if (ks->kind == KS_TCP)
+                tcp_shutdown_wr(ks->proto_idx);
+        }
+    }
+
+    return 0;
 }

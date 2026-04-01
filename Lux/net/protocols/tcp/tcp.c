@@ -21,6 +21,8 @@ int tcp_socket(void) {
             tcp_sockets[i].on_event      = 0;
             tcp_sockets[i].listen_parent = -1;
             tcp_sockets[i].accept_ready  = 0;
+            tcp_sockets[i].nodelay       = 0;
+            tcp_sockets[i].keepalive     = 0;
             return i;
         }
     }
@@ -190,6 +192,26 @@ int tcp_close(int sock) {
 /* ─────────────────────────────────────────────── */
 /*   Userspace receive                             */
 /* ─────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────── */
+/*   Half-close (SHUT_WR): send FIN, keep PCB     */
+/* ─────────────────────────────────────────────── */
+int tcp_shutdown_wr(int sock) {
+    if (sock < 0 || sock >= TCP_MAX_SOCKETS) return -1;
+    tcp_socket_t *s = &tcp_sockets[sock];
+    if (!s->used) return -1;
+
+    if (s->state == TCP_ESTABLISHED) {
+        s->state = TCP_FIN_WAIT_1;
+        return tcp_send_segment(s, TCP_FIN | TCP_ACK, NULL, 0);
+    }
+    if (s->state == TCP_CLOSE_WAIT) {
+        s->state = TCP_LAST_ACK;
+        return tcp_send_segment(s, TCP_FIN | TCP_ACK, NULL, 0);
+    }
+    /* Already shut down or not yet established — treat as success */
+    return 0;
+}
+
 int tcp_recv(int sock, uint8_t* buf, uint16_t max_len) {
     if (sock < 0 || sock >= TCP_MAX_SOCKETS) return -1;
     tcp_socket_t* s = &tcp_sockets[sock];
