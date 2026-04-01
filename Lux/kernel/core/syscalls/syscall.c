@@ -1595,6 +1595,231 @@ static int sys_unlink(char *path) {
     return vfs_unlink(parent, basename);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   I/O multiplexing — select (58) / poll (59)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── fd_set: 256-bit bitmap matching MAX_FD=256 ─────────────────────────── */
+#define SEL_SETSIZE  256
+typedef struct { uint32_t w[SEL_SETSIZE / 32]; } sel_fdset_t;
+
+#define SEL_ISSET(fd, s)  (((s)->w[(fd)/32] >> ((fd) % 32)) & 1u)
+#define SEL_SET(fd, s)    ((s)->w[(fd)/32] |=  (1u << ((fd) % 32)))
+#define SEL_ZERO(s) \
+    do { for (int _i = 0; _i < SEL_SETSIZE/32; _i++) (s)->w[_i] = 0; } while (0)
+
+/* Packed args struct passed via ebx pointer from userspace */
+typedef struct {
+    int             nfds;
+    sel_fdset_t    *readfds;
+    sel_fdset_t    *writefds;
+    sel_fdset_t    *exceptfds;
+    struct timeval *timeout;
+} sel_args_t;
+
+/* ── poll event flags ────────────────────────────────────────────────────── */
+#define POLLIN   0x0001
+#define POLLOUT  0x0004
+#define POLLERR  0x0008
+#define POLLHUP  0x0010
+#define POLLNVAL 0x0020
+
+struct pollfd {
+    int   fd;
+    short events;
+    short revents;
+};
+
+/* ── per-fd readiness helpers ────────────────────────────────────────────── */
+
+static int fd_read_ready(vfs_node_t *node) {
+    if (!node) return 0;
+    switch (node->type) {
+    case VFS_FILE:
+    case VFS_DIRECTORY:
+    case VFS_CHARDEVICE:
+    case VFS_BLOCKDEVICE:
+        return 1;
+    case VFS_PIPE: {
+        pipe_t *p = (pipe_t *)node->priv;
+        /* readable: data present OR write-end closed (EOF) */
+        return p && (p->len > 0 || !p->write_open);
+    }
+    case VFS_SOCKET: {
+        ksock_t *ks = ksock_from_node(node);
+        if (!ks) return 0;
+        if (ks->kind == KS_TCP) {
+            tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
+            /* data in rx buffer, incoming connection, or peer closed */
+            return (s->rx_head != s->rx_tail) || s->accept_ready ||
+                   (s->state == TCP_CLOSE_WAIT) || (s->state == TCP_CLOSED);
+        }
+        if (ks->kind == KS_UDP)
+            return udp_socks[ks->proto_idx].rx_ready;
+        return 0;
+    }
+    default: return 0;
+    }
+}
+
+static int fd_write_ready(vfs_node_t *node) {
+    if (!node) return 0;
+    switch (node->type) {
+    case VFS_FILE:
+    case VFS_DIRECTORY:
+    case VFS_CHARDEVICE:
+    case VFS_BLOCKDEVICE:
+        return 1;
+    case VFS_PIPE: {
+        pipe_t *p = (pipe_t *)node->priv;
+        /* writable: space in buffer AND read-end still open */
+        return p && (p->len < PIPE_BUF_SIZE) && p->read_open;
+    }
+    case VFS_SOCKET: {
+        ksock_t *ks = ksock_from_node(node);
+        if (!ks) return 0;
+        if (ks->kind == KS_TCP) {
+            tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
+            return (s->state == TCP_ESTABLISHED) || (s->state == TCP_CLOSE_WAIT);
+        }
+        if (ks->kind == KS_UDP) return 1;  /* UDP sends are always non-blocking */
+        return 0;
+    }
+    default: return 0;
+    }
+}
+
+/* ── sys_select ──────────────────────────────────────────────────────────── *
+ * ebx = pointer to sel_args_t { nfds, *readfds, *writefds, *exceptfds, *tv }
+ *
+ * Blocks by calling schedule() in a loop — same pattern used by pipe_read /
+ * mutex_lock.  Original fd_sets are snapshotted so result sets are computed
+ * from them on every iteration without corrupting the user's input.
+ * ─────────────────────────────────────────────────────────────────────────── */
+static int sys_select(struct syscall_frame *regs) {
+    sel_args_t *ua = (sel_args_t *)regs->ebx;
+    if (!validate_user_ptr(ua, sizeof(sel_args_t))) return -1;
+    if (!current_task) return -1;
+
+    int             nfds  = ua->nfds;
+    sel_fdset_t    *urfds = ua->readfds;
+    sel_fdset_t    *uwfds = ua->writefds;
+    sel_fdset_t    *uefds = ua->exceptfds;
+    struct timeval *utv   = ua->timeout;
+
+    if (nfds < 0 || nfds > MAX_FD)                                     return -1;
+    if (urfds && !validate_user_ptr(urfds, sizeof(sel_fdset_t)))        return -1;
+    if (uwfds && !validate_user_ptr(uwfds, sizeof(sel_fdset_t)))        return -1;
+    if (uefds && !validate_user_ptr(uefds, sizeof(sel_fdset_t)))        return -1;
+    if (utv   && !validate_user_ptr(utv,   sizeof(struct timeval)))     return -1;
+
+    /* Deadline */
+    int      infinite    = (utv == 0);
+    int      nonblocking = 0;
+    uint32_t deadline    = 0;
+    if (!infinite) {
+        uint32_t ticks = (uint32_t)(utv->tv_sec * TIMER_HZ) +
+                         (uint32_t)((utv->tv_usec + (1000000 / TIMER_HZ) - 1) /
+                                    (1000000 / TIMER_HZ));
+        nonblocking = (ticks == 0);
+        deadline    = timer_ticks_get() + ticks;
+    }
+
+    /* Snapshot original sets (32 bytes each) — never modified during the loop */
+    sel_fdset_t orig_r, orig_w, orig_e;
+    SEL_ZERO(&orig_r); SEL_ZERO(&orig_w); SEL_ZERO(&orig_e);
+    if (urfds) orig_r = *urfds;
+    if (uwfds) orig_w = *uwfds;
+    if (uefds) orig_e = *uefds;
+
+    /* Keep a stable pointer to our own task across schedule() calls */
+    struct task_struct *t = current_task;
+
+    for (;;) {
+        sel_fdset_t res_r, res_w, res_e;
+        SEL_ZERO(&res_r); SEL_ZERO(&res_w); SEL_ZERO(&res_e);
+        int ready = 0;
+
+        for (int fd = 0; fd < nfds; fd++) {
+            vfs_node_t *node = t->fd_table[fd];
+
+            if (urfds && SEL_ISSET(fd, &orig_r)) {
+                if (node && fd_read_ready(node)) { SEL_SET(fd, &res_r); ready++; }
+            }
+            if (uwfds && SEL_ISSET(fd, &orig_w)) {
+                if (node && fd_write_ready(node)) { SEL_SET(fd, &res_w); ready++; }
+            }
+            if (uefds && SEL_ISSET(fd, &orig_e)) {
+                /* exceptfds: pipe write-end closed (HUP condition) */
+                if (node && node->type == VFS_PIPE) {
+                    pipe_t *p = (pipe_t *)node->priv;
+                    if (p && !p->write_open) { SEL_SET(fd, &res_e); ready++; }
+                }
+            }
+        }
+
+        /* Return if: something ready, non-blocking poll, or deadline reached */
+        if (ready > 0 || nonblocking ||
+                (!infinite && (int32_t)(timer_ticks_get() - deadline) >= 0)) {
+            if (urfds) *urfds = res_r;
+            if (uwfds) *uwfds = res_w;
+            if (uefds) *uefds = res_e;
+            return ready;
+        }
+
+        schedule();   /* yield — same pattern as pipe_read / mutex_lock */
+    }
+}
+
+/* ── sys_poll ────────────────────────────────────────────────────────────── *
+ * ebx = struct pollfd[]   ecx = nfds   edx = timeout_ms
+ * timeout_ms: -1 = infinite, 0 = non-blocking, >0 = deadline in ms
+ * ─────────────────────────────────────────────────────────────────────────── */
+static int sys_poll(struct syscall_frame *regs) {
+    struct pollfd *fds        = (struct pollfd *)regs->ebx;
+    int            nfds       = (int)regs->ecx;
+    int            timeout_ms = (int)regs->edx;
+
+    if (!current_task) return -1;
+    if (nfds <= 0)     return 0;
+    if (!validate_user_ptr(fds, (uint32_t)nfds * sizeof(struct pollfd))) return -1;
+
+    int      infinite    = (timeout_ms < 0);
+    int      nonblocking = (timeout_ms == 0);
+    uint32_t deadline    = 0;
+    if (!infinite && !nonblocking) {
+        uint32_t ticks = (uint32_t)((timeout_ms + (1000 / TIMER_HZ) - 1) /
+                                    (1000 / TIMER_HZ));
+        deadline = timer_ticks_get() + ticks;
+    }
+
+    struct task_struct *t = current_task;
+
+    for (;;) {
+        int ready = 0;
+
+        for (int i = 0; i < nfds; i++) {
+            fds[i].revents = 0;
+            int fd = fds[i].fd;
+            if (fd < 0 || fd >= MAX_FD) { fds[i].revents = POLLNVAL; continue; }
+            vfs_node_t *node = t->fd_table[fd];
+            if (!node)                  { fds[i].revents = POLLNVAL; continue; }
+
+            short ev = 0;
+            if ((fds[i].events & POLLIN)  && fd_read_ready(node))  ev |= POLLIN;
+            if ((fds[i].events & POLLOUT) && fd_write_ready(node)) ev |= POLLOUT;
+            fds[i].revents = ev;
+            if (ev) ready++;
+        }
+
+        if (ready > 0 || nonblocking ||
+                (!infinite && (int32_t)(timer_ticks_get() - deadline) >= 0))
+            return ready;
+
+        schedule();
+    }
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -1653,6 +1878,8 @@ static syscall_fn syscall_table[] = {
     [55] = (syscall_fn)sys_readlink,
     [56] = (syscall_fn)sys_link,
     [57] = (syscall_fn)sys_unlink,
+    [58] = (syscall_fn)sys_select,
+    [59] = (syscall_fn)sys_poll,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -1675,7 +1902,9 @@ void syscall_handler(struct syscall_frame* regs) {
         num == 43 || num == 44 || num == 45 || num == 46 || num == 47 ||
         num == 48 || num == 49 || num == 50 || num == 51 ||
         /* symlink syscalls (54-56 need full frame; 57 uses direct args) */
-        num == 54 || num == 55 || num == 56) {
+        num == 54 || num == 55 || num == 56 ||
+        /* I/O multiplexing */
+        num == 58 || num == 59) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](
