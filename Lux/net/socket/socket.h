@@ -15,6 +15,23 @@
 #define IPPROTO_TCP   6
 #define IPPROTO_UDP  17
 
+/* ── shutdown(2) — how values ─────────────────────────────────────────────── */
+#define SHUT_RD    0   /* disable further receives */
+#define SHUT_WR    1   /* disable further sends (sends FIN for TCP) */
+#define SHUT_RDWR  2   /* disable both directions */
+
+/* ── Socket option levels ─────────────────────────────────────────────────── */
+#define SOL_SOCKET   1   /* socket-level options */
+/* IPPROTO_TCP (6) reused as TCP option level */
+
+/* ── SOL_SOCKET option names ──────────────────────────────────────────────── */
+#define SO_REUSEADDR  2   /* allow rebind to a port in TIME_WAIT */
+#define SO_KEEPALIVE  9   /* enable TCP keep-alive probes */
+#define SO_ERROR      4   /* get and clear pending socket error */
+
+/* ── IPPROTO_TCP option names ─────────────────────────────────────────────── */
+#define TCP_NODELAY   1   /* disable Nagle algorithm */
+
 /* ── sockaddr structures (shared with userspace via libc/include/socket.h) ── */
 struct sockaddr {
     uint16_t sa_family;
@@ -60,6 +77,16 @@ typedef struct ksock {
     uint8_t      used;
     ksock_kind_t kind;
     int          proto_idx;  /* index into tcp_sockets[] or udp_socks[] */
+
+    /* shutdown state */
+    uint8_t shutdown_rd;   /* SHUT_RD or SHUT_RDWR applied */
+    uint8_t shutdown_wr;   /* SHUT_WR or SHUT_RDWR applied */
+
+    /* socket options */
+    uint8_t so_reuseaddr;
+    uint8_t so_keepalive;
+    uint8_t tcp_nodelay;
+    int     so_error;      /* pending socket error (cleared on read) */
 } ksock_t;
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
@@ -77,5 +104,8 @@ ksock_t *ksock_from_node(vfs_node_t *node);
    Fills *peer_out if non-NULL.  Returns new VFS node or NULL if none ready. */
 vfs_node_t *ksock_tcp_accept(vfs_node_t *listen_node,
                               struct sockaddr_in *peer_out);
+
+/* Shut down part of a full-duplex connection (how = SHUT_RD/WR/RDWR) */
+int ksock_shutdown(vfs_node_t *node, int how);
 
 #endif /* KSOCKET_H */
