@@ -23,8 +23,11 @@
 #define SIGFPE   (1u << 7)
 #define SIGSEGV  (1u << 8)
 #define SIGWINCH (1u << 9)
+#define SIGHUP   (1u << 10)   /* hangup — terminal closed          */
+#define SIGINT   (1u << 11)   /* interrupt — Ctrl-C from TTY       */
+#define SIGQUIT  (1u << 12)   /* quit     — Ctrl-\ from TTY        */
 
-#define NSIG     10
+#define NSIG     13
 
 #define SIG_DFL  ((uint32_t)0)
 #define SIG_IGN  ((uint32_t)1)

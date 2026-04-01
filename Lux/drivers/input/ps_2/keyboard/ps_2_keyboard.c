@@ -1,6 +1,7 @@
 #include "ps_2_keyboard.h"
 #include "keyboard.h"
 #include "kernel.h"
+#include "task.h"
 
 static unsigned char keymap[128] = {
     0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -18,6 +19,11 @@ static unsigned char keymap_shift[128] = {
 
 static int shift_pressed    = 0;
 static int caps_lock_active = 0;
+static int ctrl_pressed     = 0;
+
+/* PS/2 set-1 scancodes for keys used in Ctrl-combos */
+#define SCANCODE_C    0x2E   /* 'c' — Ctrl-C → SIGINT  */
+#define SCANCODE_BSLASH 0x2B /* '\' — Ctrl-\ → SIGQUIT */
 
 int ps2_keyboard_init(void) {
     while (port_byte_in(0x64) & 0x01)
@@ -48,9 +54,26 @@ void ps2_keyboard_handler(void) {
 
     if      (scancode == 0x2A || scancode == 0x36) { shift_pressed = 1;             return; }
     else if (scancode == 0xAA || scancode == 0xB6) { shift_pressed = 0;             return; }
+    else if (scancode == 0x1D)                     { ctrl_pressed  = 1;             return; }
+    else if (scancode == 0x9D)                     { ctrl_pressed  = 0;             return; }
     else if (scancode == 0x3A) { caps_lock_active = !caps_lock_active;              return; }
 
     if (scancode & 0x80) return;
+
+    /* TTY-level signal generation: Ctrl-C → SIGINT, Ctrl-\ → SIGQUIT */
+    if (ctrl_pressed) {
+        uint32_t fg = terminal_fg_pid;
+        if (fg) {
+            if (scancode == SCANCODE_C) {
+                task_signal(fg, SIGINT);
+                return;
+            }
+            if (scancode == SCANCODE_BSLASH) {
+                task_signal(fg, SIGQUIT);
+                return;
+            }
+        }
+    }
 
     char c = keymap[scancode];
     if (!c) return;
