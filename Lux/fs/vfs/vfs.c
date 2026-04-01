@@ -7,6 +7,20 @@ vfs_node_t *vfs_root = 0;
 
 #define VFS_MOUNT_MAX 32
 
+/* ---------- Symlink node pool ------------------------------------------- */
+
+#define VFS_SYMLINK_POOL_SIZE  256
+#define VFS_SYMLINK_TARGET_MAX 512
+
+typedef struct {
+    vfs_node_t  node;
+    char        target[VFS_SYMLINK_TARGET_MAX];
+    int         in_use;
+} vfs_symlink_entry_t;
+
+static vfs_symlink_entry_t symlink_pool[VFS_SYMLINK_POOL_SIZE];
+static mutex_t             symlink_mutex;
+
 typedef struct {
     vfs_node_t *host;
     vfs_node_t *target;
@@ -44,6 +58,7 @@ static vfs_node_t *_walk_one(vfs_node_t *dir, const char *name) {
 //Public api
 void vfs_init(void) {
     mutex_init(&vfs_mutex);
+    mutex_init(&symlink_mutex);
     mount_count = 0;
 }
 
@@ -172,4 +187,208 @@ int rmdir_vfs(vfs_node_t *dir, char *name) {
 int rename_vfs(vfs_node_t *dir, const char *oldname, const char *newname) {
     if (!dir || dir->type != VFS_DIRECTORY || !dir->ops || !dir->ops->rename) return -1;
     return dir->ops->rename(dir, oldname, newname);
+}
+
+/* ---------- Symlink node pool ------------------------------------------- */
+
+vfs_node_t *vfs_symlink_alloc(const char *target, uint32_t target_len) {
+    if (!target) return 0;
+    mutex_lock(&symlink_mutex);
+    for (int i = 0; i < VFS_SYMLINK_POOL_SIZE; i++) {
+        if (!symlink_pool[i].in_use) {
+            symlink_pool[i].in_use          = 1;
+            symlink_pool[i].node.type       = VFS_SYMLINK;
+            symlink_pool[i].node.refcount   = 1;
+            symlink_pool[i].node.ops        = 0;
+            symlink_pool[i].node.inode      = 0;
+            symlink_pool[i].node.name[0]    = '\0';
+            uint32_t copy_len = target_len < VFS_SYMLINK_TARGET_MAX - 1
+                                ? target_len : VFS_SYMLINK_TARGET_MAX - 1;
+            int j;
+            for (j = 0; j < (int)copy_len; j++)
+                symlink_pool[i].target[j] = target[j];
+            symlink_pool[i].target[j]       = '\0';
+            symlink_pool[i].node.size       = copy_len;
+            symlink_pool[i].node.priv       = symlink_pool[i].target;
+            mutex_unlock(&symlink_mutex);
+            return &symlink_pool[i].node;
+        }
+    }
+    mutex_unlock(&symlink_mutex);
+    return 0;
+}
+
+int vfs_readlink_node(vfs_node_t *node, char *buf, uint32_t bufsz) {
+    if (!node || node->type != VFS_SYMLINK || !buf || bufsz == 0) return -1;
+    if (node->ops && node->ops->readlink)
+        return node->ops->readlink(node, buf, bufsz);
+    /* Default: priv points to the target string stored in the pool entry */
+    const char *target = (const char *)node->priv;
+    if (!target) return -1;
+    uint32_t len = 0;
+    while (target[len] && len < bufsz - 1) {
+        buf[len] = target[len];
+        len++;
+    }
+    buf[len] = '\0';
+    return (int)len;
+}
+
+/* ---------- Path resolution with symlink following ----------------------- */
+
+/* Forward declaration */
+static vfs_node_t *_walk_path_follow(vfs_node_t *start, const char *path,
+                                      int *depth, int *err);
+
+static vfs_node_t *_walk_one_follow(vfs_node_t *dir, const char *seg,
+                                     int *depth, int *err) {
+    vfs_node_t *node = _walk_one(dir, seg);
+    if (!node) return 0;
+
+    if (node->type == VFS_SYMLINK) {
+        if (*depth >= VFS_SYMLINK_MAX_DEPTH) {
+            *err = ELOOP;
+            return 0;
+        }
+        (*depth)++;
+
+        char target[VFS_SYMLINK_TARGET_MAX];
+        int len = vfs_readlink_node(node, target, VFS_SYMLINK_TARGET_MAX);
+        if (len <= 0) return 0;
+
+        /* Resolve relative to the directory containing the symlink */
+        vfs_node_t *base = (target[0] == '/') ? vfs_root : dir;
+        return _walk_path_follow(base, target, depth, err);
+    }
+    return node;
+}
+
+static vfs_node_t *_walk_path_follow(vfs_node_t *start, const char *path,
+                                      int *depth, int *err) {
+    if (!path) return start ? start : vfs_root;
+    vfs_node_t *cur = start ? start : vfs_root;
+    if (!cur) return 0;
+
+    const char *p = path;
+    while (*p == '/') p++;
+
+    while (*p && cur && !*err) {
+        char seg[128];
+        int  si = 0;
+        while (*p && *p != '/' && si < 127) seg[si++] = *p++;
+        seg[si] = '\0';
+        if (*p == '/') p++;
+        if (si == 0) continue;
+        cur = _walk_one_follow(cur, seg, depth, err);
+    }
+    if (*err) return 0;
+    return cur;
+}
+
+vfs_node_t *vfs_walk_path_follow(vfs_node_t *start, const char *path, int *err_out) {
+    int depth = 0;
+    int err   = 0;
+    vfs_node_t *result = _walk_path_follow(start, path, &depth, &err);
+    if (err_out) *err_out = err;
+    return result;
+}
+
+/* ---------- Reference counting ------------------------------------------ */
+
+void vfs_node_ref(vfs_node_t *node) {
+    if (node) node->refcount++;
+}
+
+void vfs_node_unref(vfs_node_t *node) {
+    if (!node || node->refcount == 0) return;
+    node->refcount--;
+    if (node->refcount == 0 && node->type == VFS_SYMLINK) {
+        /* Return this slot to the pool */
+        mutex_lock(&symlink_mutex);
+        vfs_symlink_entry_t *entry = (vfs_symlink_entry_t *)node;
+        if (entry >= symlink_pool &&
+            entry < symlink_pool + VFS_SYMLINK_POOL_SIZE) {
+            entry->in_use = 0;
+        }
+        mutex_unlock(&symlink_mutex);
+    }
+}
+
+/* ---------- Symlink / link / unlink VFS operations ---------------------- */
+
+/*
+ * vfs_symlink: create a symlink named `name` in `dir` pointing to `target`.
+ *
+ * If the filesystem backend implements ops->symlink, that is called.
+ * Otherwise a VFS-level symlink node is allocated from the pool and
+ * made visible by mounting it under (dir, name).
+ */
+int vfs_symlink(vfs_node_t *dir, const char *name, const char *target) {
+    if (!dir || dir->type != VFS_DIRECTORY || !name || !target) return -1;
+
+    if (dir->ops && dir->ops->symlink)
+        return dir->ops->symlink(dir, name, target);
+
+    /* Compute target string length */
+    int tlen = 0;
+    while (target[tlen]) tlen++;
+
+    vfs_node_t *sym = vfs_symlink_alloc(target, (uint32_t)tlen);
+    if (!sym) return -1;
+    strlcpy(sym->name, name, 128);
+
+    int ret = vfs_mount(dir, name, sym);
+    if (ret != 0)
+        vfs_node_unref(sym); /* free the pool slot back */
+    return ret;
+}
+
+/*
+ * vfs_link: create a hard link named `name` in `dir` pointing to `target_node`.
+ */
+int vfs_link(vfs_node_t *dir, const char *name, vfs_node_t *target_node) {
+    if (!dir || dir->type != VFS_DIRECTORY || !name || !target_node) return -1;
+    if (!dir->ops || !dir->ops->link) return -1;
+    int ret = dir->ops->link(dir, name, target_node);
+    if (ret == 0) vfs_node_ref(target_node);
+    return ret;
+}
+
+/*
+ * vfs_unlink: remove the directory entry named `name` from `dir`.
+ *
+ * For VFS-level symlinks (mounted via the symlink pool) the mount entry is
+ * removed and the pool slot is released via vfs_node_unref.
+ * For filesystem-backed entries the filesystem's unlink (or delete) op is used.
+ */
+int vfs_unlink(vfs_node_t *dir, const char *name) {
+    if (!dir || dir->type != VFS_DIRECTORY || !name) return -1;
+
+    /* Check if there is a VFS-level symlink mounted at (dir, name) */
+    mutex_lock(&vfs_mutex);
+    vfs_node_t *mounted = 0;
+    for (int i = 0; i < mount_count; i++) {
+        if (mount_table[i].host == dir && streq(mount_table[i].name, name)) {
+            mounted = mount_table[i].target;
+            break;
+        }
+    }
+    mutex_unlock(&vfs_mutex);
+
+    if (mounted && mounted->type == VFS_SYMLINK) {
+        int ret = vfs_umount(dir, name);
+        if (ret == 0) vfs_node_unref(mounted);
+        return ret;
+    }
+
+    /* Filesystem-backed: prefer ops->unlink, fall back to ops->delete */
+    if (dir->ops && dir->ops->unlink) {
+        vfs_node_t *node = finddir_vfs(dir, (char *)name);
+        int ret = dir->ops->unlink(dir, name);
+        if (ret == 0 && node) vfs_node_unref(node);
+        return ret;
+    }
+    if (dir->ops && dir->ops->delete)
+        return dir->ops->delete(dir, name);
+    return -1;
 }

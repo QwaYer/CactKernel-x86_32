@@ -56,6 +56,12 @@
 #define SYS_SENDTO        50
 #define SYS_RECVFROM      51
 
+/* VFS symlink / hard-link syscalls */
+#define SYS_SYMLINK       54
+#define SYS_READLINK      55
+#define SYS_LINK          56
+#define SYS_UNLINK        57
+
 int syscall(int num, int p1, int p2, int p3);
 
 #endif
