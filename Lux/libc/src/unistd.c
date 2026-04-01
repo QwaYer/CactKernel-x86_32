@@ -1,5 +1,7 @@
 #include "unistd.h"
 #include "syscall.h"
+#include "select.h"
+#include "poll.h"
 
 ssize_t read(int fd, void *buf, size_t count) {
     return syscall(SYS_READ, fd, (int)buf, count);
@@ -92,4 +94,21 @@ int pipe(int pipefd[2]) {
 
 int dup2(int oldfd, int newfd) {
     return syscall(SYS_DUP2, oldfd, newfd, 0);
+}
+
+/* select: pack 5 args into a struct, pass pointer in ebx */
+int select(int nfds, fd_set *readfds, fd_set *writefds,
+           fd_set *exceptfds, struct timeval *timeout) {
+    select_args_t args;
+    args.nfds     = nfds;
+    args.readfds  = readfds;
+    args.writefds = writefds;
+    args.exceptfds = exceptfds;
+    args.timeout  = timeout;
+    return __syscall1(SYS_SELECT, (int)&args);
+}
+
+/* poll: 3 args fit directly in ebx/ecx/edx */
+int poll(struct pollfd *fds, int nfds, int timeout_ms) {
+    return __syscall3(SYS_POLL, (int)fds, nfds, timeout_ms);
 }

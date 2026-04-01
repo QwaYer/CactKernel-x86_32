@@ -62,6 +62,10 @@
 #define SYS_LINK          56
 #define SYS_UNLINK        57
 
+/* I/O multiplexing */
+#define SYS_SELECT        58
+#define SYS_POLL          59
+
 int syscall(int num, int p1, int p2, int p3);
 
 #endif

@@ -58,6 +58,16 @@
 #define SYS_RECVFROM      51
 
 
+/* VFS symlink / hard-link syscalls */
+#define SYS_SYMLINK       54
+#define SYS_READLINK      55
+#define SYS_LINK          56
+#define SYS_UNLINK        57
+
+/* I/O multiplexing */
+#define SYS_SELECT        58
+#define SYS_POLL          59
+
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
