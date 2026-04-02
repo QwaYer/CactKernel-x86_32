@@ -46,12 +46,19 @@ static inline uint32_t slot_to_lba(swap_slot_t slot)
 //Public api
 int swap_init(swap_read_fn read_fn, swap_write_fn write_fn, uint32_t slots)
 {
-    if (!read_fn || !write_fn) return -1;
+    if (!read_fn || !write_fn) {
+        kprint_color("[SWAP] no read/write callbacks — swap disabled\n", COLOR_LIGHT_RED);
+        return -1;
+    }
 
     g_read  = read_fn;
     g_write = write_fn;
     g_total_slots = (slots == 0 || slots > SWAP_MAX_SLOTS)
                     ? SWAP_MAX_SLOTS : slots;
+
+    kprint("[SWAP] slots="); char buf[12]; itoa((int)g_total_slots, buf); kprint(buf);
+    kprint("  space="); itoa((int)(g_total_slots * PAGE_SIZE / 1024 / 1024), buf); kprint(buf);
+    kprint(" MB  bitmap="); itoa(SWAP_BITMAP_SIZE, buf); kprint(buf); kprint(" B\n");
 
     for (uint32_t i = 0; i < SWAP_BITMAP_SIZE; i++) g_bitmap[i] = 0;
     uint8_t* p = (uint8_t*)&g_stats;
@@ -60,9 +67,7 @@ int swap_init(swap_read_fn read_fn, swap_write_fn write_fn, uint32_t slots)
 
     irq_spinlock_init(&g_swap_lock);
     g_enabled = 1;
-
-    char buf[12]; itoa((int)g_total_slots, buf); 
-    itoa((int)(g_total_slots * PAGE_SIZE / 1024 / 1024), buf); 
+    kprint("[SWAP] enabled — clock-hand eviction ready\n");
     return 0;
 }
 
