@@ -51,7 +51,8 @@ int ps2_keyboard_init(void) {
     while (port_byte_in(0x64) & 0x01)
         port_byte_in(0x60);
 
-    kprint("[KBD] ready — IRQ1 will fire on each keypress\n");
+    kprint("[KBD] ctrl-C=SIGINT  ctrl-\\=SIGQUIT  caps-lock tracked\n");
+    klog(LOG_OK, "PS/2 keyboard ready — IRQ1 active");
     return 0;
 }
 
