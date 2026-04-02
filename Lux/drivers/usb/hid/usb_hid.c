@@ -297,5 +297,7 @@ static usb_driver_t hid_driver = {
 };
 
 void usb_hid_init(void) {
+    kprint("[USB-HID] registering HID driver with USB core\n");
     usb_driver_register(&hid_driver);
+    klog(LOG_OK, "USB HID driver registered");
 }

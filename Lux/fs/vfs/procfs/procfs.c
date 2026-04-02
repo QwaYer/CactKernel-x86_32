@@ -492,16 +492,19 @@ int procfs_unregister_cmd(const char *name) {
 
 void procfs_init(void) {
     if (procfs_ready) return;
+    kprint("[procfs] setting up cmd/ directory node\n");
     memset(&cmd_dir, 0, sizeof(vfs_node_t));
     strlcpy(cmd_dir.name, "cmd", 128);
     cmd_dir.type = VFS_DIRECTORY;
     cmd_dir.ops  = &cmd_dir_ops;
 
+    kprint("[procfs] setting up root 'proc' directory node\n");
     memset(&procfs_root, 0, sizeof(vfs_node_t));
     strlcpy(procfs_root.name, "proc", 128);
     procfs_root.type = VFS_DIRECTORY;
     procfs_root.ops  = &root_ops;
 
+    kprint("[procfs] registering virtual files: cpuinfo meminfo uptime version tasks\n");
     procfs_register_file("cpuinfo", _cpuinfo_read);
     procfs_register_file("meminfo", _meminfo_read);
     procfs_register_file("uptime",  _uptime_read);
@@ -509,4 +512,5 @@ void procfs_init(void) {
     procfs_register_file("tasks",   _tasks_read);
 
     procfs_ready = 1;
+    klog(LOG_OK, "procfs ready — cpuinfo/meminfo/uptime/version/tasks/cmd");
 }
