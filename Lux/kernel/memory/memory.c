@@ -38,6 +38,10 @@ void init_memory_manager() {
         bitmap_set(i);
     }
     first_available_page = reserved_pages;
+    kprint("[PMM] free pages available from #");
+    itoa(first_available_page, buf); kprint(buf);
+    kprint("  ("); itoa((TOTAL_PAGES - reserved_pages) * 4, buf); kprint(buf); kprint(" KB free)\n");
+    klog(LOG_OK, "PMM ready");
 }
 
 void init_heap() {
@@ -57,6 +61,7 @@ void init_heap() {
 
     kprint("[HEAP] single free block: usable=");
     itoa((int)heap_start->size / 1024, buf); kprint(buf); kprint(" KB\n");
+    klog(LOG_OK, "heap ready");
 }
 
 void init_paging() {
@@ -82,6 +87,7 @@ void init_paging() {
     load_page_directory(page_directory);
     enable_paging();
     kprint("[PAGING] paging enabled — virtual address space active\n");
+    klog(LOG_OK, "paging enabled");
 }
 
 

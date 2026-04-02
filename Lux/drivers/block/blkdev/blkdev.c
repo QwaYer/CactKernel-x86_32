@@ -85,10 +85,13 @@ void blkdev_init(void) {
     if (boot_dev) {
         kprint("[BLKDEV] boot device: "); kprint(boot_dev->name);
         kprint("  max_lba="); char buf[16]; hex_to_ascii(boot_dev->max_lba, buf); kprint(buf);
-        kprint("\n");
+        kprint("  total="); itoa((int)((uint64_t)boot_dev->max_lba * 512 / 1024 / 1024), buf);
+        kprint(buf); kprint(" MB\n");
+        klog(LOG_OK,  "block device layer ready");
     } else {
         kprint_color("[BLKDEV] no boot device found — filesystem mounts will fail\n",
                      COLOR_LIGHT_RED);
+        klog(LOG_WARN, "no boot disk — storage unavailable");
     }
 }
 

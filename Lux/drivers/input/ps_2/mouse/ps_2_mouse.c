@@ -38,7 +38,8 @@ void ps2_mouse_init(void) {
     kprint("[MOUSE] sending 0xF6 (set defaults)  0xF4 (enable data reporting)\n");
     ps2_write(0xF6); ps2_read();
     ps2_write(0xF4); ps2_read();
-    kprint("[MOUSE] ready — 3-byte packets on IRQ12\n");
+    kprint("[MOUSE] 3-byte packet mode: btn(1B) dx(1B) dy(1B)\n");
+    klog(LOG_OK, "PS/2 mouse ready — IRQ12 active");
 }
 
 void ps2_mouse_handler(void) {

@@ -59,6 +59,7 @@ void page_fault_init(void)
     kprint("[PF] clearing stats  handlers: COW demand-paging stack-grow swap-in SEGFAULT\n");
     uint8_t* p = (uint8_t*)&g_stats;
     for (uint32_t i = 0; i < sizeof(g_stats); i++) p[i] = 0;
+    klog(LOG_OK, "page fault handler ready");
 }
 
 void page_fault_handler(struct context_frame* regs)

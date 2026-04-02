@@ -67,7 +67,9 @@ int swap_init(swap_read_fn read_fn, swap_write_fn write_fn, uint32_t slots)
 
     irq_spinlock_init(&g_swap_lock);
     g_enabled = 1;
-    kprint("[SWAP] enabled — clock-hand eviction ready\n");
+    kprint("[SWAP] clock-hand eviction  start_lba=");
+    { char buf[12]; itoa(SWAP_DATA_START_LBA, buf); kprint(buf); kprint("\n"); }
+    klog(LOG_OK, "swap ready");
     return 0;
 }
 

@@ -51,5 +51,6 @@ void init_gdt() {
     gdt_flush((uint32_t)&gp);
     kprint("[GDT] GDTR loaded  segment registers reloaded\n");
     tss_flush();
-    kprint("[GDT] TR loaded\n");
+    kprint("[GDT] TR loaded  kernel ring0 CS=0x08 DS=0x10  user ring3 CS=0x1B DS=0x23\n");
+    klog(LOG_OK, "GDT ready");
 }
