@@ -7,7 +7,8 @@
 #include "proc_mm.h"
 #include "sync.h"
 #include "mmap.h"
-#include "dynlink.h"   
+#include "dynlink.h"
+#include "shm.h"
 
 #define USER_CODE_SEL 0x1B
 #define USER_DATA_SEL 0x23
@@ -106,6 +107,8 @@ struct task_struct {
     uint32_t sleep_until;
 
     char cwd[256];
+
+    shm_attachment_t shm_attachments[TASK_SHM_MAX];
 };
 
 typedef struct sched_queue {
