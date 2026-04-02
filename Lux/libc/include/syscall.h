@@ -45,8 +45,6 @@
 #define SYS_SIGSUSPEND    40
 #define SYS_ALARM         41
 #define SYS_SETITIMER     42
-
-/* Socket syscalls */
 #define SYS_SOCKET        43
 #define SYS_BIND          44
 #define SYS_CONNECT       45
@@ -59,16 +57,16 @@
 #define SYS_SHUTDOWN      52
 #define SYS_SETSOCKOPT    53
 #define SYS_GETSOCKOPT    60
-
-/* VFS symlink / hard-link syscalls */
 #define SYS_SYMLINK       54
 #define SYS_READLINK      55
 #define SYS_LINK          56
 #define SYS_UNLINK        57
-
-/* I/O multiplexing */
 #define SYS_SELECT        58
 #define SYS_POLL          59
+#define SYS_SHMGET        61
+#define SYS_SHMAT         62
+#define SYS_SHMDT         63
+#define SYS_SHMCTL        64
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
