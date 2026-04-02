@@ -10,8 +10,10 @@
 static ksock_t ksock_table[KSOCK_MAX];
 
 void ksock_init(void) {
+    kprint("[ksock] clearing kernel socket table (16 slots)\n");
     for (int i = 0; i < KSOCK_MAX; i++)
         ksock_table[i].used = 0;
+    klog(LOG_OK, "kernel socket table ready — 16 slots");
 }
 
 /* ── Forward declarations for VFS ops ────────────────────────────────────── */
