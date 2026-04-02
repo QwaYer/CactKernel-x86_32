@@ -139,6 +139,7 @@ void pc_init(void) {
     stat_evictions  = 0;
     stat_writebacks = 0;
     kprint("[PCACHE] LRU list cleared  stats zeroed\n");
+    klog(LOG_OK, "page cache ready");
 }
 
 uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {

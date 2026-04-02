@@ -128,7 +128,6 @@ void kprint_color(char* message, uint32_t color);
 void kprint_at   (char* message, int x, int y);
 void clear_screen(void);
 void scroll      (void);
-void boot_log    (char* component, log_level_t level);
 void klog        (log_level_t level, const char* message);
 int  get_cursor_x(void);
 int  get_cursor_y(void);
@@ -156,7 +155,7 @@ static inline uint32_t* get_current_pd(void) {
 }
 
 // Hardware Initialization
-log_level_t init_framebuffer(void);
+void init_framebuffer(void);
 int         probe_io_ports  (void);
 int         detect_memory   (void);
 void init_timer      (uint32_t frequency);

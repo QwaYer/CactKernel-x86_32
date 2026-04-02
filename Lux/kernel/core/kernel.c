@@ -126,7 +126,8 @@ void kprint_at(char* message, int x, int y) {
     kprint(message);
 }
 
-log_level_t init_framebuffer() {
+void init_framebuffer() {
+    kprint("[FB] checking multiboot framebuffer parameters\n");
     fb_init_result_t status = fb_get_init_status();
 
     if (status != FB_INIT_OK) {
@@ -138,26 +139,21 @@ log_level_t init_framebuffer() {
             [FB_INIT_NULL_PARAM] = "null address or zero width/height",
         };
         klog(LOG_ERROR, fb_errors[status]);
-        return LOG_FAIL;
+        klog(LOG_FAIL,  "Framebuffer — cannot continue without display");
+        return;
     }
 
     char buf[16];
-    kprint("        ");
-    kprint_color("addr=0x", COLOR_DARK_GREY);
-    hex_to_ascii((uint32_t)fb_get_buffer(), buf);
-    kprint_color(buf, COLOR_LIGHT_GREY);
-    kprint("  ");
-    itoa((int)fb_get_width(),  buf); kprint_color(buf, COLOR_WHITE);
-    kprint("x");
-    itoa((int)fb_get_height(), buf); kprint_color(buf, COLOR_WHITE);
-    kprint("  ");
-    itoa((int)fb_get_pitch() / (32 / 8), buf);
-    kprint_color("32bpp", COLOR_LIGHT_CYAN);
-    kprint("  pitch=");
-    itoa((int)fb_get_pitch(), buf); kprint_color(buf, COLOR_LIGHT_GREY);
-    kprint("\n");
-
-    return LOG_OK;
+    kprint("[FB] addr=0x");
+    hex_to_ascii((uint32_t)fb_get_buffer(), buf); kprint(buf);
+    kprint("  res=");
+    itoa((int)fb_get_width(), buf);  kprint(buf); kprint("x");
+    itoa((int)fb_get_height(), buf); kprint(buf);
+    kprint("  32bpp  pitch=");
+    itoa((int)fb_get_pitch(), buf); kprint(buf); kprint("\n");
+    kprint("[FB] cols="); itoa((int)(fb_get_width()  / (8*2)), buf); kprint(buf);
+    kprint("  rows=");   itoa((int)(fb_get_height() / (8*2)), buf); kprint(buf); kprint("\n");
+    klog(LOG_OK, "Framebuffer ready");
 }
 
 int probe_io_ports() {
@@ -307,38 +303,6 @@ void terminal_task() {
     kfree_heap(cmd_buffer);
 }
 
-void boot_log(char* component, log_level_t level) {
-    kprint("  [ ] ");
-    kprint(component);
-
-    int len = strlen(component);
-    for (int i = len; i < 35; i++)
-        kprint(".");
-
-    switch (level) {
-    case LOG_OK:
-        kprint(" [  ");
-        kprint_color("OK", COLOR_LIGHT_GREEN);
-        kprint("  ]\n");
-        break;
-    case LOG_WARN:
-        kprint(" [ ");
-        kprint_color("WARN", COLOR_LIGHT_BROWN);
-        kprint(" ]\n");
-        break;
-    case LOG_ERROR:
-        kprint(" [");
-        kprint_color("ERROR", COLOR_LIGHT_RED);
-        kprint("]\n");
-        break;
-    case LOG_FAIL:
-        kprint(" [ ");
-        kprint_color("FAIL", COLOR_LIGHT_RED);
-        kprint(" ]\n");
-        break;
-    }
-}
-
 void klog(log_level_t level, const char* message) {
     kprint("        ");
     switch (level) {
@@ -392,112 +356,124 @@ void kernel_setup_hardware(multiboot_info_t *mbi) {
         if (fb_phys != 0) {
             uint32_t fb_size = fb_get_height() * fb_get_pitch();
             fb_size = (fb_size + 0xFFF) & ~0xFFF;
-            for (uint32_t off = 0; off < fb_size; off += 0x1000) {
+            char buf[16];
+            kprint("[KRNL] mapping framebuffer 0x");
+            hex_to_ascii(fb_phys, buf); kprint(buf);
+            kprint("  size="); itoa((int)(fb_size / 1024), buf); kprint(buf); kprint(" KB\n");
+            for (uint32_t off = 0; off < fb_size; off += 0x1000)
                 vmm_map(page_directory, fb_phys + off, fb_phys + off,
                         PAGE_PRESENT | PAGE_RW);
-            }
+            klog(LOG_OK, "framebuffer identity-mapped");
+        } else {
+            klog(LOG_WARN, "framebuffer not yet mapped — skipping VMM map");
         }
     }
 
     init_paging();
     slab_init();
-    boot_log("Memory Manager & Heap", LOG_OK);
-
     page_fault_init();
-    boot_log("Page Fault Handler", LOG_OK);
 
     init_pic();
     init_idt();
-    boot_log("IDT & PIC (Interrupts)", LOG_OK);
 
-    boot_log("Framebuffer", init_framebuffer());
-    boot_log("PS/2 Keyboard", ps2_keyboard_init() ? LOG_FAIL : LOG_OK);
+    init_framebuffer();
+
+    ps2_keyboard_init();
     ps2_mouse_init();
-    boot_log("PS/2 Mouse", LOG_OK);
 
     {
+        kprint("[IO] probing PS/2 controller (port 0x64)\n");
         int io_status = probe_io_ports();
-        boot_log("I/O Ports Probe", io_status ? LOG_WARN : LOG_OK);
         if (io_status)
-            klog(LOG_WARN, "port 0x64 returned 0xFF — no PS/2 controller?");
+            klog(LOG_WARN, "port 0x64 = 0xFF — PS/2 controller absent or unresponsive");
+        else
+            klog(LOG_OK, "PS/2 controller present");
     }
 
     {
+        kprint("[CMOS] reading extended memory from CMOS (regs 0x17/0x18)\n");
         int mem_status = detect_memory();
-        boot_log("Base Memory Detect", mem_status ? LOG_WARN : LOG_OK);
         if (mem_status)
-            klog(LOG_WARN, "CMOS extended memory read returned 0 KB");
+            klog(LOG_WARN, "CMOS returned 0 KB — memory size unreliable");
+        else
+            klog(LOG_OK, "CMOS memory size valid");
     }
 
-    boot_log("PCI Bus Scan", search_pci() ? LOG_FAIL : LOG_OK);
+    kprint("[PCI] scanning bus for devices\n");
+    if (search_pci())
+        klog(LOG_WARN, "PCI scan reported error");
+    else
+        klog(LOG_OK, "PCI bus scan complete");
+
+    kprint("[PCI] enumerating and binding drivers\n");
     pci_enumerate();
     {
-        log_level_t pci_level = pci_device_count > 0 ? LOG_OK : LOG_WARN;
-        boot_log("PCI Enumerate", pci_level);
-        if (pci_level == LOG_WARN)
-            klog(LOG_WARN, "no PCI devices found");
+        char buf[8]; itoa(pci_device_count, buf);
+        kprint("[PCI] "); kprint(buf); kprint(" device(s) found\n");
+        if (pci_device_count > 0)
+            klog(LOG_OK,  "PCI enumeration done");
+        else
+            klog(LOG_WARN, "no PCI devices — storage/net/USB unavailable");
     }
 
+    kprint("[USB] initializing xHCI host controller stack\n");
     extern void usb_init(void);
     usb_init();
-    boot_log("USB Stack", LOG_OK);
+    klog(LOG_OK, "USB stack initialised");
 
     blkdev_init();
-    {
-        log_level_t blk_level = blkdev_get_boot() ? LOG_OK : LOG_WARN;
-        boot_log("Block Device Layer", blk_level);
-        if (blk_level == LOG_WARN)
-            klog(LOG_WARN, "no boot disk found — filesystem mounts will fail");
-    }
 
     pc_init();
-    boot_log("Page Cache", LOG_OK);
 
     {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
-        boot_log("Swap (Page Eviction)", swap_status ? LOG_WARN : LOG_OK);
         if (swap_status)
-            klog(LOG_WARN, "swap disabled — OOM may kill processes");
+            klog(LOG_WARN, "swap init failed — OOM killer is last resort");
     }
 
     vfs_init();
-    boot_log("Virtual File System", LOG_OK);
 
+    kprint("[MNT] mounting virtual filesystems\n");
     extern void mntfs_init();
     mntfs_init();
 
     if (mbi && (mbi->flags & 0x1)) {
         extern void procfs_set_meminfo(uint32_t, uint32_t);
+        char buf[12];
+        itoa((int)mbi->mem_lower, buf);
+        kprint("[MNT] mem_lower="); kprint(buf); kprint(" KB");
+        itoa((int)mbi->mem_upper, buf);
+        kprint("  mem_upper="); kprint(buf); kprint(" KB\n");
         procfs_set_meminfo(mbi->mem_lower, mbi->mem_upper);
     }
-
-    boot_log("EXT4 File System mount", LOG_OK);
-    boot_log("Device File System mount", LOG_OK);
-    boot_log("Process File System mount", LOG_OK);
-    boot_log("Mount manager", LOG_OK);
+    klog(LOG_OK, "EXT4 / devfs / procfs / mntfs mounted");
 
     net_init();
-    boot_log("Network Stack", LOG_OK);
 
     task_init();
     init_scheduler();
-    init_timer(100);
-    boot_log("Scheduler & PIT Timer", LOG_OK);
 
+    kprint("[PIT] configuring 8253 timer  divisor=");
+    { char buf[8]; itoa(1193180 / 100, buf); kprint(buf); }
+    kprint("  freq=100 Hz\n");
+    init_timer(100);
+    klog(LOG_OK, "PIT timer @ 100 Hz — IRQ0 active");
+
+    kprint("[SHELL] registering built-in commands\n");
     extern void commands_init();
     commands_init();
-    boot_log("Terminal Commands", LOG_OK);
+    klog(LOG_OK, "shell commands registered");
 
     extern void shell_init();
     shell_init();
 
+    kprint("[KRNL] allocating key input buffer (2 KB)\n");
     key_buffer = (char*)kmalloc(2048);
     if (key_buffer != 0) {
-        boot_log("System Buffers", LOG_OK);
+        klog(LOG_OK, "key buffer ready");
     } else {
         static char key_buffer_fallback[2048];
         key_buffer = key_buffer_fallback;
-        boot_log("System Buffers", LOG_WARN);
         klog(LOG_WARN, "heap alloc failed — using static fallback buffer");
     }
 }

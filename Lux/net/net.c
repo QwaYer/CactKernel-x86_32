@@ -82,6 +82,10 @@ void net_init(void) {
     kprint("[NET] initializing ARP cache\n");
     extern void arp_init(void);
     arp_init();
+    if (active_nic)
+        klog(LOG_OK,  "network stack ready");
+    else
+        klog(LOG_WARN, "network stack up but no NIC — TX/RX disabled");
 }
 
 void net_receive(skb_t* skb) {
