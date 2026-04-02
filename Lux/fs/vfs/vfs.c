@@ -63,6 +63,7 @@ void vfs_init(void) {
     mutex_init(&symlink_mutex);
     mount_count = 0;
     kprint("[VFS] root=NULL (will be set on first mount)\n");
+    klog(LOG_OK, "VFS ready");
 }
 
 int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target) {

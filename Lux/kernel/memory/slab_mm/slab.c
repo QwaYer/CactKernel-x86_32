@@ -311,11 +311,13 @@ void slab_init(void)
         if (!g_generic_caches[i]) {
             kprint_color("[SLAB] failed to create cache: ", COLOR_LIGHT_RED);
             kprint_color(name, COLOR_LIGHT_RED); kprint("\n");
+            klog(LOG_FAIL, "slab cache creation failed");
         }
     }
 
     kprint("[SLAB] "); char buf[4]; itoa(GENERIC_CACHE_COUNT, buf); kprint(buf);
     kprint(" generic caches ready\n");
+    klog(LOG_OK, "slab allocator ready");
 }
 
 

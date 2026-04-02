@@ -81,6 +81,7 @@ void task_init() {
     sched_queue_init(&zombie_queue);
     sched_queue_init(&wait_queue);
     kprint("[SCHED] scheduler lock initialized  next_pid=1\n");
+    klog(LOG_OK, "scheduler queues ready");
 }
 
 
@@ -357,9 +358,10 @@ struct task_struct* create_elf_task(char* path) {
 
 
 int init_scheduler() {
+    kprint("[SCHED] allocating idle task (pid=0, kernel, no page directory)\n");
     current_task = (struct task_struct*)kmalloc(sizeof(struct task_struct));
     if (!current_task) {
-        kprint("[SCHED] FATAL: cannot alloc idle task\n");
+        klog(LOG_FAIL, "cannot allocate idle task — out of heap");
         return -1;
     }
 
@@ -394,7 +396,9 @@ int init_scheduler() {
     task_list_head = current_task;
 
 
+    kprint("[SCHED] spawning terminal_task (pid=1)\n");
     create_task(terminal_task);
+    klog(LOG_OK, "scheduler ready — idle(pid=0) + terminal(pid=1) created");
     return 0;
 }
 

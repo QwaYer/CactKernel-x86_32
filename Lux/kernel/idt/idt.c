@@ -57,6 +57,7 @@ void init_pic(void) {
     port_byte_out(0x21, 0xF8);  // master: unmask IRQ0(timer), IRQ1(kbd), IRQ2(cascade)
     port_byte_out(0xA1, 0x80);  // slave: mask only IRQ15, rest open for USB/mouse/nvme
     kprint("[PIC] mask: master=0xF8 (IRQ0/1/2 active)  slave=0x80 (IRQ15 masked)\n");
+    klog(LOG_OK, "PIC remapped and configured");
 }
 
 int init_idt(void) {
@@ -122,5 +123,6 @@ int init_idt(void) {
 
     kprint("[IDT] loading IDTR\n");
     __asm__ __volatile__("lidt (%0)" : : "r"(&idtp));
+    klog(LOG_OK, "IDT loaded — exceptions and IRQs armed");
     return 0;
 }
