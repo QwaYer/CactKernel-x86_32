@@ -291,6 +291,8 @@ void slab_print_stats(const slab_cache_t* cache)
 
 void slab_init(void)
 {
+    kprint("[SLAB] initializing  generic caches: 8 16 32 64 128 256 512 1024 2048 B\n");
+
     irq_spinlock_init(&g_cache_lock);
     g_cache_list = NULL;
 
@@ -306,7 +308,14 @@ void slab_init(void)
 
         g_generic_caches[i] = slab_cache_create(name, g_generic_sizes[i],
                                                  NULL, NULL);
+        if (!g_generic_caches[i]) {
+            kprint_color("[SLAB] failed to create cache: ", COLOR_LIGHT_RED);
+            kprint_color(name, COLOR_LIGHT_RED); kprint("\n");
+        }
     }
+
+    kprint("[SLAB] "); char buf[4]; itoa(GENERIC_CACHE_COUNT, buf); kprint(buf);
+    kprint(" generic caches ready\n");
 }
 
 

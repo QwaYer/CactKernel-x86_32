@@ -57,9 +57,12 @@ static vfs_node_t *_walk_one(vfs_node_t *dir, const char *name) {
 
 //Public api
 void vfs_init(void) {
+    kprint("[VFS] mount table: capacity="); char buf[8]; itoa(VFS_MOUNT_MAX, buf); kprint(buf);
+    kprint(" slots  initializing mutex\n");
     mutex_init(&vfs_mutex);
     mutex_init(&symlink_mutex);
     mount_count = 0;
+    kprint("[VFS] root=NULL (will be set on first mount)\n");
 }
 
 int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target) {

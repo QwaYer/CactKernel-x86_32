@@ -65,14 +65,21 @@ static void knetd() {
 }
 
 void net_init(void) {
+    kprint("[NET] initializing semaphore and spawning knetd task\n");
     sema_init(&net_sema, 0);
     create_task(knetd);
 
-    /* 1. Bring up the NIC driver */
+    kprint("[NET] probing virtio-net NIC\n");
     extern void virtio_net_init(void);
     virtio_net_init();
 
-    /* 2. Upper-layer init (ARP cache, routing table …) */
+    if (active_nic) {
+        kprint("[NET] NIC registered: "); kprint((char*)active_nic->name); kprint("\n");
+    } else {
+        kprint_color("[NET] no NIC found — network unavailable\n", COLOR_LIGHT_RED);
+    }
+
+    kprint("[NET] initializing ARP cache\n");
     extern void arp_init(void);
     arp_init();
 }
