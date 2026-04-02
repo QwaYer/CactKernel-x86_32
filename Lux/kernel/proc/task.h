@@ -7,6 +7,7 @@
 #include "proc_mm.h"
 #include "sync.h"
 #include "mmap.h"
+#include "dynlink.h"
 #include "dynlink.h"   
 #include "shm.h"
 
@@ -110,6 +111,8 @@ struct task_struct {
     task_shm_attach_t shm_attachments[TASK_SHM_MAX];
 
     char cwd[256];
+
+    shm_attachment_t shm_attachments[TASK_SHM_MAX];
 };
 
 typedef struct sched_queue {

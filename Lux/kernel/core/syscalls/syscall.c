@@ -8,6 +8,7 @@
 #include "tcp.h"
 #include "udp.h"
 #include "net.h"
+#include "shm.h"
 
 struct syscall_frame {
     uint32_t es, ds;
@@ -1952,6 +1953,35 @@ static int sys_poll(struct syscall_frame *regs) {
     }
 }
 
+/* ---------- Syscall 61-64: IPC shared memory ---------------------------- */
+
+static int sys_shmget(struct syscall_frame* regs) {
+    int      key   = (int)regs->ebx;
+    uint32_t size  = regs->ecx;
+    int      flags = (int)regs->edx;
+    return shm_get(key, size, flags);
+}
+
+static int sys_shmat(struct syscall_frame* regs) {
+    int      shmid   = (int)regs->ebx;
+    uint32_t shmaddr = regs->ecx;
+    int      flags   = (int)regs->edx;
+    return (int)shm_at(shmid, shmaddr, flags);
+}
+
+static int sys_shmdt(struct syscall_frame* regs) {
+    uint32_t shmaddr = regs->ebx;
+    return shm_dt(shmaddr);
+}
+
+static int sys_shmctl(struct syscall_frame* regs) {
+    int   shmid = (int)regs->ebx;
+    int   cmd   = (int)regs->ecx;
+    void* buf   = (void*)regs->edx;
+    if (buf && !validate_user_ptr(buf, 64)) return -1;
+    return shm_ctl(shmid, cmd, buf);
+}
+
 typedef int (*syscall_fn)();
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
@@ -2015,6 +2045,10 @@ static syscall_fn syscall_table[] = {
     [58] = (syscall_fn)sys_select,
     [59] = (syscall_fn)sys_poll,
     [60] = (syscall_fn)sys_getsockopt,
+    [61] = (syscall_fn)sys_shmget,
+    [62] = (syscall_fn)sys_shmat,
+    [63] = (syscall_fn)sys_shmdt,
+    [64] = (syscall_fn)sys_shmctl,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 
@@ -2040,7 +2074,9 @@ void syscall_handler(struct syscall_frame* regs) {
         /* symlink syscalls (54-56 need full frame; 57 uses direct args) */
         num == 54 || num == 55 || num == 56 ||
         /* I/O multiplexing */
-        num == 58 || num == 59) {
+        num == 58 || num == 59 ||
+        /* IPC shared memory */
+        num == 61 || num == 62 || num == 63 || num == 64) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
         ret = syscall_table[num](

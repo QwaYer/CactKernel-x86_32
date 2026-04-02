@@ -6,6 +6,7 @@
 #include "gdt.h"
 #include "dynlink.h"
 #include "vfs.h"
+#include "shm.h"
 
 struct task_struct* volatile current_task   = 0;
 struct task_struct* volatile task_list_head = 0;
@@ -122,6 +123,10 @@ struct task_struct* create_task(void (*entry_point)()) {
         t->fd_table[i] = 0;
         t->fd_offset[i] = 0;
     }
+    for (int i = 0; i < TASK_SHM_MAX; i++) {
+        t->shm_attachments[i].shm_id    = 0;
+        t->shm_attachments[i].shm_vaddr = 0;
+    }
 
     irq_spinlock_acquire(&scheduler_lock);
     task_list_add(t);
@@ -180,6 +185,10 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     for (int i = 0; i < MAX_FD; i++) {
         t->fd_table[i] = 0;
         t->fd_offset[i] = 0;
+    }
+    for (int i = 0; i < TASK_SHM_MAX; i++) {
+        t->shm_attachments[i].shm_id    = 0;
+        t->shm_attachments[i].shm_vaddr = 0;
     }
 
     if (add_to_list) {
@@ -376,6 +385,10 @@ int init_scheduler() {
         current_task->fd_table[i] = 0;
         current_task->fd_offset[i] = 0;
     }
+    for (int i = 0; i < TASK_SHM_MAX; i++) {
+        current_task->shm_attachments[i].shm_id    = 0;
+        current_task->shm_attachments[i].shm_vaddr = 0;
+    }
     task_list_head = current_task;
 
 
@@ -402,6 +415,7 @@ static void task_reap_internal() {
             t->dyn_ctx = 0;
         }
 
+        shm_detach_all(t->pid, t->page_directory);
         proc_free_pages(&t->mm);
         if (t->stack_base)     kfree_page(t->stack_base);
         if (t->ustack_phys)    kfree_page(t->ustack_phys);
@@ -871,6 +885,10 @@ struct task_struct* task_fork(struct context_frame* regs) {
     child->sleep_until    = 0;
     for (int i = 0; i < 256; i++) child->cwd[i] = parent->cwd[i];
     for (int i = 0; i < NSIG; i++) child->signal_handlers[i] = parent->signal_handlers[i];
+    for (int i = 0; i < TASK_SHM_MAX; i++) {
+        child->shm_attachments[i].shm_id    = 0;
+        child->shm_attachments[i].shm_vaddr = 0;
+    }
     proc_tracker_init(&child->mm);
     mmap_table_init(&child->mmap_table);
 
@@ -990,6 +1008,12 @@ int task_exec(char* path, char** argv, char** envp, struct context_frame* regs) 
     t->page_directory = new_pd;
     t->pending_signals = 0;
     for (int i = 0; i < NSIG; i++) t->signal_handlers[i] = SIG_DFL;
+
+    shm_detach_all(t->pid, t->page_directory);
+    for (int i = 0; i < TASK_SHM_MAX; i++) {
+        t->shm_attachments[i].shm_id    = 0;
+        t->shm_attachments[i].shm_vaddr = 0;
+    }
 
     mmap_table_init(&t->mmap_table);
 
