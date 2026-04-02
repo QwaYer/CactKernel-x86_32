@@ -231,51 +231,67 @@ static net_driver_t virtio_driver = {
 void virtio_net_init(void) {
     uint8_t bus, dev;
 
+    kprint("[VIRTIO-NET] searching PCI (vendor=1AF4 modern/legacy NIC)\n");
     /* Try modern first, then legacy */
     if (!pci_find(VIRTIO_PCI_VENDOR, VIRTIO_PCI_DEV_NET_MOD, &bus, &dev))
         if (!pci_find(VIRTIO_PCI_VENDOR, VIRTIO_PCI_DEV_NET, &bus, &dev)) {
             kprint("[VIRTIO-NET] Device not found on PCI bus.\n");
+            klog(LOG_WARN, "virtio-net: no NIC found");
             return;
         }
+    kprint("[VIRTIO-NET] found at bus="); kprint_hex(bus);
+    kprint(" dev="); kprint_hex(dev); kprint("\n");
 
     /* Read BAR0 (I/O space) */
+    kprint("[VIRTIO-NET] reading BAR0\n");
     uint32_t bar0 = pci_read32(bus, dev, 0, 0x10);
     if (!(bar0 & 1)) {
         kprint("[VIRTIO-NET] BAR0 is not I/O space — modern virtio needs different init.\n");
+        klog(LOG_FAIL, "virtio-net: BAR0 not I/O space");
         return;
     }
     io_base = (uint16_t)(bar0 & ~3);
+    kprint("[VIRTIO-NET] BAR0 io_base="); kprint_hex(io_base); kprint("\n");
 
     /* Enable bus mastering + I/O space in PCI command register */
+    kprint("[VIRTIO-NET] enabling bus mastering and I/O space\n");
     uint16_t cmd = pci_read16(bus, dev, 0, 0x04);
     pci_write32(bus, dev, 0, 0x04, cmd | 0x05);
 
     /* ── Virtio init sequence (legacy, section 3.1 of spec) ── */
-    /* 1. Reset device */
+    kprint("[VIRTIO-NET] step 1/6: reset device (STATUS=0)\n");
     port_byte_out(io_base + VIRTIO_PCI_STATUS, 0);
-    /* 2. Acknowledge */
+    kprint("[VIRTIO-NET] step 2/6: set ACKNOWLEDGE\n");
     port_byte_out(io_base + VIRTIO_PCI_STATUS, VIRTIO_STATUS_ACKNOWLEDGE);
-    /* 3. Tell device we are a driver */
+    kprint("[VIRTIO-NET] step 3/6: set DRIVER\n");
     port_byte_out(io_base + VIRTIO_PCI_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
-    /* 4. Negotiate features: request MAC and status */
+    kprint("[VIRTIO-NET] step 4/6: negotiate features (MAC + STATUS)\n");
     uint32_t host_feat = port_long_in(io_base + VIRTIO_PCI_HOST_FEATURES);
     uint32_t our_feat  = host_feat & (VIRTIO_NET_F_MAC | VIRTIO_NET_F_STATUS);
     port_long_out(io_base + VIRTIO_PCI_GUEST_FEATURES, our_feat);
-    /* 5. Setup virtqueues */
+    kprint("[VIRTIO-NET] step 5/6: allocate and activate virtqueues (RX+TX)\n");
     virtq_alloc(&vq_rx, VIRTQ_MAX_SIZE);
     virtq_alloc(&vq_tx, VIRTQ_MAX_SIZE);
     virtq_activate(&vq_rx, VIRTIO_NET_QUEUE_RX);
     virtq_activate(&vq_tx, VIRTIO_NET_QUEUE_TX);
-    /* 6. Driver OK */
+    kprint("[VIRTIO-NET] step 6/6: set DRIVER_OK\n");
     port_byte_out(io_base + VIRTIO_PCI_STATUS,
                   VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_DRIVER_OK);
 
     /* Read MAC */
     virtio_net_get_mac(&virtio_driver.mac);
+    kprint("[VIRTIO-NET] MAC: ");
+    for (int i = 0; i < 6; i++) {
+        kprint_hex(virtio_driver.mac.b[i]);
+        if (i < 5) kprint(":");
+    }
+    kprint("\n");
 
     /* Register with the stack */
+    kprint("[VIRTIO-NET] registering driver with network stack\n");
     net_register_driver(&virtio_driver);
 
-        /* Fill RX queue */
+    kprint("[VIRTIO-NET] filling RX queue with buffers\n");
     rx_fill();
+    klog(LOG_OK, "virtio-net ready");
 }

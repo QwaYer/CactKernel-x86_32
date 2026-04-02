@@ -457,13 +457,18 @@ int ahci_first_port(void) {
 }
 
 void ahci_init(void) {
+    kprint("[AHCI] initializing lock and registering PCI driver\n");
     irq_spinlock_init(&ahci_lock);
 
     pci_register_driver(&ahci_pci_driver);
 
+    kprint("[AHCI] searching PCI for class=01/06 (SATA controller)\n");
     pci_device_t *d = pci_find_by_class(0x01, 0x06);
     while (d) {
         if (d->prog_if == 0x01) {
+            kprint("[AHCI] found HBA at bus="); kprint_hex(d->bus);
+            kprint(" dev="); kprint_hex(d->dev); kprint(" fn="); kprint_hex(d->fn);
+            kprint("\n[AHCI] probing controller (MMIO BAR, bus master, HBA reset)\n");
             ahci_pci_probe(d);
             break;
         }
@@ -472,10 +477,22 @@ void ahci_init(void) {
             d = d->next;
     }
 
-    if (ahci_ready && ahci_first_port() >= 0) {
+    if (!d) {
+        klog(LOG_WARN, "AHCI: no SATA controller on PCI bus");
+        return;
+    }
+
+    int port = ahci_first_port();
+    if (ahci_ready && port >= 0) {
+        char tmp[16]; itoa(port, tmp);
+        kprint("[AHCI] active SATA port="); kprint(tmp);
+        kprint(" model="); kprint(ports_info[port].model); kprint("\n");
+        kprint("[AHCI] registering devfs node 'sda'\n");
         devfs_register("sda", DEVFS_F_BLOCK, &drv_ahci, 0);
+        klog(LOG_OK, "AHCI ready — /dev/sda registered");
     } else {
         kprint("[AHCI] no SATA ports found\n");
+        klog(LOG_WARN, "AHCI: no active SATA ports");
     }
 }
 

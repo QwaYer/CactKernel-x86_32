@@ -22,6 +22,13 @@ void pci_write32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg, uint32_t val
 }
 
 int search_pci(void) {
+    kprint("[PCI] probing config space (addr=0xCF8 data=0xCFC)\n");
     port_dword_out(PCI_CONFIG_ADDRESS, 0x80000000);
-    return (port_dword_in(PCI_CONFIG_ADDRESS) == 0x80000000) ? 0 : 1;
+    uint32_t readback = port_dword_in(PCI_CONFIG_ADDRESS);
+    if (readback == 0x80000000) {
+        klog(LOG_OK, "PCI config mechanism #1 present");
+        return 0;
+    }
+    klog(LOG_WARN, "PCI config space not responding — no PCI bus?");
+    return 1;
 }

@@ -649,6 +649,7 @@ static void cmd_udptest(char* args) {
 }
 
 void commands_init(void) {
+    kprint("[commands] registering built-in shell commands\n");
     procfs_register_cmd("cd", 0, cmd_cd);
     procfs_register_cmd("pwd", 0, cmd_pwd);
     procfs_register_cmd("ls", 0, cmd_ls);
@@ -678,4 +679,5 @@ void commands_init(void) {
     procfs_register_cmd("ipconfig", 0, cmd_ipconfig);
     procfs_register_cmd("ping", 0, cmd_ping);
     procfs_register_cmd("udptest", 0, cmd_udptest);
+    klog(LOG_OK, "commands ready — 29 built-in commands registered");
 }
