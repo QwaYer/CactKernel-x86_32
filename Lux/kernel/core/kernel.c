@@ -17,6 +17,7 @@
 #include "swap.h"
 #include "pagecache.h"
 #include "blkdev.h"
+#include "version.h"
 
 extern uint32_t page_directory[1024];
 
@@ -487,8 +488,6 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
     }
 
     clear_screen();
-    kprint_color("Lux Kernel Version 0.8.8\n", COLOR_LIGHT_BROWN);
-    kprint_color("--------------------------\n", COLOR_DARK_GREY);
 
     if (magic != 0x2BADB002) {
         kprint_color("[FAIL] Bad multiboot magic (got 0x", COLOR_LIGHT_RED);
@@ -502,6 +501,14 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
     kernel_setup_hardware(mbi);
 
     kprint("\n");
+    kprint_color("Lux Kernel ", COLOR_LIGHT_BROWN);
+    kprint_color((char*)kernel_version, COLOR_LIGHT_BROWN);
+    kprint_color("\n", COLOR_LIGHT_BROWN);
+    kprint_color("--------------------------\n", COLOR_DARK_GREY);
+    kprint("[VER] commit="); kprint((char*)kernel_commit_hash);
+    kprint("  built=");      kprint((char*)kernel_build_time);
+    kprint("\n");
+
     kprint_color("Kernel is ready. Starting terminal...\n", COLOR_LIGHT_GREEN);
 
     system_ready = 1;

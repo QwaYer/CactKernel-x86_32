@@ -3,6 +3,7 @@
 # ==============================================================================
 
 KERN_CORE_DIR    = Lux/kernel/core
+KERN_VER_DIR     = Lux/kernel/core/kern_ver
 KERN_SYSCALLS_DIR    = Lux/kernel/core/syscalls
 KERN_GDT_DIR     = Lux/kernel/gdt
 KERN_ELF_DIR     = Lux/kernel/elf
@@ -57,9 +58,18 @@ DRIVER_FB_DIR    = Lux/drivers/video/fb
 DRIVER_FONT_DIR  = Lux/drivers/video/font
 BUILD_DIR        = build
 
+# Version metadata from VERSION file
+LUX_VERSION    := $(shell cat VERSION 2>/dev/null || echo "unknown")
+LUX_COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "no-git")
+LUX_BUILD_TIME := $(shell date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
+
+VERSION_DEFS = -DLUX_VERSION=$(LUX_VERSION) \
+               -DLUX_COMMIT_HASH=$(LUX_COMMIT) \
+               -DLUX_BUILD_TIME="$(LUX_BUILD_TIME)"
 
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
+         -I$(KERN_VER_DIR) \
 		 -I$(KERN_SYSCALLS_DIR) \
          -I$(KERN_GDT_DIR) \
          -I$(KERN_ELF_DIR) \
@@ -124,6 +134,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/interrupt.o \
       $(BUILD_DIR)/io.o \
       $(BUILD_DIR)/gdt.o \
+      $(BUILD_DIR)/version.o \
       $(BUILD_DIR)/kernel.o \
       $(BUILD_DIR)/memory.o \
       $(BUILD_DIR)/memory_cow.o \
@@ -183,6 +194,9 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
 all: $(BUILD_DIR)/lux.iso
 	@echo "--------------------------------------------------"
 	@echo "Lux kernel build complete!"
+	@echo "  Version: $(LUX_VERSION)"
+	@echo "  Commit:  $(LUX_COMMIT)"
+	@echo "  Built:   $(LUX_BUILD_TIME)"
 	@echo "  Kernel:  $(BUILD_DIR)/kernel.bin"
 	@echo "  Image:   $(BUILD_DIR)/lux.iso"
 	@KERN_SIZE=$$(wc -c < $(BUILD_DIR)/kernel.bin); \
@@ -230,6 +244,10 @@ $(BUILD_DIR)/mm.o: $(KERN_MEM_DIR)/mm.asm
 $(BUILD_DIR)/gdt.o: $(KERN_GDT_DIR)/gdt.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/version.o: $(KERN_VER_DIR)/version.c $(KERN_VER_DIR)/version.h VERSION
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) $(VERSION_DEFS) -c $< -o $@
 
 $(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c
 	@mkdir -p $(BUILD_DIR)
@@ -370,6 +388,10 @@ $(BUILD_DIR)/nvme.o: $(DRIVER_NVME_DIR)/nvme.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/buf.o: $(DRIVER_BUF_DIR)/buf.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/syscall.o: $(KERN_SYSCALLS_DIR)/syscall.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
