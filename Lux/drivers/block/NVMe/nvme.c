@@ -318,23 +318,31 @@ static int nvme_identify(void) {
 }
 
 void nvme_init(void) {
+    kprint("[NVMe] initializing buffer cache and disk lock\n");
     binit();
     irq_spinlock_init(&disk_lock);
 
     memory_set(&ndev, 0, sizeof(ndev));
     nvme_ready = 0;
 
+    kprint("[NVMe] searching PCI for class=01/08 (NVM Express)\n");
     pci_device_t *d = pci_find_by_class(0x01, 0x08);
     if (!d || d->prog_if != 0x02) {
+        klog(LOG_WARN, "NVMe controller not found — no NVMe disk");
         return;
     }
     ndev.pci_bus = d->bus;
     ndev.pci_dev = d->dev;
     ndev.pci_fn  = d->fn;
+    kprint("[NVMe] found at bus="); kprint_hex(ndev.pci_bus);
+    kprint(" dev="); kprint_hex(ndev.pci_dev);
+    kprint(" fn="); kprint_hex(ndev.pci_fn); kprint("\n");
 
     uint32_t bar0 = pci_read32(ndev.pci_bus, ndev.pci_dev, ndev.pci_fn, 0x10);
     ndev.bar_phys = bar0 & 0xFFFFF000;
+    kprint("[NVMe] BAR0 phys="); kprint_hex(ndev.bar_phys); kprint("\n");
 
+    kprint("[NVMe] mapping BAR0 into virtual address space (16 KB)\n");
     uint32_t bar_size = 0x4000;
     for (uint32_t off = 0; off < bar_size; off += 0x1000)
         vmm_map(get_current_pd(), ndev.bar_phys + off, ndev.bar_phys + off,
@@ -342,30 +350,46 @@ void nvme_init(void) {
 
     ndev.bar = (volatile struct nvme_bar *)(uintptr_t)ndev.bar_phys;
 
+    kprint("[NVMe] enabling bus-mastering and memory space (PCI cmd |= 0x06)\n");
     uint32_t pcicmd = pci_read32(ndev.pci_bus, ndev.pci_dev, ndev.pci_fn, 0x04);
     pci_write32(ndev.pci_bus, ndev.pci_dev, ndev.pci_fn, 0x04, pcicmd | 0x06);
 
     uint64_t cap = ndev.bar->cap;
     ndev.db_stride = 4 << ((cap >> 32) & 0xF);
+    kprint("[NVMe] CAP read — doorbell stride="); kprint_hex(ndev.db_stride); kprint("\n");
 
+    kprint("[NVMe] resetting controller (CC=0, waiting CSTS.RDY=0)\n");
     ndev.bar->cc = 0;
     nvme_wait_ready(0);
 
+    kprint("[NVMe] setting up admin submission/completion queues\n");
     nvme_setup_admin_queues();
 
+    kprint("[NVMe] enabling controller (CC.EN=1, waiting CSTS.RDY=1)\n");
     ndev.bar->cc = (4 << 20) | (6 << 16) | (0 << 7) | 1;
     nvme_wait_ready(1);
 
     if (ndev.bar->csts & 0x2) {
         kprint("[NVMe] controller fatal error (CFS)\n");
+        klog(LOG_FAIL, "NVMe controller fatal status (CFS set)");
         return;
     }
 
-    if (nvme_identify() < 0) return;
-    if (nvme_set_num_queues() < 0) return;
-    if (nvme_create_io_queues() < 0) return;
+    kprint("[NVMe] running Identify Controller and Namespace\n");
+    if (nvme_identify() < 0) { klog(LOG_FAIL, "NVMe identify failed"); return; }
+
+    char tmp[16]; itoa((int)ndev.max_lba, tmp);
+    kprint("[NVMe] namespace max_lba="); kprint(tmp);
+    kprint(" ns_id=1\n");
+
+    kprint("[NVMe] setting number of I/O queues\n");
+    if (nvme_set_num_queues() < 0) { klog(LOG_FAIL, "NVMe set num queues failed"); return; }
+
+    kprint("[NVMe] creating I/O CQ and SQ\n");
+    if (nvme_create_io_queues() < 0) { klog(LOG_FAIL, "NVMe create IO queues failed"); return; }
 
     nvme_ready = 1;
+    klog(LOG_OK, "NVMe controller ready");
 }
 
 int nvme_is_ready(void) { return nvme_ready; }

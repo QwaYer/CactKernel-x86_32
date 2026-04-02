@@ -857,16 +857,30 @@ static pci_driver_t xhci_pci_driver = {
 };
 
 void xhci_pci_init(void) {
+    kprint("[xHCI] initializing event lock and registering PCI driver\n");
     irq_spinlock_init(&xhci_evt_lock);
     pci_register_driver(&xhci_pci_driver);
 
+    kprint("[xHCI] scanning PCI for class=0C/03 prog_if=30 (xHCI)\n");
+    int found = 0;
     pci_device_t *d = pci_find_by_class(0x0C, 0x03);
     while (d) {
         if (d->prog_if == 0x30) {
+            found++;
+            kprint("[xHCI] found controller at bus="); kprint_hex(d->bus);
+            kprint(" dev="); kprint_hex(d->dev); kprint(" fn="); kprint_hex(d->fn);
+            kprint("\n[xHCI] probing (MMIO map, reset, ring init, port scan)\n");
             xhci_pci_probe(d);
         }
         d = d->next;
         while (d && !(d->class_code == 0x0C && d->subclass == 0x03 && d->prog_if == 0x30))
             d = d->next;
+    }
+    if (found == 0) {
+        klog(LOG_WARN, "xHCI: no USB3 controller found on PCI bus");
+    } else {
+        char tmp[16]; itoa(found, tmp);
+        kprint("[xHCI] probed "); kprint(tmp); kprint(" controller(s)\n");
+        klog(LOG_OK, "xHCI USB3 host controller(s) ready");
     }
 }
