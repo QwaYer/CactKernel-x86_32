@@ -124,8 +124,11 @@ void shell_resetdir(void) {
 }
 
 void shell_init(void) {
+    kprint("[shell] resetting working directory to VFS root\n");
     shell_resetdir();
+    kprint("[shell] clearing cached command directory\n");
     cached_cmd_dir = 0;
+    klog(LOG_OK, "shell ready");
 }
 
 

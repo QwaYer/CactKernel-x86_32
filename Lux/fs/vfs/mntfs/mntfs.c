@@ -357,6 +357,7 @@ void mntfs_list(void) {
 void mntfs_init(void) {
     if (mntfs_ready) return;
 
+    kprint("[mntfs] setting up VFS root node '/'\n");
     memset(&mntfs_root,0,sizeof(vfs_node_t));
     strlcpy(mntfs_root.name,"/",128);
     mntfs_root.type=VFS_DIRECTORY;
@@ -364,44 +365,59 @@ void mntfs_init(void) {
     vfs_root=&mntfs_root;
     mntfs_ready=1;
 
+    kprint("[mntfs] querying boot block device\n");
     blkdev_t *boot = blkdev_get_boot();
     if (!boot) {
         kprint("[mntfs] WARNING: no boot block device\n");
+        klog(LOG_WARN, "mntfs: no boot disk — devfs only");
         devfs_init();
         return;
     }
 
     strlcpy(boot_devname, boot->name, 32);
+    kprint("[mntfs] boot device: "); kprint(boot_devname); kprint("\n");
 
+    kprint("[mntfs] mounting ext4 on boot device (disk index 0)\n");
     vfs_node_t *ext4 = ext4_mount_disk(0);
     if (!ext4) {
         kprint("[mntfs] WARNING: no ext4 on "); kprint(boot_devname); kprint("\n");
+        klog(LOG_WARN, "mntfs: ext4 mount failed — devfs only");
         devfs_init();
         return;
     }
+    kprint("[mntfs] ext4 mounted — registering as disk '"); kprint(boot_devname); kprint("'\n");
 
     mntfs_mount_disk(boot_devname, ext4, 0);
     disk_entry_t *boot_disk = _find_disk(boot_devname);
     boot_disk->has_sys = 1;
 
+    kprint("[mntfs] initializing etcfs from ext4 root\n");
     etcfs_init(ext4);
 
     char sys_etc[64];
     strlcpy(sys_etc, boot_devname, 64);
     strlcpy(sys_etc + strlen(boot_devname), "/sys/etc", 64 - strlen(boot_devname));
+    kprint("[mntfs] mounting etcfs at "); kprint(sys_etc); kprint("\n");
     mntfs_mount(sys_etc, "etcfs", etcfs_get_root(), 0);
 
+    kprint("[mntfs] processing persistent mounts from etc/mounts\n");
     _mounts_mount_all();
 
+    kprint("[mntfs] initializing devfs\n");
     devfs_init();
     char sys_dev[64];
     strlcpy(sys_dev, boot_devname, 64);
     strlcpy(sys_dev + strlen(boot_devname), "/sys/dev", 64 - strlen(boot_devname));
+    kprint("[mntfs] mounting devfs at "); kprint(sys_dev); kprint("\n");
     mntfs_mount(sys_dev, "devfs", devfs_get_root(), 0);
 
+    kprint("[mntfs] initializing procfs\n");
     procfs_init();
     char sys_proc[64];
     strlcpy(sys_proc, boot_devname, 64);
     strlcpy(sys_proc + strlen(boot_devname), "/sys/proc", 64 - strlen(boot_devname));
+    kprint("[mntfs] mounting procfs at "); kprint(sys_proc); kprint("\n");
     mntfs_mount(sys_proc, "procfs", procfs_get_root(), 0);
+
+    klog(LOG_OK, "mntfs ready — ext4/etcfs/devfs/procfs mounted");
 }

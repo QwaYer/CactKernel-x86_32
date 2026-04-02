@@ -14,9 +14,11 @@ typedef struct {
 static arp_entry_t arp_cache[ARP_CACHE_SIZE];
 
 void arp_init(void) {
+    kprint("[ARP] clearing cache (16 slots, ip+mac+valid each)\n");
     for (int i = 0; i < ARP_CACHE_SIZE; i++) {
         arp_cache[i].valid = 0;
     }
+    klog(LOG_OK, "ARP cache ready — 16 slots zeroed");
 }
 
 void arp_input(skb_t* skb) {
