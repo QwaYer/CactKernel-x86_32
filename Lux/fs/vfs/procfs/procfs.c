@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "libc.h"
 #include "task.h"
+#include "version.h"
 
 
 typedef struct proc_file {
@@ -343,15 +344,23 @@ static int _uptime_read(uint32_t off, uint32_t size, char *buf) {
 }
 
 static int _version_read(uint32_t off, uint32_t size, char *buf) {
-    static const char data[] =
-        "Lux Kernel 0.8.8\n"
-        "Arch: x86 (i686)\n"
-        "Compiler: GCC\n"
-        "Build: " __DATE__ " " __TIME__ "\n";
-    uint32_t len = sizeof(data) - 1;
+    char tmp[512];
+    int  p = 0;
+
+    #define _V(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
+
+    _V("Lux Kernel ");  _V(kernel_version);    _V("\n");
+    _V("Arch: x86 (i686)\n");
+    _V("Compiler: GCC\n");
+    _V("Commit: ");     _V(kernel_commit_hash); _V("\n");
+    _V("Build: ");      _V(kernel_build_time);  _V("\n");
+
+    #undef _V
+
+    uint32_t len = (uint32_t)p;
     if (off >= len) return 0;
     if (size > len - off) size = len - off;
-    memcpy(buf, data + off, size);
+    memcpy(buf, tmp + off, size);
     return (int)size;
 }
 
