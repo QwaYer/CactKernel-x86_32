@@ -17,6 +17,7 @@ int memory_compare(const void* s1, const void* s2, int n);
 
 void* memset(void* dest, int val, unsigned int len);
 void* memcpy(void* dest, const void* src, unsigned int len);
+int   memcmp(const void* s1, const void* s2, unsigned int n);
 
 int  strncmp(const char* a, const char* b);
 void strncpy(char* dst, const char* src, int n);
