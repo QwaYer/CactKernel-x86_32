@@ -112,6 +112,15 @@ void* memcpy(void* dest, const void* src, unsigned int len) {
     return dest;
 }
 
+int memcmp(const void* s1, const void* s2, unsigned int n) {
+    const unsigned char* p1 = (const unsigned char*)s1;
+    const unsigned char* p2 = (const unsigned char*)s2;
+    for (unsigned int i = 0; i < n; i++) {
+        if (p1[i] != p2[i]) return (int)p1[i] - (int)p2[i];
+    }
+    return 0;
+}
+
 int strncmp(const char* a, const char* b) {
     while (*a && *a == *b) { a++; b++; }
     return *a - *b;

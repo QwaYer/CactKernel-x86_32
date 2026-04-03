@@ -7,7 +7,7 @@
 
 build/
 
-user/
+ktest/
 libc.a
 
 test/
