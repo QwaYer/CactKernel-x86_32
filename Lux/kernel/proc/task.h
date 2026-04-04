@@ -14,6 +14,9 @@
 #define USER_DATA_SEL 0x23
 #define MAX_FD        256
 
+typedef uint32_t uid_t;
+typedef uint32_t gid_t;
+
 #define SIGKILL  (1u << 0)
 #define SIGTERM  (1u << 1)
 #define SIGSTOP  (1u << 2)
@@ -107,6 +110,12 @@ struct task_struct {
     uint32_t sleep_until;
 
     char cwd[256];
+
+    /* User/group credentials */
+    uid_t uid;
+    gid_t gid;
+    uid_t euid;
+    gid_t egid;
 
     /* IPC shared memory attachments */
     task_shm_attach_t shm_attachments[TASK_SHM_MAX];

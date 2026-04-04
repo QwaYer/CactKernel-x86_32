@@ -12,6 +12,11 @@
 #define VFS_SOCKET      0x06
 #define VFS_SYMLINK     0x07
 
+/* Permission check bits */
+#define VFS_PERM_READ    0x04
+#define VFS_PERM_WRITE   0x02
+#define VFS_PERM_EXEC    0x01
+
 /* Symlink resolution depth limit */
 #define VFS_SYMLINK_MAX_DEPTH 8
 
@@ -53,6 +58,9 @@ typedef struct vfs_node {
     uint32_t      size;
     uint32_t      inode;
     uint32_t      refcount;   /* hard-link / reference count */
+    uint32_t      mode;       /* permission bits (rwxrwxrwx), 0777 default */
+    uint32_t      uid;        /* owner user id  */
+    uint32_t      gid;        /* owner group id */
     vfs_ops_t    *ops;
     void         *priv;
 } vfs_node_t;
@@ -106,5 +114,8 @@ int           vfs_unlink         (vfs_node_t *dir, const char *name);
 /* Reference counting */
 void          vfs_node_ref       (vfs_node_t *node);
 void          vfs_node_unref     (vfs_node_t *node);
+
+/* Permission checking (returns 0 on success, -1 on deny) */
+int           vfs_check_perm     (vfs_node_t *node, uint32_t perm);
 
 #endif

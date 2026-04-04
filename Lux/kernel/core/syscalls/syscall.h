@@ -66,6 +66,14 @@
 #define SYS_SHMAT         62
 #define SYS_SHMDT         63
 #define SYS_SHMCTL        64
+#define SYS_GETUID        65
+#define SYS_GETGID        66
+#define SYS_SETUID        67
+#define SYS_SETGID        68
+#define SYS_GETEUID       69
+#define SYS_GETEGID       70
+#define SYS_CHMOD         71
+#define SYS_CHOWN         72
 
 int syscall(int num, int p1, int p2, int p3);
 

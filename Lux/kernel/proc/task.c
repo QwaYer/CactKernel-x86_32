@@ -121,6 +121,10 @@ struct task_struct* create_task(void (*entry_point)()) {
     t->sleep_until    = 0;
     t->cwd[0] = '/';
     t->cwd[1] = '\0';
+    t->uid  = 0;
+    t->gid  = 0;
+    t->euid = 0;
+    t->egid = 0;
     proc_tracker_init(&t->mm);
     for (int i = 0; i < MAX_FD; i++) {
         t->fd_table[i] = 0;
@@ -183,6 +187,10 @@ static struct task_struct* create_user_task_internal(void* entry_point, int add_
     t->sleep_until     = 0;
     t->cwd[0] = '/';
     t->cwd[1] = '\0';
+    t->uid  = current_task ? current_task->uid  : 0;
+    t->gid  = current_task ? current_task->gid  : 0;
+    t->euid = current_task ? current_task->euid : 0;
+    t->egid = current_task ? current_task->egid : 0;
     for (int i = 0; i < NSIG; i++) t->signal_handlers[i] = SIG_DFL;
     proc_tracker_init(&t->mm);
     for (int i = 0; i < MAX_FD; i++) {
@@ -889,6 +897,10 @@ struct task_struct* task_fork(struct context_frame* regs) {
     child->brk_start      = parent->brk_start;
     child->brk_current    = parent->brk_current;
     child->sleep_until    = 0;
+    child->uid            = parent->uid;
+    child->gid            = parent->gid;
+    child->euid           = parent->euid;
+    child->egid           = parent->egid;
     for (int i = 0; i < 256; i++) child->cwd[i] = parent->cwd[i];
     for (int i = 0; i < NSIG; i++) child->signal_handlers[i] = parent->signal_handlers[i];
     for (int i = 0; i < TASK_SHM_MAX; i++) {
