@@ -330,6 +330,7 @@ static void cmd_help(char* args) {
     kprint("  Files      : ls  lsraw  mkdir  rmdir  tch  rm  cat  wrt  echo\n");
     kprint("  Disks      : mount  umount\n");
     kprint("  System     : help  fetch  clear  reboot  free  date  uptime  ps  kill  run\n");
+    kprint("  Users      : whoami  su  id  chmod  chown\n");
     kprint("  Network    : ipconfig  ping  udptest\n");
     kprint("  Debug      : kbd  pic\n");
     kprint("\n");
@@ -648,6 +649,155 @@ static void cmd_udptest(char* args) {
     udp_output(skb, htonl(_parse_ip(ip)), 12345, p);
 }
 
+static void cmd_whoami(char* args) {
+    (void)args;
+    if (!current_task) { kprint("\n(no task)\n"); return; }
+    const char *name = etcfs_uid_to_name(current_task->euid);
+    kprint("\n"); kprint((char*)name); kprint("\n");
+}
+
+static void cmd_su(char* args) {
+    char* target = _skip_token(args);
+    if (!target) target = "root";   /* default: su → root */
+
+    if (!current_task) { kprint("\nError: no task context\n"); return; }
+
+    /* Only root (euid==0) can su to another user without a password */
+    if (current_task->euid != 0) {
+        kprint("\nPermission denied: only root can su\n");
+        return;
+    }
+
+    uint32_t new_uid = etcfs_name_to_uid(target);
+    if (new_uid == (uint32_t)-1) {
+        kprint("\nUnknown user: "); kprint(target); kprint("\n");
+        return;
+    }
+    uint32_t new_gid = etcfs_name_to_gid(target);
+    if (new_gid == (uint32_t)-1) new_gid = new_uid;
+
+    current_task->uid  = new_uid;
+    current_task->gid  = new_gid;
+    current_task->euid = new_uid;
+    current_task->egid = new_gid;
+
+    kprint("\nSwitched to "); kprint(target); kprint("\n");
+}
+
+/* Parse an octal string ("755") → uint32_t.  Returns (uint32_t)-1 on bad input. */
+static uint32_t _parse_octal(const char *s) {
+    if (!s || !*s) return (uint32_t)-1;
+    uint32_t v = 0;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '7') return (uint32_t)-1;
+        v = (v << 3) | (uint32_t)(*s - '0');
+    }
+    return v;
+}
+
+/*
+ * chmod <mode> <path>
+ *   mode is octal, e.g. 755, 644, 700
+ */
+static void cmd_chmod(char* args) {
+    char* mode_str = _skip_token(args);
+    if (!mode_str) { kprint("\nUsage: chmod <mode> <path>\n"); return; }
+    char* path = _skip_token(mode_str);
+    if (!path)    { kprint("\nUsage: chmod <mode> <path>\n"); return; }
+
+    uint32_t mode = _parse_octal(mode_str);
+    if (mode == (uint32_t)-1 || mode > 0777) {
+        kprint("\nInvalid mode (use octal, e.g. 755)\n");
+        return;
+    }
+
+    vfs_node_t* node = _resolve_path(path);
+    if (!node) { kprint("\nError: not found: "); kprint(path); kprint("\n"); return; }
+
+    /* permission: owner or root */
+    if (current_task && current_task->euid != 0 &&
+        current_task->euid != node->uid) {
+        kprint("\nPermission denied\n");
+        return;
+    }
+
+    node->mode = mode;
+    kprint("\nMode set to ");
+    {
+        char ob[8]; int i = 2;
+        ob[0] = '0' + (char)((mode >> 6) & 7);
+        ob[1] = '0' + (char)((mode >> 3) & 7);
+        ob[2] = '0' + (char)(mode & 7);
+        ob[3] = '\0';
+        (void)i;
+        kprint(ob);
+    }
+    kprint("\n");
+}
+
+/*
+ * chown <user>[:<group>] <path>
+ *   Only root can change ownership.
+ */
+static void cmd_chown(char* args) {
+    char* spec = _skip_token(args);
+    if (!spec) { kprint("\nUsage: chown <user>[:<group>] <path>\n"); return; }
+    char* path = _skip_token(spec);
+    if (!path)  { kprint("\nUsage: chown <user>[:<group>] <path>\n"); return; }
+
+    if (!current_task || current_task->euid != 0) {
+        kprint("\nPermission denied: only root can chown\n");
+        return;
+    }
+
+    /* Split user:group */
+    char user_part[64], group_part[64];
+    int ui = 0, gi = 0, in_group = 0;
+    for (int i = 0; spec[i] && spec[i] != ' '; i++) {
+        if (spec[i] == ':') { in_group = 1; continue; }
+        if (!in_group && ui < 63) user_part[ui++] = spec[i];
+        if (in_group  && gi < 63) group_part[gi++] = spec[i];
+    }
+    user_part[ui] = '\0';
+    group_part[gi] = '\0';
+
+    vfs_node_t* node = _resolve_path(path);
+    if (!node) { kprint("\nError: not found: "); kprint(path); kprint("\n"); return; }
+
+    if (ui > 0) {
+        uint32_t new_uid = etcfs_name_to_uid(user_part);
+        if (new_uid == (uint32_t)-1) {
+            kprint("\nUnknown user: "); kprint(user_part); kprint("\n");
+            return;
+        }
+        node->uid = new_uid;
+    }
+
+    if (gi > 0) {
+        uint32_t new_gid = etcfs_name_to_gid(group_part);
+        if (new_gid == (uint32_t)-1) {
+            kprint("\nUnknown group: "); kprint(group_part); kprint("\n");
+            return;
+        }
+        node->gid = new_gid;
+    }
+
+    kprint("\nOwnership updated\n");
+}
+
+static void cmd_id(char* args) {
+    (void)args;
+    if (!current_task) { kprint("\n(no task)\n"); return; }
+    char buf[16];
+    kprint("\nuid="); itoa(current_task->uid, buf); kprint(buf);
+    kprint("("); kprint((char*)etcfs_uid_to_name(current_task->uid)); kprint(")");
+    kprint(" gid="); itoa(current_task->gid, buf); kprint(buf);
+    kprint(" euid="); itoa(current_task->euid, buf); kprint(buf);
+    kprint("("); kprint((char*)etcfs_uid_to_name(current_task->euid)); kprint(")");
+    kprint(" egid="); itoa(current_task->egid, buf); kprint(buf);
+    kprint("\n");
+}
+
 void commands_init(void) {
     kprint("[commands] registering built-in shell commands\n");
     procfs_register_cmd("cd", 0, cmd_cd);
@@ -679,5 +829,10 @@ void commands_init(void) {
     procfs_register_cmd("ipconfig", 0, cmd_ipconfig);
     procfs_register_cmd("ping", 0, cmd_ping);
     procfs_register_cmd("udptest", 0, cmd_udptest);
-    klog(LOG_OK, "commands ready — 29 built-in commands registered");
+    procfs_register_cmd("whoami", 0, cmd_whoami);
+    procfs_register_cmd("su", 0, cmd_su);
+    procfs_register_cmd("id", 0, cmd_id);
+    procfs_register_cmd("chmod", 0, cmd_chmod);
+    procfs_register_cmd("chown", 0, cmd_chown);
+    klog(LOG_OK, "commands ready — 34 built-in commands registered");
 }

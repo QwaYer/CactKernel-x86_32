@@ -19,4 +19,9 @@ int  etcfs_create(const char *name);
 int  etcfs_delete(const char *name);
 void etcfs_flush       (void);
 
+void         etcfs_seed_users  (void);
+const char  *etcfs_uid_to_name (uint32_t uid);
+uint32_t     etcfs_name_to_uid (const char *name);
+uint32_t     etcfs_name_to_gid (const char *name);
+
 #endif 

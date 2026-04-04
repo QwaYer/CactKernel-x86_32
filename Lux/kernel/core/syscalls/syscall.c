@@ -123,6 +123,68 @@ static int sys_getppid() {
     return (int)current_task->parent_pid;
 }
 
+static int sys_getuid()  { return current_task ? (int)current_task->uid  : -1; }
+static int sys_getgid()  { return current_task ? (int)current_task->gid  : -1; }
+static int sys_geteuid() { return current_task ? (int)current_task->euid : -1; }
+static int sys_getegid() { return current_task ? (int)current_task->egid : -1; }
+
+static int sys_setuid(uint32_t uid) {
+    if (!current_task) return -1;
+    /* root (euid==0) can set any uid; others can only set to their real uid */
+    if (current_task->euid != 0 && uid != current_task->uid)
+        return -1;
+    current_task->uid  = uid;
+    current_task->euid = uid;
+    return 0;
+}
+
+static int sys_setgid(uint32_t gid) {
+    if (!current_task) return -1;
+    if (current_task->euid != 0 && gid != current_task->gid)
+        return -1;
+    current_task->gid  = gid;
+    current_task->egid = gid;
+    return 0;
+}
+
+/*
+ * sys_chmod(path, mode)
+ *   Only the file owner or root may change mode.
+ */
+static int sys_chmod(char *path, uint32_t mode) {
+    if (!validate_user_str(path)) return -1;
+    if (!current_task) return -1;
+
+    vfs_node_t *node = _resolve_path(path);
+    if (!node) return -1;
+
+    /* Only owner or root */
+    if (current_task->euid != 0 && current_task->euid != node->uid)
+        return -1;
+
+    node->mode = mode & 0777;
+    return 0;
+}
+
+/*
+ * sys_chown(path, uid, gid)
+ *   Only root (euid==0) may change ownership.
+ *   Pass (uint32_t)-1 for uid or gid to leave unchanged.
+ */
+static int sys_chown(char *path, uint32_t new_uid, uint32_t new_gid) {
+    if (!validate_user_str(path)) return -1;
+    if (!current_task) return -1;
+
+    vfs_node_t *node = _resolve_path(path);
+    if (!node) return -1;
+
+    if (current_task->euid != 0) return -1;
+
+    if (new_uid != (uint32_t)-1) node->uid = new_uid;
+    if (new_gid != (uint32_t)-1) node->gid = new_gid;
+    return 0;
+}
+
 struct lux_dirent {
     uint32_t d_ino;
     char     d_name[124];
@@ -191,6 +253,15 @@ static int sys_open(char* name, int flags) {
     if (!node) {
         kprint("[DBG] sys_open: not found: "); kprint(name); kprint("\n");
         return -1;
+    }
+
+    /* Permission check based on open flags */
+    {
+        uint32_t need = 0;
+        uint32_t acc = (uint32_t)flags & 3;   /* O_RDONLY=0, O_WRONLY=1, O_RDWR=2 */
+        if (acc == 0 || acc == 2) need |= VFS_PERM_READ;
+        if (acc == 1 || acc == 2) need |= VFS_PERM_WRITE;
+        if (vfs_check_perm(node, need) < 0) return -1;
     }
 
     for (int i = 3; i < MAX_FD; i++) {
@@ -302,6 +373,9 @@ static int sys_mkdir(char* pathname) {
         return -1;
     }
 
+    /* Need write+exec on parent directory to create entries */
+    if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
+
     kprint("[DBG] sys_mkdir: parent="); kprint(parent->name);
     kprint(" basename="); kprint(basename); kprint("\n");
 
@@ -322,6 +396,7 @@ static int sys_rmdir(char* pathname) {
         kprint("[DBG] sys_rmdir: empty basename\n");
         return -1;
     }
+    if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
     kprint("[DBG] sys_rmdir: parent="); kprint(parent->name);
     kprint(" basename="); kprint(basename); kprint("\n");
@@ -419,6 +494,13 @@ static int sys_exec(struct syscall_frame* regs) {
             if (!envp[i]) break;
             if (!validate_user_str(envp[i])) return -1;
         }
+    }
+
+    /* Check exec permission on the target binary */
+    {
+        vfs_node_t *exec_node = _resolve_path(path);
+        if (exec_node && vfs_check_perm(exec_node, VFS_PERM_EXEC) < 0)
+            return -1;
     }
 
     struct context_frame cf;
@@ -1724,6 +1806,7 @@ static int sys_unlink(char *path) {
     char basename[128];
     vfs_node_t *parent = _resolve_parent_follow(path, basename, 128);
     if (!parent || !basename[0]) return -1;
+    if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
     return vfs_unlink(parent, basename);
 }
@@ -2049,6 +2132,14 @@ static syscall_fn syscall_table[] = {
     [62] = (syscall_fn)sys_shmat,
     [63] = (syscall_fn)sys_shmdt,
     [64] = (syscall_fn)sys_shmctl,
+    [65] = (syscall_fn)sys_getuid,
+    [66] = (syscall_fn)sys_getgid,
+    [67] = (syscall_fn)sys_setuid,
+    [68] = (syscall_fn)sys_setgid,
+    [69] = (syscall_fn)sys_geteuid,
+    [70] = (syscall_fn)sys_getegid,
+    [71] = (syscall_fn)sys_chmod,
+    [72] = (syscall_fn)sys_chown,
 };
 #define SYSCALL_COUNT (sizeof(syscall_table)/sizeof(syscall_table[0]))
 

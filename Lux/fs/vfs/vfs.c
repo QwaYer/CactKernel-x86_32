@@ -2,12 +2,12 @@
 #include "libc.h"
 #include "sync.h"
 #include "kernel.h"
+#include "task.h"
 
 vfs_node_t *vfs_root = 0;
 
 #define VFS_MOUNT_MAX 32
 
-/* ---------- Symlink node pool ------------------------------------------- */
 
 #define VFS_SYMLINK_POOL_SIZE  256
 #define VFS_SYMLINK_TARGET_MAX 512
@@ -193,7 +193,6 @@ int rename_vfs(vfs_node_t *dir, const char *oldname, const char *newname) {
     return dir->ops->rename(dir, oldname, newname);
 }
 
-/* ---------- Symlink node pool ------------------------------------------- */
 
 vfs_node_t *vfs_symlink_alloc(const char *target, uint32_t target_len) {
     if (!target) return 0;
@@ -226,7 +225,6 @@ int vfs_readlink_node(vfs_node_t *node, char *buf, uint32_t bufsz) {
     if (!node || node->type != VFS_SYMLINK || !buf || bufsz == 0) return -1;
     if (node->ops && node->ops->readlink)
         return node->ops->readlink(node, buf, bufsz);
-    /* Default: priv points to the target string stored in the pool entry */
     const char *target = (const char *)node->priv;
     if (!target) return -1;
     uint32_t len = 0;
@@ -238,9 +236,7 @@ int vfs_readlink_node(vfs_node_t *node, char *buf, uint32_t bufsz) {
     return (int)len;
 }
 
-/* ---------- Path resolution with symlink following ----------------------- */
 
-/* Forward declaration */
 static vfs_node_t *_walk_path_follow(vfs_node_t *start, const char *path,
                                       int *depth, int *err);
 
@@ -260,7 +256,6 @@ static vfs_node_t *_walk_one_follow(vfs_node_t *dir, const char *seg,
         int len = vfs_readlink_node(node, target, VFS_SYMLINK_TARGET_MAX);
         if (len <= 0) return 0;
 
-        /* Resolve relative to the directory containing the symlink */
         vfs_node_t *base = (target[0] == '/') ? vfs_root : dir;
         return _walk_path_follow(base, target, depth, err);
     }
@@ -297,8 +292,6 @@ vfs_node_t *vfs_walk_path_follow(vfs_node_t *start, const char *path, int *err_o
     return result;
 }
 
-/* ---------- Reference counting ------------------------------------------ */
-
 void vfs_node_ref(vfs_node_t *node) {
     if (node) node->refcount++;
 }
@@ -307,7 +300,6 @@ void vfs_node_unref(vfs_node_t *node) {
     if (!node || node->refcount == 0) return;
     node->refcount--;
     if (node->refcount == 0 && node->type == VFS_SYMLINK) {
-        /* Return this slot to the pool */
         mutex_lock(&symlink_mutex);
         vfs_symlink_entry_t *entry = (vfs_symlink_entry_t *)node;
         if (entry >= symlink_pool &&
@@ -318,22 +310,12 @@ void vfs_node_unref(vfs_node_t *node) {
     }
 }
 
-/* ---------- Symlink / link / unlink VFS operations ---------------------- */
-
-/*
- * vfs_symlink: create a symlink named `name` in `dir` pointing to `target`.
- *
- * If the filesystem backend implements ops->symlink, that is called.
- * Otherwise a VFS-level symlink node is allocated from the pool and
- * made visible by mounting it under (dir, name).
- */
 int vfs_symlink(vfs_node_t *dir, const char *name, const char *target) {
     if (!dir || dir->type != VFS_DIRECTORY || !name || !target) return -1;
 
     if (dir->ops && dir->ops->symlink)
         return dir->ops->symlink(dir, name, target);
 
-    /* Compute target string length */
     int tlen = 0;
     while (target[tlen]) tlen++;
 
@@ -343,13 +325,10 @@ int vfs_symlink(vfs_node_t *dir, const char *name, const char *target) {
 
     int ret = vfs_mount(dir, name, sym);
     if (ret != 0)
-        vfs_node_unref(sym); /* free the pool slot back */
+        vfs_node_unref(sym);
     return ret;
 }
 
-/*
- * vfs_link: create a hard link named `name` in `dir` pointing to `target_node`.
- */
 int vfs_link(vfs_node_t *dir, const char *name, vfs_node_t *target_node) {
     if (!dir || dir->type != VFS_DIRECTORY || !name || !target_node) return -1;
     if (!dir->ops || !dir->ops->link) return -1;
@@ -358,17 +337,9 @@ int vfs_link(vfs_node_t *dir, const char *name, vfs_node_t *target_node) {
     return ret;
 }
 
-/*
- * vfs_unlink: remove the directory entry named `name` from `dir`.
- *
- * For VFS-level symlinks (mounted via the symlink pool) the mount entry is
- * removed and the pool slot is released via vfs_node_unref.
- * For filesystem-backed entries the filesystem's unlink (or delete) op is used.
- */
 int vfs_unlink(vfs_node_t *dir, const char *name) {
     if (!dir || dir->type != VFS_DIRECTORY || !name) return -1;
 
-    /* Check if there is a VFS-level symlink mounted at (dir, name) */
     mutex_lock(&vfs_mutex);
     vfs_node_t *mounted = 0;
     for (int i = 0; i < mount_count; i++) {
@@ -385,7 +356,6 @@ int vfs_unlink(vfs_node_t *dir, const char *name) {
         return ret;
     }
 
-    /* Filesystem-backed: prefer ops->unlink, fall back to ops->delete */
     if (dir->ops && dir->ops->unlink) {
         vfs_node_t *node = finddir_vfs(dir, (char *)name);
         int ret = dir->ops->unlink(dir, name);
@@ -394,5 +364,28 @@ int vfs_unlink(vfs_node_t *dir, const char *name) {
     }
     if (dir->ops && dir->ops->delete)
         return dir->ops->delete(dir, name);
+    return -1;
+}
+
+int vfs_check_perm(vfs_node_t *node, uint32_t perm) {
+    if (!node) return -1;
+
+    if (node->mode == 0) return 0;
+
+    if (!current_task || current_task->is_kernel) return 0;
+
+    if (current_task->euid == 0) return 0;
+
+    uint32_t shift;
+    if (current_task->euid == node->uid)
+        shift = 6;        
+    else if (current_task->egid == node->gid)
+        shift = 3;        
+    else
+        shift = 0;           
+
+    uint32_t allowed = (node->mode >> shift) & 0x07;
+    if ((allowed & perm) == perm)
+        return 0;
     return -1;
 }

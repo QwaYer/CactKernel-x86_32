@@ -237,6 +237,8 @@ void etcfs_init(vfs_node_t *ext4_node) {
 
     if (!_find("mounts"))
         etcfs_create("mounts");
+
+    etcfs_seed_users();
 }
 
 int etcfs_read(const char *name, char *buf, uint32_t size) {
@@ -319,4 +321,122 @@ void etcfs_flush(void) {
             e->dirty = 0;
         }
     }
+}
+
+
+static const char default_passwd[] =
+    "root:x:0:0:root:/:/shell\n"
+    "daemon:x:1:1:daemon:/:/shell\n"
+    "nobody:x:65534:65534:nobody:/:/shell\n";
+
+static const char default_group[] =
+    "root:x:0:\n"
+    "daemon:x:1:\n"
+    "nogroup:x:65534:\n";
+
+void etcfs_seed_users(void) {
+    char tmp[8];
+    if (etcfs_read("passwd", tmp, 4) <= 0)
+        etcfs_write("passwd", default_passwd, sizeof(default_passwd) - 1);
+    if (etcfs_read("group", tmp, 4) <= 0)
+        etcfs_write("group", default_group, sizeof(default_group) - 1);
+}
+
+static uint32_t _parse_uint(const char *s, const char **end) {
+    uint32_t v = 0;
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (uint32_t)(*s - '0'); s++; }
+    if (end) *end = s;
+    return v;
+}
+
+static char _uid_name_buf[64];
+
+const char *etcfs_uid_to_name(uint32_t uid) {
+    char raw[1024];
+    int n = etcfs_read("passwd", raw, sizeof(raw) - 1);
+    if (n <= 0) { _uid_name_buf[0] = '?'; _uid_name_buf[1] = '\0'; return _uid_name_buf; }
+    raw[n] = '\0';
+
+    const char *p = raw;
+    while (*p) {
+        const char *name_start = p;
+        while (*p && *p != ':') p++;
+        int name_len = (int)(p - name_start);
+        if (*p == ':') p++;   
+        while (*p && *p != ':') p++;
+        if (*p == ':') p++;
+        uint32_t file_uid = _parse_uint(p, &p);
+        if (file_uid == uid) {
+            if (name_len > 63) name_len = 63;
+            for (int i = 0; i < name_len; i++) _uid_name_buf[i] = name_start[i];
+            _uid_name_buf[name_len] = '\0';
+            return _uid_name_buf;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+    _uid_name_buf[0] = '?'; _uid_name_buf[1] = '\0';
+    return _uid_name_buf;
+}
+
+uint32_t etcfs_name_to_uid(const char *name) {
+    char raw[1024];
+    int n = etcfs_read("passwd", raw, sizeof(raw) - 1);
+    if (n <= 0) return (uint32_t)-1;
+    raw[n] = '\0';
+
+    int target_len = 0;
+    while (name[target_len]) target_len++;
+
+    const char *p = raw;
+    while (*p) {
+        const char *name_start = p;
+        while (*p && *p != ':') p++;
+        int nlen = (int)(p - name_start);
+        if (*p == ':') p++;
+        while (*p && *p != ':') p++;
+        if (*p == ':') p++;
+        uint32_t uid = _parse_uint(p, &p);
+
+        if (nlen == target_len) {
+            int match = 1;
+            for (int i = 0; i < nlen; i++)
+                if (name_start[i] != name[i]) { match = 0; break; }
+            if (match) return uid;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+    return (uint32_t)-1;
+}
+
+uint32_t etcfs_name_to_gid(const char *name) {
+    char raw[1024];
+    int n = etcfs_read("group", raw, sizeof(raw) - 1);
+    if (n <= 0) return (uint32_t)-1;
+    raw[n] = '\0';
+
+    int target_len = 0;
+    while (name[target_len]) target_len++;
+
+    const char *p = raw;
+    while (*p) {
+        const char *name_start = p;
+        while (*p && *p != ':') p++;
+        int nlen = (int)(p - name_start);
+        if (*p == ':') p++;
+        while (*p && *p != ':') p++;
+        if (*p == ':') p++;
+        uint32_t gid = _parse_uint(p, &p);
+
+        if (nlen == target_len) {
+            int match = 1;
+            for (int i = 0; i < nlen; i++)
+                if (name_start[i] != name[i]) { match = 0; break; }
+            if (match) return gid;
+        }
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') p++;
+    }
+    return (uint32_t)-1;
 }
