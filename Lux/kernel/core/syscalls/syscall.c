@@ -41,7 +41,6 @@ static int validate_user_str(const char* str) {
     return 0;
 }
 
-/* Build an absolute path string from a user path (does not walk the VFS). */
 static void _make_abs(const char *path, char *abs, int abs_max) {
     int p = 0;
     if (path[0] != '/') {
@@ -54,10 +53,6 @@ static void _make_abs(const char *path, char *abs, int abs_max) {
     abs[p] = '\0';
 }
 
-/*
- * resolve user path following symlinks.
- * Returns NULL on ELOOP (depth exceeded) or "not found".
- */
 static vfs_node_t* _resolve_path(const char* path) {
     if (!path || !current_task) return 0;
     char abs[512];
@@ -65,11 +60,6 @@ static vfs_node_t* _resolve_path(const char* path) {
     return vfs_walk_path_follow(vfs_root, abs, 0);
 }
 
-/*
- * Resolve the parent directory of `path`, following symlinks in intermediate
- * components.  The final (basename) component is NOT walked – it is written
- * into basename_out so the caller can act on it directly.
- */
 static vfs_node_t* _resolve_parent_follow(const char* path,
                                            char* basename_out, int basename_max) {
     if (!path || !current_task) return 0;
@@ -103,7 +93,6 @@ static vfs_node_t* _resolve_parent_follow(const char* path,
     return vfs_walk_path_follow(vfs_root, parent_path, 0);
 }
 
-/* Thin wrapper kept for compatibility; now delegates to _resolve_parent_follow. */
 static vfs_node_t* _resolve_parent(const char* path, char* basename_out, int basename_max) {
     return _resolve_parent_follow(path, basename_out, basename_max);
 }
@@ -130,7 +119,6 @@ static int sys_getegid() { return current_task ? (int)current_task->egid : -1; }
 
 static int sys_setuid(uint32_t uid) {
     if (!current_task) return -1;
-    /* root (euid==0) can set any uid; others can only set to their real uid */
     if (current_task->euid != 0 && uid != current_task->uid)
         return -1;
     current_task->uid  = uid;
@@ -147,10 +135,6 @@ static int sys_setgid(uint32_t gid) {
     return 0;
 }
 
-/*
- * sys_chmod(path, mode)
- *   Only the file owner or root may change mode.
- */
 static int sys_chmod(char *path, uint32_t mode) {
     if (!validate_user_str(path)) return -1;
     if (!current_task) return -1;
@@ -158,7 +142,6 @@ static int sys_chmod(char *path, uint32_t mode) {
     vfs_node_t *node = _resolve_path(path);
     if (!node) return -1;
 
-    /* Only owner or root */
     if (current_task->euid != 0 && current_task->euid != node->uid)
         return -1;
 
@@ -166,11 +149,6 @@ static int sys_chmod(char *path, uint32_t mode) {
     return 0;
 }
 
-/*
- * sys_chown(path, uid, gid)
- *   Only root (euid==0) may change ownership.
- *   Pass (uint32_t)-1 for uid or gid to leave unchanged.
- */
 static int sys_chown(char *path, uint32_t new_uid, uint32_t new_gid) {
     if (!validate_user_str(path)) return -1;
     if (!current_task) return -1;
@@ -255,10 +233,9 @@ static int sys_open(char* name, int flags) {
         return -1;
     }
 
-    /* Permission check based on open flags */
     {
         uint32_t need = 0;
-        uint32_t acc = (uint32_t)flags & 3;   /* O_RDONLY=0, O_WRONLY=1, O_RDWR=2 */
+        uint32_t acc = (uint32_t)flags & 3;   
         if (acc == 0 || acc == 2) need |= VFS_PERM_READ;
         if (acc == 1 || acc == 2) need |= VFS_PERM_WRITE;
         if (vfs_check_perm(node, need) < 0) return -1;
@@ -373,7 +350,6 @@ static int sys_mkdir(char* pathname) {
         return -1;
     }
 
-    /* Need write+exec on parent directory to create entries */
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
     kprint("[DBG] sys_mkdir: parent="); kprint(parent->name);
@@ -409,13 +385,11 @@ static int sys_exit(struct syscall_frame* regs) {
     current_task->exit_code = (int)regs->ebx;
     current_task->state = TASK_ZOMBIE;
 
-    /* If this was the foreground terminal process, clear the fg pid */
     if (terminal_fg_pid == current_task->pid)
         terminal_fg_pid = 0;
 
     irq_spinlock_acquire(&scheduler_lock);
 
-    /* Notify parent that a child has exited */
     task_signal_locked(current_task->parent_pid, SIGCHLD);
 
     struct task_struct* t = task_list_head;
@@ -424,12 +398,10 @@ static int sys_exit(struct syscall_frame* regs) {
             if (t->state == TASK_WAITING &&
                 (t->wait_for_pid == current_task->pid || t->wait_for_pid == 0) &&
                 t->pid == current_task->parent_pid) {
-                sched_queue_remove(&wait_queue, t);
-                t->state = TASK_READY;
-                sched_queue_push(&ready_queue, t);
+                mlfq_wake_task(t);
 
                 uint32_t* parent_frame = (uint32_t*)t->esp;
-                parent_frame[9] = current_task->pid;  // eax = child pid
+                parent_frame[9] = current_task->pid;  
 
                 int* status_ptr = (int*)parent_frame[8];
                 if (status_ptr && (uint32_t)status_ptr < 0xC0000000u) {
@@ -496,7 +468,6 @@ static int sys_exec(struct syscall_frame* regs) {
         }
     }
 
-    /* Check exec permission on the target binary */
     {
         vfs_node_t *exec_node = _resolve_path(path);
         if (exec_node && vfs_check_perm(exec_node, VFS_PERM_EXEC) < 0)
@@ -589,8 +560,8 @@ static int sys_pipe(struct syscall_frame* regs) {
     current_task->fd_table[wfd]   = pipefd[1];
     current_task->fd_offset[rfd]  = 0;
     current_task->fd_offset[wfd]  = 0;
-    current_task->fd_flags[rfd]   = 0; /* O_RDONLY */
-    current_task->fd_flags[wfd]   = 1; /* O_WRONLY */
+    current_task->fd_flags[rfd]   = 0;
+    current_task->fd_flags[wfd]   = 1;
     current_task->fd_cloexec[rfd] = 0;
     current_task->fd_cloexec[wfd] = 0;
 
@@ -617,7 +588,7 @@ static int sys_dup2(struct syscall_frame* regs) {
     current_task->fd_table[newfd]   = node;
     current_task->fd_offset[newfd]  = current_task->fd_offset[oldfd];
     current_task->fd_flags[newfd]   = current_task->fd_flags[oldfd];
-    current_task->fd_cloexec[newfd] = 0; /* FD_CLOEXEC не наследуется через dup2 */
+    current_task->fd_cloexec[newfd] = 0; 
     open_vfs(node);
     return newfd;
 }
@@ -666,11 +637,6 @@ static int sys_sigreturn(struct syscall_frame* regs) {
     return 0;
 }
 
-
-/* ------------------------------------------------------------------ */
-/* POSIX signal mask, pending, sigsuspend, alarm, setitimer           */
-/* ------------------------------------------------------------------ */
-
 extern uint32_t timer_ticks_get(void);
 
 static int sys_sigprocmask(struct syscall_frame* regs) {
@@ -691,7 +657,6 @@ static int sys_sigpending(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (!validate_user_ptr(set, sizeof(uint32_t))) return -1;
 
-    /* Pending = sent but blocked */
     *set = current_task->pending_signals & current_task->signal_mask;
     return 0;
 }
@@ -702,17 +667,15 @@ static int sys_sigsuspend(struct syscall_frame* regs) {
     if (!current_task || current_task->is_kernel) return -1;
     if (!validate_user_ptr(mask, sizeof(uint32_t))) return -1;
 
-    /* Atomically save current mask, apply new mask, and sleep */
     current_task->saved_signal_mask = current_task->signal_mask;
     current_task->signal_mask = *mask & ~SIG_UNCATCHABLE;
     current_task->in_sigsuspend = 1;
     current_task->state = TASK_SLEEPING;
 
-    /* Return -1 (EINTR) — the scheduler will wake us when a signal arrives */
     return -1;
 }
 
-#define TIMER_HZ_SIGNALS 100   /* must match TIMER_HZ in timer section */
+#define TIMER_HZ_SIGNALS 100   
 
 static int sys_alarm(struct syscall_frame* regs) {
     uint32_t seconds = (uint32_t)regs->ebx;
@@ -722,7 +685,6 @@ static int sys_alarm(struct syscall_frame* regs) {
     uint32_t now = timer_ticks_get();
     uint32_t remaining = 0;
 
-    /* Return remaining time from previous alarm */
     if (current_task->alarm_ticks) {
         uint32_t left_ticks = (current_task->alarm_ticks > now)
                               ? (current_task->alarm_ticks - now) : 0;
@@ -749,7 +711,6 @@ static int sys_setitimer(struct syscall_frame* regs) {
     struct itimerval_k* oldval   = (struct itimerval_k*)regs->edx;
 
     if (!current_task) return -1;
-    /* Only ITIMER_REAL (0) is supported */
     if (which != 0) return -1;
     if (newval && !validate_user_ptr(newval, sizeof(struct itimerval_k))) return -1;
     if (oldval && !validate_user_ptr(oldval, sizeof(struct itimerval_k))) return -1;
@@ -757,7 +718,6 @@ static int sys_setitimer(struct syscall_frame* regs) {
     uint32_t now = timer_ticks_get();
 
     if (oldval) {
-        /* Return current timer state */
         if (current_task->itimer_value && current_task->itimer_value > now) {
             uint32_t left = current_task->itimer_value - now;
             oldval->it_value.tv_sec  = left / TIMER_HZ_SIGNALS;
@@ -773,7 +733,6 @@ static int sys_setitimer(struct syscall_frame* regs) {
     }
 
     if (newval) {
-        /* Convert timeval to ticks */
         uint32_t val_ticks = (uint32_t)(newval->it_value.tv_sec * TIMER_HZ_SIGNALS) +
                              (uint32_t)((newval->it_value.tv_usec * TIMER_HZ_SIGNALS) / 1000000);
         uint32_t int_ticks = (uint32_t)(newval->it_interval.tv_sec * TIMER_HZ_SIGNALS) +
@@ -953,7 +912,6 @@ static int sys_chdir(struct syscall_frame* regs) {
         abs[p] = '\0';
     }
 
-    // normalize "." and ".."
     int segs_start[64], segs_len[64];
     int nseg = 0;
     const char* s = abs;
@@ -1086,7 +1044,6 @@ static int sys_ioctl(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    /* Handle terminal window-size ioctls directly, independent of fd type */
     if (cmd == TIOCGWINSZ) {
         if (!arg || !validate_user_ptr(arg, sizeof(struct winsize))) return -1;
         struct winsize* ws = (struct winsize*)arg;
@@ -1117,8 +1074,7 @@ static int sys_ioctl(struct syscall_frame* regs) {
     return ioctl_vfs(node, cmd, arg);
 }
 
-/* Маска изменяемых файловых статус-флагов через F_SETFL */
-#define SETFL_MASK  (0x0800 /* O_NONBLOCK */ | 0x0400 /* O_APPEND */)
+#define SETFL_MASK  (0x0800 | 0x0400)
 
 static int sys_fcntl(int fd, int cmd, int arg) {
     if (!current_task)          return -1;
@@ -1129,15 +1085,14 @@ static int sys_fcntl(int fd, int cmd, int arg) {
 
     switch (cmd) {
 
-    /* --- F_DUPFD: дублировать fd, назначив первый свободный >= arg --- */
-    case 0: { /* F_DUPFD */
+    case 0: { 
         if (arg < 0 || arg >= MAX_FD) return -1;
         for (int i = arg; i < MAX_FD; i++) {
             if (!current_task->fd_table[i]) {
                 current_task->fd_table[i]   = node;
                 current_task->fd_offset[i]  = current_task->fd_offset[fd];
                 current_task->fd_flags[i]   = current_task->fd_flags[fd];
-                current_task->fd_cloexec[i] = 0; /* FD_CLOEXEC не наследуется */
+                current_task->fd_cloexec[i] = 0; 
                 open_vfs(node);
                 return i;
             }
@@ -1145,29 +1100,24 @@ static int sys_fcntl(int fd, int cmd, int arg) {
         return -1;
     }
 
-    /* --- F_GETFD: получить флаги дескриптора (FD_CLOEXEC) --- */
-    case 1: /* F_GETFD */
-        return (int)current_task->fd_cloexec[fd]; /* 0 или FD_CLOEXEC(1) */
+    case 1:
+        return (int)current_task->fd_cloexec[fd]; 
 
-    /* --- F_SETFD: установить флаги дескриптора (FD_CLOEXEC) --- */
-    case 2: /* F_SETFD */
+    case 2: 
         current_task->fd_cloexec[fd] = (arg & 1) ? 1 : 0;
         return 0;
 
-    /* --- F_GETFL: получить файловые статус-флаги --- */
-    case 3: /* F_GETFL */
+    case 3: 
         return (int)current_task->fd_flags[fd];
 
-    /* --- F_SETFL: изменить изменяемые файловые статус-флаги --- */
-    case 4: { /* F_SETFL */
+    case 4: { 
         uint32_t new_flags = (current_task->fd_flags[fd] & ~(uint32_t)SETFL_MASK)
                            | ((uint32_t)arg & SETFL_MASK);
         current_task->fd_flags[fd] = new_flags;
 
-        /* Для пайпов синхронизируем O_NONBLOCK внутри pipe_t */
         if (node->type == VFS_PIPE && node->priv) {
             pipe_t* p = (pipe_t*)node->priv;
-            if (new_flags & 0x0800 /* O_NONBLOCK */)
+            if (new_flags & 0x0800)
                 p->flags |=  O_NONBLOCK;
             else
                 p->flags &= ~O_NONBLOCK;
@@ -1180,7 +1130,6 @@ static int sys_fcntl(int fd, int cmd, int arg) {
     }
 }
 
-/* Timer runs at 100 Hz → 1 tick = 10 ms */
 #define TIMER_HZ 100
 
 struct timeval {
@@ -1198,7 +1147,6 @@ struct timespec {
 
 static int sys_gettimeofday(struct syscall_frame* regs) {
     struct timeval* tv = (struct timeval*)regs->ebx;
-    /* tz argument (ecx) is ignored per POSIX */
 
     if (!tv) return 0;
     if (!validate_user_ptr(tv, sizeof(struct timeval))) return -1;
@@ -1215,7 +1163,6 @@ static int sys_clock_gettime(struct syscall_frame* regs) {
 
     if (!tp) return -1;
     if (!validate_user_ptr(tp, sizeof(struct timespec))) return -1;
-    /* Both CLOCK_REALTIME and CLOCK_MONOTONIC map to ticks since boot */
     if (clkid != CLOCK_REALTIME && clkid != CLOCK_MONOTONIC) return -1;
 
     uint32_t ticks = timer_ticks_get();
@@ -1237,7 +1184,6 @@ static int sys_nanosleep(struct syscall_frame* regs) {
 
     if (!current_task) return -1;
 
-    /* Convert to milliseconds, then to ticks (ceiling) */
     uint32_t ms   = (uint32_t)(req->tv_sec * 1000) +
                     (uint32_t)((req->tv_nsec + 999999) / 1000000);
     uint32_t ticks = (ms + (1000 / TIMER_HZ) - 1) / (1000 / TIMER_HZ);
@@ -1251,16 +1197,10 @@ static int sys_nanosleep(struct syscall_frame* regs) {
     current_task->sleep_until = now + ticks;
     current_task->state = TASK_SLEEPING;
 
-    /* rem is zeroed — sleep ran to completion (no signal support yet) */
     if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
     return 0;
 }
 
-/* ═══════════════════════════════════════════════
-   Socket syscall helpers
-   ═══════════════════════════════════════════════ */
-
-/* Allocate the next free FD (>= 3) for the current task. */
 static int alloc_fd(vfs_node_t *node) {
     for (int i = 3; i < MAX_FD; i++) {
         if (!current_task->fd_table[i]) {
@@ -1274,7 +1214,6 @@ static int alloc_fd(vfs_node_t *node) {
     return -1;
 }
 
-/* SYS_SOCKET — create a socket, return fd */
 static int sys_socket(struct syscall_frame *regs) {
     int domain   = (int)regs->ebx;
     int type     = (int)regs->ecx;
@@ -1286,18 +1225,15 @@ static int sys_socket(struct syscall_frame *regs) {
 
     int fd = alloc_fd(node);
     if (fd < 0) {
-        /* close_vfs will free the node via socket_close_op */
         close_vfs(node);
         return -1;
     }
     return fd;
 }
 
-/* SYS_BIND — bind socket to a local address */
 static int sys_bind(struct syscall_frame *regs) {
     int fd = (int)regs->ebx;
     struct sockaddr_in *addr = (struct sockaddr_in *)regs->ecx;
-    /* addrlen in edx — not strictly needed here */
 
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
@@ -1312,7 +1248,6 @@ static int sys_bind(struct syscall_frame *regs) {
     uint16_t port = ntohs(addr->sin_port);
 
     if (ks->kind == KS_TCP) {
-        /* tcp_listen needs a port; we store it now — actual LISTEN on sys_listen */
         tcp_socket_t *s = 0;
         if (ks->proto_idx >= 0 && ks->proto_idx < TCP_MAX_SOCKETS)
             s = &tcp_sockets[ks->proto_idx];
@@ -1324,7 +1259,6 @@ static int sys_bind(struct syscall_frame *regs) {
 
     if (ks->kind == KS_UDP) {
         udp_sock_t *s = udp_sock_find_by_port(port);
-        /* port already in use by another socket? */
         if (s && s != &udp_socks[ks->proto_idx] && !ks->so_reuseaddr) return -1;
         udp_socks[ks->proto_idx].local_port = port;
         udp_socks[ks->proto_idx].local_ip   = ntohl(addr->sin_addr);
@@ -1334,7 +1268,6 @@ static int sys_bind(struct syscall_frame *regs) {
     return -1;
 }
 
-/* SYS_CONNECT — initiate a TCP connection */
 static int sys_connect(struct syscall_frame *regs) {
     int fd = (int)regs->ebx;
     struct sockaddr_in *addr = (struct sockaddr_in *)regs->ecx;
@@ -1349,15 +1282,13 @@ static int sys_connect(struct syscall_frame *regs) {
     ksock_t *ks = ksock_from_node(node);
     if (!ks || ks->kind != KS_TCP) return -1;
 
-    uint32_t dst_ip   = addr->sin_addr;           /* already network order */
+    uint32_t dst_ip   = addr->sin_addr;         
     uint16_t dst_port = ntohs(addr->sin_port);
     return tcp_connect(ks->proto_idx, dst_ip, dst_port);
 }
 
-/* SYS_LISTEN — mark TCP socket as passive */
 static int sys_listen(struct syscall_frame *regs) {
     int fd      = (int)regs->ebx;
-    /* backlog in ecx — ignored for now */
 
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
@@ -1373,7 +1304,6 @@ static int sys_listen(struct syscall_frame *regs) {
     return tcp_listen(ks->proto_idx, s->local_port);
 }
 
-/* SYS_ACCEPT — accept a pending TCP connection */
 static int sys_accept(struct syscall_frame *regs) {
     int fd = (int)regs->ebx;
     struct sockaddr_in *peer_addr    = (struct sockaddr_in *)regs->ecx;
@@ -1390,7 +1320,7 @@ static int sys_accept(struct syscall_frame *regs) {
     if (!listen_node || listen_node->type != VFS_SOCKET) return -1;
 
     vfs_node_t *conn_node = ksock_tcp_accept(listen_node, peer_addr);
-    if (!conn_node) return -1;  /* no connection ready (would block) */
+    if (!conn_node) return -1;  
 
     if (peer_addrlen) *peer_addrlen = sizeof(struct sockaddr_in);
 
@@ -1402,12 +1332,10 @@ static int sys_accept(struct syscall_frame *regs) {
     return new_fd;
 }
 
-/* SYS_SEND — send data on a connected socket */
 static int sys_send(struct syscall_frame *regs) {
     int      fd   = (int)regs->ebx;
     char    *buf  = (char *)regs->ecx;
     uint32_t len  = regs->edx;
-    /* flags ignored */
 
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
@@ -1419,12 +1347,10 @@ static int sys_send(struct syscall_frame *regs) {
     return write_vfs(node, 0, len, buf);
 }
 
-/* SYS_RECV — receive data from a connected socket */
 static int sys_recv(struct syscall_frame *regs) {
     int      fd   = (int)regs->ebx;
     char    *buf  = (char *)regs->ecx;
     uint32_t len  = regs->edx;
-    /* flags ignored */
 
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
@@ -1436,7 +1362,6 @@ static int sys_recv(struct syscall_frame *regs) {
     return read_vfs(node, 0, len, buf);
 }
 
-/* SYS_SENDTO — send a UDP datagram to a specific address */
 static int sys_sendto(struct syscall_frame *regs) {
     sendto_args_t *args = (sendto_args_t *)regs->ebx;
     if (!validate_user_ptr(args, sizeof(sendto_args_t))) return -1;
@@ -1469,7 +1394,6 @@ static int sys_sendto(struct syscall_frame *regs) {
     return -1;
 }
 
-/* SYS_RECVFROM — receive a UDP datagram and capture source address */
 static int sys_recvfrom(struct syscall_frame *regs) {
     recvfrom_args_t *args = (recvfrom_args_t *)regs->ebx;
     if (!validate_user_ptr(args, sizeof(recvfrom_args_t))) return -1;
@@ -1517,7 +1441,6 @@ static int sys_recvfrom(struct syscall_frame *regs) {
     return ret;
 }
 
-/* ── setsockopt / getsockopt args structs ─────────────────────────────────── */
 
 typedef struct {
     int         fd;
@@ -1535,7 +1458,6 @@ typedef struct {
     uint32_t *optlen;
 } getsockopt_args_t;
 
-/* SYS_SHUTDOWN — shut down part of a full-duplex connection */
 static int sys_shutdown(struct syscall_frame *regs) {
     int fd  = (int)regs->ebx;
     int how = (int)regs->ecx;
@@ -1549,7 +1471,6 @@ static int sys_shutdown(struct syscall_frame *regs) {
     return ksock_shutdown(node, how);
 }
 
-/* SYS_SETSOCKOPT — set a socket option */
 static int sys_setsockopt(struct syscall_frame *regs) {
     setsockopt_args_t *args = (setsockopt_args_t *)regs->ebx;
     if (!validate_user_ptr(args, sizeof(setsockopt_args_t))) return -1;
@@ -1585,7 +1506,7 @@ static int sys_setsockopt(struct syscall_frame *regs) {
                 tcp_sockets[ks->proto_idx].keepalive = ks->so_keepalive;
             return 0;
         case SO_ERROR:
-            return -1;  /* SO_ERROR is read-only */
+            return -1;  
         }
     } else if (level == IPPROTO_TCP) {
         switch (optname) {
@@ -1600,7 +1521,6 @@ static int sys_setsockopt(struct syscall_frame *regs) {
     return -1;
 }
 
-/* SYS_GETSOCKOPT — retrieve a socket option */
 static int sys_getsockopt(struct syscall_frame *regs) {
     getsockopt_args_t *args = (getsockopt_args_t *)regs->ebx;
     if (!validate_user_ptr(args, sizeof(getsockopt_args_t))) return -1;
@@ -1631,7 +1551,7 @@ static int sys_getsockopt(struct syscall_frame *regs) {
         case SO_KEEPALIVE: ival = ks->so_keepalive; break;
         case SO_ERROR:
             ival = ks->so_error;
-            ks->so_error = 0;  /* clear on read */
+            ks->so_error = 0;  
             break;
         default: return -1;
         }
@@ -1649,45 +1569,24 @@ static int sys_getsockopt(struct syscall_frame *regs) {
     return 0;
 }
 
-/*
- * deliver_pending_signal — set up a signal frame on the user stack and
- * redirect EIP to the registered handler, so the signal is delivered when
- * the kernel returns to user space after the current syscall.
- *
- * Signal frame layout on user stack (low → high address):
- *   [new_esp + 0 ]  signal_frame_t.ret_addr  = sigreturn trampoline address
- *   [new_esp + 4 ]  signal_frame_t.signum    = bit position of the signal
- *   [new_esp + 8 ]  signal_frame_t.eax       = saved eax
- *   ...             (rest of saved register context)
- *
- * The handler is called with EIP = handler, ESP = new_esp.
- * cdecl convention: [esp+0] = return addr (trampoline), [esp+4] = signum arg.
- * On handler ret: esp = new_esp + 4, EIP = trampoline.
- * Trampoline does: sub esp, 4  (restore to new_esp), then sys_sigreturn (16).
- * sys_sigreturn reads signal_frame_t from new_esp and restores all registers.
- */
 static void deliver_pending_signal(struct task_struct* t,
                                    struct syscall_frame* regs) {
     uint32_t deliverable = t->pending_signals & ~t->signal_mask;
     if (!deliverable) return;
 
-    /* Find the lowest-numbered pending deliverable signal with a user handler */
     for (int bit = 0; bit < NSIG; bit++) {
         uint32_t mask = (1u << bit);
         if (!(deliverable & mask)) continue;
         uint32_t handler = t->signal_handlers[bit];
-        if (handler <= SIG_IGN) continue;  /* SIG_DFL or SIG_IGN — handled by task_handle_signals */
-        if (handler >= KERNEL_BASE) continue; /* Reject kernel-space handler pointers */
+        if (handler <= SIG_IGN) continue;  
+        if (handler >= KERNEL_BASE) continue; 
 
-        /* Allocate signal_frame_t on the user stack */
         uint32_t new_esp = regs->useresp - sizeof(signal_frame_t);
 
-        /* Ensure the frame fits inside a single page and is in user space */
         if (new_esp >= KERNEL_BASE) continue;
         uint32_t page_off = new_esp & 0xFFFu;
         if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) continue;
 
-        /* Translate virtual address → physical */
         uint32_t* pd  = t->page_directory;
         if (!pd) continue;
         uint32_t  pdi = PD_INDEX(new_esp);
@@ -1699,7 +1598,6 @@ static void deliver_pending_signal(struct task_struct* t,
         uint32_t phys_page = pt[pti] & ~0xFFFu;
         signal_frame_t* frame = (signal_frame_t*)(phys_page + page_off);
 
-        /* Save current user register context into the frame */
         frame->ret_addr = t->sigreturn_trampoline;
         frame->signum   = (uint32_t)bit;
         frame->eax      = regs->eax;
@@ -1713,23 +1611,14 @@ static void deliver_pending_signal(struct task_struct* t,
         frame->eip      = regs->eip;
         frame->eflags   = regs->eflags;
 
-        /* Redirect execution to the signal handler */
         regs->useresp = new_esp;
         regs->eip     = handler;
 
-        /* Clear the signal so it is not re-delivered */
         t->pending_signals &= ~mask;
-        return; /* deliver one signal per syscall return */
+        return; 
     }
 }
 
-/* ---------- Syscall 54-57: symlink / readlink / link / unlink ----------- */
-
-/*
- * sys_symlink(target, linkpath)
- *   ebx = target string (what the symlink points at)
- *   ecx = linkpath     (where to create the symlink)
- */
 static int sys_symlink(struct syscall_frame *regs) {
     char *target   = (char *)regs->ebx;
     char *linkpath = (char *)regs->ecx;
@@ -1744,12 +1633,6 @@ static int sys_symlink(struct syscall_frame *regs) {
     return vfs_symlink(parent, basename, target);
 }
 
-/*
- * sys_readlink(path, buf, bufsz)
- *   ebx = path   (must resolve to a symlink; final component NOT followed)
- *   ecx = buf
- *   edx = bufsz
- */
 static int sys_readlink(struct syscall_frame *regs) {
     char     *path  = (char *)regs->ebx;
     char     *buf   = (char *)regs->ecx;
@@ -1760,8 +1643,6 @@ static int sys_readlink(struct syscall_frame *regs) {
     if (bufsz == 0)                        return -1;
     if (!current_task)                     return -1;
 
-    /* Resolve all parent components following symlinks, but do NOT follow
-     * the final component – we want the symlink node itself. */
     char basename[128];
     vfs_node_t *parent = _resolve_parent_follow(path, basename, 128);
     if (!parent || !basename[0]) return -1;
@@ -1773,11 +1654,6 @@ static int sys_readlink(struct syscall_frame *regs) {
     return vfs_readlink_node(node, buf, bufsz);
 }
 
-/*
- * sys_link(oldpath, newpath)
- *   ebx = oldpath  (existing file – becomes the hard-link target)
- *   ecx = newpath  (new directory entry to create)
- */
 static int sys_link(struct syscall_frame *regs) {
     char *oldpath = (char *)regs->ebx;
     char *newpath = (char *)regs->ecx;
@@ -1795,10 +1671,6 @@ static int sys_link(struct syscall_frame *regs) {
     return vfs_link(new_parent, basename, target_node);
 }
 
-/*
- * sys_unlink(path)
- *   ebx = path  (file or symlink to remove)
- */
 static int sys_unlink(char *path) {
     if (!validate_user_str(path)) return -1;
     if (!current_task) return -1;
@@ -1811,11 +1683,6 @@ static int sys_unlink(char *path) {
     return vfs_unlink(parent, basename);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
-   I/O multiplexing — select (58) / poll (59)
-   ═══════════════════════════════════════════════════════════════════════ */
-
-/* ── fd_set: 256-bit bitmap matching MAX_FD=256 ─────────────────────────── */
 #define SEL_SETSIZE  256
 typedef struct { uint32_t w[SEL_SETSIZE / 32]; } sel_fdset_t;
 
@@ -1824,7 +1691,6 @@ typedef struct { uint32_t w[SEL_SETSIZE / 32]; } sel_fdset_t;
 #define SEL_ZERO(s) \
     do { for (int _i = 0; _i < SEL_SETSIZE/32; _i++) (s)->w[_i] = 0; } while (0)
 
-/* Packed args struct passed via ebx pointer from userspace */
 typedef struct {
     int             nfds;
     sel_fdset_t    *readfds;
@@ -1833,7 +1699,6 @@ typedef struct {
     struct timeval *timeout;
 } sel_args_t;
 
-/* ── poll event flags ────────────────────────────────────────────────────── */
 #define POLLIN   0x0001
 #define POLLOUT  0x0004
 #define POLLERR  0x0008
@@ -1846,7 +1711,6 @@ struct pollfd {
     short revents;
 };
 
-/* ── per-fd readiness helpers ────────────────────────────────────────────── */
 
 static int fd_read_ready(vfs_node_t *node) {
     if (!node) return 0;
@@ -1858,7 +1722,6 @@ static int fd_read_ready(vfs_node_t *node) {
         return 1;
     case VFS_PIPE: {
         pipe_t *p = (pipe_t *)node->priv;
-        /* readable: data present OR write-end closed (EOF) */
         return p && (p->len > 0 || !p->write_open);
     }
     case VFS_SOCKET: {
@@ -1866,7 +1729,6 @@ static int fd_read_ready(vfs_node_t *node) {
         if (!ks) return 0;
         if (ks->kind == KS_TCP) {
             tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
-            /* data in rx buffer, incoming connection, or peer closed */
             return (s->rx_head != s->rx_tail) || s->accept_ready ||
                    (s->state == TCP_CLOSE_WAIT) || (s->state == TCP_CLOSED);
         }
@@ -1888,7 +1750,6 @@ static int fd_write_ready(vfs_node_t *node) {
         return 1;
     case VFS_PIPE: {
         pipe_t *p = (pipe_t *)node->priv;
-        /* writable: space in buffer AND read-end still open */
         return p && (p->len < PIPE_BUF_SIZE) && p->read_open;
     }
     case VFS_SOCKET: {
@@ -1898,20 +1759,13 @@ static int fd_write_ready(vfs_node_t *node) {
             tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
             return (s->state == TCP_ESTABLISHED) || (s->state == TCP_CLOSE_WAIT);
         }
-        if (ks->kind == KS_UDP) return 1;  /* UDP sends are always non-blocking */
+        if (ks->kind == KS_UDP) return 1;  
         return 0;
     }
     default: return 0;
     }
 }
 
-/* ── sys_select ──────────────────────────────────────────────────────────── *
- * ebx = pointer to sel_args_t { nfds, *readfds, *writefds, *exceptfds, *tv }
- *
- * Blocks by calling schedule() in a loop — same pattern used by pipe_read /
- * mutex_lock.  Original fd_sets are snapshotted so result sets are computed
- * from them on every iteration without corrupting the user's input.
- * ─────────────────────────────────────────────────────────────────────────── */
 static int sys_select(struct syscall_frame *regs) {
     sel_args_t *ua = (sel_args_t *)regs->ebx;
     if (!validate_user_ptr(ua, sizeof(sel_args_t))) return -1;
@@ -1929,7 +1783,6 @@ static int sys_select(struct syscall_frame *regs) {
     if (uefds && !validate_user_ptr(uefds, sizeof(sel_fdset_t)))        return -1;
     if (utv   && !validate_user_ptr(utv,   sizeof(struct timeval)))     return -1;
 
-    /* Deadline */
     int      infinite    = (utv == 0);
     int      nonblocking = 0;
     uint32_t deadline    = 0;
@@ -1941,14 +1794,12 @@ static int sys_select(struct syscall_frame *regs) {
         deadline    = timer_ticks_get() + ticks;
     }
 
-    /* Snapshot original sets (32 bytes each) — never modified during the loop */
     sel_fdset_t orig_r, orig_w, orig_e;
     SEL_ZERO(&orig_r); SEL_ZERO(&orig_w); SEL_ZERO(&orig_e);
     if (urfds) orig_r = *urfds;
     if (uwfds) orig_w = *uwfds;
     if (uefds) orig_e = *uefds;
 
-    /* Keep a stable pointer to our own task across schedule() calls */
     struct task_struct *t = current_task;
 
     for (;;) {
@@ -1966,7 +1817,6 @@ static int sys_select(struct syscall_frame *regs) {
                 if (node && fd_write_ready(node)) { SEL_SET(fd, &res_w); ready++; }
             }
             if (uefds && SEL_ISSET(fd, &orig_e)) {
-                /* exceptfds: pipe write-end closed (HUP condition) */
                 if (node && node->type == VFS_PIPE) {
                     pipe_t *p = (pipe_t *)node->priv;
                     if (p && !p->write_open) { SEL_SET(fd, &res_e); ready++; }
@@ -1974,7 +1824,6 @@ static int sys_select(struct syscall_frame *regs) {
             }
         }
 
-        /* Return if: something ready, non-blocking poll, or deadline reached */
         if (ready > 0 || nonblocking ||
                 (!infinite && (int32_t)(timer_ticks_get() - deadline) >= 0)) {
             if (urfds) *urfds = res_r;
@@ -1983,14 +1832,10 @@ static int sys_select(struct syscall_frame *regs) {
             return ready;
         }
 
-        schedule();   /* yield — same pattern as pipe_read / mutex_lock */
+        schedule();  
     }
 }
 
-/* ── sys_poll ────────────────────────────────────────────────────────────── *
- * ebx = struct pollfd[]   ecx = nfds   edx = timeout_ms
- * timeout_ms: -1 = infinite, 0 = non-blocking, >0 = deadline in ms
- * ─────────────────────────────────────────────────────────────────────────── */
 static int sys_poll(struct syscall_frame *regs) {
     struct pollfd *fds        = (struct pollfd *)regs->ebx;
     int            nfds       = (int)regs->ecx;
@@ -2036,7 +1881,6 @@ static int sys_poll(struct syscall_frame *regs) {
     }
 }
 
-/* ---------- Syscall 61-64: IPC shared memory ---------------------------- */
 
 static int sys_shmget(struct syscall_frame* regs) {
     int      key   = (int)regs->ebx;
@@ -2158,15 +2002,11 @@ void syscall_handler(struct syscall_frame* regs) {
         num == 29 || num == 31 ||
         num == 35 || num == 36 || num == 37 ||
         num == 38 || num == 39 || num == 40 || num == 41 || num == 42 ||
-        /* socket syscalls */
         num == 43 || num == 44 || num == 45 || num == 46 || num == 47 ||
         num == 48 || num == 49 || num == 50 || num == 51 ||
         num == 52 || num == 53 || num == 60 ||
-        /* symlink syscalls (54-56 need full frame; 57 uses direct args) */
         num == 54 || num == 55 || num == 56 ||
-        /* I/O multiplexing */
         num == 58 || num == 59 ||
-        /* IPC shared memory */
         num == 61 || num == 62 || num == 63 || num == 64) {
         ret = ((int(*)(struct syscall_frame*))syscall_table[num])(regs);
     } else {
@@ -2177,13 +2017,9 @@ void syscall_handler(struct syscall_frame* regs) {
         );
     }
 
-    /* sys_exit (7): task is ZOMBIE, don't touch its frame */
     if (num == 7) return;
-    /* sys_sigsuspend (40): task is now SLEEPING, eax will be set to -1 (EINTR)
-       when it wakes up — write -1 now so it's in the frame */
     regs->eax = (uint32_t)ret;
 
-    /* Deliver any pending signal with a user handler before returning to user space */
     if (current_task && !current_task->is_kernel)
         deliver_pending_signal(current_task, regs);
 }

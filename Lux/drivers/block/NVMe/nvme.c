@@ -144,9 +144,7 @@ void bio_irq_complete(int error) {
         done->waiter = 0;
         irq_spinlock_acquire(&scheduler_lock);
         if (w->state == TASK_SLEEPING) {
-            w->state = TASK_READY;
-            sched_queue_remove(&sleep_queue, w);
-            sched_queue_push(&ready_queue, w);
+            mlfq_wake_task(w);
         }
         irq_spinlock_release(&scheduler_lock);
     }
@@ -262,7 +260,6 @@ static int nvme_create_io_queues(void) {
 
     struct nvme_sq_entry cmd;
 
-    /* IO CQ: IEN=1 (interrupts enabled), PC=1 (phys contiguous), IV=0 */
     memory_set(&cmd, 0, sizeof(cmd));
     cmd.cdw0  = NVME_OPC_CREATE_IOCQ | ((uint32_t)(admin_cid++ & 0xFFFF) << 16);
     cmd.prp1  = (uint32_t)io_cq_mem;
