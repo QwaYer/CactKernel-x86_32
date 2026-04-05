@@ -2,6 +2,9 @@
 # Lux Kernel Makefile
 # ==============================================================================
 
+
+
+
 KERN_CORE_DIR    = Lux/kernel/core
 KERN_VER_DIR     = Lux/kernel/core/kern_ver
 KERN_SYSCALLS_DIR    = Lux/kernel/core/syscalls
@@ -19,6 +22,9 @@ KERN_OOM_DIR     = Lux/kernel/memory/oom
 KERN_MMAP_DIR    = Lux/kernel/memory/mmap_mm
 KERN_SHM_DIR     = Lux/kernel/memory/shm
 KERN_PROC_DIR    = Lux/kernel/proc
+SCHED_DIR    = Lux/kernel/proc/sched
+SCHED_TARGET = $(SCHED_DIR)/target/i686-lux/release/libsched.a
+CARGO        = cargo +nightly
 KERN_SYNC_DIR    = Lux/kernel/sync
 KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
@@ -145,10 +151,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/oom.o \
       $(BUILD_DIR)/mmap.o \
       $(BUILD_DIR)/shm.o \
-      $(BUILD_DIR)/task.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/dynlink.o \
-      $(BUILD_DIR)/sync.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/shell.o \
       $(BUILD_DIR)/commands.o \
@@ -212,8 +216,9 @@ $(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/lux.iso $(BUILD_DIR)/isodir
 
 
-$(BUILD_DIR)/kernel.bin: $(OBJ)
-	ld $(LDFLAGS) -o $@ $^
+$(BUILD_DIR)/kernel.bin: $(OBJ) $(SCHED_TARGET)
+	@echo "[LD] Linking kernel with Rust MLFQ scheduler..."
+	ld $(LDFLAGS) -o $@ --start-group $^ -L$(dir $(SCHED_TARGET)) -lsched --end-group
 
 
 $(BUILD_DIR)/kernel_entry.o: $(KERN_CORE_DIR)/kernel.asm
@@ -297,13 +302,11 @@ $(BUILD_DIR)/shm.o: $(KERN_SHM_DIR)/shm.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/task.o: $(KERN_PROC_DIR)/task.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/sync.o: $(KERN_SYNC_DIR)/sync.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
+$(SCHED_TARGET): $(wildcard $(SCHED_DIR)/src/*.rs) $(SCHED_DIR)/Cargo.toml $(SCHED_DIR)/targets/i686-lux.json
+	cd $(SCHED_DIR) && $(CARGO) build --release \
+		-Z json-target-spec \
+		-Z build-std=core,compiler_builtins \
+		-Z build-std-features=compiler-builtins-mem 2>&1
 
 $(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
 	@mkdir -p $(BUILD_DIR)
@@ -391,10 +394,6 @@ $(BUILD_DIR)/buf.o: $(DRIVER_BUF_DIR)/buf.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/syscall.o: $(KERN_SYSCALLS_DIR)/syscall.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/keyboard.o: $(DRIVER_INPUT_DIR)/keyboard.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -475,5 +474,8 @@ $(BUILD_DIR)/ksocket.o: $(NET_SOCKET_DIR)/socket.c
 
 clean:
 	rm -rf $(BUILD_DIR)
+	cd $(SCHED_DIR) && cargo +nightly clean
 
-.PHONY: all clean
+.PHONY: all clean sched
+.PHONY: sched
+sched: $(SCHED_TARGET)

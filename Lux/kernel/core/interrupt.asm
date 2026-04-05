@@ -52,6 +52,7 @@ extern nvme_irq_handler
 extern ps2_mouse_handler
 extern current_task
 extern schedule
+extern on_timer_tick       
 extern page_fault_handler
 extern xhci_irq_handler
 extern tss_entry
@@ -261,23 +262,8 @@ isr_common_stub:
     add esp, 8
     iretd
 
-;
-; timer_isr — preemptive context switch
-;
-; Stack on entry (pushed by CPU + our code):
-;   [ss, useresp]  (only on ring change 3→0)
-;   eflags, cs, eip
-;   pusha (8 regs)
-;   ds, es
-;   ← esp saved here into current_task->esp
-;
-; After schedule() picks a new current_task, we:
-;   1) restore esp from new task
-;   2) switch cr3 if task has its own page_directory
-;   3) update tss.esp0 for ring3→ring0 transitions
-;   4) send EOI
-;   5) pop es, ds, popa, iretd
-;
+extern task_trampoline_addr   
+
 timer_isr:
     pusha
     push ds
@@ -287,43 +273,7 @@ timer_isr:
     mov es, ax
 
     inc dword [timer_ticks]
-
-    ; save current esp into current_task->esp (offset 0)
-    mov eax, [current_task]
-    test eax, eax
-    jz .skip_save
-    mov [eax], esp
-
-.skip_save:
-    call schedule
-
-    ; load new task's esp
-    mov eax, [current_task]
-    test eax, eax
-    jz .do_eoi
-    mov esp, [eax]
-
-    ; switch cr3: task->page_directory is at offset 28
-    ; struct offsets: esp(0) pid(4) state(8) is_kernel(12) stack_base(16)
-    ;                 ustack_phys(20) ustack_virt(24) page_directory(28)
-    mov ebx, [eax + 28]
-    test ebx, ebx
-    jz .use_kernel_pd
-    mov cr3, ebx
-    jmp .update_tss
-
-.use_kernel_pd:
-    mov ebx, page_directory
-    mov cr3, ebx
-
-.update_tss:
-    ; tss_entry.esp0 = task->stack_base + 4096
-    ; stack_base is at offset 16
-    mov ecx, [eax + 16]
-    test ecx, ecx
-    jz .do_eoi
-    add ecx, 4096
-    mov [tss_entry + 4], ecx   ; tss_entry.esp0 is at offset 4
+    call on_timer_tick
 
 .do_eoi:
     mov al, 0x20
@@ -429,8 +379,6 @@ xhci_isr:
     popa
     iretd
 
-; Syscall (INT 0x80)
-; Same context-switch pattern as timer_isr
 syscall_isr:
     pusha
     push ds
@@ -442,34 +390,7 @@ syscall_isr:
     push esp
     call syscall_handler
     add esp, 4
-
-    ; save & switch
-    mov eax, [current_task]
-    test eax, eax
-    jz .sc_no_switch
-
-    mov [eax], esp
     call schedule
-    mov eax, [current_task]
-    mov esp, [eax]
-
-    ; switch cr3
-    mov ebx, [eax + 28]
-    test ebx, ebx
-    jz .sc_kernel_pd
-    mov cr3, ebx
-    jmp .sc_update_tss
-
-.sc_kernel_pd:
-    mov ebx, page_directory
-    mov cr3, ebx
-
-.sc_update_tss:
-    mov ecx, [eax + 16]
-    test ecx, ecx
-    jz .sc_no_switch
-    add ecx, 4096
-    mov [tss_entry + 4], ecx
 
 .sc_no_switch:
     pop es
@@ -477,7 +398,6 @@ syscall_isr:
     popa
     iretd
 
-; Spurious IRQ7 (master PIC, vector 0x27)
 spurious_irq7:
     push eax
     mov al, 0x0B
@@ -491,7 +411,6 @@ spurious_irq7:
     pop eax
     iretd
 
-; Spurious IRQ15 (slave PIC, vector 0x2F)
 spurious_irq15:
     push eax
     mov al, 0x0B

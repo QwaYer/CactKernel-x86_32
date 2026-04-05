@@ -27,16 +27,15 @@ typedef uint32_t gid_t;
 #define SIGFPE   (1u << 7)
 #define SIGSEGV  (1u << 8)
 #define SIGWINCH (1u << 9)
-#define SIGHUP   (1u << 10)   /* hangup — terminal closed          */
-#define SIGINT   (1u << 11)   /* interrupt — Ctrl-C from TTY       */
-#define SIGQUIT  (1u << 12)   /* quit     — Ctrl-\ from TTY        */
+#define SIGHUP   (1u << 10)  
+#define SIGINT   (1u << 11)  
+#define SIGQUIT  (1u << 12)  
 
 #define NSIG     13
 
 #define SIG_DFL  ((uint32_t)0)
 #define SIG_IGN  ((uint32_t)1)
 
-/* Signals that cannot be blocked or caught */
 #define SIG_UNCATCHABLE  (SIGKILL | SIGSTOP)
 
 
@@ -81,20 +80,19 @@ struct task_struct {
     struct task_struct* queue_next;
 
     uint32_t pending_signals;
-    uint32_t signal_mask;           /* blocked signals (sigprocmask) */
-    uint32_t saved_signal_mask;     /* mask saved across sigsuspend */
-    uint8_t  in_sigsuspend;         /* task is sleeping in sigsuspend */
+    uint32_t signal_mask;    
+    uint32_t saved_signal_mask;    
+    uint8_t  in_sigsuspend;         
     uint32_t signal_handlers[NSIG];
     uint32_t sigreturn_trampoline;
 
-    /* alarm / setitimer (ITIMER_REAL) */
-    uint32_t alarm_ticks;           /* absolute tick when SIGALRM fires (0=none) */
-    uint32_t itimer_value;          /* absolute tick for next interval fire (0=none) */
-    uint32_t itimer_interval;       /* reload interval in ticks (0=one-shot) */
+    uint32_t alarm_ticks;     
+    uint32_t itimer_value;     
+    uint32_t itimer_interval;   
     struct vfs_node* fd_table[MAX_FD];
     uint32_t fd_offset[MAX_FD];
-    uint32_t fd_flags[MAX_FD];    /* file status flags: O_RDONLY/WRONLY/RDWR, O_NONBLOCK, O_APPEND */
-    uint32_t fd_cloexec[MAX_FD];  /* FD_CLOEXEC per descriptor (1 = close-on-exec) */
+    uint32_t fd_flags[MAX_FD];  
+    uint32_t fd_cloexec[MAX_FD];  
     proc_page_tracker_t mm;
 
     mmap_table_t mmap_table;
@@ -111,13 +109,11 @@ struct task_struct {
 
     char cwd[256];
 
-    /* User/group credentials */
     uid_t uid;
     gid_t gid;
     uid_t euid;
     gid_t egid;
 
-    /* IPC shared memory attachments */
     task_shm_attach_t shm_attachments[TASK_SHM_MAX];
 };
 
@@ -175,6 +171,8 @@ extern sched_queue_t ready_queue;
 extern sched_queue_t sleep_queue;
 extern sched_queue_t zombie_queue;
 extern sched_queue_t wait_queue;
+
+void mlfq_wake_task(struct task_struct* task);
 
 void task_init();
 struct task_struct* create_task(void (*entry_point)());

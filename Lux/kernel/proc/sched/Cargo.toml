@@ -1,0 +1,20 @@
+[package]
+name    = "sched"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name       = "sched"
+crate-type = ["staticlib"]
+
+[profile.release]
+panic           = "abort"
+opt-level       = 2
+lto             = true
+codegen-units   = 1
+overflow-checks = false
+debug           = false
+
+[profile.dev]
+panic           = "abort"
+overflow-checks = false
