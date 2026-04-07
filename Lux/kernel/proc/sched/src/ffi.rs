@@ -82,6 +82,10 @@ extern "C" {
     pub fn switch_to(old_esp: *mut u32, new_esp: u32);
     pub fn switch_paging(pd: *mut u32);
 
+    pub fn kernel_task_trampoline();
+    pub fn user_task_trampoline();
+    pub fn fork_task_trampoline();
+
     pub fn kprint(s: *const u8);
     pub fn kprint_color(s: *const u8, color: u32);
     pub fn itoa(n: i32, buf: *mut u8);

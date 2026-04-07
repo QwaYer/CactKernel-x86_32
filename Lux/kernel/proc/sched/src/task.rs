@@ -274,24 +274,17 @@ pub unsafe extern "C" fn create_task(entry_point: *const c_void) -> *mut TaskStr
 
     let mut esp = stack_top;
 
-    // iretd frame (для выхода из прерывания в kernel mode)
-    esp = esp.sub(1); *esp = 0x00000202;                    // eflags (IF=1)
-    esp = esp.sub(1); *esp = KERNEL_CODE_SEL;               // cs
-    esp = esp.sub(1); *esp = entry_point as u32;            // eip
+    // kernel_task_trampoline will `ret` to this entry point
+    esp = esp.sub(1); *esp = entry_point as u32;
 
-    // pusha-совместимый блок (8 регистров)
-    esp = esp.sub(1); *esp = 0; // eax
-    esp = esp.sub(1); *esp = 0; // ecx
-    esp = esp.sub(1); *esp = 0; // edx
-    esp = esp.sub(1); *esp = 0; // ebx
-    esp = esp.sub(1); *esp = 0; // esp_dummy
+    // return address for switch_to's `ret`
+    esp = esp.sub(1); *esp = ffi::kernel_task_trampoline as u32;
+
+    // switch_to callee-saved registers (pop ebx, pop esi, pop edi, pop ebp)
     esp = esp.sub(1); *esp = 0; // ebp
-    esp = esp.sub(1); *esp = 0; // esi
     esp = esp.sub(1); *esp = 0; // edi
-
-    // ds, es
-    esp = esp.sub(1); *esp = KERNEL_DATA_SEL;
-    esp = esp.sub(1); *esp = KERNEL_DATA_SEL;
+    esp = esp.sub(1); *esp = 0; // esi
+    esp = esp.sub(1); *esp = 0; // ebx
 
     (*t).esp           = esp as u32;
     (*t).stack_base    = stack as *mut c_void;
@@ -329,19 +322,21 @@ unsafe fn create_user_task_internal(entry_point: *const c_void, add_to_list: boo
     let stack_top = (kstack as usize + KERNEL_STACK_SIZE) as *mut u32;
     let mut esp = stack_top;
 
-    // iretd frame для ring3 (с ss и useresp)
+    // iretd frame for ring3 (user_task_trampoline will iretd using this)
     esp = esp.sub(1); *esp = USER_DATA_SEL;                        // ss
     esp = esp.sub(1); *esp = ustack_virt + PAGE_SIZE - 4;         // useresp
     esp = esp.sub(1); *esp = 0x0000_0202;                          // eflags (IF=1)
     esp = esp.sub(1); *esp = USER_CODE_SEL;                        // cs
     esp = esp.sub(1); *esp = entry_point as u32;                   // eip
 
-    // pusha
-    for _ in 0..8 { esp = esp.sub(1); *esp = 0; }
+    // return address for switch_to's `ret`
+    esp = esp.sub(1); *esp = ffi::user_task_trampoline as u32;
 
-    // ds, es
-    esp = esp.sub(1); *esp = USER_DATA_SEL;
-    esp = esp.sub(1); *esp = USER_DATA_SEL;
+    // switch_to callee-saved registers
+    esp = esp.sub(1); *esp = 0; // ebp
+    esp = esp.sub(1); *esp = 0; // edi
+    esp = esp.sub(1); *esp = 0; // esi
+    esp = esp.sub(1); *esp = 0; // ebx
 
     (*t).esp          = esp as u32;
     (*t).stack_base   = kstack as *mut c_void;
@@ -384,9 +379,9 @@ pub unsafe extern "C" fn create_task_with_entry(
                      core::mem::size_of::<ProcPageTracker>());
     (*t).page_directory = pd;
 
-    // Исправить EIP на стеке (offset 10 от esp, как в C-версии)
+    // Исправить EIP на стеке (offset 5 от esp: ebx,esi,edi,ebp,trampoline,eip)
     let stk = (*t).esp as *mut u32;
-    *stk.add(10) = entry as u32;
+    *stk.add(5) = entry as u32;
 
     // Маппинг user-стека в page directory
     ffi::vmm_map(pd, (*t).ustack_virt, (*t).ustack_phys as u32,
@@ -402,8 +397,8 @@ pub unsafe extern "C" fn create_task_with_entry(
     let phys = (*t).ustack_phys as *mut u8;
     let mut sp = ustack_top - 4;
     push_empty_args(phys, (*t).ustack_virt, &mut sp);
-    // Исправить useresp на стеке (offset 13)
-    *stk.add(13) = sp;
+    // Исправить useresp на стеке (offset 8)
+    *stk.add(8) = sp;
 
     task_setup_sigreturn(t);
 
@@ -453,7 +448,7 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     (*t).page_directory = pd;
 
     let stk = (*t).esp as *mut u32;
-    *stk.add(10) = entry as u32;
+    *stk.add(5) = entry as u32;
 
     ffi::vmm_map(pd, (*t).ustack_virt, (*t).ustack_phys as u32,
                  PAGE_USER | PAGE_RW | PAGE_PRESENT);
@@ -466,7 +461,7 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     let phys = (*t).ustack_phys as *mut u8;
     let mut sp = ustack_top - 4;
     push_empty_args(phys, (*t).ustack_virt, &mut sp);
-    *stk.add(13) = sp;
+    *stk.add(8) = sp;
 
     task_setup_sigreturn(t);
 
@@ -566,7 +561,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     let stack_top_ptr = (kstack as usize + KERNEL_STACK_SIZE) as *mut u32;
     let mut esp_ptr = stack_top_ptr;
 
-    // Скопировать iretd-фрейм из parent regs, но eax=0 (child вернёт 0)
+    // iretd frame (fork_task_trampoline will pop es/ds, popa, iretd)
     esp_ptr = esp_ptr.sub(1); *esp_ptr = (*regs).ss;
     esp_ptr = esp_ptr.sub(1); *esp_ptr = (*regs).useresp;
     esp_ptr = esp_ptr.sub(1); *esp_ptr = (*regs).eflags;
@@ -582,6 +577,13 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     esp_ptr = esp_ptr.sub(1); *esp_ptr = (*regs).edi;
     esp_ptr = esp_ptr.sub(1); *esp_ptr = (*regs).ds;
     esp_ptr = esp_ptr.sub(1); *esp_ptr = (*regs).es;
+
+    // switch_to frame: ret lands on fork_task_trampoline
+    esp_ptr = esp_ptr.sub(1); *esp_ptr = ffi::fork_task_trampoline as u32;
+    esp_ptr = esp_ptr.sub(1); *esp_ptr = 0; // ebp
+    esp_ptr = esp_ptr.sub(1); *esp_ptr = 0; // edi
+    esp_ptr = esp_ptr.sub(1); *esp_ptr = 0; // esi
+    esp_ptr = esp_ptr.sub(1); *esp_ptr = 0; // ebx
 
     (*child).esp = esp_ptr as u32;
 
