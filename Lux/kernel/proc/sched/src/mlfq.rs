@@ -89,6 +89,7 @@ static mut SLEEP_QUEUE: MlfqQueue = MlfqQueue::empty();
 
 static mut BOOST_COUNTER: u32 = 0;
 
+#[no_mangle]
 static SCHEDULE_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
 
 

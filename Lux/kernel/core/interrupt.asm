@@ -273,11 +273,14 @@ timer_isr:
     mov es, ax
 
     inc dword [timer_ticks]
-    call on_timer_tick
 
-.do_eoi:
+    ; Send EOI early — on_timer_tick may call schedule() → switch_to()
+    ; and never return here.  The PIC must be acked before that happens,
+    ; otherwise IRQ0 stays masked and the timer stops.
     mov al, 0x20
     out 0x20, al
+
+    call on_timer_tick
 
     pop es
     pop ds
