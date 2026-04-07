@@ -1,0 +1,7 @@
+[build]
+target = "i686-lux.json"
+
+[unstable]
+build-std = ["core"]
+build-std-features = ["compiler-builtins-mem"]
+json-target-spec = true
