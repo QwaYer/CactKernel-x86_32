@@ -34,7 +34,7 @@ int oom_kill(void)
 
     struct task_struct* t = task_list_head;
     int count = 0;
-    do {
+    while (t && count < 256) {
         uint32_t score = oom_score(t);
         if (score > best_score) {
             best_score = score;
@@ -42,7 +42,7 @@ int oom_kill(void)
         }
         t = t->next;
         count++;
-    } while (t != task_list_head && count < 256);
+    }
 
     if (!victim || best_score == 0) {
         irq_spinlock_release(&scheduler_lock);
@@ -53,11 +53,8 @@ int oom_kill(void)
     uint32_t victim_pid   = victim->pid;
     uint32_t victim_pages = victim->mm.count;
 
-    victim->pending_signals |= SIGKILL;
-
-    if (victim->state == TASK_SLEEPING || victim->state == TASK_WAITING) {
-        mlfq_wake_task(victim);
-    }
+    extern void task_signal_locked(uint32_t pid, uint32_t signal);
+    task_signal_locked(victim_pid, SIGKILL);
 
     irq_spinlock_release(&scheduler_lock);
 
