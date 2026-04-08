@@ -20,3 +20,6 @@ test/
 qemu.dmp
 qemu.txt
 diskcomm.txt
+
+# Rust build artifacts
+**/target/
