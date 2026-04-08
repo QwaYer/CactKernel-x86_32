@@ -8,11 +8,13 @@ extern char             current_path[512];
 
 extern vfs_node_t* shell_out;
 extern vfs_node_t* shell_stdin;
+extern vfs_node_t* shell_stderr;
 extern vfs_node_t* current_ext4_dir;
-void shell_recalc_ext4_dir(void);  
+void shell_recalc_ext4_dir(void);
 extern char        current_mnt_path[128];
 
 void shell_write(const char* s);
+void shell_err_write(const char* s);
 
 char* shell_read_stdin(int* out_len);
 

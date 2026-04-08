@@ -334,6 +334,14 @@ static void cmd_help(char* args) {
     kprint("  Network    : ipconfig  ping  udptest\n");
     kprint("  Debug      : kbd  pic\n");
     kprint("\n");
+    kprint_color("Pipes & redirection:\n", COLOR_LIGHT_BROWN);
+    kprint("  cmd1 | cmd2 | cmd3    pipeline\n");
+    kprint("  cmd > file            redirect stdout (overwrite)\n");
+    kprint("  cmd >> file           redirect stdout (append)\n");
+    kprint("  cmd < file            redirect stdin from file\n");
+    kprint("  cmd 2> file           redirect stderr to file\n");
+    kprint("  cmd 2>&1              merge stderr into stdout\n");
+    kprint("\n");
     kprint_color("run usage:\n", COLOR_LIGHT_BROWN);
     kprint("  run <path>            <- static or dynamic ELF\n");
     kprint("  run <path> --static   <- force static loader\n");
