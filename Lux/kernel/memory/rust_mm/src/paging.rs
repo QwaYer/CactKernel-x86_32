@@ -1,12 +1,15 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page};
 
+#[repr(C, align(4096))]
+struct Aligned4K<T>(T);
+
 #[no_mangle]
-pub static mut page_directory: [u32; 1024] = [0u32; 1024];
-static mut PAGE_TABLES: [[u32; 1024]; 32] = [[0u32; 1024]; 32];
+static mut page_directory: Aligned4K<[u32; 1024]> = Aligned4K([0u32; 1024]);
+static mut PAGE_TABLES: Aligned4K<[[u32; 1024]; 32]> = Aligned4K([[0u32; 1024]; 32]);
 
 pub unsafe fn get_kernel_pd() -> *mut u32 {
-    page_directory.as_mut_ptr()
+    page_directory.0.as_mut_ptr()
 }
 
 //public api
@@ -14,28 +17,28 @@ pub unsafe fn get_kernel_pd() -> *mut u32 {
 pub unsafe extern "C" fn init_paging() {
     let mut buf = [0u8; 16];
     kprint(b"[PAGING] page_directory at 0x\0".as_ptr());
-    hex_to_ascii(page_directory.as_ptr() as u32, buf.as_mut_ptr());
+    hex_to_ascii(page_directory.0.as_ptr() as u32, buf.as_mut_ptr());
     kprint(buf.as_ptr());
     kprint(b"  identity-mapping first 128 MB (32 page tables x 1024 pages)\n\0".as_ptr());
 
     for i in 0..1024 {
-        if page_directory[i] == 0 {
-            page_directory[i] = 0x00000002;
+        if page_directory.0[i] == 0 {
+            page_directory.0[i] = 0x00000002;
         }
     }
 
     for j in 0..32 {
         for i in 0..1024 {
-            PAGE_TABLES[j][i] = ((j as u32 * 1024 + i as u32) * 4096) | 3;
+            PAGE_TABLES.0[j][i] = ((j as u32 * 1024 + i as u32) * 4096) | 3;
         }
-        page_directory[j] = (PAGE_TABLES[j].as_ptr() as u32) | 3;
+        page_directory.0[j] = (PAGE_TABLES.0[j].as_ptr() as u32) | 3;
     }
 
     kprint(b"[PAGING] loading CR3=0x\0".as_ptr());
-    hex_to_ascii(page_directory.as_ptr() as u32, buf.as_mut_ptr());
+    hex_to_ascii(page_directory.0.as_ptr() as u32, buf.as_mut_ptr());
     kprint(buf.as_ptr());
     kprint(b"  setting CR0.PG\n\0".as_ptr());
-    load_page_directory(page_directory.as_mut_ptr());
+    load_page_directory(page_directory.0.as_mut_ptr());
     enable_paging();
     kprint(b"[PAGING] paging enabled \xe2\x80\x94 virtual address space active\n\0".as_ptr());
     klog(LOG_OK, b"paging enabled\0".as_ptr());
@@ -79,13 +82,13 @@ pub unsafe extern "C" fn vmm_create_address_space() -> *mut u32 {
     }
 
     for i in 0..32 {
-        *pd.add(i) = page_directory[i];
+        *pd.add(i) = page_directory.0[i];
     }
     for i in 32..768 {
         *pd.add(i) = 0;
     }
     for i in 768..1024 {
-        *pd.add(i) = page_directory[i];
+        *pd.add(i) = page_directory.0[i];
     }
     pd
 }
