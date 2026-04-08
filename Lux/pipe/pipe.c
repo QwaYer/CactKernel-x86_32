@@ -44,11 +44,12 @@ static vfs_node_t *_make_node(pipe_t *p, const char *name, int is_write) {
     while (name[i] && i < 127) { n->name[i] = name[i]; i++; }
     n->name[i] = '\0';
 
-    n->type  = VFS_PIPE;
-    n->size  = PIPE_BUF_SIZE;
-    n->inode = (uint32_t)is_write;  // 0=read-end, 1=write-end 
-    n->ops   = &pipe_ops;
-    n->priv  = p;                   // pipe_t* хранится в priv  
+    n->type     = VFS_PIPE;
+    n->size     = PIPE_BUF_SIZE;
+    n->inode    = (uint32_t)is_write;  // 0=read-end, 1=write-end
+    n->refcount = 1;                   // initial reference
+    n->ops      = &pipe_ops;
+    n->priv     = p;                   // pipe_t* хранится в priv
     return n;
 }
 
@@ -103,10 +104,23 @@ int pipe_read(pipe_t *p, uint32_t offset, uint32_t size, char *buffer) {
             continue;
         }
 
-        buffer[copied] = (char)p->buf[p->read_pos];
-        p->read_pos    = (p->read_pos + 1) % PIPE_BUF_SIZE;
-        p->len--;
-        copied++;
+        /* batch copy: take as many bytes as available in one lock */
+        uint32_t want  = size - copied;
+        uint32_t avail = p->len;
+        uint32_t chunk = (want < avail) ? want : avail;
+
+        /* copy up to the wrap-around boundary, then the rest */
+        uint32_t to_end = PIPE_BUF_SIZE - p->read_pos;
+        if (chunk <= to_end) {
+            memcpy(buffer + copied, p->buf + p->read_pos, chunk);
+        } else {
+            memcpy(buffer + copied, p->buf + p->read_pos, to_end);
+            memcpy(buffer + copied + to_end, p->buf, chunk - to_end);
+        }
+        p->read_pos = (p->read_pos + chunk) % PIPE_BUF_SIZE;
+        p->len     -= chunk;
+        copied     += chunk;
+
         mutex_unlock(&p->lock);
     }
     return (int)copied;
@@ -144,10 +158,23 @@ int pipe_write(pipe_t *p, uint32_t offset, uint32_t size, char *buffer) {
             continue;
         }
 
-        p->buf[p->write_pos] = (uint8_t)buffer[written];
-        p->write_pos = (p->write_pos + 1) % PIPE_BUF_SIZE;
-        p->len++;
-        written++;
+        /* batch copy: fill as much free space as possible in one lock */
+        uint32_t want  = size - written;
+        uint32_t space = PIPE_BUF_SIZE - p->len;
+        uint32_t chunk = (want < space) ? want : space;
+
+        /* copy up to the wrap-around boundary, then the rest */
+        uint32_t to_end = PIPE_BUF_SIZE - p->write_pos;
+        if (chunk <= to_end) {
+            memcpy(p->buf + p->write_pos, buffer + written, chunk);
+        } else {
+            memcpy(p->buf + p->write_pos, buffer + written, to_end);
+            memcpy(p->buf, buffer + written + to_end, chunk - to_end);
+        }
+        p->write_pos = (p->write_pos + chunk) % PIPE_BUF_SIZE;
+        p->len      += chunk;
+        written     += chunk;
+
         mutex_unlock(&p->lock);
     }
     return (int)written;
@@ -195,6 +222,7 @@ static int _vfs_pipe_write(vfs_node_t *node, uint32_t off, uint32_t size, char *
 static void _vfs_pipe_open(vfs_node_t *node) {
     pipe_t *p = _node_to_pipe(node);
     if (!p || p->magic != PIPE_MAGIC) return;
+    node->refcount++;
     mutex_lock(&p->lock);
     if (p->name) {
         p->read_open++;
@@ -208,7 +236,11 @@ static void _vfs_pipe_open(vfs_node_t *node) {
 
 static void _vfs_pipe_close(vfs_node_t *node) {
     pipe_t *p = _node_to_pipe(node);
-    if (!p || p->magic != PIPE_MAGIC) return;
+    if (!p || p->magic != PIPE_MAGIC) {
+        if (node->refcount <= 1) kfree_heap(node);
+        else                     node->refcount--;
+        return;
+    }
     if (p->name) {
         pipe_close_read(p);
         pipe_close_write(p);
@@ -216,4 +248,9 @@ static void _vfs_pipe_close(vfs_node_t *node) {
         if (_node_is_write(node)) pipe_close_write(p);
         else                      pipe_close_read(p);
     }
+    /* free vfs_node_t wrapper only when last reference drops */
+    if (node->refcount <= 1)
+        kfree_heap(node);
+    else
+        node->refcount--;
 }
