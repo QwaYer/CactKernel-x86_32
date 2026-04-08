@@ -165,13 +165,6 @@ pub struct DynCtx {
 }
 
 #[repr(C)]
-pub struct SchedQueue {
-    pub head: *mut TaskStruct,
-    pub tail: *mut TaskStruct,
-    pub count: u32,
-}
-
-#[repr(C)]
 pub struct TaskStruct {
     pub esp: u32,
     pub pid: u32,
@@ -264,7 +257,6 @@ extern "C" {
     pub static mut current_task: *mut TaskStruct;
     pub static mut task_list_head: *mut TaskStruct;
     pub static mut scheduler_lock: IrqSpinlock;
-    pub static mut ready_queue: SchedQueue;
 
     pub fn task_signal(pid: u32, signal: u32);
     pub fn schedule();
@@ -300,36 +292,3 @@ pub unsafe fn tlb_flush_all() {
     );
 }
 
-pub unsafe fn sched_queue_push(q: *mut SchedQueue, t: *mut TaskStruct) {
-    (*t).queue_next = core::ptr::null_mut();
-    if (*q).tail.is_null() {
-        (*q).head = t;
-        (*q).tail = t;
-    } else {
-        (*(*q).tail).queue_next = t;
-        (*q).tail = t;
-    }
-    (*q).count += 1;
-}
-
-pub unsafe fn sched_queue_remove(q: *mut SchedQueue, t: *mut TaskStruct) {
-    let mut prev: *mut TaskStruct = core::ptr::null_mut();
-    let mut cur = (*q).head;
-    while !cur.is_null() {
-        if cur == t {
-            if !prev.is_null() {
-                (*prev).queue_next = (*cur).queue_next;
-            } else {
-                (*q).head = (*cur).queue_next;
-            }
-            if (*q).tail == cur {
-                (*q).tail = prev;
-            }
-            (*cur).queue_next = core::ptr::null_mut();
-            (*q).count -= 1;
-            return;
-        }
-        prev = cur;
-        cur = (*cur).queue_next;
-    }
-}
