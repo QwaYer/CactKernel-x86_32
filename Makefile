@@ -26,6 +26,10 @@ SCHED_DIR    = Lux/kernel/proc/sched
 SCHED_TARGET = $(SCHED_DIR)/target/i686-lux/release/libsched.a
 CARGO        = cargo +nightly
 KERN_SYNC_DIR    = Lux/kernel/sync
+
+# Rust memory manager
+RUST_MM_DIR  = Lux/kernel/memory/rust_mm
+RUST_MM_LIB  = $(RUST_MM_DIR)/target/i686-lux/release/liblux_mm.a
 KERN_IDT_DIR     = Lux/kernel/idt
 KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR     = Lux/drivers/input
@@ -142,15 +146,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/gdt.o \
       $(BUILD_DIR)/version.o \
       $(BUILD_DIR)/kernel.o \
-      $(BUILD_DIR)/memory.o \
-      $(BUILD_DIR)/memory_cow.o \
-      $(BUILD_DIR)/proc_mm.o \
-      $(BUILD_DIR)/slab.o \
-      $(BUILD_DIR)/page_fault.o \
-      $(BUILD_DIR)/swap.o \
-      $(BUILD_DIR)/oom.o \
-      $(BUILD_DIR)/mmap.o \
-      $(BUILD_DIR)/shm.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/dynlink.o \
       $(BUILD_DIR)/idt.o \
@@ -216,9 +211,14 @@ $(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/lux.iso $(BUILD_DIR)/isodir
 
 
-$(BUILD_DIR)/kernel.bin: $(OBJ) $(SCHED_TARGET)
-	@echo "[LD] Linking kernel with Rust MLFQ scheduler..."
-	ld $(LDFLAGS) -o $@ --start-group $^ -L$(dir $(SCHED_TARGET)) -lsched --end-group
+$(RUST_MM_LIB): FORCE
+	cd $(RUST_MM_DIR) && cargo build --release
+
+FORCE:
+
+$(BUILD_DIR)/kernel.bin: $(OBJ) $(RUST_MM_LIB) $(SCHED_TARGET)
+	@echo "[LD] Linking kernel with Rust MM + MLFQ scheduler..."
+	ld $(LDFLAGS) -o $@ --start-group $(OBJ) $(RUST_MM_LIB) -L$(dir $(SCHED_TARGET)) -lsched --end-group
 
 
 $(BUILD_DIR)/kernel_entry.o: $(KERN_CORE_DIR)/kernel.asm
@@ -263,42 +263,6 @@ $(BUILD_DIR)/syscall.o: $(KERN_SYSCALLS_DIR)/syscall.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/memory.o: $(KERN_MEM_DIR)/memory.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/page_fault.o: $(KERN_PF_DIR)/page_fault.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/memory_cow.o: $(KERN_MEM_DIR)/memory_cow.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/proc_mm.o: $(KERN_PROCMM_DIR)/proc_mm.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/slab.o: $(KERN_SLABMM_DIR)/slab.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/swap.o: $(KERN_SWAP_DIR)/swap.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/oom.o: $(KERN_OOM_DIR)/oom.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/mmap.o: $(KERN_MMAP_DIR)/mmap.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/shm.o: $(KERN_SHM_DIR)/shm.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -475,7 +439,8 @@ $(BUILD_DIR)/ksocket.o: $(NET_SOCKET_DIR)/socket.c
 clean:
 	rm -rf $(BUILD_DIR)
 	cd $(SCHED_DIR) && cargo +nightly clean
+	cd $(RUST_MM_DIR) && cargo clean
 
-.PHONY: all clean sched
+.PHONY: all clean sched FORCE
 .PHONY: sched
 sched: $(SCHED_TARGET)
