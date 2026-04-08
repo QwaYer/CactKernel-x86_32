@@ -41,7 +41,7 @@ pub unsafe extern "C" fn oom_kill() -> i32 {
 
     let mut t = task_list_head;
     let mut count = 0;
-    loop {
+    while !t.is_null() && count < 256 {
         let score = oom_score(t);
         if score > best_score {
             best_score = score;
@@ -49,9 +49,6 @@ pub unsafe extern "C" fn oom_kill() -> i32 {
         }
         t = (*t).next;
         count += 1;
-        if t == task_list_head || count >= 256 {
-            break;
-        }
     }
 
     if victim.is_null() || best_score == 0 {
@@ -63,24 +60,10 @@ pub unsafe extern "C" fn oom_kill() -> i32 {
     let victim_pid = (*victim).pid;
     let victim_pages = (*victim).mm.count;
 
-    (*victim).pending_signals |= SIGKILL;
-
-    if (*victim).state == TASK_SLEEPING {
-        extern "C" {
-            static mut sleep_queue: SchedQueue;
-        }
-        sched_queue_remove(&raw mut sleep_queue, victim);
-        (*victim).state = TASK_READY;
-        sched_queue_push(&raw mut ready_queue, victim);
+    extern "C" {
+        fn task_signal_locked(pid: u32, signal: u32);
     }
-    if (*victim).state == TASK_WAITING {
-        extern "C" {
-            static mut wait_queue: SchedQueue;
-        }
-        sched_queue_remove(&raw mut wait_queue, victim);
-        (*victim).state = TASK_READY;
-        sched_queue_push(&raw mut ready_queue, victim);
-    }
+    task_signal_locked(victim_pid, SIGKILL);
 
     irq_spinlock_release(&raw mut scheduler_lock);
 
