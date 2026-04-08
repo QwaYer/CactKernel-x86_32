@@ -285,7 +285,7 @@ static int sys_write(int fd, char* buf, unsigned int size) {
 
 static int sys_close(int fd) {
     if (!current_task)          return -1;
-    if (fd < 3 || fd >= MAX_FD) return -1;
+    if (fd < 0 || fd >= MAX_FD) return -1;
     struct vfs_node* node = current_task->fd_table[fd];
     if (!node) return -1;
     current_task->fd_table[fd]   = 0;
@@ -1869,6 +1869,19 @@ static int sys_poll(struct syscall_frame *regs) {
             short ev = 0;
             if ((fds[i].events & POLLIN)  && fd_read_ready(node))  ev |= POLLIN;
             if ((fds[i].events & POLLOUT) && fd_write_ready(node)) ev |= POLLOUT;
+
+            /* POLLHUP/POLLERR for broken pipes (reported regardless of events) */
+            if (node->type == VFS_PIPE) {
+                pipe_t *pp = (pipe_t *)node->priv;
+                if (pp) {
+                    int is_wr = (int)node->inode;
+                    if (!is_wr && !pp->write_open && pp->len == 0)
+                        ev |= POLLHUP;     /* read end: writer gone, no data */
+                    if (is_wr && !pp->read_open)
+                        ev |= POLLERR;     /* write end: reader gone */
+                }
+            }
+
             fds[i].revents = ev;
             if (ev) ready++;
         }
