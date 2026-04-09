@@ -1,6 +1,7 @@
 use crate::ffi::*;
 
 static mut MEMORY_BITMAP: [u8; BITMAP_SIZE as usize] = [0u8; BITMAP_SIZE as usize];
+static mut PAGE_REFCOUNTS: [u16; TOTAL_PAGES as usize] = [0u16; TOTAL_PAGES as usize];
 static mut FIRST_AVAILABLE_PAGE: i32 = 0;
 static mut PAGE_LOCK: IrqSpinlock = IrqSpinlock { spin_locked: 0, saved_flags: 0 };
 
@@ -70,6 +71,7 @@ pub unsafe extern "C" fn kalloc() -> *mut u8 {
     while i < TOTAL_PAGES {
         if !bitmap_test(i) {
             bitmap_set(i);
+            PAGE_REFCOUNTS[i as usize] = 1;
             FIRST_AVAILABLE_PAGE = (i + 1) as i32;
             irq_spinlock_release(&raw mut PAGE_LOCK);
             return (MEM_START + i * PAGE_SIZE) as *mut u8;
@@ -108,9 +110,41 @@ pub unsafe extern "C" fn kfree_page(ptr: *mut u8) {
         return;
     }
     irq_spinlock_acquire(&raw mut PAGE_LOCK);
+    if PAGE_REFCOUNTS[page_idx as usize] > 1 {
+        PAGE_REFCOUNTS[page_idx as usize] -= 1;
+        irq_spinlock_release(&raw mut PAGE_LOCK);
+        return;
+    }
+    PAGE_REFCOUNTS[page_idx as usize] = 0;
     bitmap_clear(page_idx);
     if (page_idx as i32) < FIRST_AVAILABLE_PAGE {
         FIRST_AVAILABLE_PAGE = page_idx as i32;
     }
     irq_spinlock_release(&raw mut PAGE_LOCK);
+}
+
+pub unsafe fn page_ref_inc(phys: *const u8) {
+    let addr = phys as u32;
+    if addr < MEM_START {
+        return;
+    }
+    let idx = (addr - MEM_START) / PAGE_SIZE;
+    if idx >= TOTAL_PAGES {
+        return;
+    }
+    irq_spinlock_acquire(&raw mut PAGE_LOCK);
+    PAGE_REFCOUNTS[idx as usize] = PAGE_REFCOUNTS[idx as usize].saturating_add(1);
+    irq_spinlock_release(&raw mut PAGE_LOCK);
+}
+
+pub unsafe fn page_ref_get(phys: *const u8) -> u16 {
+    let addr = phys as u32;
+    if addr < MEM_START {
+        return 0;
+    }
+    let idx = (addr - MEM_START) / PAGE_SIZE;
+    if idx >= TOTAL_PAGES {
+        return 0;
+    }
+    PAGE_REFCOUNTS[idx as usize]
 }
