@@ -1,6 +1,6 @@
 #include "blkdev.h"
 #include "kernel.h"
-#include "libc.h"
+#include "klib.h"
 #include "memory.h"
 #include "nvme.h"
 #include "ahci.h"

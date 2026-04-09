@@ -2,7 +2,7 @@
 #include "vfs.h"
 #include "kernel.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 #include "task.h"
 #include "version.h"
 

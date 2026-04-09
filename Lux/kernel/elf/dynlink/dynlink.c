@@ -1,7 +1,7 @@
 #include "dynlink.h"
 #include "vfs.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 #include "kernel.h"
 
 static int _so_path_join(char* dst, int dst_sz,

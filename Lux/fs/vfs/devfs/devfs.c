@@ -1,7 +1,7 @@
 #include "devfs.h"
 #include "vfs.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 #include "kernel.h"
 #include "pipe.h"
 #include "blkdev.h"

@@ -1,5 +1,5 @@
 #include "gdt.h"
-#include "libc.h"
+#include "klib.h"
 #include "kernel.h"
 
 struct gdt_entry gdt[6];

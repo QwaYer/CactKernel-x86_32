@@ -1,7 +1,7 @@
 #include "pipe.h"
 #include "memory.h"
 #include "task.h"
-#include "libc.h"
+#include "klib.h"
 
 #define PIPE_FULL(p)   ((p)->len == PIPE_BUF_SIZE)
 #define PIPE_EMPTY(p)  ((p)->len == 0)

@@ -1,5 +1,5 @@
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 #include "kernel.h"
 #include "sync.h"
 #include "oom.h"

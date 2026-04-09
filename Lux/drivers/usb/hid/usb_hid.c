@@ -5,7 +5,7 @@
 #include "task.h"
 #include "mouse.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 
 /* HID usage IDs for Ctrl-combo keys */
 #define HID_KEY_C      0x06   /* 'c'  — Ctrl-C → SIGINT  */
