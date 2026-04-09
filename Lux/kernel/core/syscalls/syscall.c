@@ -16,24 +16,27 @@ struct syscall_frame {
     uint32_t eip, cs, eflags, useresp, ss;
 } __attribute__((packed));
 
-#define KERNEL_BASE   0xC0000000U
-#define USER_STR_MAX  4096
+#define KERNEL_BASE      0xC0000000U
+#define USER_SPACE_START 0x08000000U  /* first 128 MB is identity-mapped kernel memory */
+#define USER_STR_MAX     4096
 
 static int validate_user_ptr(const void* ptr, uint32_t size) {
     uint32_t addr = (uint32_t)ptr;
-    if (!ptr)                return 0;
-    if (addr >= KERNEL_BASE) return 0;
-    if (size == 0)           return 1;
+    if (!ptr)                     return 0;
+    if (addr < USER_SPACE_START)  return 0;
+    if (addr >= KERNEL_BASE)      return 0;
+    if (size == 0)                return 1;
     uint32_t end = addr + size;
-    if (end < addr)          return 0;
-    if (end > KERNEL_BASE)   return 0;
+    if (end < addr)               return 0;
+    if (end > KERNEL_BASE)        return 0;
     return 1;
 }
 
 static int validate_user_str(const char* str) {
     uint32_t addr = (uint32_t)str;
-    if (!str)                return 0;
-    if (addr >= KERNEL_BASE) return 0;
+    if (!str)                     return 0;
+    if (addr < USER_SPACE_START)  return 0;
+    if (addr >= KERNEL_BASE)      return 0;
     for (uint32_t i = 0; i < USER_STR_MAX; i++) {
         if (addr + i >= KERNEL_BASE) return 0;
         if (str[i] == '\0')          return 1;
@@ -404,7 +407,8 @@ static int sys_exit(struct syscall_frame* regs) {
                 parent_frame[9] = current_task->pid;  
 
                 int* status_ptr = (int*)parent_frame[8];
-                if (status_ptr && (uint32_t)status_ptr < 0xC0000000u) {
+                if (status_ptr && (uint32_t)status_ptr >= USER_SPACE_START
+                    && (uint32_t)status_ptr < KERNEL_BASE) {
                     uint32_t va = (uint32_t)status_ptr;
                     uint32_t pdi = PD_INDEX(va);
                     uint32_t pti = PT_INDEX(va);
@@ -453,7 +457,7 @@ static int sys_exec(struct syscall_frame* regs) {
     if (argv) {
         if (!validate_user_ptr(argv, sizeof(char*))) return -1;
         for (int i = 0; i < EXEC_VALIDATE_MAX; i++) {
-            if ((uint32_t)&argv[i] >= KERNEL_BASE) return -1;
+            if ((uint32_t)&argv[i] < USER_SPACE_START || (uint32_t)&argv[i] >= KERNEL_BASE) return -1;
             if (!argv[i]) break;
             if (!validate_user_str(argv[i])) return -1;
         }
@@ -462,7 +466,7 @@ static int sys_exec(struct syscall_frame* regs) {
     if (envp) {
         if (!validate_user_ptr(envp, sizeof(char*))) return -1;
         for (int i = 0; i < EXEC_VALIDATE_MAX; i++) {
-            if ((uint32_t)&envp[i] >= KERNEL_BASE) return -1;
+            if ((uint32_t)&envp[i] < USER_SPACE_START || (uint32_t)&envp[i] >= KERNEL_BASE) return -1;
             if (!envp[i]) break;
             if (!validate_user_str(envp[i])) return -1;
         }
@@ -599,7 +603,7 @@ static int sys_sigaction(struct syscall_frame* regs) {
 
     if (!current_task) return -1;
 
-    if (handler > SIG_IGN && handler >= 0xC0000000u) return -1;
+    if (handler > SIG_IGN && (handler < USER_SPACE_START || handler >= KERNEL_BASE)) return -1;
 
     return task_sigaction(current_task, signum, handler);
 }
@@ -608,7 +612,7 @@ static int sys_sigreturn(struct syscall_frame* regs) {
     if (!current_task || current_task->is_kernel) return -1;
 
     uint32_t user_esp = regs->useresp;
-    if (user_esp >= 0xC0000000u) return -1;
+    if (user_esp < USER_SPACE_START || user_esp >= KERNEL_BASE) return -1;
 
     uint32_t* pd  = current_task->page_directory;
     uint32_t  pdi = PD_INDEX(user_esp);
@@ -1579,11 +1583,11 @@ static void deliver_pending_signal(struct task_struct* t,
         if (!(deliverable & mask)) continue;
         uint32_t handler = t->signal_handlers[bit];
         if (handler <= SIG_IGN) continue;  
-        if (handler >= KERNEL_BASE) continue; 
+        if (handler < USER_SPACE_START || handler >= KERNEL_BASE) continue;
 
         uint32_t new_esp = regs->useresp - sizeof(signal_frame_t);
 
-        if (new_esp >= KERNEL_BASE) continue;
+        if (new_esp < USER_SPACE_START || new_esp >= KERNEL_BASE) continue;
         uint32_t page_off = new_esp & 0xFFFu;
         if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) continue;
 

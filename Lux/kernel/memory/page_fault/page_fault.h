@@ -62,7 +62,7 @@ int vmm_handle_cow(uint32_t* pd, uint32_t virtual_addr);
 
 
 static inline int vmm_is_user_address(uint32_t addr) {
-    return addr < USER_STACK_TOP;
+    return addr >= 0x08000000U && addr < USER_STACK_TOP;
 }
 
 static inline int vmm_is_valid_stack_addr(uint32_t addr) {
