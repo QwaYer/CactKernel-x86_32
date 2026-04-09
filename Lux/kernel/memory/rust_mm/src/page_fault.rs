@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::pmm::kalloc;
+use crate::pmm::{kalloc, kfree_page, page_ref_get};
 use crate::paging::vmm_map;
 use crate::swap::{swap_pte_is_swapped, swap_handle_fault};
 use crate::oom::oom_kill;
@@ -311,7 +311,18 @@ pub unsafe extern "C" fn vmm_handle_cow(pd: *mut u32, virtual_addr: u32) -> i32 
         return -1;
     }
 
-    let old_phys = *pte & !0xFFF;
+    let old_phys = (*pte & !0xFFF) as *mut u8;
+    let flags = (*pte & 0xFFF) & !PAGE_COW;
+    let flags = flags | PAGE_RW | PAGE_PRESENT;
+
+    // Sole owner — just make writable again, no copy needed
+    if page_ref_get(old_phys) == 1 {
+        *pte = (old_phys as u32 & !0xFFF) | flags;
+        tlb_flush(virtual_addr & !0xFFF);
+        return 0;
+    }
+
+    // Multiple references — allocate a private copy
     let new_phys = kalloc();
     if new_phys.is_null() {
         return -1;
@@ -319,9 +330,10 @@ pub unsafe extern "C" fn vmm_handle_cow(pd: *mut u32, virtual_addr: u32) -> i32 
 
     core::ptr::copy_nonoverlapping(old_phys as *const u8, new_phys, PAGE_SIZE as usize);
 
-    let flags = (*pte & 0xFFF) & !PAGE_COW;
-    let flags = flags | PAGE_RW | PAGE_PRESENT;
     *pte = (new_phys as u32 & !0xFFF) | flags;
+
+    // Release our reference to the shared page
+    kfree_page(old_phys);
 
     tlb_flush(virtual_addr & !0xFFF);
     0

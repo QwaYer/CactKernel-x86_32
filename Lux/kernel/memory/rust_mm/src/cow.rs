@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::pmm::kalloc;
+use crate::pmm::{kalloc, page_ref_inc};
 
 fn zero_page(p: *mut u8) {
     unsafe {
@@ -34,16 +34,18 @@ pub unsafe extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u
                 continue;
             }
 
-            let new_page = kalloc();
-            if new_page.is_null() {
-                *dst_pt.add(j) = 0;
-                continue;
-            }
-            let old_page = (pte & !0xFFFu32) as *const u8;
-            core::ptr::copy_nonoverlapping(old_page, new_page, PAGE_SIZE as usize);
-            *dst_pt.add(j) = (new_page as u32 & !0xFFFu32) | (pte & 0xFFFu32);
+            let phys = pte & !0xFFFu32;
+            let flags = pte & 0xFFFu32;
+
+            let cow_flags = (flags & !PAGE_RW) | PAGE_COW;
+            *src_pt.add(j) = phys | cow_flags;
+            *dst_pt.add(j) = phys | cow_flags;
+
+            page_ref_inc(phys as *const u8);
         }
 
         *dst_pd.add(i) = (dst_pt as u32 & !0xFFFu32) | (*src_pd.add(i) & 0xFFFu32);
     }
+
+    tlb_flush_all();
 }
