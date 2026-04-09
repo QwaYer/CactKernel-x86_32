@@ -210,7 +210,7 @@ static int ahci_identify(int portno) {
     port->is = (uint32_t)-1;
 
     int slot = ahci_find_cmdslot(port);
-    if (slot < 0) { kfree_heap(id_buf); return -1; }
+    if (slot < 0) { kfree_aligned(id_buf); return -1; }
 
     hba_cmd_header_t *hdr = &cmd_headers[portno][slot];
     hdr->cfis_len = sizeof(fis_reg_h2d_t) / 4;
@@ -245,7 +245,7 @@ static int ahci_identify(int portno) {
         if (port->is & HBA_PxIS_TFES) {
             kprint("[AHCI] identify TFE port=");
             char b[16]; itoa(portno, b); kprint(b); kprint("\n");
-            kfree_heap(id_buf);
+            kfree_aligned(id_buf);
             return -1;
         }
     }
@@ -253,7 +253,7 @@ static int ahci_identify(int portno) {
     if (port->ci & (1u << slot)) {
         kprint("[AHCI] identify timeout port=");
         char b[16]; itoa(portno, b); kprint(b); kprint("\n");
-        kfree_heap(id_buf);
+        kfree_aligned(id_buf);
         return -1;
     }
 
@@ -271,7 +271,7 @@ static int ahci_identify(int portno) {
     for (int i = 39; i >= 0 && ports_info[portno].model[i] == ' '; i--)
         ports_info[portno].model[i] = '\0';
 
-    kfree_heap(id_buf);
+    kfree_aligned(id_buf);
     return 0;
 }
 
