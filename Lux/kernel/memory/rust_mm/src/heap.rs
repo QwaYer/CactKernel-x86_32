@@ -93,13 +93,26 @@ pub unsafe extern "C" fn kmalloc(size: u32) -> *mut u8 {
 //public api
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kmalloc_aligned(size: u32, align: u32) -> *mut u8 {
-    let raw = kmalloc(size + align);
+    let align = if align < 4 { 4 } else { align };
+    let raw = kmalloc(size + align + 4);
     if raw.is_null() {
         return core::ptr::null_mut();
     }
-    let addr = raw as u32;
+    let addr = raw as u32 + 4; // leave room for storing the raw pointer
     let aligned = (addr + align - 1) & !(align - 1);
+    // Store original pointer just before the aligned address
+    *((aligned - 4) as *mut u32) = raw as u32;
     aligned as *mut u8
+}
+
+//public api
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kfree_aligned(ptr: *mut u8) {
+    if ptr.is_null() {
+        return;
+    }
+    let raw = *((ptr as u32 - 4) as *const u32) as *mut u8;
+    kfree_heap(raw);
 }
 
 //public api

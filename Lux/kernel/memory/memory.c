@@ -262,11 +262,20 @@ void* kmalloc(uint32_t size) {
 }
 
 void* kmalloc_aligned(uint32_t size, uint32_t align) {
-    uint8_t* raw = (uint8_t*)kmalloc(size + align);
+    if (align < sizeof(void*)) align = sizeof(void*);
+    uint8_t* raw = (uint8_t*)kmalloc(size + align + sizeof(void*));
     if (!raw) return NULL;
-    uint32_t addr = (uint32_t)(uintptr_t)raw;
+    uint32_t addr = (uint32_t)(uintptr_t)(raw + sizeof(void*));
     uint32_t aligned = (addr + align - 1) & ~(align - 1);
+    /* Store original pointer just before the aligned address */
+    ((void**)aligned)[-1] = raw;
     return (void*)(uintptr_t)aligned;
+}
+
+void kfree_aligned(void* ptr) {
+    if (!ptr) return;
+    void* raw = ((void**)ptr)[-1];
+    kfree_heap(raw);
 }
 
 void kfree_heap(void* ptr) {
