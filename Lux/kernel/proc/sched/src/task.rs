@@ -243,7 +243,7 @@ pub unsafe extern "C" fn init_scheduler() -> i32 {
     (*idle).is_kernel     = 1;
     (*idle).page_directory = ptr::null_mut();
     (*idle).next          = idle;  
-    (*idle).priority      = mlfq::MLFQ_LEVEL_NORMAL;
+    (*idle).priority      = mlfq::MLFQ_LEVEL_BACKGROUND;
     (*idle).cwd[0]        = b'/';
 
     current_task    = idle;
@@ -1171,10 +1171,10 @@ unsafe fn copy_strings_to_ustack(
 
         let mut len = 0usize;
         while len < EXEC_MAX_STRLEN && *s.add(len) != 0 { len += 1; }
-        len += 1; // null terminator
+        len += 1;
 
         *sp -= len as u32;
-        *sp &= !3u32; // выравнивание
+        *sp &= !3u32; 
         let off = (*sp - ustack_virt) as usize;
         for j in 0..len {
             *phys_base.add(off + j) = *s.add(j);
