@@ -5,7 +5,6 @@ global kernel_task_trampoline
 global user_task_trampoline
 global fork_task_trampoline
 
-extern SCHEDULE_IN_PROGRESS
 
 switch_paging:
     mov eax, [esp + 4]
@@ -29,19 +28,16 @@ switch_to:
 
 
 kernel_task_trampoline:
-    mov dword [SCHEDULE_IN_PROGRESS], 0
-    sti                        
-    ret                        
+    sti
+    ret
 
 user_task_trampoline:
-    mov dword [SCHEDULE_IN_PROGRESS], 0
-    mov ax, 0x23              
+    mov ax, 0x23
     mov ds, ax
     mov es, ax
-    iretd                     
+    iretd
 
 fork_task_trampoline:
-    mov dword [SCHEDULE_IN_PROGRESS], 0
     pop es
     pop ds
     popa

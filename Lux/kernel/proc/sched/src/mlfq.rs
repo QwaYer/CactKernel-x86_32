@@ -89,7 +89,6 @@ static mut SLEEP_QUEUE: MlfqQueue = MlfqQueue::empty();
 
 static mut BOOST_COUNTER: u32 = 0;
 
-#[no_mangle]
 static SCHEDULE_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
 
 
@@ -232,9 +231,10 @@ pub unsafe extern "C" fn schedule() {
         ffi::tss_entry.esp0 = (*next).stack_base as u32 + crate::task::KERNEL_STACK_SIZE as u32;
     }
 
-    ffi::switch_to(&raw mut (*prev).esp, (*next).esp);
-
+    ffi::cli();
     SCHEDULE_IN_PROGRESS.store(0, Ordering::Release);
+    ffi::switch_to(&raw mut (*prev).esp, (*next).esp);
+    ffi::sti();
 
     let cur = crate::task::current_task;
     if !cur.is_null() {
