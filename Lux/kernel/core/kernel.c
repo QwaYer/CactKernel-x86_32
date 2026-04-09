@@ -9,7 +9,7 @@
 #include "idt.h"
 #include "vfs.h"
 #include "devfs.h"
-#include "libc.h"
+#include "klib.h"
 #include "task.h"
 #include "shell.h"
 #include "fb.h"

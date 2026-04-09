@@ -3,7 +3,7 @@
 #include "xhci.h"
 #include "kernel.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 
 
 static int hub_set_port_feature(usb_device_t *dev, uint8_t port, uint16_t feat) {

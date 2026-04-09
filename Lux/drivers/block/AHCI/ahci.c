@@ -4,7 +4,7 @@
 #include "pci_driver.h"
 #include "kernel.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 #include "sync.h"
 #include "devfs.h"
 

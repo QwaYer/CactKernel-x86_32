@@ -2,7 +2,7 @@
 #include "memory.h"
 #include "kernel.h"
 #include "task.h"
-#include "libc.h"
+#include "klib.h"
 #include "swap.h"
 #include "oom.h"
 

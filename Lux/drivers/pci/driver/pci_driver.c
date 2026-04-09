@@ -1,7 +1,7 @@
 #include "pci_driver.h"
 #include "pci_loader.h"
 #include "kernel.h"
-#include "libc.h"
+#include "klib.h"
 
 static pci_driver_t *driver_list  = NULL;
 static uint32_t      driver_count = 0;

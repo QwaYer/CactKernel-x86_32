@@ -3,7 +3,7 @@
 #include "kernel.h"
 #include "task.h"
 #include "sync.h"
-#include "libc.h"
+#include "klib.h"
 
 /* Virtual address range reserved for SHM attachments. */
 #define SHM_VA_BASE   0xA0000000u

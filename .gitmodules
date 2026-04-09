@@ -1,3 +1,0 @@
-[submodule "Lux/libc"]
-	path = Lux/libc
-	url = https://github.com/qwaer80792/cactlib.git

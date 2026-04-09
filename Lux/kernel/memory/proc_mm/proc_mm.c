@@ -1,7 +1,7 @@
 #include "proc_mm.h"
 #include "memory.h"
 #include "kernel.h"
-#include "libc.h"
+#include "klib.h"
 
 int proc_tracker_add(proc_page_tracker_t* t, void* phys)
 {

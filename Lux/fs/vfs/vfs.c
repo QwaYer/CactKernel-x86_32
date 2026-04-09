@@ -1,5 +1,5 @@
 #include "vfs.h"
-#include "libc.h"
+#include "klib.h"
 #include "sync.h"
 #include "kernel.h"
 #include "task.h"

@@ -1,7 +1,7 @@
 #include "pci_enum.h"
 #include "pci_driver.h"
 #include "kernel.h"
-#include "libc.h"
+#include "klib.h"
 
 static pci_device_t  pool[MAX_PCI_DEVICES];
 static uint32_t      pool_idx = 0;

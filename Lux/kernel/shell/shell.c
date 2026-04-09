@@ -5,7 +5,7 @@
 #include "vfs.h"
 #include "kernel.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 
 #define DIR_STACK_MAX   32
 #define PIPE_PARTS_MAX  8
