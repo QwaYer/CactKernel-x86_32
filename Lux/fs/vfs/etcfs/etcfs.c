@@ -2,7 +2,7 @@
 #include "vfs.h"
 #include "kernel.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 
 
 typedef struct etc_entry etc_entry_t;

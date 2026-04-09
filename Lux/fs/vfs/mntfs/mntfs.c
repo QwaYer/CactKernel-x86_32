@@ -5,7 +5,7 @@
 #include "vfs.h"
 #include "ext4.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 #include "kernel.h"
 #include "blkdev.h"
 

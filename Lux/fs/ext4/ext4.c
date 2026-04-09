@@ -1,6 +1,6 @@
 #include "ext4.h"
 #include "blkdev.h"
-#include "libc.h"
+#include "klib.h"
 #include "memory.h"
 #include "kernel.h"
 #include "pagecache.h"

@@ -31,7 +31,6 @@ KERN_SYNC_DIR    = Lux/kernel/sync
 RUST_MM_DIR  = Lux/kernel/memory/rust_mm
 RUST_MM_LIB  = $(RUST_MM_DIR)/target/i686-lux/release/liblux_mm.a
 KERN_IDT_DIR     = Lux/kernel/idt
-KERN_LIBC_DIR    = Lux/libc
 DRIVER_INPUT_DIR     = Lux/drivers/input
 DRIVER_PS2_KBD_DIR   = Lux/drivers/input/ps_2/keyboard
 DRIVER_PS2_MOUSE_DIR = Lux/drivers/input/ps_2/mouse
@@ -97,7 +96,6 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_PROC_DIR) \
          -I$(KERN_SYNC_DIR) \
          -I$(KERN_IDT_DIR) \
-         -I$(KERN_LIBC_DIR) \
          -I$(DRIVER_INPUT_DIR) \
          -I$(DRIVER_PS2_KBD_DIR) \
          -I$(DRIVER_PS2_MOUSE_DIR) \
@@ -151,7 +149,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/shell.o \
       $(BUILD_DIR)/commands.o \
-      $(BUILD_DIR)/libc.o \
+      $(BUILD_DIR)/klib.o \
       $(BUILD_DIR)/vfs.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
@@ -288,7 +286,7 @@ $(BUILD_DIR)/commands.o: $(KERN_CMDS_DIR)/commands.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/libc.o: $(KERN_LIBC_DIR)/libc.c
+$(BUILD_DIR)/klib.o: $(KERN_CORE_DIR)/klib.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
