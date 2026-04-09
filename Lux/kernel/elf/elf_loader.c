@@ -5,7 +5,7 @@
 #include "memory.h"
 #include "page_fault.h"
 #include "proc_mm.h"
-#include "libc.h"
+#include "klib.h"
 
 
 void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)

@@ -5,7 +5,7 @@
 #include "pci.h"
 #include "kernel.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 #include "sync.h"
 
 static usb_hc_t *xhci_hc_list = NULL;

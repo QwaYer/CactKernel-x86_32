@@ -4,7 +4,7 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "task.h"
-#include "libc.h"
+#include "klib.h"
 
 static struct vfs_node* fd_to_node(int fd)
 {

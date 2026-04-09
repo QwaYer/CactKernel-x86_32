@@ -1,7 +1,7 @@
 #include "usb.h"
 #include "kernel.h"
 #include "memory.h"
-#include "libc.h"
+#include "klib.h"
 
 
 static usb_hc_t     *hc_list      = NULL;

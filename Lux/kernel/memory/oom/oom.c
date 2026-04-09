@@ -2,7 +2,7 @@
 #include "memory.h"
 #include "kernel.h"
 #include "task.h"
-#include "libc.h"
+#include "klib.h"
 #include "proc_mm.h"
 
 static oom_stats_t g_stats;

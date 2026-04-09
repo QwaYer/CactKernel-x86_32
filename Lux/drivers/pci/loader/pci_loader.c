@@ -4,7 +4,7 @@
 #include "vfs.h"
 #include "memory.h"
 #include "kernel.h"
-#include "libc.h"
+#include "klib.h"
 
 typedef uint32_t Elf32_Addr;
 typedef uint32_t Elf32_Off;
