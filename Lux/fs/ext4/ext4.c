@@ -465,10 +465,13 @@ static void _iter_dir(struct ext4_ctx* ctx, vfs_node_t* node,
             }
         }
     } else {
-        for (int bi = 0; bi < 12; bi++) {
-            if (!inode.i_block[bi]) break;
+        uint32_t total_blocks = inode.i_size_lo / ctx->block_size;
+        if (inode.i_size_lo % ctx->block_size) total_blocks++;
+        for (uint32_t bi = 0; bi < total_blocks; bi++) {
+            uint32_t pb = _legacy_bmap(ctx, &inode, bi);
+            if (!pb) break;
             memory_set(buf, 0, ctx->block_size);
-            _read_block(ctx, inode.i_block[bi], buf);
+            _read_block(ctx, pb, buf);
             uint32_t off = 0;
             while (off + sizeof(struct ext4_dir_entry_2) <= ctx->block_size) {
                 struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(buf + off);
@@ -722,6 +725,73 @@ vfs_node_t* ext4_finddir(vfs_node_t* node, char* name) {
     return fc.result;
 }
 
+/* Resolve logical block -> physical block for classic (non-extent) inodes.
+ * i_block[0..11]  = direct          (blocks 0-11)
+ * i_block[12]     = singly indirect (blocks 12 .. 12+N-1)
+ * i_block[13]     = doubly indirect (blocks 12+N .. 12+N+N*N-1)
+ * where N = block_size / 4  (pointers per block)
+ */
+static uint32_t _legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32_t fb) {
+    uint32_t ppb = ctx->block_size / 4;  /* pointers per block */
+
+    /* direct */
+    if (fb < 12)
+        return inode->i_block[fb];
+
+    fb -= 12;
+
+    /* singly indirect */
+    if (fb < ppb) {
+        uint32_t ind = inode->i_block[12];
+        if (!ind) return 0;
+        uint32_t* buf = (uint32_t*)kmalloc(ctx->block_size);
+        if (!buf) return 0;
+        _read_block(ctx, ind, (uint8_t*)buf);
+        uint32_t pb = buf[fb];
+        kfree_heap(buf);
+        return pb;
+    }
+
+    fb -= ppb;
+
+    /* doubly indirect */
+    if (fb < ppb * ppb) {
+        uint32_t dind = inode->i_block[13];
+        if (!dind) return 0;
+        uint32_t* buf = (uint32_t*)kmalloc(ctx->block_size);
+        if (!buf) return 0;
+        _read_block(ctx, dind, (uint8_t*)buf);
+        uint32_t ind = buf[fb / ppb];
+        if (!ind) { kfree_heap(buf); return 0; }
+        _read_block(ctx, ind, (uint8_t*)buf);
+        uint32_t pb = buf[fb % ppb];
+        kfree_heap(buf);
+        return pb;
+    }
+
+    fb -= ppb * ppb;
+
+    /* triply indirect */
+    if (fb < ppb * ppb * ppb) {
+        uint32_t tind = inode->i_block[14];
+        if (!tind) return 0;
+        uint32_t* buf = (uint32_t*)kmalloc(ctx->block_size);
+        if (!buf) return 0;
+        _read_block(ctx, tind, (uint8_t*)buf);
+        uint32_t dind = buf[fb / (ppb * ppb)];
+        if (!dind) { kfree_heap(buf); return 0; }
+        _read_block(ctx, dind, (uint8_t*)buf);
+        uint32_t ind = buf[(fb / ppb) % ppb];
+        if (!ind) { kfree_heap(buf); return 0; }
+        _read_block(ctx, ind, (uint8_t*)buf);
+        uint32_t pb = buf[fb % ppb];
+        kfree_heap(buf);
+        return pb;
+    }
+
+    return 0;
+}
+
 int ext4_read_file(vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer) {
     struct ext4_ctx* ctx = (struct ext4_ctx*)node->priv;
     struct ext4_inode inode;
@@ -738,7 +808,7 @@ int ext4_read_file(vfs_node_t* node, uint32_t offset, uint32_t size, char* buffe
     while (read < size) {
         uint32_t fb = cur / ctx->block_size;
         uint32_t ibo = cur % ctx->block_size;
-        uint32_t pb = use_ext ? _extent_pblock(&inode, fb) : (fb < 12 ? inode.i_block[fb] : 0);
+        uint32_t pb = use_ext ? _extent_pblock(&inode, fb) : _legacy_bmap(ctx, &inode, fb);
         if (!pb) break;
         memory_set(tmp, 0, ctx->block_size);
         _read_block(ctx, pb, tmp);
