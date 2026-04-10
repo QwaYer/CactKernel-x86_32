@@ -393,8 +393,10 @@ static int sys_exit(struct syscall_frame* regs) {
     if (terminal_fg_pid == current_task->pid)
         terminal_fg_pid = 0;
 
-    irq_spinlock_acquire(&scheduler_lock);
+    /* Find waiting parent while holding the lock */
+    struct task_struct* parent_to_wake = 0;
 
+    irq_spinlock_acquire(&scheduler_lock);
     task_signal_locked(current_task->parent_pid, SIGCHLD);
 
     struct task_struct* t = task_list_head;
@@ -403,32 +405,19 @@ static int sys_exit(struct syscall_frame* regs) {
             if (t->state == TASK_WAITING &&
                 (t->wait_for_pid == current_task->pid || t->wait_for_pid == 0) &&
                 t->pid == current_task->parent_pid) {
-                mlfq_wake_task(t);
-
-                uint32_t* parent_frame = (uint32_t*)t->esp;
-                parent_frame[9] = current_task->pid;  
-
-                int* status_ptr = (int*)parent_frame[8];
-                if (status_ptr && (uint32_t)status_ptr >= USER_SPACE_START
-                    && (uint32_t)status_ptr < KERNEL_BASE) {
-                    uint32_t va = (uint32_t)status_ptr;
-                    uint32_t pdi = PD_INDEX(va);
-                    uint32_t pti = PT_INDEX(va);
-                    if (t->page_directory &&
-                        (t->page_directory[pdi] & PAGE_PRESENT)) {
-                        uint32_t* pt = (uint32_t*)(t->page_directory[pdi] & ~0xFFFu);
-                        if (pt[pti] & PAGE_PRESENT) {
-                            uint32_t phys = (pt[pti] & ~0xFFFu) + (va & 0xFFFu);
-                            *(int*)phys = current_task->exit_code;
-                        }
-                    }
-                }
+                parent_to_wake = t;
                 break;
             }
             t = t->next;
         } while (t != task_list_head);
     }
     irq_spinlock_release(&scheduler_lock);
+
+    /* Wake parent outside the lock to avoid deadlock */
+    if (parent_to_wake)
+        mlfq_wake_task(parent_to_wake);
+
+    schedule();
     return 0;
 }
 
