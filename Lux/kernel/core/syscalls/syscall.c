@@ -10,6 +10,8 @@
 #include "net.h"
 #include "shm.h"
 
+extern void sched_sleep_ticks(uint32_t ticks);
+
 struct syscall_frame {
     uint32_t es, ds;
     uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
@@ -832,10 +834,7 @@ static int sys_sleep(struct syscall_frame* regs) {
     if (ms == 0) return 0;
 
     uint32_t ticks = (ms + 9) / 10;
-    uint32_t now = timer_ticks_get();
-    current_task->sleep_until = now + ticks;
-
-    current_task->state = TASK_SLEEPING;
+    sched_sleep_ticks(ticks);
     return 0;
 }
 
@@ -1197,9 +1196,7 @@ static int sys_nanosleep(struct syscall_frame* regs) {
         return 0;
     }
 
-    uint32_t now = timer_ticks_get();
-    current_task->sleep_until = now + ticks;
-    current_task->state = TASK_SLEEPING;
+    sched_sleep_ticks(ticks);
 
     if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
     return 0;
