@@ -594,6 +594,86 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     child
 }
 
+// ── sched_task_exit ─────────────────────────────────────────────────────
+// Called from C sys_exit. Handles all scheduler state atomically.
+#[no_mangle]
+pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
+    let t = current_task;
+    if t.is_null() { return; }
+
+    (*t).exit_code = exit_code;
+    (*t).state = TaskState::Zombie;
+
+    let parent_pid = (*t).parent_pid;
+
+    // Find & wake waiting parent under lock
+    crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+
+    task_signal_locked(parent_pid, SIGCHLD);
+
+    let parent = find_task_by_pid(parent_pid);
+    let mut need_wake = false;
+    if !parent.is_null() && matches!((*parent).state, TaskState::Waiting) {
+        if (*parent).wait_for_pid == (*t).pid || (*parent).wait_for_pid == 0 {
+            (*parent).state = TaskState::Ready;
+            mlfq::mlfq_enqueue_locked(parent, (*parent).priority);
+            need_wake = true;
+        }
+    }
+
+    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+
+    // Yield CPU — zombie shouldn't run anymore
+    mlfq::schedule();
+}
+
+// ── sched_waitpid ───────────────────────────────────────────────────────
+// Called from C sys_waitpid. Returns child pid (>0) or -1 on error.
+// Writes exit code to *status if non-null.
+#[no_mangle]
+pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32 {
+    let cur = current_task;
+    if cur.is_null() { return -1; }
+
+    loop {
+        // Scan for zombie child under lock
+        crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+
+        let mut t = task_list_head;
+        let head = task_list_head;
+        if !t.is_null() {
+            loop {
+                if matches!((*t).state, TaskState::Zombie)
+                    && (*t).parent_pid == (*cur).pid
+                    && (target_pid <= 0 || (*t).pid == target_pid as u32)
+                {
+                    let child_pid = (*t).pid;
+                    let child_exit = (*t).exit_code;
+                    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+
+                    if !status.is_null() {
+                        *status = child_exit;
+                    }
+                    return child_pid as i32;
+                }
+                t = (*t).next;
+                if t == head || t.is_null() { break; }
+            }
+        }
+
+        // No zombie found — go to sleep
+        (*cur).wait_for_pid = if target_pid > 0 { target_pid as u32 } else { 0 };
+        (*cur).state = TaskState::Waiting;
+
+        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+
+        // Yield CPU — will be woken by child exit or signal
+        mlfq::schedule();
+
+        // After waking up, loop back and re-check for zombie
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn task_exec(
     path: *const u8,

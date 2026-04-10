@@ -11,6 +11,8 @@
 #include "shm.h"
 
 extern void sched_sleep_ticks(uint32_t ticks);
+extern void sched_task_exit(int exit_code);
+extern int  sched_waitpid(int target_pid, int* status);
 
 struct syscall_frame {
     uint32_t es, ds;
@@ -387,37 +389,12 @@ static int sys_rmdir(char* pathname) {
 
 static int sys_exit(struct syscall_frame* regs) {
     if (!current_task) return -1;
-    current_task->exit_code = (int)regs->ebx;
-    current_task->state = TASK_ZOMBIE;
 
     if (terminal_fg_pid == current_task->pid)
         terminal_fg_pid = 0;
 
-    /* Find waiting parent while holding the lock */
-    struct task_struct* parent_to_wake = 0;
-
-    irq_spinlock_acquire(&scheduler_lock);
-    task_signal_locked(current_task->parent_pid, SIGCHLD);
-
-    struct task_struct* t = task_list_head;
-    if (t) {
-        do {
-            if (t->state == TASK_WAITING &&
-                (t->wait_for_pid == current_task->pid || t->wait_for_pid == 0) &&
-                t->pid == current_task->parent_pid) {
-                parent_to_wake = t;
-                break;
-            }
-            t = t->next;
-        } while (t != task_list_head);
-    }
-    irq_spinlock_release(&scheduler_lock);
-
-    /* Wake parent outside the lock to avoid deadlock */
-    if (parent_to_wake)
-        mlfq_wake_task(parent_to_wake);
-
-    schedule();
+    sched_task_exit((int)regs->ebx);
+    /* never returns */
     return 0;
 }
 
@@ -667,6 +644,7 @@ static int sys_sigsuspend(struct syscall_frame* regs) {
     current_task->in_sigsuspend = 1;
     current_task->state = TASK_SLEEPING;
 
+    schedule();
     return -1;
 }
 
@@ -792,52 +770,7 @@ static int sys_waitpid(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (status && !validate_user_ptr(status, sizeof(int))) return -1;
 
-    /* First check: is there already a zombie child? */
-    irq_spinlock_acquire(&scheduler_lock);
-    struct task_struct* t = task_list_head;
-    if (t) {
-        do {
-            if (t->state == TASK_ZOMBIE &&
-                t->parent_pid == current_task->pid &&
-                (target_pid <= 0 || t->pid == (uint32_t)target_pid)) {
-                uint32_t child_pid = t->pid;
-                int child_exit = t->exit_code;
-                irq_spinlock_release(&scheduler_lock);
-                if (status) *status = child_exit;
-                return (int)child_pid;
-            }
-            t = t->next;
-        } while (t != task_list_head);
-    }
-
-    /* No zombie yet — sleep until woken by child exit */
-    current_task->wait_for_pid = (target_pid > 0) ?
-        (uint32_t)target_pid : 0;
-    current_task->state = TASK_WAITING;
-    irq_spinlock_release(&scheduler_lock);
-
-    schedule();
-
-    /* Woken up — scan again for zombie child */
-    irq_spinlock_acquire(&scheduler_lock);
-    t = task_list_head;
-    if (t) {
-        do {
-            if (t->state == TASK_ZOMBIE &&
-                t->parent_pid == current_task->pid &&
-                (target_pid <= 0 || t->pid == (uint32_t)target_pid)) {
-                uint32_t child_pid = t->pid;
-                int child_exit = t->exit_code;
-                irq_spinlock_release(&scheduler_lock);
-                if (status) *status = child_exit;
-                return (int)child_pid;
-            }
-            t = t->next;
-        } while (t != task_list_head);
-    }
-    irq_spinlock_release(&scheduler_lock);
-
-    return -2;
+    return sched_waitpid(target_pid, status);
 }
 
 static int sys_sleep(struct syscall_frame* regs) {
