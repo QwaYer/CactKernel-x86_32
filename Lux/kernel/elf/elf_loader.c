@@ -12,6 +12,8 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 {
     tracker->page_dir = pd;
 
+    kprint("[ELF] loading: "); kprint(path); kprint("\n");
+
     vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
     struct vfs_node* file = vfs_walk_path(base, path);
     if (!file) {
@@ -60,6 +62,7 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
                     return 0;
                 }
                 if (proc_tracker_add(tracker, phys) < 0) {
+                    kprint("[ELF] ERR: tracker_add failed\n");
                     kfree_page(phys);
                     proc_free_pages(tracker);
                     return 0;
@@ -76,7 +79,13 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
                     uint32_t file_offset = ph.p_offset + (copy_start - ph.p_vaddr);
                     uint32_t copy_sz     = copy_end - copy_start;
 
-                    if (read_vfs(file, file_offset, copy_sz, (char*)phys + page_offset) <= 0) {
+                    int rd = read_vfs(file, file_offset, copy_sz, (char*)phys + page_offset);
+                    if (rd <= 0) {
+                        kprint("[ELF] ERR: read_vfs failed at off=");
+                        char _b[12]; itoa(file_offset, _b); kprint(_b);
+                        kprint(" sz="); itoa(copy_sz, _b); kprint(_b);
+                        kprint(" ret="); itoa(rd, _b); kprint(_b);
+                        kprint("\n");
                         proc_free_pages(tracker);
                         return 0;
                     }
@@ -85,6 +94,7 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
                 vmm_map(pd, va, (uint32_t)phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
             } else {
                 if (vmm_map_zero(pd, va, PAGE_SIZE, PAGE_USER) != 0) {
+                    kprint("[ELF] ERR: vmm_map_zero failed\n");
                     proc_free_pages(tracker);
                     return 0;
                 }
