@@ -394,8 +394,11 @@ static int sys_exit(struct syscall_frame* regs) {
         terminal_fg_pid = 0;
 
     sched_task_exit((int)regs->ebx);
-    /* never returns */
-    return 0;
+
+    /* Zombie: spin until timer interrupt preempts us.
+       Scheduler sees Zombie, wakes parent, never re-enqueues us. */
+    for (;;)
+        __asm__ volatile ("hlt");
 }
 
 static int sys_fork(struct syscall_frame* regs) {
