@@ -595,7 +595,9 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 }
 
 // ── sched_task_exit ─────────────────────────────────────────────────────
-// Called from C sys_exit. Handles all scheduler state atomically.
+// Called from C sys_exit. Sets zombie state — nothing else.
+// The scheduler (via timer interrupt) handles waking the parent
+// and never re-enqueuing the zombie. sys_exit busy-loops after this.
 #[no_mangle]
 pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
     let t = current_task;
@@ -603,28 +605,6 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
 
     (*t).exit_code = exit_code;
     (*t).state = TaskState::Zombie;
-
-    let parent_pid = (*t).parent_pid;
-
-    // Find & wake waiting parent under lock
-    crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
-
-    task_signal_locked(parent_pid, SIGCHLD);
-
-    let parent = find_task_by_pid(parent_pid);
-    let mut need_wake = false;
-    if !parent.is_null() && matches!((*parent).state, TaskState::Waiting) {
-        if (*parent).wait_for_pid == (*t).pid || (*parent).wait_for_pid == 0 {
-            (*parent).state = TaskState::Ready;
-            mlfq::mlfq_enqueue_locked(parent, (*parent).priority);
-            need_wake = true;
-        }
-    }
-
-    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
-
-    // Yield CPU — zombie shouldn't run anymore
-    mlfq::schedule();
 }
 
 // ── sched_waitpid ───────────────────────────────────────────────────────
