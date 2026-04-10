@@ -628,50 +628,46 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
 }
 
 // ── sched_waitpid ───────────────────────────────────────────────────────
-// Called from C sys_waitpid. Returns child pid (>0) or -1 on error.
-// Writes exit code to *status if non-null.
+// Non-blocking: check for zombie child once, set Waiting if none found.
+// Returns child pid (>0) or -2 if sleeping.
+// Timer interrupt will naturally preempt; child exit wakes parent.
 #[no_mangle]
 pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32 {
     let cur = current_task;
     if cur.is_null() { return -1; }
 
-    loop {
-        // Scan for zombie child under lock
-        crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+    crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
-        let mut t = task_list_head;
-        let head = task_list_head;
-        if !t.is_null() {
-            loop {
-                if matches!((*t).state, TaskState::Zombie)
-                    && (*t).parent_pid == (*cur).pid
-                    && (target_pid <= 0 || (*t).pid == target_pid as u32)
-                {
-                    let child_pid = (*t).pid;
-                    let child_exit = (*t).exit_code;
-                    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+    // Scan for zombie child
+    let mut t = task_list_head;
+    let head = task_list_head;
+    if !t.is_null() {
+        loop {
+            if matches!((*t).state, TaskState::Zombie)
+                && (*t).parent_pid == (*cur).pid
+                && (target_pid <= 0 || (*t).pid == target_pid as u32)
+            {
+                let child_pid = (*t).pid;
+                let child_exit = (*t).exit_code;
+                crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-                    if !status.is_null() {
-                        *status = child_exit;
-                    }
-                    return child_pid as i32;
+                if !status.is_null() {
+                    *status = child_exit;
                 }
-                t = (*t).next;
-                if t == head || t.is_null() { break; }
+                return child_pid as i32;
             }
+            t = (*t).next;
+            if t == head || t.is_null() { break; }
         }
-
-        // No zombie found — go to sleep
-        (*cur).wait_for_pid = if target_pid > 0 { target_pid as u32 } else { 0 };
-        (*cur).state = TaskState::Waiting;
-
-        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
-
-        // Yield CPU — will be woken by child exit or signal
-        mlfq::schedule();
-
-        // After waking up, loop back and re-check for zombie
     }
+
+    // No zombie — mark as Waiting and return.
+    // Timer interrupt will preempt us; child exit will wake us.
+    (*cur).wait_for_pid = if target_pid > 0 { target_pid as u32 } else { 0 };
+    (*cur).state = TaskState::Waiting;
+
+    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+    return -2;
 }
 
 #[no_mangle]
