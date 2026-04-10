@@ -440,6 +440,7 @@ static int _extent_add(struct ext4_inode* inode, uint32_t fb, uint32_t pb, uint1
     return 0;
 }
 
+static uint32_t _legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32_t fb);
 
 static void _iter_dir(struct ext4_ctx* ctx, vfs_node_t* node,
                       void (*cb)(struct ext4_dir_entry_2*, void*), void* ud) {
