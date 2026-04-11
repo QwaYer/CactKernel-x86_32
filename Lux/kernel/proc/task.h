@@ -67,39 +67,32 @@ struct context_frame {
 };
 
 struct task_struct {
-    uint32_t esp;                          /* offset  0 */
-    uint32_t pid;                          /* offset  4 */
-    task_state state;                      /* offset  8 */
-    uint8_t  is_kernel;                    /* offset 12 */
-    uint8_t  _pad0[3];                     /* offset 13 — alignment to 16 */
-    void* stack_base;                      /* offset 16 */
-    void* ustack_phys;                     /* offset 20 */
-    uint32_t ustack_virt;                  /* offset 24 */
-    uint32_t* page_directory;              /* offset 28 */
+    uint32_t esp;
+    uint32_t pid;
+    task_state state;
+    uint8_t  is_kernel;
+    void* stack_base;
+    void* ustack_phys;
+    uint32_t ustack_virt;
+    uint32_t* page_directory;
 
-    struct task_struct* next;              /* offset 32 */
-    struct task_struct* queue_next;         /* offset 36 */
-
-    /* MLFQ fields (managed by Rust scheduler) */
-    uint32_t priority;                     /* offset 40 */
-    uint32_t time_slice;                   /* offset 44 */
-    uint32_t ticks_used;                   /* offset 48 */
+    struct task_struct* next;
+    struct task_struct* queue_next;
 
     uint32_t pending_signals;
-    uint32_t signal_mask;
-    uint32_t saved_signal_mask;
-    uint8_t  in_sigsuspend;
-    uint8_t  _pad1[3];                     /* alignment */
+    uint32_t signal_mask;    
+    uint32_t saved_signal_mask;    
+    uint8_t  in_sigsuspend;         
     uint32_t signal_handlers[NSIG];
     uint32_t sigreturn_trampoline;
 
-    uint32_t alarm_ticks;
-    uint32_t itimer_value;
-    uint32_t itimer_interval;
+    uint32_t alarm_ticks;     
+    uint32_t itimer_value;     
+    uint32_t itimer_interval;   
     struct vfs_node* fd_table[MAX_FD];
     uint32_t fd_offset[MAX_FD];
-    uint32_t fd_flags[MAX_FD];
-    uint32_t fd_cloexec[MAX_FD];
+    uint32_t fd_flags[MAX_FD];  
+    uint32_t fd_cloexec[MAX_FD];  
     proc_page_tracker_t mm;
 
     mmap_table_t mmap_table;
@@ -122,9 +115,62 @@ struct task_struct {
     gid_t egid;
 
     task_shm_attach_t shm_attachments[TASK_SHM_MAX];
-
-    struct task_struct* wait_next;          /* timer-wheel link */
 };
+
+typedef struct sched_queue {
+    struct task_struct* head;
+    struct task_struct* tail;
+    uint32_t            count;
+} sched_queue_t;
+
+static inline void sched_queue_init(sched_queue_t* q) {
+    q->head = q->tail = 0;
+    q->count = 0;
+}
+
+static inline void sched_queue_push(sched_queue_t* q, struct task_struct* t) {
+    t->queue_next = 0;
+    if (!q->tail) {
+        q->head = q->tail = t;
+    } else {
+        q->tail->queue_next = t;
+        q->tail = t;
+    }
+    q->count++;
+}
+
+static inline struct task_struct* sched_queue_pop(sched_queue_t* q) {
+    if (!q->head) return 0;
+    struct task_struct* t = q->head;
+    q->head = t->queue_next;
+    if (!q->head) q->tail = 0;
+    t->queue_next = 0;
+    q->count--;
+    return t;
+}
+
+static inline void sched_queue_remove(sched_queue_t* q, struct task_struct* t) {
+    struct task_struct* prev = 0;
+    struct task_struct* cur  = q->head;
+    while (cur) {
+        if (cur == t) {
+            if (prev) prev->queue_next = cur->queue_next;
+            else      q->head          = cur->queue_next;
+            if (q->tail == cur)
+                q->tail = prev;
+            cur->queue_next = 0;
+            q->count--;
+            return;
+        }
+        prev = cur;
+        cur  = cur->queue_next;
+    }
+}
+
+extern sched_queue_t ready_queue;
+extern sched_queue_t sleep_queue;
+extern sched_queue_t zombie_queue;
+extern sched_queue_t wait_queue;
 
 void mlfq_wake_task(struct task_struct* task);
 
