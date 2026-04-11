@@ -608,9 +608,9 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
 }
 
 // ── sched_waitpid ───────────────────────────────────────────────────────
-// Non-blocking: check for zombie child once, set Waiting if none found.
-// Returns child pid (>0) or -2 if sleeping.
-// Timer interrupt will naturally preempt; child exit wakes parent.
+// Non-blocking: check for zombie child, return pid or -2.
+// Does NOT change caller state — libc retries in userspace where
+// the timer can preempt and give the child CPU time.
 #[no_mangle]
 pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32 {
     let cur = current_task;
@@ -618,7 +618,6 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
 
     crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
-    // Scan for zombie child
     let mut t = task_list_head;
     let head = task_list_head;
     if !t.is_null() {
@@ -640,11 +639,6 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
             if t == head || t.is_null() { break; }
         }
     }
-
-    // No zombie — mark as Waiting and return.
-    // Timer interrupt will preempt us; child exit will wake us.
-    (*cur).wait_for_pid = if target_pid > 0 { target_pid as u32 } else { 0 };
-    (*cur).state = TaskState::Waiting;
 
     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
     return -2;
