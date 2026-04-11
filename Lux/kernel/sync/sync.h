@@ -23,13 +23,13 @@ void irq_spinlock_acquire(irq_spinlock_t* lock);
 void irq_spinlock_release(irq_spinlock_t* lock);
 
 
-#define MUTEX_WAIT_QUEUE_MAX 64
+#define MUTEX_WAIT_QUEUE_MAX 16
 
 typedef struct {
-    volatile uint32_t   locked;
-    spinlock_t          guard;
-    struct task_struct* owner;
-    struct task_struct* waiters[MUTEX_WAIT_QUEUE_MAX];
+    volatile int        locked;
+    spinlock_t          guard;                          /* защищает поля самого мьютекса */
+    struct task_struct* owner;                          /* задача, держащая мьютекс      */
+    struct task_struct* waiters[MUTEX_WAIT_QUEUE_MAX];  /* очередь ожидающих (FIFO)      */
     uint32_t            waiter_count;
 } mutex_t;
 
@@ -39,10 +39,9 @@ void mutex_unlock (mutex_t* m);
 int  mutex_trylock(mutex_t* m);
 
 typedef struct {
-    spinlock_t          guard;
-    volatile int32_t    count;
+    spinlock_t guard;
     struct task_struct* waiters[MUTEX_WAIT_QUEUE_MAX];
-    uint32_t            waiter_count;
+    uint32_t waiter_count;
 } semaphore_t;
 
 void sema_init(semaphore_t* s, int val);
