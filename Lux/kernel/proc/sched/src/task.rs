@@ -595,9 +595,10 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 }
 
 // ── sched_task_exit ─────────────────────────────────────────────────────
-// Called from C sys_exit. Sets zombie state — nothing else.
-// The scheduler (via timer interrupt) handles waking the parent
-// and never re-enqueuing the zombie. sys_exit busy-loops after this.
+// Called from C sys_exit.  Sets zombie state and yields immediately.
+// schedule() sees Zombie, sends SIGCHLD, wakes the parent (if Waiting),
+// and never re-enqueues this task.  sys_exit's hlt-loop is a safety net
+// in case schedule() returns (e.g. no other runnable task yet).
 #[no_mangle]
 pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
     let t = current_task;
@@ -605,43 +606,61 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
 
     (*t).exit_code = exit_code;
     (*t).state = TaskState::Zombie;
+
+    crate::mlfq::schedule();
 }
 
 // ── sched_waitpid ───────────────────────────────────────────────────────
-// Non-blocking: check for zombie child, return pid or -2.
-// Does NOT change caller state — libc retries in userspace where
-// the timer can preempt and give the child CPU time.
+// Blocking: scan children for a zombie that matches target_pid.
+//   • Found  → collect exit code, mark reaped, return child pid.
+//   • Not found but live children exist → Waiting + schedule(); retry.
+//   • No matching children at all → return -1.
+// Same pattern as sched_sleep_ticks: set state, release lock, schedule().
 #[no_mangle]
 pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32 {
     let cur = current_task;
     if cur.is_null() { return -1; }
 
-    crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+    loop {
+        crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
-    let mut t = task_list_head;
-    let head = task_list_head;
-    if !t.is_null() {
-        loop {
-            if matches!((*t).state, TaskState::Zombie)
-                && (*t).parent_pid == (*cur).pid
+        let mut t = task_list_head;
+        let mut found_child = false;
+
+        while !t.is_null() {
+            if (*t).parent_pid == (*cur).pid
                 && (target_pid <= 0 || (*t).pid == target_pid as u32)
             {
-                let child_pid = (*t).pid;
-                let child_exit = (*t).exit_code;
-                crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+                if matches!((*t).state, TaskState::Zombie) {
+                    let child_pid = (*t).pid;
+                    let child_exit = (*t).exit_code;
+                    (*t).parent_pid = 0; // mark reaped — won't match again
+                    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-                if !status.is_null() {
-                    *status = child_exit;
+                    if !status.is_null() {
+                        *status = child_exit;
+                    }
+                    return child_pid as i32;
                 }
-                return child_pid as i32;
+                found_child = true;
             }
             t = (*t).next;
-            if t == head || t.is_null() { break; }
         }
-    }
 
-    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
-    return -2;
+        if !found_child {
+            // No matching children at all
+            crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+            return -1;
+        }
+
+        // Live children exist but none is zombie yet — block.
+        // The scheduler wakes us (Waiting → Ready) when a child
+        // becomes Zombie (see mlfq::schedule zombie detection).
+        (*cur).state = TaskState::Waiting;
+        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+        crate::mlfq::schedule();
+        // Woken by SIGCHLD — loop back and collect the zombie.
+    }
 }
 
 #[no_mangle]
