@@ -45,9 +45,10 @@ static void kill_current(uint32_t fault_addr, uint32_t err, uint32_t eip)
     g_stats.protection_faults++;
 
     if (t && !t->is_kernel) {
-        task_signal(t->pid, SIGSEGV);
-        schedule();
-        return;
+        extern void sched_task_exit(int exit_code);
+        sched_task_exit(-11);          /* Zombie + schedule() */
+        __asm__ volatile ("sti");      /* re-enable IRQs for hlt */
+        for (;;) __asm__ volatile ("hlt");
     }
 
     kprint_color("[PF] KERNEL PAGE FAULT — SYSTEM HALTED\n", COLOR_LIGHT_RED);
