@@ -14,13 +14,6 @@ KERN_DYNLINK_DIR = Lux/kernel/elf/dynlink
 KERN_SHELL_DIR   = Lux/kernel/shell
 KERN_CMDS_DIR    = Lux/kernel/shell/commands
 KERN_MEM_DIR     = Lux/kernel/memory
-KERN_PROCMM_DIR  = Lux/kernel/memory/proc_mm
-KERN_SLABMM_DIR  = Lux/kernel/memory/slab_mm
-KERN_PF_DIR      = Lux/kernel/memory/page_fault
-KERN_SWAP_DIR    = Lux/kernel/memory/swap_mm
-KERN_OOM_DIR     = Lux/kernel/memory/oom
-KERN_MMAP_DIR    = Lux/kernel/memory/mmap_mm
-KERN_SHM_DIR     = Lux/kernel/memory/shm
 KERN_PROC_DIR    = Lux/kernel/proc
 SCHED_DIR    = Lux/kernel/proc/sched
 SCHED_TARGET = $(SCHED_DIR)/target/i686-lux/release/libsched.a
@@ -86,13 +79,6 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_SHELL_DIR) \
          -I$(KERN_CMDS_DIR) \
          -I$(KERN_MEM_DIR) \
-         -I$(KERN_PF_DIR) \
-         -I$(KERN_PROCMM_DIR) \
-         -I$(KERN_SLABMM_DIR) \
-         -I$(KERN_SWAP_DIR) \
-         -I$(KERN_OOM_DIR) \
-         -I$(KERN_MMAP_DIR) \
-         -I$(KERN_SHM_DIR) \
          -I$(KERN_PROC_DIR) \
          -I$(KERN_SYNC_DIR) \
          -I$(KERN_IDT_DIR) \

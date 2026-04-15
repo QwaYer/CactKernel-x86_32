@@ -1,6 +1,6 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page};
-use crate::heap::{kmalloc, kfree_heap};
+use crate::alloc::heap::{kmalloc, kfree_heap};
 
 #[repr(C)]
 pub struct Slab {

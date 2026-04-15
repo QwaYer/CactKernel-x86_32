@@ -1,7 +1,7 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page};
-use crate::paging::vmm_map;
-use crate::page_fault::vmm_map_zero;
+use crate::vmm::paging::vmm_map;
+use crate::fault::page_fault::vmm_map_zero;
 
 unsafe fn fd_to_node(fd: i32) -> *mut VfsNode {
     if current_task.is_null() {

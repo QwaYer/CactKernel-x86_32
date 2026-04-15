@@ -1,8 +1,8 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page, page_ref_get};
-use crate::paging::vmm_map;
-use crate::swap::{swap_pte_is_swapped, swap_handle_fault};
-use crate::oom::oom_kill;
+use crate::vmm::paging::vmm_map;
+use crate::fault::swap::{swap_pte_is_swapped, swap_handle_fault};
+use crate::fault::oom::oom_kill;
 
 static mut G_STATS: PfStats = PfStats {
     total_faults: 0,

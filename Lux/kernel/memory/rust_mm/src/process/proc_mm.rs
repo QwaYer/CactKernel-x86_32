@@ -1,7 +1,7 @@
 use crate::ffi::*;
 use crate::pmm::kfree_page;
-use crate::heap::{kmalloc, kfree_heap};
-use crate::paging::vmm_free_address_space;
+use crate::alloc::heap::{kmalloc, kfree_heap};
+use crate::vmm::paging::vmm_free_address_space;
 
 //public api
 #[unsafe(no_mangle)]

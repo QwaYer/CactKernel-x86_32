@@ -4,16 +4,10 @@
 
 mod ffi;
 pub mod pmm;
-pub mod heap;
-pub mod paging;
-pub mod cow;
-pub mod slab;
-pub mod swap;
-pub mod oom;
-pub mod page_fault;
-pub mod proc_mm;
-pub mod mmap;
-pub mod shm;
+pub mod alloc;
+pub mod vmm;
+pub mod fault;
+pub mod process;
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
