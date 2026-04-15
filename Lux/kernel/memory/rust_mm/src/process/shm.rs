@@ -1,6 +1,6 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page};
-use crate::paging::vmm_map;
+use crate::vmm::paging::vmm_map;
 
 #[repr(C)]
 struct ShmSeg {
