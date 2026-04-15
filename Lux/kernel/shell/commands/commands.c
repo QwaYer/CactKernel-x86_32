@@ -461,13 +461,31 @@ static void cmd_run(char* args) {
     }
 
     Elf32_Ehdr hdr;
-    if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) {
-        kprint("\nError: cannot read ELF header\n");
+    for (int _i = 0; _i < (int)sizeof(hdr); _i++) ((char*)&hdr)[_i] = 0;
+    int _rd = read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr);
+    if (_rd <= 0) {
+        kprint("\nError: cannot read ELF header (ret=");
+        char _szb[12]; itoa(_rd, _szb); kprint(_szb);
+        kprint(" inode="); itoa((int)file->inode, _szb); kprint(_szb);
+        kprint(")\n");
         return;
     }
 
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
-        kprint("\nError: not an ELF file\n");
+        char _szb[12];
+        kprint("\nError: not an ELF file (magic=0x");
+        kprint_hex(*(uint32_t*)hdr.e_ident);
+        kprint(" read="); itoa(_rd, _szb); kprint(_szb);
+        kprint(" size="); itoa((int)file->size, _szb); kprint(_szb);
+        kprint(" inode="); itoa((int)file->inode, _szb); kprint(_szb);
+        kprint(" type="); itoa((int)file->type, _szb); kprint(_szb);
+        kprint(")\n");
+        kprint("  first 16 bytes: ");
+        for (int _i = 0; _i < 16; _i++) {
+            kprint_hex((uint8_t)hdr.e_ident[_i]);
+            kprint(" ");
+        }
+        kprint("\n");
         return;
     }
     if (hdr.e_machine != 3) {
