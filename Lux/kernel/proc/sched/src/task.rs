@@ -7,7 +7,7 @@ use crate::timer_wheel;
 
 pub const MAX_FD:     usize = 256;
 pub const NSIG:       usize = 13;
-pub const TASK_SHM_MAX: usize = 8;
+pub const TASK_SHM_MAX: usize = 16;
 
 pub const USER_CODE_SEL: u32 = 0x1B;
 pub const USER_DATA_SEL: u32 = 0x23;

@@ -79,6 +79,11 @@ struct task_struct {
     struct task_struct* next;
     struct task_struct* queue_next;
 
+    /* MLFQ scheduler fields (managed by Rust scheduler, do not touch from C) */
+    uint32_t priority;
+    uint32_t time_slice;
+    uint32_t ticks_used;
+
     uint32_t pending_signals;
     uint32_t signal_mask;    
     uint32_t saved_signal_mask;    
@@ -115,6 +120,8 @@ struct task_struct {
     gid_t egid;
 
     task_shm_attach_t shm_attachments[TASK_SHM_MAX];
+
+    struct task_struct* wait_next;  /* timer_wheel linkage (managed by Rust) */
 };
 
 typedef struct sched_queue {
