@@ -80,14 +80,14 @@ pub unsafe extern "C" fn kalloc() -> *mut u8 {
     }
     irq_spinlock_release(&raw mut PAGE_LOCK);
 
-    if crate::swap::swap_is_enabled_internal() {
+    if crate::fault::swap::swap_is_enabled_internal() {
         let pd = get_current_pd();
-        if !pd.is_null() && crate::swap::swap_evict_page_internal(pd) == 0 {
+        if !pd.is_null() && crate::fault::swap::swap_evict_page_internal(pd) == 0 {
             return kalloc();
         }
     }
 
-    if crate::oom::oom_kill_internal() == 0 {
+    if crate::fault::oom::oom_kill_internal() == 0 {
         return kalloc();
     }
 
