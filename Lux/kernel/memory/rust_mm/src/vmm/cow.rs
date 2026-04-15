@@ -14,7 +14,15 @@ pub unsafe extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u
         return;
     }
 
+    let mmap_pde_start = (MMAP_BASE >> 22) as usize;
+    let mmap_pde_end = (MMAP_LIMIT >> 22) as usize;
+
     for i in 32..768 {
+        // Skip mmap region — mmap_table_clone handles these PDEs
+        if i >= mmap_pde_start && i < mmap_pde_end {
+            continue;
+        }
+
         if *src_pd.add(i) & PAGE_PRESENT == 0 {
             *dst_pd.add(i) = 0;
             continue;

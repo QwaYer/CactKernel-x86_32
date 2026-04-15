@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::pmm::{kalloc, kfree_page};
+use crate::pmm::{kalloc, kfree_page, page_ref_inc};
 use crate::vmm::paging::vmm_map;
 use crate::fault::page_fault::vmm_map_zero;
 
@@ -398,6 +398,10 @@ pub unsafe extern "C" fn mmap_table_clone(
                 }
                 let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
                 *dst_pt.add(pti) = pte;
+
+                if pte & PAGE_PRESENT != 0 {
+                    page_ref_inc((pte & !0xFFF) as *const u8);
+                }
             }
         } else {
             for p in 0..pages {
@@ -430,6 +434,8 @@ pub unsafe extern "C" fn mmap_table_clone(
                 let cow_pte = (pte & !PAGE_RW) | PAGE_COW;
                 *src_pt.add(pti) = cow_pte;
                 *dst_pt.add(pti) = cow_pte;
+
+                page_ref_inc((pte & !0xFFF) as *const u8);
             }
 
             tlb_flush_all();
