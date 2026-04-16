@@ -210,6 +210,7 @@ unsafe fn task_zero_init(t: *mut TaskStruct) {
     for i in 0..NSIG {
         (*t).signal_handlers[i] = SIG_DFL;
     }
+    ffi::mmap_table_init(&raw mut (*t).mmap_table);
 }
 
 #[no_mangle]
