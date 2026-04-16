@@ -539,6 +539,14 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         ffi::vmm_fork_address_space((*parent).page_directory, child_pd);
     }
 
+    // Клонировать mmap-таблицу (COW для private, share для shared)
+    ffi::mmap_table_clone(
+        &raw mut (*parent).mmap_table,
+        &raw mut (*child).mmap_table,
+        (*parent).page_directory,
+        child_pd,
+    );
+
     // Маппинг и копирование user stack
     ffi::vmm_map(child_pd, (*child).ustack_virt, ustack_phys as u32,
                  PAGE_USER | PAGE_RW | PAGE_PRESENT);

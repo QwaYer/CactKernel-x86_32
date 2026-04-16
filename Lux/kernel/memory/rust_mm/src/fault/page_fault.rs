@@ -143,6 +143,7 @@ pub unsafe extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
         }
 
         if !pte.is_null() && (*pte & PAGE_COW != 0) {
+            let old_phys = (*pte & !0xFFF) as *mut u8;
             let mut phys = kalloc();
             if phys.is_null() && oom_kill() == 0 {
                 phys = kalloc();
@@ -151,14 +152,24 @@ pub unsafe extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 kill_current(fault_addr, err, eip);
                 return;
             }
-            zero_page(phys);
 
-            let flags = (*pte & 0xFFF) & !PAGE_COW;
-            let flags = flags | PAGE_PRESENT | PAGE_RW;
-            *pte = (phys as u32 & !0xFFF) | flags;
+            if page_ref_get(old_phys) <= 1 {
+                // Sole owner — just make writable, no copy needed
+                let flags = (*pte & 0xFFF) & !PAGE_COW;
+                let flags = flags | PAGE_PRESENT | PAGE_RW;
+                *pte = (old_phys as u32 & !0xFFF) | flags;
+                kfree_page(phys);
+            } else {
+                // Multiple refs — copy old content
+                core::ptr::copy_nonoverlapping(old_phys as *const u8, phys, PAGE_SIZE as usize);
+                let flags = (*pte & 0xFFF) & !PAGE_COW;
+                let flags = flags | PAGE_PRESENT | PAGE_RW;
+                *pte = (phys as u32 & !0xFFF) | flags;
+                kfree_page(old_phys as *mut u8);
+            }
             tlb_flush(page_va);
 
-            G_STATS.demand_allocs += 1;
+            G_STATS.cow_copies += 1;
             return;
         }
 
