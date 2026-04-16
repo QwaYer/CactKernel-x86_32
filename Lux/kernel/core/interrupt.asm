@@ -136,11 +136,6 @@ isr13:
 
 isr14:
     push dword 14
-    push eax
-    mov  eax, [esp+8]
-    mov  [esp+8], dword 14
-    mov  [esp+4], eax
-    pop  eax
     jmp  isr_pf_stub
 
 isr15:
