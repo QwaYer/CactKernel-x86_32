@@ -402,6 +402,19 @@ static int sys_exit(struct syscall_frame* regs) {
 }
 
 static int sys_fork(struct syscall_frame* regs) {
+    char hbuf[12];
+    kprint("[SYSFORK] eip=0x");
+    hex_to_ascii(regs->eip, hbuf); kprint(hbuf);
+    kprint(" uesp=0x");
+    hex_to_ascii(regs->useresp, hbuf); kprint(hbuf);
+    kprint(" cs=0x");
+    hex_to_ascii(regs->cs, hbuf); kprint(hbuf);
+    kprint(" ss=0x");
+    hex_to_ascii(regs->ss, hbuf); kprint(hbuf);
+    kprint(" eflags=0x");
+    hex_to_ascii(regs->eflags, hbuf); kprint(hbuf);
+    kprint("\n");
+
     struct context_frame cf;
     cf.es        = regs->es;        cf.ds       = regs->ds;
     cf.edi       = regs->edi;       cf.esi      = regs->esi;
@@ -412,7 +425,13 @@ static int sys_fork(struct syscall_frame* regs) {
     cf.eflags    = regs->eflags;
     cf.useresp   = regs->useresp;   cf.ss       = regs->ss;
     struct task_struct* child = task_fork(&cf);
-    if (!child) return -1;
+    if (!child) {
+        kprint("[SYSFORK] task_fork returned NULL!\n");
+        return -1;
+    }
+    kprint("[SYSFORK] ok pid=");
+    itoa((int)child->pid, hbuf); kprint(hbuf);
+    kprint("\n");
     return (int)child->pid;
 }
 
