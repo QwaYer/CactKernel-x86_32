@@ -170,11 +170,29 @@ pub unsafe extern "C" fn schedule() {
     if matches!((*prev).state, TaskState::Zombie) {
         let parent_pid = (*prev).parent_pid;
         if parent_pid != 0 {
+            let mut buf = [0u8; 12];
+            crate::ffi::kprint(b"[SCHED] zombie pid=\0".as_ptr());
+            crate::ffi::itoa((*prev).pid as i32, buf.as_mut_ptr());
+            crate::ffi::kprint(buf.as_ptr());
+            crate::ffi::kprint(b" parent=\0".as_ptr());
+            crate::ffi::itoa(parent_pid as i32, buf.as_mut_ptr());
+            crate::ffi::kprint(buf.as_ptr());
+
             crate::task::task_signal_locked(parent_pid, crate::task::SIGCHLD);
             let parent = crate::task::find_task_by_pid(parent_pid);
             if !parent.is_null() && matches!((*parent).state, TaskState::Waiting) {
                 (*parent).state = TaskState::Ready;
                 mlfq_enqueue_locked(parent, (*parent).priority);
+                crate::ffi::kprint(b" WOKE\n\0".as_ptr());
+            } else {
+                crate::ffi::kprint(b" parent_state=\0".as_ptr());
+                if parent.is_null() {
+                    crate::ffi::kprint(b"NOT_FOUND\n\0".as_ptr());
+                } else {
+                    crate::ffi::itoa((*parent).state as i32, buf.as_mut_ptr());
+                    crate::ffi::kprint(buf.as_ptr());
+                    crate::ffi::kprint(b"\n\0".as_ptr());
+                }
             }
         }
     }
