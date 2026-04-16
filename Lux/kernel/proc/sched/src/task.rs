@@ -598,6 +598,33 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 
     task_list_add(child);
     mlfq::mlfq_enqueue_locked(child, (*child).priority);
+
+    {
+        let mut buf = [0u8; 12];
+        ffi::kprint(b"[FORK] parent=\0".as_ptr());
+        ffi::itoa((*parent).pid as i32, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" child=\0".as_ptr());
+        ffi::itoa((*child).pid as i32, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" eip=0x\0".as_ptr());
+        ffi::hex_to_ascii((*regs).eip, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" uesp=0x\0".as_ptr());
+        ffi::hex_to_ascii((*regs).useresp, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" cs=0x\0".as_ptr());
+        ffi::hex_to_ascii((*regs).cs, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" ss=0x\0".as_ptr());
+        ffi::hex_to_ascii((*regs).ss, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" child_esp=0x\0".as_ptr());
+        ffi::hex_to_ascii((*child).esp, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b"\n\0".as_ptr());
+    }
+
     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
     child
@@ -612,6 +639,20 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
     let t = current_task;
     if t.is_null() { return; }
+
+    {
+        let mut buf = [0u8; 12];
+        ffi::kprint(b"[EXIT] pid=\0".as_ptr());
+        ffi::itoa((*t).pid as i32, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" code=\0".as_ptr());
+        ffi::itoa(exit_code, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" parent=\0".as_ptr());
+        ffi::itoa((*t).parent_pid as i32, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b"\n\0".as_ptr());
+    }
 
     (*t).exit_code = exit_code;
     (*t).state = TaskState::Zombie;
@@ -630,6 +671,17 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
     let cur = current_task;
     if cur.is_null() { return -1; }
 
+    {
+        let mut buf = [0u8; 12];
+        ffi::kprint(b"[WAIT] pid=\0".as_ptr());
+        ffi::itoa((*cur).pid as i32, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b" target=\0".as_ptr());
+        ffi::itoa(target_pid, buf.as_mut_ptr());
+        ffi::kprint(buf.as_ptr());
+        ffi::kprint(b"\n\0".as_ptr());
+    }
+
     loop {
         crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
@@ -646,6 +698,17 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
                     (*t).parent_pid = 0; // mark reaped — won't match again
                     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
+                    {
+                        let mut buf = [0u8; 12];
+                        ffi::kprint(b"[WAIT] reaped pid=\0".as_ptr());
+                        ffi::itoa(child_pid as i32, buf.as_mut_ptr());
+                        ffi::kprint(buf.as_ptr());
+                        ffi::kprint(b" exit=\0".as_ptr());
+                        ffi::itoa(child_exit, buf.as_mut_ptr());
+                        ffi::kprint(buf.as_ptr());
+                        ffi::kprint(b"\n\0".as_ptr());
+                    }
+
                     if !status.is_null() {
                         *status = child_exit;
                     }
@@ -657,14 +720,12 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
         }
 
         if !found_child {
-            // No matching children at all
+            ffi::kprint(b"[WAIT] no children found!\n\0".as_ptr());
             crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
         }
 
-        // Live children exist but none is zombie yet — block.
-        // The scheduler wakes us (Waiting → Ready) when a child
-        // becomes Zombie (see mlfq::schedule zombie detection).
+        ffi::kprint(b"[WAIT] blocking, child alive\n\0".as_ptr());
         (*cur).state = TaskState::Waiting;
         crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
         crate::mlfq::schedule();
