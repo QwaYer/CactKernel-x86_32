@@ -74,6 +74,12 @@ extern "C" {
     pub fn proc_free_pages(tracker: *mut ProcPageTracker);
 
     pub fn mmap_table_init(table: *mut MmapTable);
+    pub fn mmap_table_clone(
+        src: *mut MmapTable,
+        dst: *mut MmapTable,
+        src_pd: *mut u32,
+        dst_pd: *mut u32,
+    );
 
     pub fn shm_detach_all(pid: u32, pd: *mut u32);
 
