@@ -392,7 +392,10 @@ pub unsafe extern "C" fn mmap_table_clone(
                     if new_pt.is_null() {
                         continue;
                     }
-                    core::ptr::write_bytes(new_pt, 0, 1024);
+                    // A page table is 1024 entries * 4 bytes = PAGE_SIZE bytes.
+                    // Zero the whole page so stale PTEs from the physical page's
+                    // previous owner don't cause bogus kfree_page calls later.
+                    core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                     *dst_pd.add(pdi) =
                         (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
                 }
@@ -420,7 +423,7 @@ pub unsafe extern "C" fn mmap_table_clone(
                     if new_pt.is_null() {
                         continue;
                     }
-                    core::ptr::write_bytes(new_pt, 0, 1024);
+                    core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                     *dst_pd.add(pdi) =
                         (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
                 }
