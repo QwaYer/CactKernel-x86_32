@@ -1,24 +1,48 @@
 [bits 32]
 [global _start]
 
-; Multiboot header
-MODULEALIGN equ  1<<0
-MEMINFO     equ  1<<1
-VIDINFO     equ  1<<2
-FLAGS       equ  MODULEALIGN | MEMINFO | VIDINFO
-MAGIC       equ  0x1BADB002
-CHECKSUM    equ -(MAGIC + FLAGS)
+; Multiboot2 header
+MB2_MAGIC    equ 0xE85250D6
+MB2_ARCH     equ 0                              ; i386 protected mode
+MB2_LENGTH   equ header_end - header_start
+MB2_CHECKSUM equ -(MB2_MAGIC + MB2_ARCH + MB2_LENGTH)
 
 section .multiboot
-align 4
-    dd MAGIC
-    dd FLAGS
-    dd CHECKSUM
-    dd 0, 0, 0, 0, 0 ; unused fields for a.out kludge
-    dd 0 ; mode_type (0 = linear graphics)
-    dd 1024 ; width
-    dd 768 ; height
-    dd 32 ; depth
+align 8
+header_start:
+    dd MB2_MAGIC
+    dd MB2_ARCH
+    dd MB2_LENGTH
+    dd MB2_CHECKSUM
+
+    ; Information request tag
+    align 8
+ireq_start:
+    dw 1                                         ; type = information request
+    dw 0                                         ; flags
+    dd ireq_end - ireq_start                     ; size
+    dd 4                                         ; request BASIC_MEMINFO
+    dd 6                                         ; request MMAP
+    dd 8                                         ; request FRAMEBUFFER
+ireq_end:
+
+    ; Framebuffer tag: ask for 1024x768x32
+    align 8
+fbtag_start:
+    dw 5                                         ; type = framebuffer
+    dw 0                                         ; flags (0 = required)
+    dd fbtag_end - fbtag_start                   ; size
+    dd 1024                                      ; width
+    dd 768                                       ; height
+    dd 32                                        ; bpp
+fbtag_end:
+
+    ; End tag
+    align 8
+    dw 0
+    dw 0
+    dd 8
+header_end:
 
 section .bss
 align 16
@@ -31,12 +55,12 @@ extern init
 
 _start:
     mov esp, stack_top
-    
+
     ; Reset EFLAGS
     push 0
     popf
 
-    ; Push multiboot info
+    ; Push multiboot2 info pointer (ebx) and magic (eax)
     push ebx
     push eax
 
