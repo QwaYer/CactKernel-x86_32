@@ -607,6 +607,11 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 
     (*child).esp = esp_ptr as u32;
 
+    // COW maps the parent's trampoline page read-only into child's PD.
+    // Allocate a fresh writable page so child has its own trampoline
+    // and proc_free_pages won't double-free the parent's physical page.
+    task_setup_sigreturn(child);
+
     task_list_add(child);
     mlfq::mlfq_enqueue_locked(child, (*child).priority);
 
