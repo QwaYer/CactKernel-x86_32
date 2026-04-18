@@ -535,6 +535,17 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     (*child).dyn_ctx        = ptr::null_mut();
     (*child).ticks_used     = 0;
 
+    // КРИТИЧНО: после memcpy у ребёнка mm.pages и mm.page_dir указывают
+    // на объекты родителя. Без сброса task_reap на зомби-ребёнке вызвал бы
+    // proc_free_pages(&child.mm), что:
+    //   1) освобождает родительский массив pages (heap corruption),
+    //   2) вызывает vmm_free_address_space на PD РОДИТЕЛЯ.
+    // Также mmap_table содержит копию параметров родителя; mmap_table_clone
+    // ниже заполнит её заново от начального состояния.
+    ffi::proc_tracker_init(&raw mut (*child).mm);
+    (*child).mm.page_dir = child_pd;
+    ffi::mmap_table_init(&raw mut (*child).mmap_table);
+
     // Клонировать адресное пространство (COW)
     if !(*parent).page_directory.is_null() {
         ffi::vmm_fork_address_space((*parent).page_directory, child_pd);
