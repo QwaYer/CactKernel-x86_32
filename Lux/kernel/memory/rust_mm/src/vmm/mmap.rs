@@ -414,73 +414,77 @@ pub extern "C" fn mmap_table_clone(
         let pages = sr.length / PAGE_SIZE;
 
         if sr.flags & MAP_SHARED as u32 != 0 {
-            for p in 0..pages {
-                let va = sr.base + p * PAGE_SIZE;
-                let pdi = pd_index(va) as usize;
-                let pti = pt_index(va) as usize;
+            // SAFETY: src_pd and dst_pd are valid page directories; indices
+            // are computed from a va within the region bounds.
+            unsafe {
+                for p in 0..pages {
+                    let va = sr.base + p * PAGE_SIZE;
+                    let pdi = pd_index(va) as usize;
+                    let pti = pt_index(va) as usize;
 
-                // SAFETY: src_pd is valid.
-                if *src_pd.add(pdi) & PAGE_PRESENT == 0 {
-                    continue;
-                }
-                let src_pt = (*src_pd.add(pdi) & !0xFFF) as *mut u32;
-                let pte = *src_pt.add(pti);
-                if pte == 0 {
-                    continue;
-                }
-
-                // SAFETY: dst_pd is valid.
-                if *dst_pd.add(pdi) & PAGE_PRESENT == 0 {
-                    let new_pt = kalloc() as *mut u32;
-                    if new_pt.is_null() {
+                    if *src_pd.add(pdi) & PAGE_PRESENT == 0 {
                         continue;
                     }
-                    core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
-                    *dst_pd.add(pdi) =
-                        (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
-                }
-                let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
-                *dst_pt.add(pti) = pte;
+                    let src_pt = (*src_pd.add(pdi) & !0xFFF) as *mut u32;
+                    let pte = *src_pt.add(pti);
+                    if pte == 0 {
+                        continue;
+                    }
 
-                if pte & PAGE_PRESENT != 0 {
-                    page_ref_inc((pte & !0xFFF) as *const u8);
+                    if *dst_pd.add(pdi) & PAGE_PRESENT == 0 {
+                        let new_pt = kalloc() as *mut u32;
+                        if new_pt.is_null() {
+                            continue;
+                        }
+                        core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
+                        *dst_pd.add(pdi) =
+                            (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+                    }
+                    let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
+                    *dst_pt.add(pti) = pte;
+
+                    if pte & PAGE_PRESENT != 0 {
+                        page_ref_inc((pte & !0xFFF) as *const u8);
+                    }
                 }
             }
         } else {
-            for p in 0..pages {
-                let va = sr.base + p * PAGE_SIZE;
-                let pdi = pd_index(va) as usize;
-                let pti = pt_index(va) as usize;
+            // SAFETY: src_pd and dst_pd are valid page directories; indices
+            // are computed from a va within the region bounds.
+            unsafe {
+                for p in 0..pages {
+                    let va = sr.base + p * PAGE_SIZE;
+                    let pdi = pd_index(va) as usize;
+                    let pti = pt_index(va) as usize;
 
-                // SAFETY: src_pd is valid.
-                if *src_pd.add(pdi) & PAGE_PRESENT == 0 {
-                    continue;
-                }
-                let src_pt = (*src_pd.add(pdi) & !0xFFF) as *mut u32;
-                let pte = *src_pt.add(pti);
-
-                // SAFETY: dst_pd is valid.
-                if *dst_pd.add(pdi) & PAGE_PRESENT == 0 {
-                    let new_pt = kalloc() as *mut u32;
-                    if new_pt.is_null() {
+                    if *src_pd.add(pdi) & PAGE_PRESENT == 0 {
                         continue;
                     }
-                    core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
-                    *dst_pd.add(pdi) =
-                        (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+                    let src_pt = (*src_pd.add(pdi) & !0xFFF) as *mut u32;
+                    let pte = *src_pt.add(pti);
+
+                    if *dst_pd.add(pdi) & PAGE_PRESENT == 0 {
+                        let new_pt = kalloc() as *mut u32;
+                        if new_pt.is_null() {
+                            continue;
+                        }
+                        core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
+                        *dst_pd.add(pdi) =
+                            (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+                    }
+                    let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
+
+                    if pte & PAGE_PRESENT == 0 {
+                        *dst_pt.add(pti) = pte;
+                        continue;
+                    }
+
+                    let cow_pte = (pte & !PAGE_RW) | PAGE_COW;
+                    *src_pt.add(pti) = cow_pte;
+                    *dst_pt.add(pti) = cow_pte;
+
+                    page_ref_inc((pte & !0xFFF) as *const u8);
                 }
-                let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
-
-                if pte & PAGE_PRESENT == 0 {
-                    *dst_pt.add(pti) = pte;
-                    continue;
-                }
-
-                let cow_pte = (pte & !PAGE_RW) | PAGE_COW;
-                *src_pt.add(pti) = cow_pte;
-                *dst_pt.add(pti) = cow_pte;
-
-                page_ref_inc((pte & !0xFFF) as *const u8);
             }
 
             flush_tlb_all();
