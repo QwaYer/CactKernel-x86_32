@@ -2,7 +2,7 @@ use crate::ffi::*;
 use crate::pmm::kfree_page;
 use crate::alloc::heap::{kmalloc, kfree_heap};
 use crate::vmm::paging::vmm_free_address_space;
-use crate::safe::{kprint_str, zero_page};
+use crate::safe::kprint_str;
 
 //public api
 #[unsafe(no_mangle)]

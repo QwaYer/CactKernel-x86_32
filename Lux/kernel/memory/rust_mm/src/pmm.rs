@@ -24,7 +24,6 @@ fn bitmap_test(idx: u32) -> bool {
 //public api
 #[unsafe(no_mangle)]
 pub extern "C" fn init_memory_manager() {
-    let mut buf = [0u8; 16];
     kprint_str(b"[PMM] bitmap at 0x\0".as_ptr());
     kprint_hex(MEMORY_BITMAP.as_ptr() as u32);
     kprint_str(b"  size=\0".as_ptr());
