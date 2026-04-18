@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg};
+use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int};
 
 static G_STATS: KStatic<OomStats> = KStatic::new(OomStats {
     oom_kills: 0,
@@ -29,12 +29,12 @@ fn oom_score(t: *mut TaskStruct) -> u32 {
 //public api
 #[unsafe(no_mangle)]
 pub extern "C" fn oom_kill() -> i32 {
-    lock_acquire(unsafe { &raw mut scheduler_lock } as *mut IrqSpinlock);
+    lock_acquire(&raw mut scheduler_lock as *mut IrqSpinlock);
 
     // SAFETY: task_list_head is a valid kernel global.
     let head = unsafe { task_list_head };
     if head.is_null() {
-        lock_release(unsafe { &raw mut scheduler_lock } as *mut IrqSpinlock);
+        lock_release(&raw mut scheduler_lock as *mut IrqSpinlock);
         return -1;
     }
 
@@ -55,7 +55,7 @@ pub extern "C" fn oom_kill() -> i32 {
     }
 
     if victim.is_null() || best_score == 0 {
-        lock_release(unsafe { &raw mut scheduler_lock } as *mut IrqSpinlock);
+        lock_release(&raw mut scheduler_lock as *mut IrqSpinlock);
         // SAFETY: kprint_color takes a valid string.
         unsafe { kprint_color(b"[OOM] no killable process found\n\0".as_ptr(), COLOR_LIGHT_RED); }
         return -1;
@@ -71,7 +71,7 @@ pub extern "C" fn oom_kill() -> i32 {
     // SAFETY: task_signal_locked is a C function; we hold the scheduler lock.
     unsafe { task_signal_locked(victim_pid, SIGKILL); }
 
-    lock_release(unsafe { &raw mut scheduler_lock } as *mut IrqSpinlock);
+    lock_release(&raw mut scheduler_lock as *mut IrqSpinlock);
 
     let stats = G_STATS.get_mut();
     stats.oom_kills += 1;
@@ -104,7 +104,6 @@ pub extern "C" fn oom_get_stats() -> OomStats {
 //public api
 #[unsafe(no_mangle)]
 pub extern "C" fn oom_print_stats() {
-    let mut buf = [0u8; 16];
     let stats = *G_STATS.get_mut();
     kprint_str(b"[OOM] === OOM Killer Statistics ===\n\0".as_ptr());
     kprint_str(b"  oom_kills:       \0".as_ptr());
