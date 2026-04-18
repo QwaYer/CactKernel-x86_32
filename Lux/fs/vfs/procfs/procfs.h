@@ -12,7 +12,7 @@ typedef int (*procfs_cmd_fn)(const char *cmd, uint32_t len);
 
 //Public api
 void         procfs_init        (void);
-void         procfs_set_meminfo  (uint32_t mem_lower_kb, uint32_t mem_upper_kb);
+void         procfs_set_meminfo  (uint32_t mem_total_kb);
 vfs_node_t  *procfs_get_root(void);
 
 int procfs_register_file(const char *name, procfs_read_fn read_fn);
