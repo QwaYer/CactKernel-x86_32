@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::safe::{KStatic, kprint_str, kprint_hex, klog_msg, zero_page, flush_tlb, flush_tlb_all};
+use crate::safe::{kprint_str, kprint_hex, klog_msg};
 use crate::pmm::{kalloc, kfree_page};
 
 #[repr(C, align(4096))]
@@ -17,7 +17,6 @@ pub fn get_kernel_pd() -> *mut u32 {
 //public api
 #[unsafe(no_mangle)]
 pub extern "C" fn init_paging() {
-    let mut buf = [0u8; 16];
     kprint_str(b"[PAGING] page_directory at 0x\0".as_ptr());
     // SAFETY: reading the address of a static.
     let pd_addr = unsafe { page_directory.0.as_ptr() as u32 };

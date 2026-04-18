@@ -1,7 +1,7 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page};
 use crate::vmm::paging::vmm_map;
-use crate::safe::{KStatic, lock_acquire, lock_release, zero_page, flush_tlb, kprint_str};
+use crate::safe::{KStatic, lock_acquire, lock_release, zero_page, flush_tlb};
 
 #[repr(C)]
 struct ShmSeg {
@@ -336,8 +336,7 @@ pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
     seg.lpid = unsafe { (*t).pid };
 
     if seg.destroy != 0 && seg.nattch == 0 {
-        // SAFETY: seg is in SHM_TABLE, valid, and we hold the lock.
-        unsafe { seg_free(seg as *mut ShmSeg); }
+        seg_free(seg as *mut ShmSeg);
     }
 
     lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
@@ -360,8 +359,7 @@ pub extern "C" fn shm_ctl(shmid: i32, cmd: i32, buf: *mut u8) -> i32 {
     if cmd == IPC_RMID {
         seg.destroy = 1;
         if seg.nattch == 0 {
-            // SAFETY: seg is valid and we hold the lock.
-            unsafe { seg_free(seg as *mut ShmSeg); }
+            seg_free(seg as *mut ShmSeg);
         }
         lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
         return 0;
@@ -448,8 +446,7 @@ pub extern "C" fn shm_detach_all(pid: u32, page_directory: *mut u32) {
         }
         seg.lpid = pid;
         if seg.destroy != 0 && seg.nattch == 0 {
-            // SAFETY: seg is valid and we hold the lock.
-            unsafe { seg_free(seg as *mut ShmSeg); }
+            seg_free(seg as *mut ShmSeg);
         }
     }
 

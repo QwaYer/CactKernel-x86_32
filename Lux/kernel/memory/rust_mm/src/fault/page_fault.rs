@@ -3,7 +3,7 @@ use crate::pmm::{kalloc, kfree_page, page_ref_get};
 use crate::vmm::paging::vmm_map;
 use crate::fault::swap::{swap_pte_is_swapped, swap_handle_fault};
 use crate::fault::oom::oom_kill;
-use crate::safe::{KStatic, zero_page, flush_tlb, kprint_str, kprint_int, klog_msg, read_cr2_val, current_page_dir};
+use crate::safe::{KStatic, zero_page, flush_tlb, kprint_str, read_cr2_val, current_page_dir};
 
 static G_STATS: KStatic<PfStats> = KStatic::new(PfStats {
     total_faults: 0,
@@ -160,7 +160,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
         }
 
         if !pte.is_null() && unsafe { *pte & PAGE_COW != 0 } {
-            let old_phys = unsafe { (*pte & !0xFFF) } as *mut u8;
+            let old_phys = unsafe { *pte & !0xFFF } as *mut u8;
             let mut phys = kalloc();
             if phys.is_null() && oom_kill() == 0 {
                 phys = kalloc();
@@ -354,7 +354,7 @@ pub extern "C" fn vmm_handle_cow(pd: *mut u32, virtual_addr: u32) -> i32 {
     }
 
     // SAFETY: pte is valid and has COW flag.
-    let old_phys = unsafe { (*pte & !0xFFF) } as *mut u8;
+    let old_phys = unsafe { *pte & !0xFFF } as *mut u8;
     let pte_val = unsafe { *pte };
     let flags = (pte_val & 0xFFF) & !PAGE_COW;
     let flags = flags | PAGE_RW | PAGE_PRESENT;

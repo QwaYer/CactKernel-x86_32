@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, kprint_hex, klog_msg, zero_page};
+use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, kprint_hex, klog_msg};
 
 #[repr(C)]
 struct HeapBlock {
@@ -15,7 +15,6 @@ static HEAP_LOCK: KStatic<IrqSpinlock> = KStatic::new(IrqSpinlock { spin_locked:
 //public api
 #[unsafe(no_mangle)]
 pub extern "C" fn init_heap() {
-    let mut buf = [0u8; 16];
     kprint_str(b"[HEAP] base=0x\0".as_ptr());
     kprint_hex(HEAP_START);
     kprint_str(b"  size=16 MB  header=\0".as_ptr());

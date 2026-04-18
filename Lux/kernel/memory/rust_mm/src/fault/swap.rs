@@ -3,8 +3,8 @@ use crate::pmm::{kalloc, kfree_page};
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg, flush_tlb};
 
 pub type SwapSlot = u32;
-pub type SwapReadFn = Option<extern "C" fn(u32, *mut u8, u32) -> i32>;
-pub type SwapWriteFn = Option<extern "C" fn(u32, *const u8, u32) -> i32>;
+pub type SwapReadFn = Option<unsafe extern "C" fn(u32, *mut u8, u32) -> i32>;
+pub type SwapWriteFn = Option<unsafe extern "C" fn(u32, *const u8, u32) -> i32>;
 
 static G_READ: KStatic<SwapReadFn> = KStatic::new(None);
 static G_WRITE: KStatic<SwapWriteFn> = KStatic::new(None);
@@ -74,8 +74,8 @@ pub fn swap_is_enabled() -> bool {
 //public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_init(
-    read_fn: extern "C" fn(u32, *mut u8, u32) -> i32,
-    write_fn: extern "C" fn(u32, *const u8, u32) -> i32,
+    read_fn: unsafe extern "C" fn(u32, *mut u8, u32) -> i32,
+    write_fn: unsafe extern "C" fn(u32, *const u8, u32) -> i32,
     slots: u32,
 ) -> i32 {
     *G_READ.get_mut() = Some(read_fn);
@@ -353,7 +353,6 @@ pub extern "C" fn swap_get_stats() -> SwapStats {
 //public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_print_stats() {
-    let mut buf = [0u8; 16];
     let stats = *G_STATS.get_mut();
     kprint_str(b"[SWAP] === Swap Statistics ===\n\0".as_ptr());
     kprint_str(b"  total_slots:       \0".as_ptr());
