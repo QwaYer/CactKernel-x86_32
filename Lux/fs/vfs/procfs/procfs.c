@@ -289,16 +289,14 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
-static uint32_t _mb_mem_lower_kb = 0;
-static uint32_t _mb_mem_upper_kb = 0;
+static uint32_t _mb_mem_total_kb = 0;
 
-void procfs_set_meminfo(uint32_t mem_lower_kb, uint32_t mem_upper_kb) {
-    _mb_mem_lower_kb = mem_lower_kb;
-    _mb_mem_upper_kb = mem_upper_kb;
+void procfs_set_meminfo(uint32_t mem_total_kb) {
+    _mb_mem_total_kb = mem_total_kb;
 }
 
 static uint32_t _get_total_memory_kb(void) {
-    return _mb_mem_lower_kb + 1024 + _mb_mem_upper_kb;
+    return _mb_mem_total_kb;
 }
 
 static int _meminfo_read(uint32_t off, uint32_t size, char *buf) {
