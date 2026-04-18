@@ -2,15 +2,19 @@ use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page, page_ref_inc};
 use crate::vmm::paging::vmm_map;
 use crate::fault::page_fault::vmm_map_zero;
+use crate::safe::{zero_page, flush_tlb, flush_tlb_all, kprint_str};
 
-unsafe fn fd_to_node(fd: i32) -> *mut VfsNode {
-    if current_task.is_null() {
+fn fd_to_node(fd: i32) -> *mut VfsNode {
+    // SAFETY: reading current_task is a kernel global; we check for null.
+    let t = unsafe { current_task };
+    if t.is_null() {
         return core::ptr::null_mut();
     }
     if fd < 0 || fd as usize >= MAX_FD {
         return core::ptr::null_mut();
     }
-    (*current_task).fd_table[fd as usize]
+    // SAFETY: t is valid and fd is in bounds.
+    unsafe { (*t).fd_table[fd as usize] }
 }
 
 fn prot_to_page_flags(prot: i32, user: bool) -> i32 {
@@ -24,8 +28,9 @@ fn prot_to_page_flags(prot: i32, user: bool) -> i32 {
     f
 }
 
-unsafe fn find_free_va(tbl: *mut MmapTable, length: u32) -> u32 {
-    let mut candidate = (*tbl).next_base;
+fn find_free_va(tbl: *mut MmapTable, length: u32) -> u32 {
+    // SAFETY: tbl is a valid MmapTable (checked by callers).
+    let mut candidate = unsafe { (*tbl).next_base };
     candidate = (candidate + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
     loop {
@@ -36,8 +41,9 @@ unsafe fn find_free_va(tbl: *mut MmapTable, length: u32) -> u32 {
         }
 
         let mut clash = false;
+        // SAFETY: tbl is valid, regions array is within bounds.
         for i in 0..MMAP_MAX_REGIONS {
-            let r = &(*tbl).regions[i];
+            let r = unsafe { &(*tbl).regions[i] };
             if r.is_used == 0 {
                 continue;
             }
@@ -56,10 +62,12 @@ unsafe fn find_free_va(tbl: *mut MmapTable, length: u32) -> u32 {
     }
 }
 
-unsafe fn alloc_region_slot(tbl: *mut MmapTable) -> *mut MmapRegion {
+fn alloc_region_slot(tbl: *mut MmapTable) -> *mut MmapRegion {
+    // SAFETY: tbl is valid.
     for i in 0..MMAP_MAX_REGIONS {
-        if (*tbl).regions[i].is_used == 0 {
-            return &mut (*tbl).regions[i];
+        let r = unsafe { &mut (*tbl).regions[i] };
+        if r.is_used == 0 {
+            return r;
         }
     }
     core::ptr::null_mut()
@@ -67,25 +75,29 @@ unsafe fn alloc_region_slot(tbl: *mut MmapTable) -> *mut MmapRegion {
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mmap_table_init(tbl: *mut MmapTable) {
+pub extern "C" fn mmap_table_init(tbl: *mut MmapTable) {
     if tbl.is_null() {
         return;
     }
-    for i in 0..MMAP_MAX_REGIONS {
-        (*tbl).regions[i].is_used = 0;
-        (*tbl).regions[i].fd = -1;
+    // SAFETY: tbl is valid.
+    unsafe {
+        for i in 0..MMAP_MAX_REGIONS {
+            (*tbl).regions[i].is_used = 0;
+            (*tbl).regions[i].fd = -1;
+        }
+        (*tbl).next_base = MMAP_BASE;
     }
-    (*tbl).next_base = MMAP_BASE;
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mmap_find_region(tbl: *mut MmapTable, addr: u32) -> *mut MmapRegion {
+pub extern "C" fn mmap_find_region(tbl: *mut MmapTable, addr: u32) -> *mut MmapRegion {
     if tbl.is_null() {
         return core::ptr::null_mut();
     }
+    // SAFETY: tbl is valid.
     for i in 0..MMAP_MAX_REGIONS {
-        let r = &mut (*tbl).regions[i];
+        let r = unsafe { &mut (*tbl).regions[i] };
         if r.is_used == 0 {
             continue;
         }
@@ -98,7 +110,7 @@ pub unsafe extern "C" fn mmap_find_region(tbl: *mut MmapTable, addr: u32) -> *mu
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn do_mmap(
+pub extern "C" fn do_mmap(
     pd: *mut u32,
     tbl: *mut MmapTable,
     hint: u32,
@@ -126,14 +138,14 @@ pub unsafe extern "C" fn do_mmap(
     } else {
         va = find_free_va(tbl, length);
         if va == 0 {
-            kprint(b"[MMAP] do_mmap: no free virtual address space\n\0".as_ptr());
+            kprint_str(b"[MMAP] do_mmap: no free virtual address space\n\0".as_ptr());
             return MAP_FAILED as *mut u8;
         }
     }
 
     let region = alloc_region_slot(tbl);
     if region.is_null() {
-        kprint(b"[MMAP] do_mmap: region table full\n\0".as_ptr());
+        kprint_str(b"[MMAP] do_mmap: region table full\n\0".as_ptr());
         return MAP_FAILED as *mut u8;
     }
 
@@ -142,7 +154,7 @@ pub unsafe extern "C" fn do_mmap(
 
     if flags & MAP_ANON != 0 {
         if vmm_map_zero(pd, va, length, page_flags) != 0 {
-            kprint(b"[MMAP] do_mmap: vmm_map_zero failed\n\0".as_ptr());
+            kprint_str(b"[MMAP] do_mmap: vmm_map_zero failed\n\0".as_ptr());
             return MAP_FAILED as *mut u8;
         }
     } else {
@@ -158,25 +170,30 @@ pub unsafe extern "C" fn do_mmap(
                 do_munmap(pd, tbl, va, i * PAGE_SIZE);
                 return MAP_FAILED as *mut u8;
             }
-            core::ptr::write_bytes(phys, 0, PAGE_SIZE as usize);
+            zero_page(phys);
             if !node.is_null() {
-                read_vfs(node, file_off, PAGE_SIZE, phys);
+                // SAFETY: node is a valid VfsNode.
+                unsafe { read_vfs(node, file_off, PAGE_SIZE, phys); }
             }
             vmm_map(pd, va + i * PAGE_SIZE, phys as u32, page_flags);
             file_off += PAGE_SIZE;
         }
     }
 
-    (*region).base = va;
-    (*region).length = length;
-    (*region).flags = flags as u32;
-    (*region).prot = prot as u32;
-    (*region).fd = if flags & MAP_ANON != 0 { -1 } else { fd };
-    (*region).file_off = offset;
-    (*region).is_used = 1;
+    // SAFETY: region is a valid slot we just allocated.
+    unsafe {
+        (*region).base = va;
+        (*region).length = length;
+        (*region).flags = flags as u32;
+        (*region).prot = prot as u32;
+        (*region).fd = if flags & MAP_ANON != 0 { -1 } else { fd };
+        (*region).file_off = offset;
+        (*region).is_used = 1;
+    }
 
-    if va + length > (*tbl).next_base {
-        (*tbl).next_base = va + length;
+    // SAFETY: tbl is valid.
+    if va + length > unsafe { (*tbl).next_base } {
+        unsafe { (*tbl).next_base = va + length; }
     }
 
     va as *mut u8
@@ -184,7 +201,7 @@ pub unsafe extern "C" fn do_mmap(
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn do_munmap(
+pub extern "C" fn do_munmap(
     pd: *mut u32,
     tbl: *mut MmapTable,
     addr: u32,
@@ -200,8 +217,9 @@ pub unsafe extern "C" fn do_munmap(
     length = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
     let mut region: *mut MmapRegion = core::ptr::null_mut();
+    // SAFETY: tbl is valid.
     for i in 0..MMAP_MAX_REGIONS {
-        let r = &mut (*tbl).regions[i];
+        let r = unsafe { &mut (*tbl).regions[i] };
         if r.is_used == 0 {
             continue;
         }
@@ -223,28 +241,34 @@ pub unsafe extern "C" fn do_munmap(
     for i in 0..pages {
         let va = addr + i * PAGE_SIZE;
         let pdi = pd_index(va) as usize;
-        if *pd.add(pdi) & PAGE_PRESENT == 0 {
+        // SAFETY: pd is valid.
+        let pde = unsafe { *pd.add(pdi) };
+        if pde & PAGE_PRESENT == 0 {
             continue;
         }
-        let pt = (*pd.add(pdi) & !0xFFF) as *mut u32;
-        let pte = *pt.add(pt_index(va) as usize);
+        let pt = (pde & !0xFFF) as *mut u32;
+        // SAFETY: pt is a valid page table.
+        let pte = unsafe { *pt.add(pt_index(va) as usize) };
 
         if pte & PAGE_PRESENT != 0 {
             kfree_page((pte & !0xFFF) as *mut u8);
         }
-        *pt.add(pt_index(va) as usize) = 0;
-        tlb_flush(va);
+        unsafe { *pt.add(pt_index(va) as usize) = 0; }
+        flush_tlb(va);
     }
 
-    if addr == (*region).base && length >= (*region).length {
-        (*region).is_used = 0;
-        (*region).fd = -1;
-    } else if addr == (*region).base {
-        (*region).base += length;
-        (*region).length -= length;
-        (*region).file_off += length;
-    } else {
-        (*region).length = addr - (*region).base;
+    // SAFETY: region is valid.
+    unsafe {
+        if addr == (*region).base && length >= (*region).length {
+            (*region).is_used = 0;
+            (*region).fd = -1;
+        } else if addr == (*region).base {
+            (*region).base += length;
+            (*region).length -= length;
+            (*region).file_off += length;
+        } else {
+            (*region).length = addr - (*region).base;
+        }
     }
 
     0
@@ -252,7 +276,7 @@ pub unsafe extern "C" fn do_munmap(
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn do_mprotect(
+pub extern "C" fn do_mprotect(
     pd: *mut u32,
     tbl: *mut MmapTable,
     addr: u32,
@@ -279,25 +303,29 @@ pub unsafe extern "C" fn do_mprotect(
     for i in 0..pages {
         let va = addr + i * PAGE_SIZE;
         let pdi = pd_index(va) as usize;
-        if *pd.add(pdi) & PAGE_PRESENT == 0 {
+        // SAFETY: pd is valid.
+        let pde = unsafe { *pd.add(pdi) };
+        if pde & PAGE_PRESENT == 0 {
             continue;
         }
-        let pt = (*pd.add(pdi) & !0xFFF) as *mut u32;
-        let pte = *pt.add(pt_index(va) as usize);
+        let pt = (pde & !0xFFF) as *mut u32;
+        // SAFETY: pt is a valid page table.
+        let pte = unsafe { *pt.add(pt_index(va) as usize) };
         if pte & PAGE_PRESENT == 0 {
             continue;
         }
-        *pt.add(pt_index(va) as usize) = (pte & !0xFFF) | page_flags;
-        tlb_flush(va);
+        unsafe { *pt.add(pt_index(va) as usize) = (pte & !0xFFF) | page_flags; }
+        flush_tlb(va);
     }
 
-    (*region).prot = prot as u32;
+    // SAFETY: region is valid.
+    unsafe { (*region).prot = prot as u32; }
     0
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mmap_handle_fault(
+pub extern "C" fn mmap_handle_fault(
     pd: *mut u32,
     tbl: *mut MmapTable,
     fault_addr: u32,
@@ -315,12 +343,16 @@ pub unsafe extern "C" fn mmap_handle_fault(
     let pdi = pd_index(page_va) as usize;
     let pti = pt_index(page_va) as usize;
 
-    if *pd.add(pdi) & PAGE_PRESENT == 0 {
+    // SAFETY: pd is valid.
+    let pde = unsafe { *pd.add(pdi) };
+    if pde & PAGE_PRESENT == 0 {
         return -1;
     }
-    let pt = (*pd.add(pdi) & !0xFFF) as *mut u32;
+    let pt = (pde & !0xFFF) as *mut u32;
 
-    if *pt.add(pti) & PAGE_PRESENT != 0 {
+    // SAFETY: pt is valid.
+    let pte = unsafe { *pt.add(pti) };
+    if pte & PAGE_PRESENT != 0 {
         return -1;
     }
 
@@ -328,26 +360,30 @@ pub unsafe extern "C" fn mmap_handle_fault(
     if phys.is_null() {
         return -1;
     }
-    core::ptr::write_bytes(phys, 0, PAGE_SIZE as usize);
+    zero_page(phys);
 
-    if (*region).fd >= 0 {
-        let page_offset = page_va - (*region).base;
-        let file_off = (*region).file_off + page_offset;
-        let node = fd_to_node((*region).fd);
+    // SAFETY: region is valid.
+    let fd = unsafe { (*region).fd };
+    if fd >= 0 {
+        let page_offset = page_va - unsafe { (*region).base };
+        let file_off = unsafe { (*region).file_off } + page_offset;
+        let node = fd_to_node(fd);
         if !node.is_null() {
-            read_vfs(node, file_off, PAGE_SIZE, phys);
+            // SAFETY: node is a valid VfsNode.
+            unsafe { read_vfs(node, file_off, PAGE_SIZE, phys); }
         }
     }
 
-    let page_flags = prot_to_page_flags((*region).prot as i32, true) as u32;
-    *pt.add(pti) = (phys as u32 & !0xFFF) | page_flags;
-    tlb_flush(page_va);
+    let page_flags = prot_to_page_flags(unsafe { (*region).prot as i32 }, true) as u32;
+    // SAFETY: pt is valid.
+    unsafe { *pt.add(pti) = (phys as u32 & !0xFFF) | page_flags; }
+    flush_tlb(page_va);
     0
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mmap_table_clone(
+pub extern "C" fn mmap_table_clone(
     src: *mut MmapTable,
     dst: *mut MmapTable,
     src_pd: *mut u32,
@@ -357,18 +393,23 @@ pub unsafe extern "C" fn mmap_table_clone(
         return;
     }
 
-    (*dst).next_base = (*src).next_base;
+    // SAFETY: src and dst are valid MmapTable pointers.
+    unsafe {
+        (*dst).next_base = (*src).next_base;
+    }
 
     for i in 0..MMAP_MAX_REGIONS {
-        let sr = &(*src).regions[i];
-        let dr = &mut (*dst).regions[i];
+        // SAFETY: src and dst are valid.
+        let sr = unsafe { &(*src).regions[i] };
+        let dr = unsafe { &mut (*dst).regions[i] };
 
         if sr.is_used == 0 {
             dr.is_used = 0;
             continue;
         }
 
-        *dr = core::ptr::read(sr);
+        // SAFETY: copy the region metadata.
+        unsafe { core::ptr::write(dr, core::ptr::read(sr)); }
 
         let pages = sr.length / PAGE_SIZE;
 
@@ -378,6 +419,7 @@ pub unsafe extern "C" fn mmap_table_clone(
                 let pdi = pd_index(va) as usize;
                 let pti = pt_index(va) as usize;
 
+                // SAFETY: src_pd is valid.
                 if *src_pd.add(pdi) & PAGE_PRESENT == 0 {
                     continue;
                 }
@@ -387,14 +429,12 @@ pub unsafe extern "C" fn mmap_table_clone(
                     continue;
                 }
 
+                // SAFETY: dst_pd is valid.
                 if *dst_pd.add(pdi) & PAGE_PRESENT == 0 {
                     let new_pt = kalloc() as *mut u32;
                     if new_pt.is_null() {
                         continue;
                     }
-                    // A page table is 1024 entries * 4 bytes = PAGE_SIZE bytes.
-                    // Zero the whole page so stale PTEs from the physical page's
-                    // previous owner don't cause bogus kfree_page calls later.
                     core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                     *dst_pd.add(pdi) =
                         (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
@@ -412,12 +452,14 @@ pub unsafe extern "C" fn mmap_table_clone(
                 let pdi = pd_index(va) as usize;
                 let pti = pt_index(va) as usize;
 
+                // SAFETY: src_pd is valid.
                 if *src_pd.add(pdi) & PAGE_PRESENT == 0 {
                     continue;
                 }
                 let src_pt = (*src_pd.add(pdi) & !0xFFF) as *mut u32;
                 let pte = *src_pt.add(pti);
 
+                // SAFETY: dst_pd is valid.
                 if *dst_pd.add(pdi) & PAGE_PRESENT == 0 {
                     let new_pt = kalloc() as *mut u32;
                     if new_pt.is_null() {
@@ -441,19 +483,20 @@ pub unsafe extern "C" fn mmap_table_clone(
                 page_ref_inc((pte & !0xFFF) as *const u8);
             }
 
-            tlb_flush_all();
+            flush_tlb_all();
         }
     }
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mmap_table_free(tbl: *mut MmapTable, pd: *mut u32) {
+pub extern "C" fn mmap_table_free(tbl: *mut MmapTable, pd: *mut u32) {
     if tbl.is_null() || pd.is_null() {
         return;
     }
+    // SAFETY: tbl is valid.
     for i in 0..MMAP_MAX_REGIONS {
-        let r = &(*tbl).regions[i];
+        let r = unsafe { &(*tbl).regions[i] };
         if r.is_used == 0 {
             continue;
         }
@@ -463,35 +506,49 @@ pub unsafe extern "C" fn mmap_table_free(tbl: *mut MmapTable, pd: *mut u32) {
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mmap_print_regions(tbl: *const MmapTable) {
+pub extern "C" fn mmap_print_regions(tbl: *const MmapTable) {
     if tbl.is_null() {
         return;
     }
     let mut buf = [0u8; 16];
-    kprint(b"[MMAP] === Memory Regions ===\n\0".as_ptr());
+    kprint_str(b"[MMAP] === Memory Regions ===\n\0".as_ptr());
+    // SAFETY: tbl is valid.
     for i in 0..MMAP_MAX_REGIONS {
-        let r = &(*tbl).regions[i];
+        let r = unsafe { &(*tbl).regions[i] };
         if r.is_used == 0 {
             continue;
         }
-        kprint(b"  [\0".as_ptr());
-        itoa(i as i32, buf.as_mut_ptr());
-        kprint(buf.as_ptr());
-        kprint(b"] base=0x\0".as_ptr());
-        hex_to_ascii(r.base, buf.as_mut_ptr());
-        kprint(buf.as_ptr());
-        kprint(b" len=0x\0".as_ptr());
-        hex_to_ascii(r.length, buf.as_mut_ptr());
-        kprint(buf.as_ptr());
-        kprint(b" prot=\0".as_ptr());
-        itoa(r.prot as i32, buf.as_mut_ptr());
-        kprint(buf.as_ptr());
-        kprint(b" flags=\0".as_ptr());
-        itoa(r.flags as i32, buf.as_mut_ptr());
-        kprint(buf.as_ptr());
-        kprint(b" fd=\0".as_ptr());
-        itoa(r.fd, buf.as_mut_ptr());
-        kprint(buf.as_ptr());
-        kprint(b"\n\0".as_ptr());
+        kprint_str(b"  [\0".as_ptr());
+        // SAFETY: itoa/hex_to_ascii require a valid buffer.
+        unsafe {
+            itoa(i as i32, buf.as_mut_ptr());
+            kprint(buf.as_ptr());
+        }
+        kprint_str(b"] base=0x\0".as_ptr());
+        unsafe {
+            hex_to_ascii(r.base, buf.as_mut_ptr());
+            kprint(buf.as_ptr());
+        }
+        kprint_str(b" len=0x\0".as_ptr());
+        unsafe {
+            hex_to_ascii(r.length, buf.as_mut_ptr());
+            kprint(buf.as_ptr());
+        }
+        kprint_str(b" prot=\0".as_ptr());
+        unsafe {
+            itoa(r.prot as i32, buf.as_mut_ptr());
+            kprint(buf.as_ptr());
+        }
+        kprint_str(b" flags=\0".as_ptr());
+        unsafe {
+            itoa(r.flags as i32, buf.as_mut_ptr());
+            kprint(buf.as_ptr());
+        }
+        kprint_str(b" fd=\0".as_ptr());
+        unsafe {
+            itoa(r.fd, buf.as_mut_ptr());
+            kprint(buf.as_ptr());
+        }
+        kprint_str(b"\n\0".as_ptr());
     }
 }

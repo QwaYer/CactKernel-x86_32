@@ -15,7 +15,9 @@ pub const PAGE_USER: u32 = 0x4;
 pub const PAGE_COW: u32 = 0x200;
 pub const PAGE_DEMAND: u32 = 0x400;
 pub const PAGE_ZERO: u32 = 0x800;
-pub const PAGE_SWAPPED: u32 = 0x200;
+/// Bit 3 — available for software when PRESENT=0.
+/// Used to mark a PTE whose backing page has been swapped out to disk.
+pub const PAGE_SWAPPED: u32 = 0x008;
 pub const PTE_ACCESSED: u32 = 0x20;
 
 pub const USER_STACK_TOP: u32 = 0xC0000000;
@@ -263,32 +265,45 @@ extern "C" {
     pub fn task_reap();
 }
 
+// ---------------------------------------------------------------------------
+// Inline-asm helpers — encapsulated in safe functions
+// ---------------------------------------------------------------------------
+
+/// Read CR2 (page-fault address).
 #[inline(always)]
-pub unsafe fn read_cr2() -> u32 {
+pub fn read_cr2() -> u32 {
     let val: u32;
-    core::arch::asm!("mov {}, cr2", out(reg) val, options(nomem, nostack));
+    // SAFETY: reading CR2 is side-effect-free.
+    unsafe { core::arch::asm!("mov {}, cr2", out(reg) val, options(nomem, nostack)) };
     val
 }
 
+/// Read CR3 (current page directory).
 #[inline(always)]
-pub unsafe fn get_current_pd() -> *mut u32 {
+pub fn get_current_pd() -> *mut u32 {
     let val: u32;
-    core::arch::asm!("mov {}, cr3", out(reg) val, options(nomem, nostack));
+    // SAFETY: reading CR3 is side-effect-free.
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) val, options(nomem, nostack)) };
     val as *mut u32
 }
 
+/// Invalidate a single TLB entry.
 #[inline(always)]
-pub unsafe fn tlb_flush(vaddr: u32) {
-    core::arch::asm!("invlpg [{}]", in(reg) vaddr, options(nostack));
+pub fn tlb_flush(vaddr: u32) {
+    // SAFETY: INVLPG is safe for any address.
+    unsafe { core::arch::asm!("invlpg [{}]", in(reg) vaddr, options(nostack)) };
 }
 
+/// Flush the entire TLB by reloading CR3.
 #[inline(always)]
-pub unsafe fn tlb_flush_all() {
-    core::arch::asm!(
-        "mov eax, cr3",
-        "mov cr3, eax",
-        out("eax") _,
-        options(nostack)
-    );
+pub fn tlb_flush_all() {
+    // SAFETY: reloading CR3 with the current value only flushes the TLB.
+    unsafe {
+        core::arch::asm!(
+            "mov eax, cr3",
+            "mov cr3, eax",
+            out("eax") _,
+            options(nostack)
+        );
+    }
 }
-
