@@ -90,7 +90,8 @@ pub extern "C" fn oom_kill() -> i32 {
         kprint_color(b" pages)\n\0".as_ptr(), COLOR_LIGHT_RED);
     }
 
-    task_reap();
+    // SAFETY: task_reap is a kernel FFI entry point.
+    unsafe { task_reap(); }
     0
 }
 

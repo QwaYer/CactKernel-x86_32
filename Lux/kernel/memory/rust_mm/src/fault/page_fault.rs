@@ -60,8 +60,11 @@ fn kill_current(fault_addr: u32, err: u32, eip: u32) {
 
     if !t.is_null() && unsafe { (*t).is_kernel } == 0 {
         let pid = unsafe { (*t).pid };
-        task_signal(pid, SIGSEGV);
-        schedule();
+        // SAFETY: task_signal and schedule are kernel FFI entry points.
+        unsafe {
+            task_signal(pid, SIGSEGV);
+            schedule();
+        }
         return;
     }
 
