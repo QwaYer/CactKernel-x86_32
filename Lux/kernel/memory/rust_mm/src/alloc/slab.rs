@@ -1,4 +1,5 @@
 use crate::ffi::*;
+use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg, zero_page};
 use crate::pmm::{kalloc, kfree_page};
 use crate::alloc::heap::{kmalloc, kfree_heap};
 
@@ -23,18 +24,18 @@ pub struct SlabCache {
     total_slabs: u32,
     total_allocs: u32,
     total_frees: u32,
-    ctor: Option<unsafe extern "C" fn(*mut u8)>,
-    dtor: Option<unsafe extern "C" fn(*mut u8)>,
+    ctor: Option<extern "C" fn(*mut u8)>,
+    dtor: Option<extern "C" fn(*mut u8)>,
     next: *mut SlabCache,
 }
 
-static mut G_CACHE_LIST: *mut SlabCache = core::ptr::null_mut();
-static mut G_CACHE_LOCK: IrqSpinlock = IrqSpinlock { spin_locked: 0, saved_flags: 0 };
+static G_CACHE_LIST: KStatic<*mut SlabCache> = KStatic::new(core::ptr::null_mut());
+static G_CACHE_LOCK: KStatic<IrqSpinlock> = KStatic::new(IrqSpinlock { spin_locked: 0, saved_flags: 0 });
 
 const GENERIC_CACHE_COUNT: usize = 9;
 static GENERIC_SIZES: [u32; GENERIC_CACHE_COUNT] = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
-static mut G_GENERIC_CACHES: [*mut SlabCache; GENERIC_CACHE_COUNT] =
-    [core::ptr::null_mut(); GENERIC_CACHE_COUNT];
+static G_GENERIC_CACHES: KStatic<[*mut SlabCache; GENERIC_CACHE_COUNT]> =
+    KStatic::new([core::ptr::null_mut(); GENERIC_CACHE_COUNT]);
 
 fn align_up(size: u32, align: u32) -> u32 {
     (size + align - 1) & !(align - 1)
@@ -46,85 +47,97 @@ fn calc_objs_per_slab(obj_size: u32) -> u32 {
     if n < 1 { 1 } else { n }
 }
 
-unsafe fn list_push(head: *mut *mut Slab, s: *mut Slab) {
-    (*s).prev = core::ptr::null_mut();
-    (*s).next = *head;
-    if !(*head).is_null() {
-        (**head).prev = s;
+fn list_push(head: *mut *mut Slab, s: *mut Slab) {
+    // SAFETY: head and s are valid pointers maintained by the slab allocator.
+    unsafe {
+        (*s).prev = core::ptr::null_mut();
+        (*s).next = *head;
+        if !(*head).is_null() {
+            (**head).prev = s;
+        }
+        *head = s;
     }
-    *head = s;
 }
 
-unsafe fn list_remove(head: *mut *mut Slab, s: *mut Slab) {
-    if !(*s).prev.is_null() {
-        (*(*s).prev).next = (*s).next;
-    } else {
-        *head = (*s).next;
+fn list_remove(head: *mut *mut Slab, s: *mut Slab) {
+    // SAFETY: head and s are valid pointers maintained by the slab allocator.
+    unsafe {
+        if !(*s).prev.is_null() {
+            (*(*s).prev).next = (*s).next;
+        } else {
+            *head = (*s).next;
+        }
+        if !(*s).next.is_null() {
+            (*(*s).next).prev = (*s).prev;
+        }
+        (*s).prev = core::ptr::null_mut();
+        (*s).next = core::ptr::null_mut();
     }
-    if !(*s).next.is_null() {
-        (*(*s).next).prev = (*s).prev;
-    }
-    (*s).prev = core::ptr::null_mut();
-    (*s).next = core::ptr::null_mut();
 }
 
-unsafe fn slab_create_slab(cache: *mut SlabCache) -> *mut Slab {
+fn slab_create_slab(cache: *mut SlabCache) -> *mut Slab {
     let page = kalloc();
     if page.is_null() {
         return core::ptr::null_mut();
     }
 
-    let s = page as *mut Slab;
-    (*s).next = core::ptr::null_mut();
-    (*s).prev = core::ptr::null_mut();
-    (*s).inuse = 0;
-    (*s).capacity = (*cache).objs_per_slab;
-    (*s).cache = cache;
+    // SAFETY: page is a freshly allocated 4 KiB page.
+    unsafe {
+        let s = page as *mut Slab;
+        (*s).next = core::ptr::null_mut();
+        (*s).prev = core::ptr::null_mut();
+        (*s).inuse = 0;
+        (*s).capacity = (*cache).objs_per_slab;
+        (*s).cache = cache;
 
-    let obj_base = (page as *mut u8).add(core::mem::size_of::<Slab>());
-    let obj_size = (*cache).obj_size;
+        let obj_base = (page as *mut u8).add(core::mem::size_of::<Slab>());
+        let obj_size = (*cache).obj_size;
 
-    (*s).freelist = obj_base;
-    for i in 0..(*s).capacity {
-        let slot = obj_base.add((i * obj_size) as usize) as *mut *mut u8;
-        if i + 1 < (*s).capacity {
-            *slot = obj_base.add(((i + 1) * obj_size) as usize);
-        } else {
-            *slot = core::ptr::null_mut();
+        (*s).freelist = obj_base;
+        for i in 0..(*s).capacity {
+            let slot = obj_base.add((i * obj_size) as usize) as *mut *mut u8;
+            if i + 1 < (*s).capacity {
+                *slot = obj_base.add(((i + 1) * obj_size) as usize);
+            } else {
+                *slot = core::ptr::null_mut();
+            }
+            if let Some(ctor) = (*cache).ctor {
+                ctor(slot as *mut u8);
+            }
         }
-        if let Some(ctor) = (*cache).ctor {
-            ctor(slot as *mut u8);
-        }
+
+        (*cache).total_slabs += 1;
+        s
     }
-
-    (*cache).total_slabs += 1;
-    s
 }
 
-unsafe fn slab_destroy_slab(cache: *mut SlabCache, s: *mut Slab) {
-    if let Some(dtor) = (*cache).dtor {
-        let obj_base = (s as *mut u8).add(core::mem::size_of::<Slab>());
-        for i in 0..(*s).capacity {
-            dtor(obj_base.add((i * (*cache).obj_size) as usize));
+fn slab_destroy_slab(cache: *mut SlabCache, s: *mut Slab) {
+    // SAFETY: cache and s are valid slab structures.
+    unsafe {
+        if let Some(dtor) = (*cache).dtor {
+            let obj_base = (s as *mut u8).add(core::mem::size_of::<Slab>());
+            for i in 0..(*s).capacity {
+                dtor(obj_base.add((i * (*cache).obj_size) as usize));
+            }
         }
+        kfree_page(s as *mut u8);
+        (*cache).total_slabs -= 1;
     }
-    kfree_page(s as *mut u8);
-    (*cache).total_slabs -= 1;
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_cache_create(
+pub extern "C" fn slab_cache_create(
     name: *const u8,
     mut obj_size: u32,
-    ctor: Option<unsafe extern "C" fn(*mut u8)>,
-    dtor: Option<unsafe extern "C" fn(*mut u8)>,
+    ctor: Option<extern "C" fn(*mut u8)>,
+    dtor: Option<extern "C" fn(*mut u8)>,
 ) -> *mut SlabCache {
     if obj_size < SLAB_MIN_OBJ_SIZE {
         obj_size = SLAB_MIN_OBJ_SIZE;
     }
     if obj_size > SLAB_MAX_OBJ_SIZE {
-        kprint(b"[SLAB] obj_size too large (> 2048)\n\0".as_ptr());
+        kprint_str(b"[SLAB] obj_size too large (> 2048)\n\0".as_ptr());
         return core::ptr::null_mut();
     }
     if obj_size < core::mem::size_of::<*mut u8>() as u32 {
@@ -137,172 +150,193 @@ pub unsafe extern "C" fn slab_cache_create(
         return core::ptr::null_mut();
     }
 
-    let mut i = 0usize;
-    while i < SLAB_NAME_LEN - 1 && *name.add(i) != 0 {
-        (*cache).name[i] = *name.add(i);
-        i += 1;
+    // SAFETY: cache was just allocated; name is a valid C string.
+    unsafe {
+        let mut i = 0usize;
+        while i < SLAB_NAME_LEN - 1 && *name.add(i) != 0 {
+            (*cache).name[i] = *name.add(i);
+            i += 1;
+        }
+        (*cache).name[i] = 0;
+
+        (*cache).obj_size = obj_size;
+        (*cache).objs_per_slab = calc_objs_per_slab(obj_size);
+        (*cache).partial = core::ptr::null_mut();
+        (*cache).full = core::ptr::null_mut();
+        (*cache).free = core::ptr::null_mut();
+        (*cache).total_slabs = 0;
+        (*cache).total_allocs = 0;
+        (*cache).total_frees = 0;
+        (*cache).ctor = ctor;
+        (*cache).dtor = dtor;
+
+        lock_acquire(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
+        (*cache).next = *G_CACHE_LIST.get_mut();
+        *G_CACHE_LIST.get_mut() = cache;
+        lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
     }
-    (*cache).name[i] = 0;
-
-    (*cache).obj_size = obj_size;
-    (*cache).objs_per_slab = calc_objs_per_slab(obj_size);
-    (*cache).partial = core::ptr::null_mut();
-    (*cache).full = core::ptr::null_mut();
-    (*cache).free = core::ptr::null_mut();
-    (*cache).total_slabs = 0;
-    (*cache).total_allocs = 0;
-    (*cache).total_frees = 0;
-    (*cache).ctor = ctor;
-    (*cache).dtor = dtor;
-
-    irq_spinlock_acquire(&raw mut G_CACHE_LOCK);
-    (*cache).next = G_CACHE_LIST;
-    G_CACHE_LIST = cache;
-    irq_spinlock_release(&raw mut G_CACHE_LOCK);
 
     cache
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_alloc(cache: *mut SlabCache) -> *mut u8 {
+pub extern "C" fn slab_alloc(cache: *mut SlabCache) -> *mut u8 {
     if cache.is_null() {
         return core::ptr::null_mut();
     }
 
-    irq_spinlock_acquire(&raw mut G_CACHE_LOCK);
-    let mut s = (*cache).partial;
+    lock_acquire(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
+
+    // SAFETY: cache is valid and we hold the lock.
+    let mut s = unsafe { (*cache).partial };
 
     if s.is_null() {
-        s = (*cache).free;
+        // SAFETY: cache is valid.
+        s = unsafe { (*cache).free };
         if !s.is_null() {
-            list_remove(&raw mut (*cache).free, s);
-            list_push(&raw mut (*cache).partial, s);
+            list_remove(unsafe { &raw mut (*cache).free }, s);
+            list_push(unsafe { &raw mut (*cache).partial }, s);
         }
     }
 
     if s.is_null() {
-        irq_spinlock_release(&raw mut G_CACHE_LOCK);
+        lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
         s = slab_create_slab(cache);
         if s.is_null() {
             return core::ptr::null_mut();
         }
-        irq_spinlock_acquire(&raw mut G_CACHE_LOCK);
-        list_push(&raw mut (*cache).partial, s);
+        lock_acquire(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
+        list_push(unsafe { &raw mut (*cache).partial }, s);
     }
 
-    let obj = (*s).freelist;
-    (*s).freelist = *(obj as *const *mut u8);
-    (*s).inuse += 1;
-    (*cache).total_allocs += 1;
-
-    if (*s).inuse == (*s).capacity {
-        list_remove(&raw mut (*cache).partial, s);
-        list_push(&raw mut (*cache).full, s);
+    // SAFETY: s is a valid slab with free objects.
+    let obj = unsafe { (*s).freelist };
+    unsafe {
+        (*s).freelist = *(obj as *const *mut u8);
+        (*s).inuse += 1;
+        (*cache).total_allocs += 1;
     }
 
-    irq_spinlock_release(&raw mut G_CACHE_LOCK);
+    let inuse = unsafe { (*s).inuse };
+    let capacity = unsafe { (*s).capacity };
+    if inuse == capacity {
+        list_remove(unsafe { &raw mut (*cache).partial }, s);
+        list_push(unsafe { &raw mut (*cache).full }, s);
+    }
+
+    lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
     obj
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_free(cache: *mut SlabCache, obj: *mut u8) {
+pub extern "C" fn slab_free(cache: *mut SlabCache, obj: *mut u8) {
     if cache.is_null() || obj.is_null() {
         return;
     }
 
-    irq_spinlock_acquire(&raw mut G_CACHE_LOCK);
+    lock_acquire(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
 
+    // SAFETY: obj resides within a page that starts with a Slab header.
     let s = (obj as u32 & !(PAGE_SIZE - 1)) as *mut Slab;
 
-    if (*s).cache != cache {
-        kprint(b"[SLAB] slab_free: wrong cache!\n\0".as_ptr());
-        irq_spinlock_release(&raw mut G_CACHE_LOCK);
-        return;
+    // SAFETY: s and cache are valid.
+    unsafe {
+        if (*s).cache != cache {
+            kprint_str(b"[SLAB] slab_free: wrong cache!\n\0".as_ptr());
+            lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
+            return;
+        }
+
+        *(obj as *mut *mut u8) = (*s).freelist;
+        (*s).freelist = obj;
+
+        let was_full = (*s).inuse == (*s).capacity;
+        (*s).inuse -= 1;
+        (*cache).total_frees += 1;
+
+        if was_full {
+            list_remove(&raw mut (*cache).full, s);
+            list_push(&raw mut (*cache).partial, s);
+        } else if (*s).inuse == 0 {
+            list_remove(&raw mut (*cache).partial, s);
+            list_push(&raw mut (*cache).free, s);
+        }
     }
 
-    *(obj as *mut *mut u8) = (*s).freelist;
-    (*s).freelist = obj;
-
-    let was_full = (*s).inuse == (*s).capacity;
-    (*s).inuse -= 1;
-    (*cache).total_frees += 1;
-
-    if was_full {
-        list_remove(&raw mut (*cache).full, s);
-        list_push(&raw mut (*cache).partial, s);
-    } else if (*s).inuse == 0 {
-        list_remove(&raw mut (*cache).partial, s);
-        list_push(&raw mut (*cache).free, s);
-    }
-
-    irq_spinlock_release(&raw mut G_CACHE_LOCK);
+    lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_cache_shrink(cache: *mut SlabCache) {
+pub extern "C" fn slab_cache_shrink(cache: *mut SlabCache) {
     if cache.is_null() {
         return;
     }
-    irq_spinlock_acquire(&raw mut G_CACHE_LOCK);
-    let mut s = (*cache).free;
-    while !s.is_null() {
-        let next = (*s).next;
-        slab_destroy_slab(cache, s);
-        s = next;
+    lock_acquire(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
+    // SAFETY: cache is valid.
+    unsafe {
+        let mut s = (*cache).free;
+        while !s.is_null() {
+            let next = (*s).next;
+            slab_destroy_slab(cache, s);
+            s = next;
+        }
+        (*cache).free = core::ptr::null_mut();
     }
-    (*cache).free = core::ptr::null_mut();
-    irq_spinlock_release(&raw mut G_CACHE_LOCK);
+    lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_cache_destroy(cache: *mut SlabCache) {
+pub extern "C" fn slab_cache_destroy(cache: *mut SlabCache) {
     if cache.is_null() {
         return;
     }
 
-    irq_spinlock_acquire(&raw mut G_CACHE_LOCK);
+    lock_acquire(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
 
-    let mut s = (*cache).full;
-    while !s.is_null() {
-        let n = (*s).next;
-        slab_destroy_slab(cache, s);
-        s = n;
-    }
-    s = (*cache).partial;
-    while !s.is_null() {
-        let n = (*s).next;
-        slab_destroy_slab(cache, s);
-        s = n;
-    }
-    s = (*cache).free;
-    while !s.is_null() {
-        let n = (*s).next;
-        slab_destroy_slab(cache, s);
-        s = n;
-    }
-    (*cache).full = core::ptr::null_mut();
-    (*cache).partial = core::ptr::null_mut();
-    (*cache).free = core::ptr::null_mut();
+    // SAFETY: cache is valid and we hold the lock.
+    unsafe {
+        let mut s = (*cache).full;
+        while !s.is_null() {
+            let n = (*s).next;
+            slab_destroy_slab(cache, s);
+            s = n;
+        }
+        s = (*cache).partial;
+        while !s.is_null() {
+            let n = (*s).next;
+            slab_destroy_slab(cache, s);
+            s = n;
+        }
+        s = (*cache).free;
+        while !s.is_null() {
+            let n = (*s).next;
+            slab_destroy_slab(cache, s);
+            s = n;
+        }
+        (*cache).full = core::ptr::null_mut();
+        (*cache).partial = core::ptr::null_mut();
+        (*cache).free = core::ptr::null_mut();
 
-    let mut pp: *mut *mut SlabCache = &raw mut G_CACHE_LIST;
-    while !(*pp).is_null() && *pp != cache {
-        pp = &raw mut (**pp).next;
-    }
-    if !(*pp).is_null() {
-        *pp = (*cache).next;
+        let mut pp: *mut *mut SlabCache = G_CACHE_LIST.as_ptr();
+        while !(*pp).is_null() && *pp != cache {
+            pp = &raw mut (**pp).next;
+        }
+        if !(*pp).is_null() {
+            *pp = (*cache).next;
+        }
     }
 
-    irq_spinlock_release(&raw mut G_CACHE_LOCK);
+    lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
     kfree_heap(cache as *mut u8);
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_print_stats(cache: *const SlabCache) {
+pub extern "C" fn slab_print_stats(cache: *const SlabCache) {
     if cache.is_null() {
         return;
     }
@@ -312,55 +346,54 @@ pub unsafe extern "C" fn slab_print_stats(cache: *const SlabCache) {
     let mut free_slabs: u32 = 0;
     let mut free_objs: u32 = 0;
 
-    let mut s = (*cache).partial;
-    while !s.is_null() {
-        partial_slabs += 1;
-        free_objs += (*s).capacity - (*s).inuse;
-        s = (*s).next;
-    }
-    s = (*cache).full;
-    while !s.is_null() {
-        full_slabs += 1;
-        s = (*s).next;
-    }
-    s = (*cache).free;
-    while !s.is_null() {
-        free_slabs += 1;
-        free_objs += (*cache).objs_per_slab;
-        s = (*s).next;
+    // SAFETY: cache is valid (checked above).
+    unsafe {
+        let mut s = (*cache).partial;
+        while !s.is_null() {
+            partial_slabs += 1;
+            free_objs += (*s).capacity - (*s).inuse;
+            s = (*s).next;
+        }
+        s = (*cache).full;
+        while !s.is_null() {
+            full_slabs += 1;
+            s = (*s).next;
+        }
+        s = (*cache).free;
+        while !s.is_null() {
+            free_slabs += 1;
+            free_objs += (*cache).objs_per_slab;
+            s = (*s).next;
+        }
     }
 
     let mut buf = [0u8; 16];
-    kprint(b"[SLAB] cache=\0".as_ptr());
-    kprint((*cache).name.as_ptr());
-    kprint(b" obj_size=\0".as_ptr());
-    itoa((*cache).obj_size as i32, buf.as_mut_ptr());
-    kprint(buf.as_ptr());
-    kprint(b" slabs(full/partial/free)=\0".as_ptr());
-    itoa(full_slabs as i32, buf.as_mut_ptr());
-    kprint(buf.as_ptr());
-    kprint(b"/\0".as_ptr());
-    itoa(partial_slabs as i32, buf.as_mut_ptr());
-    kprint(buf.as_ptr());
-    kprint(b"/\0".as_ptr());
-    itoa(free_slabs as i32, buf.as_mut_ptr());
-    kprint(buf.as_ptr());
-    kprint(b" free_objs=\0".as_ptr());
-    itoa(free_objs as i32, buf.as_mut_ptr());
-    kprint(buf.as_ptr());
-    kprint(b" allocs=\0".as_ptr());
-    itoa((*cache).total_allocs as i32, buf.as_mut_ptr());
-    kprint(buf.as_ptr());
-    kprint(b"\n\0".as_ptr());
+    kprint_str(b"[SLAB] cache=\0".as_ptr());
+    // SAFETY: cache is valid.
+    unsafe { kprint((*cache).name.as_ptr()); }
+    kprint_str(b" obj_size=\0".as_ptr());
+    unsafe { kprint_int((*cache).obj_size as i32); }
+    kprint_str(b" slabs(full/partial/free)=\0".as_ptr());
+    kprint_int(full_slabs as i32);
+    kprint_str(b"/\0".as_ptr());
+    kprint_int(partial_slabs as i32);
+    kprint_str(b"/\0".as_ptr());
+    kprint_int(free_slabs as i32);
+    kprint_str(b" free_objs=\0".as_ptr());
+    kprint_int(free_objs as i32);
+    kprint_str(b" allocs=\0".as_ptr());
+    unsafe { kprint_int((*cache).total_allocs as i32); }
+    kprint_str(b"\n\0".as_ptr());
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_init() {
-    kprint(b"[SLAB] initializing  generic caches: 8 16 32 64 128 256 512 1024 2048 B\n\0".as_ptr());
+pub extern "C" fn slab_init() {
+    kprint_str(b"[SLAB] initializing  generic caches: 8 16 32 64 128 256 512 1024 2048 B\n\0".as_ptr());
 
-    irq_spinlock_init(&raw mut G_CACHE_LOCK);
-    G_CACHE_LIST = core::ptr::null_mut();
+    // SAFETY: boot-time init, single-threaded.
+    unsafe { irq_spinlock_init(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock) };
+    *G_CACHE_LIST.get_mut() = core::ptr::null_mut();
 
     for i in 0..GENERIC_CACHE_COUNT {
         let mut name = [0u8; SLAB_NAME_LEN];
@@ -388,36 +421,36 @@ pub unsafe extern "C" fn slab_init() {
         }
         name[j] = 0;
 
-        G_GENERIC_CACHES[i] =
-            slab_cache_create(name.as_ptr(), GENERIC_SIZES[i], None, None);
-        if G_GENERIC_CACHES[i].is_null() {
-            kprint_color(
-                b"[SLAB] failed to create cache: \0".as_ptr(),
-                COLOR_LIGHT_RED,
-            );
-            kprint_color(name.as_ptr(), COLOR_LIGHT_RED);
-            kprint(b"\n\0".as_ptr());
-            klog(LOG_FAIL, b"slab cache creation failed\0".as_ptr());
+        let cache = slab_cache_create(name.as_ptr(), GENERIC_SIZES[i], None, None);
+        G_GENERIC_CACHES.get_mut()[i] = cache;
+        if cache.is_null() {
+            // SAFETY: kprint_color is a C function that takes a valid string.
+            unsafe {
+                kprint_color(b"[SLAB] failed to create cache: \0".as_ptr(), COLOR_LIGHT_RED);
+                kprint_color(name.as_ptr(), COLOR_LIGHT_RED);
+            }
+            kprint_str(b"\n\0".as_ptr());
+            klog_msg(LOG_FAIL, b"slab cache creation failed\0".as_ptr());
         }
     }
 
     let mut buf = [0u8; 4];
-    kprint(b"[SLAB] \0".as_ptr());
-    itoa(GENERIC_CACHE_COUNT as i32, buf.as_mut_ptr());
-    kprint(buf.as_ptr());
-    kprint(b" generic caches ready\n\0".as_ptr());
-    klog(LOG_OK, b"slab allocator ready\0".as_ptr());
+    kprint_str(b"[SLAB] \0".as_ptr());
+    kprint_int(GENERIC_CACHE_COUNT as i32);
+    kprint_str(b" generic caches ready\n\0".as_ptr());
+    klog_msg(LOG_OK, b"slab allocator ready\0".as_ptr());
 }
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_kmalloc(size: u32) -> *mut u8 {
+pub extern "C" fn slab_kmalloc(size: u32) -> *mut u8 {
     if size == 0 {
         return core::ptr::null_mut();
     }
+    let caches = G_GENERIC_CACHES.get_mut();
     for i in 0..GENERIC_CACHE_COUNT {
         if size <= GENERIC_SIZES[i] {
-            return slab_alloc(G_GENERIC_CACHES[i]);
+            return slab_alloc(caches[i]);
         }
     }
     kmalloc(size)
@@ -425,15 +458,17 @@ pub unsafe extern "C" fn slab_kmalloc(size: u32) -> *mut u8 {
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slab_kfree(ptr: *mut u8) {
+pub extern "C" fn slab_kfree(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY: obj resides in a page whose start is a Slab header.
     let s = (ptr as u32 & !(PAGE_SIZE - 1)) as *mut Slab;
-
-    if !(*s).cache.is_null() && (*s).capacity > 0 && (*s).capacity <= 512 {
-        slab_free((*s).cache, ptr);
-        return;
+    unsafe {
+        if !(*s).cache.is_null() && (*s).capacity > 0 && (*s).capacity <= 512 {
+            slab_free((*s).cache, ptr);
+            return;
+        }
     }
     kfree_heap(ptr);
 }

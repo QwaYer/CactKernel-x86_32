@@ -1,15 +1,10 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, page_ref_inc};
-
-fn zero_page(p: *mut u8) {
-    unsafe {
-        core::ptr::write_bytes(p, 0, PAGE_SIZE as usize);
-    }
-}
+use crate::safe::{zero_page, flush_tlb_all};
 
 //public api
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u32) {
+pub extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u32) {
     if src_pd.is_null() || dst_pd.is_null() {
         return;
     }
@@ -23,12 +18,14 @@ pub unsafe extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u
             continue;
         }
 
-        if *src_pd.add(i) & PAGE_PRESENT == 0 {
-            *dst_pd.add(i) = 0;
+        // SAFETY: src_pd is a valid page directory (checked above).
+        let src_pde = unsafe { *src_pd.add(i) };
+        if src_pde & PAGE_PRESENT == 0 {
+            unsafe { *dst_pd.add(i) = 0; }
             continue;
         }
 
-        let src_pt = (*src_pd.add(i) & !0xFFFu32) as *mut u32;
+        let src_pt = (src_pde & !0xFFFu32) as *mut u32;
         let dst_pt = kalloc() as *mut u32;
         if dst_pt.is_null() {
             continue;
@@ -36,9 +33,10 @@ pub unsafe extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u
         zero_page(dst_pt as *mut u8);
 
         for j in 0..1024usize {
-            let pte = *src_pt.add(j);
+            // SAFETY: src_pt is a valid page table within src_pd.
+            let pte = unsafe { *src_pt.add(j) };
             if pte & PAGE_PRESENT == 0 {
-                *dst_pt.add(j) = pte;
+                unsafe { *dst_pt.add(j) = pte; }
                 continue;
             }
 
@@ -46,14 +44,20 @@ pub unsafe extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u
             let flags = pte & 0xFFFu32;
 
             let cow_flags = (flags & !PAGE_RW) | PAGE_COW;
-            *src_pt.add(j) = phys | cow_flags;
-            *dst_pt.add(j) = phys | cow_flags;
+            // SAFETY: writing COW PTEs into both page tables.
+            unsafe {
+                *src_pt.add(j) = phys | cow_flags;
+                *dst_pt.add(j) = phys | cow_flags;
+            }
 
             page_ref_inc(phys as *const u8);
         }
 
-        *dst_pd.add(i) = (dst_pt as u32 & !0xFFFu32) | (*src_pd.add(i) & 0xFFFu32);
+        // SAFETY: writing the PDE into dst_pd.
+        unsafe {
+            *dst_pd.add(i) = (dst_pt as u32 & !0xFFFu32) | (src_pde & 0xFFFu32);
+        }
     }
 
-    tlb_flush_all();
+    flush_tlb_all();
 }
