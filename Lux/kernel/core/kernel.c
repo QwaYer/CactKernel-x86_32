@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "multiboot2.h"
 #include "pci.h"
 #include "pci_enum.h"
 #include "pci_driver.h"
@@ -133,7 +134,7 @@ void init_framebuffer() {
 
     if (status != FB_INIT_OK) {
         static const char* fb_errors[] = {
-            [FB_INIT_NO_FLAG]    = "multiboot flag bit 12 not set",
+            [FB_INIT_NO_FLAG]    = "multiboot2 framebuffer tag missing",
             [FB_INIT_HIGH_ADDR]  = "framebuffer address above 4 GB (not mappable)",
             [FB_INIT_BAD_TYPE]   = "framebuffer type != 1 (not RGB direct-color)",
             [FB_INIT_BAD_BPP]    = "bpp != 32 (only 32-bit color supported)",
@@ -438,14 +439,30 @@ void kernel_setup_hardware(multiboot_info_t *mbi) {
     extern void mntfs_init();
     mntfs_init();
 
-    if (mbi && (mbi->flags & 0x1)) {
-        extern void procfs_set_meminfo(uint32_t, uint32_t);
+    if (mbi) {
+        extern void procfs_set_meminfo(uint32_t);
         char buf[12];
-        itoa((int)mbi->mem_lower, buf);
-        kprint("[MNT] mem_lower="); kprint(buf); kprint(" KB");
-        itoa((int)mbi->mem_upper, buf);
-        kprint("  mem_upper="); kprint(buf); kprint(" KB\n");
-        procfs_set_meminfo(mbi->mem_lower, mbi->mem_upper);
+
+        if (mbi->flags & 0x1) {
+            itoa((int)mbi->mem_lower, buf);
+            kprint("[MNT] mem_lower="); kprint(buf); kprint(" KB");
+            itoa((int)mbi->mem_upper, buf);
+            kprint("  mem_upper="); kprint(buf); kprint(" KB\n");
+        }
+
+        /*
+         * Prefer the multiboot2 memory map total: mem_upper caps around 4 GB
+         * and omits holes, while the mmap gives us the actual available bytes.
+         */
+        uint32_t total_kb;
+        if (mbi->flags & (1u << 6)) {
+            total_kb = (uint32_t)(mbi->mem_total_bytes / 1024ull);
+            itoa((int)total_kb, buf);
+            kprint("[MNT] mmap total="); kprint(buf); kprint(" KB\n");
+        } else {
+            total_kb = mbi->mem_lower + 1024 + mbi->mem_upper;
+        }
+        procfs_set_meminfo(total_kb);
     }
     klog(LOG_OK, "EXT4 / devfs / procfs / mntfs mounted");
 
@@ -479,7 +496,11 @@ void kernel_setup_hardware(multiboot_info_t *mbi) {
     }
 }
 
-void init(uint32_t magic, multiboot_info_t* mbi) {
+void init(uint32_t magic, uint32_t mb2_info_addr) {
+    static multiboot_info_t mbi_storage;
+    multiboot2_parse(mb2_info_addr, &mbi_storage);
+    multiboot_info_t* mbi = &mbi_storage;
+
     fb_init(mbi);
 
     if (fb_get_width() == 0) {
@@ -489,12 +510,12 @@ void init(uint32_t magic, multiboot_info_t* mbi) {
 
     clear_screen();
 
-    if (magic != 0x2BADB002) {
-        kprint_color("[FAIL] Bad multiboot magic (got 0x", COLOR_LIGHT_RED);
+    if (magic != MB2_BOOTLOADER_MAGIC) {
+        kprint_color("[FAIL] Bad multiboot2 magic (got 0x", COLOR_LIGHT_RED);
         char buf[16];
         hex_to_ascii(magic, buf);
         kprint_color(buf, COLOR_LIGHT_RED);
-        kprint_color(", expected 0x2BADB002)\n", COLOR_LIGHT_RED);
+        kprint_color(", expected 0x36D76289)\n", COLOR_LIGHT_RED);
         while(1) __asm__ __volatile__("hlt");
     }
 

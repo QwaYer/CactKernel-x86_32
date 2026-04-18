@@ -130,6 +130,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/gdt.o \
       $(BUILD_DIR)/version.o \
       $(BUILD_DIR)/kernel.o \
+      $(BUILD_DIR)/multiboot2.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/dynlink.o \
       $(BUILD_DIR)/idt.o \
@@ -239,6 +240,10 @@ $(BUILD_DIR)/version.o: $(KERN_VER_DIR)/version.c $(KERN_VER_DIR)/version.h VERS
 	gcc $(CFLAGS) $(VERSION_DEFS) -c $< -o $@
 
 $(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/multiboot2.o: $(KERN_CORE_DIR)/multiboot2.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
