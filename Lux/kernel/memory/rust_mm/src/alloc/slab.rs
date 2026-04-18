@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg, zero_page};
+use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg};
 use crate::pmm::{kalloc, kfree_page};
 use crate::alloc::heap::{kmalloc, kfree_heap};
 
@@ -367,7 +367,6 @@ pub extern "C" fn slab_print_stats(cache: *const SlabCache) {
         }
     }
 
-    let mut buf = [0u8; 16];
     kprint_str(b"[SLAB] cache=\0".as_ptr());
     // SAFETY: cache is valid.
     unsafe { kprint((*cache).name.as_ptr()); }
@@ -434,7 +433,6 @@ pub extern "C" fn slab_init() {
         }
     }
 
-    let mut buf = [0u8; 4];
     kprint_str(b"[SLAB] \0".as_ptr());
     kprint_int(GENERIC_CACHE_COUNT as i32);
     kprint_str(b" generic caches ready\n\0".as_ptr());

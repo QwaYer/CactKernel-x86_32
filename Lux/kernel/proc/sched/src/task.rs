@@ -279,7 +279,7 @@ pub unsafe extern "C" fn create_task(entry_point: *const c_void) -> *mut TaskStr
     esp = esp.sub(1); *esp = entry_point as u32;
 
     // return address for switch_to's `ret`
-    esp = esp.sub(1); *esp = ffi::kernel_task_trampoline as u32;
+    esp = esp.sub(1); *esp = ffi::kernel_task_trampoline as *const () as u32;
 
     // switch_to callee-saved registers (pop ebx, pop esi, pop edi, pop ebp)
     esp = esp.sub(1); *esp = 0; // ebp
@@ -331,7 +331,7 @@ unsafe fn create_user_task_internal(entry_point: *const c_void, add_to_list: boo
     esp = esp.sub(1); *esp = entry_point as u32;                   // eip
 
     // return address for switch_to's `ret`
-    esp = esp.sub(1); *esp = ffi::user_task_trampoline as u32;
+    esp = esp.sub(1); *esp = ffi::user_task_trampoline as *const () as u32;
 
     // switch_to callee-saved registers
     esp = esp.sub(1); *esp = 0; // ebp
@@ -588,7 +588,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     esp_ptr = esp_ptr.sub(1); *esp_ptr = (*regs).es;
 
     // switch_to frame: ret lands on fork_task_trampoline
-    esp_ptr = esp_ptr.sub(1); *esp_ptr = ffi::fork_task_trampoline as u32;
+    esp_ptr = esp_ptr.sub(1); *esp_ptr = ffi::fork_task_trampoline as *const () as u32;
     esp_ptr = esp_ptr.sub(1); *esp_ptr = 0; // ebp
     esp_ptr = esp_ptr.sub(1); *esp_ptr = 0; // edi
     esp_ptr = esp_ptr.sub(1); *esp_ptr = 0; // esi
