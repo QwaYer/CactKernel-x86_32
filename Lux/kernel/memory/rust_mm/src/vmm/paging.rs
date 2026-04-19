@@ -10,7 +10,6 @@ static mut page_directory: Aligned4K<[u32; 1024]> = Aligned4K([0u32; 1024]);
 static mut PAGE_TABLES: Aligned4K<[[u32; 1024]; 32]> = Aligned4K([[0u32; 1024]; 32]);
 
 pub fn get_kernel_pd() -> *mut u32 {
-    // SAFETY: page_directory is a static; taking its address is safe.
     unsafe { page_directory.0.as_mut_ptr() }
 }
 
@@ -18,12 +17,10 @@ pub fn get_kernel_pd() -> *mut u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn init_paging() {
     kprint_str(b"[PAGING] page_directory at 0x\0".as_ptr());
-    // SAFETY: reading the address of a static.
     let pd_addr = unsafe { page_directory.0.as_ptr() as u32 };
     kprint_hex(pd_addr);
     kprint_str(b"  identity-mapping first 128 MB (32 page tables x 1024 pages)\n\0".as_ptr());
 
-    // SAFETY: boot-time init; page_directory and PAGE_TABLES are BSS, no concurrency.
     unsafe {
         for i in 0..1024 {
             if page_directory.0[i] == 0 {
@@ -42,7 +39,6 @@ pub extern "C" fn init_paging() {
     kprint_str(b"[PAGING] loading CR3=0x\0".as_ptr());
     kprint_hex(unsafe { page_directory.0.as_ptr() as u32 });
     kprint_str(b"  setting CR0.PG\n\0".as_ptr());
-    // SAFETY: loading the kernel page directory and enabling paging — boot-time only.
     unsafe {
         load_page_directory(page_directory.0.as_mut_ptr());
         enable_paging();
@@ -66,7 +62,6 @@ pub extern "C" fn vmm_map(pd: *mut u32, virtual_addr: u32, physical_addr: u32, f
     let pt_idx = pt_index(virtual_addr) as usize;
     let flags = flags as u32;
 
-    // SAFETY: pd is a valid page directory pointer (null-checked above).
     unsafe {
         if *pd.add(pd_idx) & PAGE_PRESENT == 0 {
             let pt = kalloc() as *mut u32;
@@ -79,6 +74,15 @@ pub extern "C" fn vmm_map(pd: *mut u32, virtual_addr: u32, physical_addr: u32, f
         }
 
         let pt = (*pd.add(pd_idx) & !0xFFF) as *mut u32;
+
+        let old_pte = *pt.add(pt_idx);
+        if old_pte & PAGE_PRESENT != 0
+            && old_pte & PAGE_COW != 0
+            && (old_pte & !0xFFF) != (physical_addr & !0xFFF)
+        {
+            kfree_page((old_pte & !0xFFF) as *mut u8);
+        }
+
         *pt.add(pt_idx) = (physical_addr & !0xFFF) | flags | PAGE_PRESENT;
     }
 }
@@ -91,7 +95,6 @@ pub extern "C" fn vmm_create_address_space() -> *mut u32 {
         return core::ptr::null_mut();
     }
 
-    // SAFETY: pd is freshly allocated; page_directory is a valid static.
     unsafe {
         for i in 0..32 {
             *pd.add(i) = page_directory.0[i];
@@ -112,9 +115,8 @@ pub extern "C" fn vmm_free_address_space(pd: *mut u32) {
     if pd.is_null() {
         return;
     }
-    // SAFETY: pd is a valid page directory that is being torn down.
     unsafe {
-        for i in 32..1024 {
+        for i in 32..768 {
             if *pd.add(i) & PAGE_PRESENT != 0 {
                 let pt = (*pd.add(i) & !0xFFF) as *mut u32;
                 for j in 0..1024 {
@@ -135,9 +137,8 @@ pub extern "C" fn vmm_copy_address_space(src_pd: *mut u32, dst_pd: *mut u32) {
     if src_pd.is_null() || dst_pd.is_null() {
         return;
     }
-    // SAFETY: both PDs are valid; deep-copying page tables.
     unsafe {
-        for i in 32..1024 {
+        for i in 32..768 {
             if *src_pd.add(i) & PAGE_PRESENT != 0 {
                 let src_pt = (*src_pd.add(i) & !0xFFF) as *mut u32;
                 let dst_pt = kalloc() as *mut u32;

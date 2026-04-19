@@ -1122,9 +1122,11 @@ pub unsafe extern "C" fn task_reap() {
         ffi::shm_detach_all((*t).pid, (*t).page_directory);
 
         ffi::proc_free_pages(&raw mut (*t).mm);
-        if !(*t).stack_base.is_null()     { ffi::kfree_page((*t).stack_base); }
-        if !(*t).ustack_phys.is_null()    { ffi::kfree_page((*t).ustack_phys); }
-        if !(*t).page_directory.is_null() { ffi::vmm_free_address_space((*t).page_directory); }
+
+        (*t).page_directory = ptr::null_mut();
+        (*t).ustack_phys    = ptr::null_mut();
+
+        if !(*t).stack_base.is_null() { ffi::kfree_page((*t).stack_base); }
 
         ffi::kfree_heap(t as *mut c_void);
     }
