@@ -95,13 +95,13 @@ void shell_recalc_ext4_dir(void) {
 
     vfs_node_t *node = ext4r;
     char seg[128]; int idx = 0;
-    while (*deeper) {
+    while (*deeper && node) {
         char c = *deeper++;
         if (c == '/') {
-            if (idx > 0) { seg[idx] = '\0'; if (node->ops && node->ops->walk) node = node->ops->walk(node, seg); idx = 0; }
-        } else { seg[idx++] = c; }
+            if (idx > 0) { seg[idx] = '\0'; if (node && node->ops && node->ops->walk) node = node->ops->walk(node, seg); idx = 0; }
+        } else { if (idx < 127) seg[idx++] = c; }
     }
-    if (idx > 0) { seg[idx]='\0'; if (node->ops && node->ops->walk) node = node->ops->walk(node, seg); }
+    if (idx > 0 && node) { seg[idx]='\0'; if (node->ops && node->ops->walk) node = node->ops->walk(node, seg); }
     current_ext4_dir = node;
 }
 
