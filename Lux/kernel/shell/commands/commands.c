@@ -86,7 +86,10 @@ static void cmd_cd(char* args) {
 
     vfs_node_t* cur = start;
     char tmp_path[512];
-    copy_string(tmp_path, current_path);
+    if (start == vfs_root)
+        copy_string(tmp_path, "/");
+    else
+        copy_string(tmp_path, current_path);
 
     char seg[128];
     const char *p = path;
@@ -110,6 +113,13 @@ static void cmd_cd(char* args) {
         shell_pushdir(cur);
         if (compare_string(tmp_path, "/") != 0) {
             int len = strlen(tmp_path);
+            if (len + 1 + (int)strlen(seg) >= 511) {
+                for (int i = 0; i < pushed; i++) shell_popdir();
+                current_dir = saved_dir;
+                copy_string(current_path, saved_path);
+                kprint("\nPath too long\n");
+                return;
+            }
             tmp_path[len] = '/'; tmp_path[len+1] = '\0';
         }
         strcat(tmp_path, seg);
