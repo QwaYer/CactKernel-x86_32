@@ -47,6 +47,7 @@ FS_EXT4_DIR      = Lux/fs/ext4
 FS_PROCFS_DIR    = Lux/fs/vfs/procfs
 FS_MNTFS_DIR     = Lux/fs/vfs/mntfs
 FS_ETCFS_DIR     = Lux/fs/vfs/etcfs
+FS_TMPFS_DIR     = Lux/fs/vfs/tmpfs
 NET_DIR          = Lux/net
 NET_ARP_DIR      = Lux/net/arp
 NET_ETH_DIR      = Lux/net/ethernet
@@ -105,6 +106,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_PROCFS_DIR) \
          -I$(FS_MNTFS_DIR) \
          -I$(FS_ETCFS_DIR) \
+         -I$(FS_TMPFS_DIR) \
          -I$(NET_DIR) \
          -I$(NET_ARP_DIR) \
          -I$(NET_ETH_DIR) \
@@ -145,6 +147,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/mntfs.o \
       $(BUILD_DIR)/etcfs.o \
+      $(BUILD_DIR)/tmpfs.o \
       $(BUILD_DIR)/pci.o \
       $(BUILD_DIR)/pci_enum.o \
       $(BUILD_DIR)/pci_driver.o \
@@ -311,6 +314,10 @@ $(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/etcfs.o: $(FS_ETCFS_DIR)/etcfs.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tmpfs.o: $(FS_TMPFS_DIR)/tmpfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
