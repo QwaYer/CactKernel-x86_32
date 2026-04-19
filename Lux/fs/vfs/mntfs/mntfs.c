@@ -2,6 +2,7 @@
 #include "etcfs.h"
 #include "devfs.h"
 #include "procfs.h"
+#include "tmpfs.h"
 #include "vfs.h"
 #include "ext4.h"
 #include "memory.h"
@@ -419,5 +420,13 @@ void mntfs_init(void) {
     kprint("[mntfs] mounting procfs at "); kprint(sys_proc); kprint("\n");
     mntfs_mount(sys_proc, "procfs", procfs_get_root(), 0);
 
-    klog(LOG_OK, "mntfs ready — ext4/etcfs/devfs/procfs mounted");
+    kprint("[mntfs] initializing tmpfs\n");
+    tmpfs_init();
+    char sys_tmp[64];
+    strlcpy(sys_tmp, boot_devname, 64);
+    strlcpy(sys_tmp + strlen(boot_devname), "/sys/tmp", 64 - strlen(boot_devname));
+    mntfs_mount(sys_tmp, "tmpfs", tmpfs_get_root(), 0);
+    kprint("[mntfs] tmpfs mounted at "); kprint(sys_tmp); kprint("\n");
+
+    klog(LOG_OK, "mntfs ready — ext4/etcfs/devfs/procfs/tmpfs mounted");
 }
