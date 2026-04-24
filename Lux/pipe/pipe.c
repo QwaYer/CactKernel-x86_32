@@ -19,7 +19,7 @@ static vfs_ops_t pipe_ops = {
     .close = _vfs_pipe_close,
 };
 
-// inode: 0 = read-end, 1 = write-end 
+// inode: 0 = read-end, 1 = write-end
 static inline pipe_t *_node_to_pipe    (vfs_node_t *node) { return (pipe_t *)node->priv; }
 static inline int     _node_is_write   (vfs_node_t *node) { return (int)node->inode; }
 
@@ -31,6 +31,7 @@ static pipe_t *_pipe_alloc(int flags) {
     p->flags      = flags;
     p->write_open = 0;
     p->read_open  = 0;
+    p->ref_count  = 0;
     mutex_init(&p->lock);
     return p;
 }
@@ -49,7 +50,13 @@ static vfs_node_t *_make_node(pipe_t *p, const char *name, int is_write) {
     n->inode    = (uint32_t)is_write;  // 0=read-end, 1=write-end
     n->refcount = 1;                   // initial reference
     n->ops      = &pipe_ops;
-    n->priv     = p;                   // pipe_t* хранится в priv
+    n->priv     = p;                   // pipe_t* stored in priv
+
+    /* Each live vfs_node_t counts as one reference to the pipe_t. */
+    mutex_lock(&p->lock);
+    p->ref_count++;
+    mutex_unlock(&p->lock);
+
     return n;
 }
 
@@ -79,7 +86,15 @@ vfs_node_t *fifo_create(const char *name, int flags) {
     vfs_node_t *n = _make_node(p, name, 0);
     if (!n) { kfree_heap(p); return 0; }
 
-    p->name       = n->name;
+    /*
+     * Store the FIFO name inside pipe_t itself so p->name never becomes a
+     * dangling pointer if the vfs_node_t wrapper gets freed before pipe_t.
+     */
+    int i = 0;
+    while (name[i] && i < 127) { p->name_buf[i] = name[i]; i++; }
+    p->name_buf[i] = '\0';
+    p->name        = p->name_buf;
+
     p->write_open = 0;
     p->read_open  = 0;
     return n;
@@ -180,20 +195,16 @@ int pipe_write(pipe_t *p, uint32_t offset, uint32_t size, char *buffer) {
     return (int)written;
 }
 
-static void _pipe_try_destroy(pipe_t *p) {
-    mutex_lock(&p->lock);
-    int dead = (p->read_open == 0 && p->write_open == 0);
-    if (dead) p->magic = 0;
-    mutex_unlock(&p->lock);
-    if (dead) kfree_heap(p);
-}
-
+/*
+ * Logical-only close helpers used by external callers (e.g. process teardown)
+ * that already hold their own reference and handle lifetime separately.
+ * These do NOT free pipe_t; lifetime is managed via ref_count in _vfs_pipe_close.
+ */
 void pipe_close_read(pipe_t *p) {
     if (!p || p->magic != PIPE_MAGIC) return;
     mutex_lock(&p->lock);
     if (p->read_open > 0) p->read_open--;
     mutex_unlock(&p->lock);
-    _pipe_try_destroy(p);
 }
 
 void pipe_close_write(pipe_t *p) {
@@ -201,12 +212,13 @@ void pipe_close_write(pipe_t *p) {
     mutex_lock(&p->lock);
     if (p->write_open > 0) p->write_open--;
     mutex_unlock(&p->lock);
-    _pipe_try_destroy(p);
 }
 
 void pipe_destroy(pipe_t *p) {
     if (!p) return;
+    mutex_lock(&p->lock);
     p->magic = 0;
+    mutex_unlock(&p->lock);
     kfree_heap(p);
 }
 
@@ -224,6 +236,7 @@ static void _vfs_pipe_open(vfs_node_t *node) {
     if (!p || p->magic != PIPE_MAGIC) return;
     node->refcount++;
     mutex_lock(&p->lock);
+    p->ref_count++;
     if (p->name) {
         p->read_open++;
         p->write_open++;
@@ -236,19 +249,42 @@ static void _vfs_pipe_open(vfs_node_t *node) {
 
 static void _vfs_pipe_close(vfs_node_t *node) {
     pipe_t *p = _node_to_pipe(node);
+
+    /*
+     * Guard against a node whose pipe was already forcefully destroyed
+     * (e.g. via pipe_destroy).  We still need to release the node itself.
+     */
     if (!p || p->magic != PIPE_MAGIC) {
         if (node->refcount <= 1) kfree_heap(node);
         else                     node->refcount--;
         return;
     }
+
+    /*
+     * Update logical open counters and drop the ref_count in one critical
+     * section.  This prevents the FIFO UAF (BUG-1) and the double-free race
+     * (BUG-2) from the old _pipe_try_destroy pattern.
+     */
+    mutex_lock(&p->lock);
     if (p->name) {
-        pipe_close_read(p);
-        pipe_close_write(p);
+        /* Named FIFO: one fd covers both ends */
+        if (p->read_open  > 0) p->read_open--;
+        if (p->write_open > 0) p->write_open--;
     } else {
-        if (_node_is_write(node)) pipe_close_write(p);
-        else                      pipe_close_read(p);
+        if (_node_is_write(node)) {
+            if (p->write_open > 0) p->write_open--;
+        } else {
+            if (p->read_open  > 0) p->read_open--;
+        }
     }
-    /* free vfs_node_t wrapper only when last reference drops */
+    int should_free = (--p->ref_count == 0);
+    if (should_free) p->magic = 0;
+    mutex_unlock(&p->lock);
+
+    /* Free pipe_t only after the lock is released and ref_count confirmed 0. */
+    if (should_free) kfree_heap(p);
+
+    /* Release the vfs_node_t wrapper. */
     if (node->refcount <= 1)
         kfree_heap(node);
     else

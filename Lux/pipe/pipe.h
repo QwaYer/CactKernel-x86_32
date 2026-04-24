@@ -25,13 +25,15 @@ typedef struct pipe {
     int         flags;
     int         write_open;
     int         read_open;
+    int         ref_count;    /* # of vfs_node_t wrappers pointing here */
     mutex_t     lock;
-    char       *name;
+    char       *name;         /* points into name_buf, or NULL for anonymous pipe */
+    char        name_buf[128];
 } pipe_t;
 
 
 //Public api
-int       pipe_create(vfs_node_t *pipefd[2], int flags);
+int         pipe_create(vfs_node_t *pipefd[2], int flags);
 vfs_node_t *fifo_create(const char *name, int flags);
 
 int  pipe_read (pipe_t *p, uint32_t offset, uint32_t size, char *buffer);
