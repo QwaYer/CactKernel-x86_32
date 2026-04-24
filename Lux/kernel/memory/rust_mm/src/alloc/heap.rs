@@ -144,28 +144,55 @@ pub extern "C" fn kfree_heap(ptr: *mut u8) {
     // SAFETY: ptr points past a valid HeapBlock header.
     let block = unsafe { ptr.sub(hdr_size) } as *mut HeapBlock;
     let magic = unsafe { (*block).magic };
-    if magic == HEAP_MAGIC {
-        unsafe { (*block).is_free = 1; }
+    if magic != HEAP_MAGIC {
+        // Either a bogus pointer or a double-free that already walked off the
+        // list.  Bail instead of corrupting the heap further.
+        kprint_str(b"[ERR] kfree_heap: bad magic, ignoring\n\0".as_ptr());
+        lock_release(HEAP_LOCK.as_ptr() as *mut IrqSpinlock);
+        return;
+    }
 
-        let mut curr = *HEAP_START_PTR.get_mut();
-        while !curr.is_null() {
-            // SAFETY: curr is a valid HeapBlock.
-            let curr_free = unsafe { (*curr).is_free };
-            let next = unsafe { (*curr).next };
-            if curr_free != 0 && !next.is_null() {
-                let next_free = unsafe { (*next).is_free };
-                if next_free != 0 {
-                    let next_size = unsafe { (*next).size };
-                    let next_next = unsafe { (*next).next };
-                    unsafe {
-                        (*curr).size += next_size + hdr_size as u32;
-                        (*curr).next = next_next;
-                    }
-                    continue;
-                }
-            }
-            curr = next;
+    unsafe { (*block).is_free = 1; }
+
+    /*
+     * Coalesce adjacent free blocks.  Critically, re-validate magic of the
+     * `next` header before trusting its fields: a buffer overrun in any
+     * allocated block would otherwise let us merge across a corrupted
+     * header and follow a garbage `next` pointer, wrecking the entire
+     * freelist.  On bad magic we stop the walk — the allocator becomes
+     * conservative but stays consistent.
+     */
+    let mut curr = *HEAP_START_PTR.get_mut();
+    while !curr.is_null() {
+        // SAFETY: curr is a valid HeapBlock in the linked list.
+        let curr_magic = unsafe { (*curr).magic };
+        if curr_magic != HEAP_MAGIC {
+            kprint_str(b"[FATAL] kfree_heap: heap corruption at curr\n\0".as_ptr());
+            break;
         }
+        let curr_free = unsafe { (*curr).is_free };
+        let next = unsafe { (*curr).next };
+        if curr_free != 0 && !next.is_null() {
+            let next_magic = unsafe { (*next).magic };
+            if next_magic != HEAP_MAGIC {
+                kprint_str(b"[FATAL] kfree_heap: next header corrupted, stopping coalesce\n\0".as_ptr());
+                break;
+            }
+            let next_free = unsafe { (*next).is_free };
+            if next_free != 0 {
+                let next_size = unsafe { (*next).size };
+                let next_next = unsafe { (*next).next };
+                unsafe {
+                    // Invalidate the absorbed header so a stale pointer into
+                    // it cannot pass a later magic check.
+                    (*next).magic = 0;
+                    (*curr).size += next_size + hdr_size as u32;
+                    (*curr).next = next_next;
+                }
+                continue;
+            }
+        }
+        curr = next;
     }
     lock_release(HEAP_LOCK.as_ptr() as *mut IrqSpinlock);
 }

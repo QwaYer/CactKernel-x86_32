@@ -17,6 +17,12 @@ struct tmpfs_node {
     vfs_node_t     vnode;
     tmpfs_node_t  *children;
     tmpfs_node_t  *next;
+    /*
+     * Unix-style unlink semantics: when a node is unlinked while still held
+     * by an open fd, it's detached from the directory tree and marked
+     * pending_free.  The final close (_tmp_close) actually frees it.
+     */
+    int            pending_free;
 };
 
 static tmpfs_node_t  tmpfs_root_node;
@@ -25,6 +31,8 @@ static int           tmpfs_ready     = 0;
 
 static int _tmp_read   (vfs_node_t*, uint32_t, uint32_t, char*);
 static int _tmp_write  (vfs_node_t*, uint32_t, uint32_t, char*);
+static void _tmp_open  (vfs_node_t*);
+static void _tmp_close (vfs_node_t*);
 static vfs_node_t *_tmp_walk   (vfs_node_t*, const char*);
 static vfs_dirent_t *_tmp_readdir(vfs_node_t*, uint32_t);
 static void _tmp_listdir(vfs_node_t*);
@@ -37,6 +45,8 @@ static int _tmp_rename (vfs_node_t*, const char*, const char*);
 static vfs_ops_t tmpfs_ops = {
     .read    = _tmp_read,
     .write   = _tmp_write,
+    .open    = _tmp_open,
+    .close   = _tmp_close,
     .walk    = _tmp_walk,
     .readdir = _tmp_readdir,
     .listdir = _tmp_listdir,
@@ -56,12 +66,21 @@ static tmpfs_node_t *_find_child(tmpfs_node_t *dir, const char *name) {
 
 static void _init_vnode(tmpfs_node_t *n) {
     strlcpy(n->vnode.name, n->name, 128);
-    n->vnode.type    = n->type;
-    n->vnode.size    = n->size;
-    n->vnode.inode   = n->inode;
-    n->vnode.mode    = 0777;
-    n->vnode.ops     = &tmpfs_ops;
-    n->vnode.priv    = n;
+    n->vnode.type     = n->type;
+    n->vnode.size     = n->size;
+    n->vnode.inode    = n->inode;
+    n->vnode.mode     = 0777;
+    n->vnode.refcount = 1;            /* 1 = link from the directory tree */
+    n->vnode.ops      = &tmpfs_ops;
+    n->vnode.priv     = n;
+}
+
+static void _free_tmpfs_node(tmpfs_node_t *n) {
+    if (!n) return;
+    /* never free the static root */
+    if (n == &tmpfs_root_node) return;
+    if (n->data) kfree_heap(n->data);
+    kfree_heap(n);
 }
 
 static int _ensure_cap(tmpfs_node_t *n, uint32_t needed) {
@@ -97,6 +116,27 @@ static int _tmp_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
     memcpy(n->data + off, buf, size);
     if (end > n->size) { n->size = end; node->size = end; }
     return (int)size;
+}
+
+/*
+ * open/close: maintain vfs_node_t.refcount so _tmp_delete can defer the
+ * actual free until the last fd closes (Unix-style unlink-while-open).
+ * Without these, unlink() freed tmpfs_node_t (and its embedded vnode)
+ * while other tasks still held pointers — classic UAF that corrupted
+ * the heap once the block was reallocated.
+ */
+static void _tmp_open(vfs_node_t *node) {
+    if (!node) return;
+    node->refcount++;
+}
+
+static void _tmp_close(vfs_node_t *node) {
+    if (!node || node->refcount == 0) return;
+    node->refcount--;
+    if (node->refcount == 0) {
+        tmpfs_node_t *n = (tmpfs_node_t*)node->priv;
+        if (n && n->pending_free) _free_tmpfs_node(n);
+    }
 }
 
 static vfs_node_t *_tmp_walk(vfs_node_t *dir, const char *name) {
@@ -153,9 +193,19 @@ static int _tmp_delete(vfs_node_t *dir, const char *name) {
     while (*pp) {
         if (streq((*pp)->name, name)) {
             tmpfs_node_t *dead = *pp;
-            *pp = dead->next;
-            if (dead->data) kfree_heap(dead->data);
-            kfree_heap(dead);
+            *pp = dead->next;                    /* detach from directory */
+            dead->next = 0;
+            /*
+             * The directory link itself counts as 1 in vnode.refcount (set
+             * by _init_vnode).  Drop it; if any fd still holds the node,
+             * defer the actual free to _tmp_close via pending_free.
+             */
+            if (dead->vnode.refcount > 0) dead->vnode.refcount--;
+            if (dead->vnode.refcount == 0) {
+                _free_tmpfs_node(dead);
+            } else {
+                dead->pending_free = 1;
+            }
             return 0;
         }
         pp = &(*pp)->next;
@@ -186,7 +236,17 @@ static int _tmp_rmdir(vfs_node_t *dir, const char *name) {
     if (!c || c->type != VFS_DIRECTORY || c->children) return -1;
     tmpfs_node_t **pp = &d->children;
     while (*pp) {
-        if (*pp == c) { *pp = c->next; kfree_heap(c); return 0; }
+        if (*pp == c) {
+            *pp = c->next;
+            c->next = 0;
+            if (c->vnode.refcount > 0) c->vnode.refcount--;
+            if (c->vnode.refcount == 0) {
+                _free_tmpfs_node(c);
+            } else {
+                c->pending_free = 1;
+            }
+            return 0;
+        }
         pp = &(*pp)->next;
     }
     return -1;
