@@ -1,7 +1,8 @@
 #include "virtio_net.h"
 #include "net.h"
 #include "kernel.h"
-#include "memory.h"   
+#include "memory.h"
+#include "klib.h"
 
 static uint16_t io_base = 0;   /* BAR0 I/O port base */
 

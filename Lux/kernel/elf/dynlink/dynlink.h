@@ -131,4 +131,13 @@ uint32_t dynlink_resolve_symbol(dyn_ctx_t* ctx, const char* name);
 
 void dynlink_unload_all(dyn_ctx_t* ctx);
 
-#endif 
+/*
+ * load_elf_dynamic lives in elf_loader.c but takes a dyn_ctx_t*, so its
+ * prototype is exposed here next to the dynlink types it depends on.
+ * The plain (non-dynamic) loader is declared in elf_loader.c — callers that
+ * need it can declare it locally; only the dynamic path is widely used.
+ */
+void* load_elf_dynamic(char* path, uint32_t* pd,
+                       proc_page_tracker_t* tracker, dyn_ctx_t* ctx);
+
+#endif

@@ -3,6 +3,12 @@
 #include "blkdev.h"
 #include "kernel.h"
 #include "memory.h"
+#include "klib.h"
+
+/* Defensive: klib.h is supposed to declare these, but stricter compilers
+ * trip if a transitive include path drops it.  Re-declare locally. */
+extern void* memory_set(void* dest, int val, int len);
+extern void* memory_copy(void* dest, const void* src, int len);
 
 
 struct page {
