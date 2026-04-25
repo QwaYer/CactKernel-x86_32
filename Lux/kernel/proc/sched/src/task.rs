@@ -790,7 +790,6 @@ pub unsafe extern "C" fn task_exec(
 
     crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
-    // Освободить старое адресное пространство
     if !(*t).page_directory.is_null() {
         ffi::proc_free_pages(&raw mut (*t).mm);
         ffi::vmm_free_address_space((*t).page_directory);
@@ -808,12 +807,13 @@ pub unsafe extern "C" fn task_exec(
 
     ffi::mmap_table_init(&raw mut (*t).mmap_table);
 
-    // Закрыть fd с FD_CLOEXEC (fd 3+)
     for i in 3..MAX_FD {
-        if !(*t).fd_table[i].is_null() {
+        if !(*t).fd_table[i].is_null() && (*t).fd_cloexec[i] != 0 {
             ffi::close_vfs((*t).fd_table[i]);
-            (*t).fd_table[i]  = ptr::null_mut();
-            (*t).fd_offset[i] = 0;
+            (*t).fd_table[i]   = ptr::null_mut();
+            (*t).fd_offset[i]  = 0;
+            (*t).fd_flags[i]   = 0;
+            (*t).fd_cloexec[i] = 0;
         }
     }
 
@@ -824,7 +824,6 @@ pub unsafe extern "C" fn task_exec(
     let us = (*t).ustack_phys as *mut u8;
     for i in 0..(PAGE_SIZE as usize) { *us.add(i) = 0; }
 
-    // Вычислить brk
     {
         let file = ffi::vfs_walk_path(ffi::vfs_root, path);
         if !file.is_null() {
