@@ -254,6 +254,8 @@ static int sys_open(char* name, int flags) {
             current_task->fd_offset[i] = 0;
             current_task->fd_flags[i]   = (uint32_t)flags;
             current_task->fd_cloexec[i] = 0;
+            /* Increment refcount so unlink-while-open defers free until close. */
+            open_vfs(node);
             kprint("[DBG] sys_open: fd=");
             char tmp[16]; itoa(i, tmp); kprint(tmp);
             kprint(" path="); kprint(name); kprint("\n");
@@ -550,6 +552,10 @@ static int sys_pipe(struct syscall_frame* regs) {
         return -1;
     }
 
+    /* No open_vfs here: pipe_create/_make_node already incremented
+     * pipe_t.ref_count once per node, which balances the close_vfs in
+     * sys_close.  Unlike regular files, pipe nodes are not in any
+     * directory tree so there is no separate "dir-link" refcount. */
     current_task->fd_table[rfd]   = pipefd[0];
     current_task->fd_table[wfd]   = pipefd[1];
     current_task->fd_offset[rfd]  = 0;
@@ -1176,6 +1182,7 @@ static int alloc_fd(vfs_node_t *node) {
             current_task->fd_offset[i]  = 0;
             current_task->fd_flags[i]   = 0;
             current_task->fd_cloexec[i] = 0;
+            open_vfs(node);
             return i;
         }
     }
@@ -1890,7 +1897,12 @@ static int sys_shmctl(struct syscall_frame* regs) {
     return shm_ctl(shmid, cmd, buf);
 }
 
-typedef int (*syscall_fn)();
+/* All syscalls go through the cdecl ABI: callers push up to 3 args
+ * (ebx/ecx/edx) and the callee pops nothing.  Some real prototypes take
+ * a struct syscall_frame*, others take a few void*; both are reachable
+ * via casts.  Declare the table-entry type as the widest 3-arg shape so
+ * that the dispatch site below is a well-typed call. */
+typedef int (*syscall_fn)(void*, void*, void*);
 static syscall_fn syscall_table[] = {
     [0]  = (syscall_fn)sys_print,
     [1]  = (syscall_fn)sys_get_pid,

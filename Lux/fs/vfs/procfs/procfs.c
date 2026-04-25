@@ -68,7 +68,8 @@ static int _cmd_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
     (void)off;
     proc_cmd_t *c = (proc_cmd_t *)node->priv;
     if (!c || !c->cmd_fn) return -1;
-    return c->cmd_fn(buf, size);
+    c->cmd_fn(buf);
+    return (int)size;
 }
 
 static vfs_ops_t cmd_ops = { .read = _cmd_read, .write = _cmd_write };
@@ -369,7 +370,7 @@ static int _tasks_read(uint32_t off, uint32_t size, char *buf) {
     task_snap_t snap[TASKS_SNAP_MAX];
     int count = 0;
 
-    spinlock_acquire(&scheduler_lock);
+    irq_spinlock_acquire(&scheduler_lock);
     struct task_struct *head = (struct task_struct *)task_list_head;
     struct task_struct *t    = head;
     if (t) do {
@@ -379,7 +380,7 @@ static int _tasks_read(uint32_t off, uint32_t size, char *buf) {
         count++;
         t = t->next;
     } while (t && t != head && count < TASKS_SNAP_MAX);
-    spinlock_release(&scheduler_lock);
+    irq_spinlock_release(&scheduler_lock);
 
     char tmp[2048];
     int  p = 0;

@@ -196,7 +196,7 @@ $(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 	@mkdir -p $(BUILD_DIR)/isodir/boot/grub
 	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir/boot/kernel.bin
 	cp grub.cfg $(BUILD_DIR)/isodir/boot/grub/grub.cfg
-	grub-mkrescue -o $(BUILD_DIR)/lux.iso $(BUILD_DIR)/isodir
+	grub2-mkrescue -o $(BUILD_DIR)/lux.iso $(BUILD_DIR)/isodir
 
 
 $(RUST_MM_LIB): FORCE
@@ -205,7 +205,6 @@ $(RUST_MM_LIB): FORCE
 FORCE:
 
 $(BUILD_DIR)/kernel.bin: $(OBJ) $(RUST_MM_LIB) $(SCHED_TARGET)
-	@echo "[LD] Linking kernel with Rust MM + MLFQ scheduler..."
 	ld $(LDFLAGS) -o $@ --start-group $(OBJ) $(RUST_MM_LIB) -L$(dir $(SCHED_TARGET)) -lsched --end-group
 
 

@@ -7,7 +7,7 @@
 
 typedef int (*procfs_read_fn)(uint32_t off, uint32_t size, char *buf);
 
-typedef int (*procfs_cmd_fn)(const char *cmd, uint32_t len);
+typedef void (*procfs_cmd_fn)(char *args);
 
 
 //Public api
