@@ -3,6 +3,7 @@
 #include "devfs.h"
 #include "procfs.h"
 #include "tmpfs.h"
+#include "binfs.h"
 #include "vfs.h"
 #include "ext4.h"
 #include "memory.h"
@@ -428,5 +429,13 @@ void mntfs_init(void) {
     mntfs_mount(sys_tmp, "tmpfs", tmpfs_get_root(), 0);
     kprint("[mntfs] tmpfs mounted at "); kprint(sys_tmp); kprint("\n");
 
-    klog(LOG_OK, "mntfs ready — ext4/etcfs/devfs/procfs/tmpfs mounted");
+    kprint("[mntfs] initializing binfs\n");
+    binfs_init(ext4);
+    char sys_bin[64];
+    strlcpy(sys_bin, boot_devname, 64);
+    strlcpy(sys_bin + strlen(boot_devname), "/sys/bin", 64 - strlen(boot_devname));
+    mntfs_mount(sys_bin, "binfs", binfs_get_root(), 0);
+    kprint("[mntfs] binfs mounted at "); kprint(sys_bin); kprint("\n");
+
+    klog(LOG_OK, "mntfs ready — ext4/etcfs/devfs/procfs/tmpfs/binfs mounted");
 }
