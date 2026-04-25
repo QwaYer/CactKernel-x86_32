@@ -227,134 +227,85 @@ typedef struct {
     char err_path[128];
 } redir_info_t;
 
-/* Shift the tail of string from 'src' to 'dst' (src >= dst). */
-static void _str_shift(char *dst, const char *src)
+static int _grab_path(char **pp, char *out, int max)
 {
-    while (*src) *dst++ = *src++;
-    *dst = '\0';
-}
+    char *p = *pp;
+    while (*p == ' ') p++;          
 
-/* Extract a filename token starting at *p, store into 'out'.
-   Advances *p past the token.  Returns length written. */
-static int _grab_path(char *p, char *out, int max)
-{
-    while (*p == ' ') p++;      /* skip spaces after operator */
     int i = 0;
-    while (*p && *p != ' ' && *p != '>' && *p != '<' && i < max - 1) {
-        out[i++] = *p++;
+    while (*p && *p != ' ' && *p != '>' && *p != '<' && *p != '|') {
+        if (i < max - 1)         
+            out[i++] = *p;
+        p++;
     }
     out[i] = '\0';
-    return i;
+    *pp = p;                       
 }
 
-/*  Scan 'cmd' for redirect operators, fill 'ri', and strip
- *  the operators + filenames from 'cmd' in place.
- *
- *  Recognised:  2>&1  2>file  >>file  >file  <file
- */
 static void _parse_redirects(char *cmd, redir_info_t *ri)
 {
     memset(ri, 0, sizeof(redir_info_t));
 
-    char *p = cmd;
+    char *p       = cmd;
+    char *cmd_end = 0;   
+
     while (*p) {
         /* --- 2>&1 --- */
         if (p[0] == '2' && p[1] == '>' && p[2] == '&' && p[3] == '1') {
+            if (!cmd_end) cmd_end = p;
             ri->redir_err = REDIR_ERR2OUT;
-            char *tail = p + 4;
-            while (*tail == ' ') tail++;
-            _str_shift(p, tail);
-            continue;                   /* rescan from same position */
+            p += 4;
+            continue;
         }
 
-        /* --- 2> file --- */
+        /* --- 2>file --- */
         if (p[0] == '2' && p[1] == '>') {
+            if (!cmd_end) cmd_end = p;
             ri->redir_err = REDIR_ERR;
-            char *start = p;
             p += 2;
-            _grab_path(p, ri->err_path, 128);
-            /* advance p past the path */
-            while (*p == ' ') p++;
-            while (*p && *p != ' ' && *p != '>' && *p != '<') p++;
-            _str_shift(start, p);
-            p = start;
+            _grab_path(&p, ri->err_path, 128);
             continue;
         }
 
-        /* --- >> file --- */
+        /* --- >>file --- */
         if (p[0] == '>' && p[1] == '>') {
+            if (!cmd_end) cmd_end = p;
             ri->redir_out = REDIR_APPEND;
-            char *start = p;
             p += 2;
-            _grab_path(p, ri->out_path, 128);
-            while (*p == ' ') p++;
-            while (*p && *p != ' ' && *p != '>' && *p != '<') p++;
-            _str_shift(start, p);
-            p = start;
+            _grab_path(&p, ri->out_path, 128);
             continue;
         }
 
-        /* --- > file --- */
+        /* --- >file --- */
         if (p[0] == '>') {
+            if (!cmd_end) cmd_end = p;
             ri->redir_out = REDIR_OUT;
-            char *start = p;
             p += 1;
-            _grab_path(p, ri->out_path, 128);
-            while (*p == ' ') p++;
-            while (*p && *p != ' ' && *p != '>' && *p != '<') p++;
-            _str_shift(start, p);
-            p = start;
+            _grab_path(&p, ri->out_path, 128);
             continue;
         }
 
-        /* --- < file --- */
+        /* --- <file --- */
         if (p[0] == '<') {
+            if (!cmd_end) cmd_end = p;
             ri->redir_in = REDIR_IN;
-            char *start = p;
             p += 1;
-            _grab_path(p, ri->in_path, 128);
-            while (*p == ' ') p++;
-            while (*p && *p != ' ' && *p != '>' && *p != '<') p++;
-            _str_shift(start, p);
-            p = start;
+            _grab_path(&p, ri->in_path, 128);
             continue;
         }
 
         p++;
     }
 
-    /* trim trailing spaces left over */
-    int len = strlen(cmd);
-    while (len > 0 && cmd[len - 1] == ' ') cmd[--len] = '\0';
-}
-
-/* ---------- stderr helper ---------- */
-
-void shell_err_write(const char *s)
-{
-    if (!s) return;
-    if (shell_stderr)
-        write_vfs(shell_stderr, 0, strlen(s), (char *)s);
-    else
-        kprint((char *)s);
-}
-
-/* ================================================================ */
-
-static vfs_node_t* _get_cmd_dir(void)
-{
-    if (cached_cmd_dir) return cached_cmd_dir;
-
-    vfs_node_t* pr = procfs_get_root();
-    if (pr && pr->ops && pr->ops->walk) {
-        cached_cmd_dir = pr->ops->walk(pr, "cmd");
-        if (cached_cmd_dir) return cached_cmd_dir;
+    if (cmd_end) {
+        char *trim = cmd_end;
+        while (trim > cmd && trim[-1] == ' ') trim--;
+        *trim = '\0';
+    } else {
+        /* No operators — just trim trailing spaces. */
+        int len = (int)strlen(cmd);
+        while (len > 0 && cmd[len - 1] == ' ') cmd[--len] = '\0';
     }
-
-    vfs_node_t* n = vfs_walk_path(vfs_root, "nvme0n1/sys/proc/cmd");
-    if (n) { cached_cmd_dir = n; return n; }
-
-    return 0;
 }
 
 
@@ -380,72 +331,164 @@ static int split_by(char* input, char sep, char* parts[], int max)
     return count;
 }
 
+#define ARGV_MAX 32
 
-static void _run_one(char* input)
+typedef struct {
+    char        *path;           /* binary name — argv[0]                  */
+    char        *argv[ARGV_MAX]; /* NULL-terminated, pointers into segment  */
+    int          argc;
+    redir_info_t redir;
+} command_t;
+
+static int _tokenize_cmd(char *cmd, char **argv, int max)
 {
-    if (!input || input[0] == '\0') return;
+    int   argc = 0;
+    char *p    = cmd;
+
+    while (*p && argc < max - 1) {
+        while (*p == ' ') p++;      /* skip inter-token spaces */
+        if (!*p) break;
+
+        argv[argc++] = p;           /* record token start */
+
+        while (*p && *p != ' ') p++;
+        if (*p == ' ') *p++ = '\0'; /* null-terminate token, advance past space */
+    }
+    argv[argc] = 0;
+    return argc;
+}
+
+
+static command_t *parse_line(char *input, int *out_n)
+{
+    *out_n = 0;
+    if (!input || !input[0]) return 0;
+
+    /* 1. Split by '|' into pipe stages ('\0' inserted at each '|'). */
+    char *segs[PIPE_PARTS_MAX];
+    int   n = split_by(input, '|', segs, PIPE_PARTS_MAX);
+    if (n == 0) return 0;
+
+    /* 2. Allocate command array. */
+    command_t *cmds = (command_t *)kmalloc((uint32_t)(n * (int)sizeof(command_t)));
+    if (!cmds) return 0;
+    memset(cmds, 0, (uint32_t)(n * (int)sizeof(command_t)));
+
+    for (int i = 0; i < n; i++) {
+        char *seg = segs[i];
+
+        /* Skip leading spaces left by split_by. */
+        while (*seg == ' ') seg++;
+
+        /* 3. Parse redirects — null-terminates seg at first operator. */
+        _parse_redirects(seg, &cmds[i].redir);
+
+        /* 4. Tokenize remaining command + args into argv. */
+        cmds[i].argc = _tokenize_cmd(seg, cmds[i].argv, ARGV_MAX);
+        cmds[i].path = (cmds[i].argc > 0) ? cmds[i].argv[0] : 0;
+    }
+
+    *out_n = n;
+    return cmds;
+}
+
+void shell_err_write(const char *s)
+{
+    if (!s) return;
+    if (shell_stderr)
+        write_vfs(shell_stderr, 0, strlen(s), (char *)s);
+    else
+        kprint((char *)s);
+}
+
+
+static vfs_node_t* _get_cmd_dir(void)
+{
+    if (cached_cmd_dir) return cached_cmd_dir;
+
+    vfs_node_t* pr = procfs_get_root();
+    if (pr && pr->ops && pr->ops->walk) {
+        cached_cmd_dir = pr->ops->walk(pr, "cmd");
+        if (cached_cmd_dir) return cached_cmd_dir;
+    }
+
+    vfs_node_t* n = vfs_walk_path(vfs_root, "nvme0n1/sys/proc/cmd");
+    if (n) { cached_cmd_dir = n; return n; }
+
+    return 0;
+}
+
+
+static void _run_one(command_t *cmd)
+{
+    if (!cmd || cmd->argc == 0 || !cmd->path) return;
     if (!current_dir) shell_resetdir();
 
-    char cmd_name[64];
-    int i = 0;
-    while (input[i] && input[i] != ' ' && i < 63) {
-        cmd_name[i] = input[i];
-        i++;
-    }
-    cmd_name[i] = '\0';
-
-    vfs_node_t* cmd_dir = _get_cmd_dir();
+    vfs_node_t *cmd_dir = _get_cmd_dir();
     if (cmd_dir) {
-        vfs_node_t* node = (cmd_dir->ops && cmd_dir->ops->walk)
-                           ? cmd_dir->ops->walk(cmd_dir, cmd_name) : 0;
+        vfs_node_t *node = (cmd_dir->ops && cmd_dir->ops->walk)
+                           ? cmd_dir->ops->walk(cmd_dir, cmd->path) : 0;
         if (node) {
-            write_vfs(node, 0, (uint32_t)strlen(input), (char*)input);
+            char full[512];
+            int  off = 0;
+            for (int i = 0; i < cmd->argc && off < (int)sizeof(full) - 2; i++) {
+                if (i > 0) full[off++] = ' ';
+                int n = (int)strlen(cmd->argv[i]);
+                if (off + n >= (int)sizeof(full) - 1)
+                    n = (int)sizeof(full) - 1 - off;
+                memcpy(full + off, cmd->argv[i], (uint32_t)n);
+                off += n;
+            }
+            full[off] = '\0';
+            write_vfs(node, 0, (uint32_t)off, full);
             return;
         }
     }
 
     kprint("\nUnknown command: ");
-    kprint(cmd_name);
+    kprint(cmd->path);
     kprint("\nType 'help' for a list of commands.\n");
 }
 
-
-static void _run_pipeline(char* parts[], int n)
+static void _run_pipeline(char *input)
 {
-    vfs_node_t* prev_read = 0;
+    int        n;
+    command_t *cmds = parse_line(input, &n);
+    if (!cmds || n == 0) { kfree_heap(cmds); return; }
+
+    vfs_node_t *prev_read = 0;
 
     for (int step = 0; step < n; step++) {
-        int is_last  = (step == n - 1);
+        command_t  *cmd     = &cmds[step];
+        int         is_last = (step == n - 1);
 
-        /* ---- parse redirections from this segment ---- */
-        redir_info_t ri;
-        _parse_redirects(parts[step], &ri);
-
-        vfs_node_t* redir_out_node = 0;
-        vfs_node_t* redir_in_node  = 0;
-        vfs_node_t* redir_err_node = 0;
+        vfs_node_t *redir_out_node = 0;
+        vfs_node_t *redir_in_node  = 0;
+        vfs_node_t *redir_err_node = 0;
 
         /* ---- set up inter-stage pipe ---- */
-        vfs_node_t* pipe_nodes[2] = {0, 0};
+        vfs_node_t *pipe_nodes[2] = {0, 0};
 
-        if (!is_last && !ri.redir_out) {
+        if (!is_last && !cmd->redir.redir_out) {
             /* normal pipe to next stage */
             if (pipe_create(pipe_nodes, 0) != 0) {
                 kprint("[pipe] error: pipe_create failed\n");
                 shell_out = 0; shell_stdin = 0; shell_stderr = 0;
                 if (prev_read) close_vfs(prev_read);
+                kfree_heap(cmds);
                 return;
             }
             shell_out = pipe_nodes[1];
-        } else if (ri.redir_out) {
+        } else if (cmd->redir.redir_out) {
             /* stdout redirected to file */
-            int append = (ri.redir_out == REDIR_APPEND);
-            redir_out_node = _redir_open(ri.out_path, append);
+            int append = (cmd->redir.redir_out == REDIR_APPEND);
+            redir_out_node = _redir_open(cmd->redir.out_path, append);
             if (!redir_out_node) {
                 kprint("[redir] error: cannot open '");
-                kprint(ri.out_path); kprint("'\n");
+                kprint(cmd->redir.out_path); kprint("'\n");
                 shell_out = 0; shell_stdin = 0; shell_stderr = 0;
                 if (prev_read) close_vfs(prev_read);
+                kfree_heap(cmds);
                 return;
             }
             shell_out = redir_out_node;
@@ -456,29 +499,33 @@ static void _run_pipeline(char* parts[], int n)
         }
 
         /* ---- stdin: from previous pipe or from file ---- */
-        if (ri.redir_in) {
-            redir_in_node = _redir_open(ri.in_path, 0);
+        if (cmd->redir.redir_in) {
+            redir_in_node = _redir_open(cmd->redir.in_path, 0);
             if (!redir_in_node) {
                 kprint("[redir] error: cannot open '");
-                kprint(ri.in_path); kprint("'\n");
+                kprint(cmd->redir.in_path); kprint("'\n");
                 _redir_free(redir_out_node);
-                if (!is_last && pipe_nodes[0]) { close_vfs(pipe_nodes[0]); close_vfs(pipe_nodes[1]); }
+                if (!is_last && pipe_nodes[0]) {
+                    close_vfs(pipe_nodes[0]);
+                    close_vfs(pipe_nodes[1]);
+                }
                 shell_out = 0; shell_stdin = 0; shell_stderr = 0;
                 if (prev_read) close_vfs(prev_read);
+                kfree_heap(cmds);
                 return;
             }
             shell_stdin = redir_in_node;
-            /* close unused prev_read if input is redirected */
+            /* close unused prev_read when stdin is redirected from file */
             if (prev_read) { close_vfs(prev_read); prev_read = 0; }
         } else {
             shell_stdin = prev_read;
         }
 
         /* ---- stderr ---- */
-        if (ri.redir_err == REDIR_ERR2OUT) {
+        if (cmd->redir.redir_err == REDIR_ERR2OUT) {
             shell_stderr = shell_out;   /* merge stderr into stdout */
-        } else if (ri.redir_err == REDIR_ERR) {
-            redir_err_node = _redir_open(ri.err_path, 0);
+        } else if (cmd->redir.redir_err == REDIR_ERR) {
+            redir_err_node = _redir_open(cmd->redir.err_path, 0);
             if (redir_err_node)
                 shell_stderr = redir_err_node;
         } else {
@@ -486,15 +533,14 @@ static void _run_pipeline(char* parts[], int n)
         }
 
         /* ---- execute ---- */
-        _run_one(parts[step]);
+        _run_one(cmd);
 
-        /* ---- cleanup ---- */
-        if (!is_last && pipe_nodes[1]) {
+        /* ---- per-stage cleanup ---- */
+        if (!is_last && pipe_nodes[1])
             close_vfs(pipe_nodes[1]);
-        }
         shell_out = 0;
 
-        if (prev_read && !ri.redir_in) {
+        if (prev_read && !cmd->redir.redir_in) {
             close_vfs(prev_read);
             prev_read = 0;
         }
@@ -509,9 +555,11 @@ static void _run_pipeline(char* parts[], int n)
     }
 
     if (prev_read) close_vfs(prev_read);
-    shell_out   = 0;
-    shell_stdin = 0;
+    shell_out    = 0;
+    shell_stdin  = 0;
     shell_stderr = 0;
+
+    kfree_heap(cmds);
 }
 
 
@@ -534,62 +582,6 @@ void shell_execute(char* input)
         char* seg = seq_parts[s];
         if (!seg || seg[0] == '\0') continue;
 
-        char* pipe_parts[PIPE_PARTS_MAX];
-        int   pipe_n = split_by(seg, '|', pipe_parts, PIPE_PARTS_MAX);
-
-        if (pipe_n < 2) {
-            /* single command — still check for redirections */
-            redir_info_t ri;
-            _parse_redirects(seg, &ri);
-
-            vfs_node_t *r_out = 0, *r_in = 0, *r_err = 0;
-
-            if (ri.redir_out) {
-                r_out = _redir_open(ri.out_path,
-                                    ri.redir_out == REDIR_APPEND);
-                if (!r_out) {
-                    kprint("[redir] error: cannot open '");
-                    kprint(ri.out_path); kprint("'\n");
-                    continue;
-                }
-                shell_out = r_out;
-            } else {
-                shell_out = 0;
-            }
-
-            if (ri.redir_in) {
-                r_in = _redir_open(ri.in_path, 0);
-                if (!r_in) {
-                    kprint("[redir] error: cannot open '");
-                    kprint(ri.in_path); kprint("'\n");
-                    _redir_free(r_out);
-                    shell_out = 0;
-                    continue;
-                }
-                shell_stdin = r_in;
-            } else {
-                shell_stdin = 0;
-            }
-
-            if (ri.redir_err == REDIR_ERR2OUT) {
-                shell_stderr = shell_out;
-            } else if (ri.redir_err == REDIR_ERR) {
-                r_err = _redir_open(ri.err_path, 0);
-                if (r_err) shell_stderr = r_err;
-            } else {
-                shell_stderr = 0;
-            }
-
-            _run_one(seg);
-
-            _redir_free(r_out);
-            _redir_free(r_in);
-            _redir_free(r_err);
-            shell_out    = 0;
-            shell_stdin  = 0;
-            shell_stderr = 0;
-        } else {
-            _run_pipeline(pipe_parts, pipe_n);
-        }
+        _run_pipeline(seg);
     }
 }
