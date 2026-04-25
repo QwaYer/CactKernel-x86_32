@@ -578,18 +578,27 @@ static int sys_dup2(struct syscall_frame* regs) {
     if (oldfd < 0 || oldfd >= MAX_FD) return -1;
     if (newfd < 0 || newfd >= MAX_FD) return -1;
 
+    /* POSIX: dup2(fd, fd) is a no-op that returns fd. */
+    if (oldfd == newfd) return newfd;
+
     struct vfs_node* node = current_task->fd_table[oldfd];
     if (!node) return -1;
 
-    if (current_task->fd_table[newfd]) {
-        close_vfs(current_task->fd_table[newfd]);
-    }
+    /* Increment first so the node is never transiently unreferenced even if
+     * newfd happens to alias the same underlying object (e.g. after a previous
+     * dup2). This prevents use-after-free when old_newnode == node. */
+    open_vfs(node);
 
+    struct vfs_node* old_newnode = current_task->fd_table[newfd];
     current_task->fd_table[newfd]   = node;
     current_task->fd_offset[newfd]  = current_task->fd_offset[oldfd];
     current_task->fd_flags[newfd]   = current_task->fd_flags[oldfd];
-    current_task->fd_cloexec[newfd] = 0; 
-    open_vfs(node);
+    current_task->fd_cloexec[newfd] = 0;
+
+    /* Decrement the evicted slot only after the new reference is established. */
+    if (old_newnode)
+        close_vfs(old_newnode);
+
     return newfd;
 }
 
