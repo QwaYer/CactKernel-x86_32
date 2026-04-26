@@ -266,17 +266,16 @@ static devfs_driver_t drv_disk = {
     .ctl=_disk_ctl,   .status=_disk_status
 };
 
-extern volatile char last_char;
-extern volatile int  key_event_happened;
+extern int keyboard_read_char(void);
 
 static int _tty_read(void *p, uint32_t off, uint32_t size, char *buf) {
     (void)p;(void)off;
     uint32_t i=0;
     while(i<size){
-        while(!key_event_happened) schedule();
-        key_event_happened=0;
-        buf[i++]=last_char;
-        if(last_char=='\n') break;
+        int c;
+        while((c=keyboard_read_char())<0) schedule();
+        buf[i++]=(char)c;
+        if((char)c=='\n') break;
     }
     return (int)i;
 }
@@ -373,7 +372,7 @@ void devfs_init(void) {
         kprint("[devfs] no boot disk — skipping block device node\n");
     }
     kprint("[devfs] registering /dev/tty  (char, keyboard/framebuffer)\n");
-    devfs_register("tty", DEVFS_F_CHAR,  &drv_tty, 0);
+    devfs_register("tty", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_tty, 0);
 
     devfs_ready = 1;
     klog(LOG_OK, "devfs ready — null/zero/random/urandom/tty registered");
