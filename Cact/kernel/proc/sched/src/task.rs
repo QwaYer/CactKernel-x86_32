@@ -1150,7 +1150,7 @@ pub unsafe extern "C" fn task_set_state(
 pub unsafe extern "C" fn task_setup_sigreturn(t: *mut TaskStruct) {
     if t.is_null() || (*t).page_directory.is_null() { return; }
 
-    let tramp_vaddr: u32 = 0xBFFFE000;
+    let tramp_vaddr: u32 = 0xBEFFF000;
     let phys = ffi::kalloc() as *mut u8;
     if phys.is_null() { return; }
 

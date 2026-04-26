@@ -199,7 +199,7 @@ $(BUILD_DIR)/cact.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 	@mkdir -p $(BUILD_DIR)/isodir/boot/grub
 	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir/boot/kernel.bin
 	cp grub.cfg $(BUILD_DIR)/isodir/boot/grub/grub.cfg
-	grub2-mkrescue -o $(BUILD_DIR)/cact.iso $(BUILD_DIR)/isodir
+	grub-mkrescue -o $(BUILD_DIR)/cact.iso $(BUILD_DIR)/isodir
 
 
 $(RUST_MM_LIB): FORCE
