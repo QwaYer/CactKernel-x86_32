@@ -348,7 +348,7 @@ static int _version_read(uint32_t off, uint32_t size, char *buf) {
 
     #define _V(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
 
-    _V("Lux Kernel ");  _V(kernel_version);    _V("\n");
+    _V("Cact Kernel ");  _V(kernel_version);    _V("\n");
     _V("Arch: x86 (i686)\n");
     _V("Compiler: GCC\n");
     _V("Commit: ");     _V(kernel_commit_hash); _V("\n");

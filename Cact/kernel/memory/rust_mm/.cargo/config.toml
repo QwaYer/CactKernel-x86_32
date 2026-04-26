@@ -1,5 +1,5 @@
 [build]
-target = "i686-lux.json"
+target = "i686-cact.json"
 
 [unstable]
 build-std = ["core"]
