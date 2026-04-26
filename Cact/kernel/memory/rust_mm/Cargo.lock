@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "lux_mm"
+name = "cact_mm"
 version = "0.1.0"

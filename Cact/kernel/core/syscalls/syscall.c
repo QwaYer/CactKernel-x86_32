@@ -170,7 +170,7 @@ static int sys_chown(char *path, uint32_t new_uid, uint32_t new_gid) {
     return 0;
 }
 
-struct lux_dirent {
+struct cact_dirent {
     uint32_t d_ino;
     char     d_name[124];
 };
@@ -187,7 +187,7 @@ static int sys_getdents(struct syscall_frame* regs) {
     if (!node) return -1;
     if (node->type != VFS_DIRECTORY) return -1;
 
-    uint32_t entry_size = sizeof(struct lux_dirent);
+    uint32_t entry_size = sizeof(struct cact_dirent);
     if (!validate_user_ptr(buf, count)) return -1;
     if (count < entry_size) return -1;
 
@@ -198,7 +198,7 @@ static int sys_getdents(struct syscall_frame* regs) {
         struct vfs_dirent* de = readdir_vfs(node, index);
         if (!de) break;
 
-        struct lux_dirent* out = (struct lux_dirent*)(buf + written);
+        struct cact_dirent* out = (struct cact_dirent*)(buf + written);
         out->d_ino = de->inode;
 
         int i = 0;

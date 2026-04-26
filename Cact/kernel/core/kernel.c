@@ -250,11 +250,11 @@ void terminal_task() {
     terminal_winsize.ws_ypixel = (uint16_t)fb_h;
 
     kprint("\n");
-    kprint_color("Lux Shell", COLOR_LIGHT_CYAN);
+    kprint_color("Cact Shell", COLOR_LIGHT_CYAN);
     kprint(" ready!\n");
     kprint_color("kernel", COLOR_LIGHT_GREEN);
     kprint("@");
-    kprint_color("lux", COLOR_LIGHT_RED);
+    kprint_color("cact", COLOR_LIGHT_RED);
     kprint(":");
     kprint_color("~", COLOR_LIGHT_BLUE);
     kprint("$ ");
@@ -284,7 +284,7 @@ void terminal_task() {
                 idx = 0;
                 kprint_color("kernel", COLOR_LIGHT_GREEN);
                 kprint("@");
-                kprint_color("lux", COLOR_LIGHT_RED);
+                kprint_color("cact", COLOR_LIGHT_RED);
                 kprint(":");
                 kprint_color("~", COLOR_LIGHT_BLUE);
                 kprint("$ ");
@@ -522,7 +522,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     kernel_setup_hardware(mbi);
 
     kprint("\n");
-    kprint_color("Lux Kernel ", COLOR_LIGHT_BROWN);
+    kprint_color("Cact Kernel ", COLOR_LIGHT_BROWN);
     kprint_color((char*)kernel_version, COLOR_LIGHT_BROWN);
     kprint_color("\n", COLOR_LIGHT_BROWN);
     kprint_color("--------------------------\n", COLOR_DARK_GREY);
