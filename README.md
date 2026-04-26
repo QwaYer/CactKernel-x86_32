@@ -76,7 +76,7 @@ VERSION_DEFS = -DCACT_VERSION=0.9.0 -DCACT_COMMIT_HASH=$(git rev-parse --short H
 **Linking:**
 ```makefile
 LDFLAGS = -m elf_i386 -T linker.ld -z noexecstack
-# Final link: C objects + liblux_mm.a (Rust PMM/VMM) + libsched.a (Rust MLFQ)
+# Final link: C objects + libcact_mm.a (Rust PMM/VMM) + libsched.a (Rust MLFQ)
 ```
 
 ---
@@ -85,7 +85,7 @@ LDFLAGS = -m elf_i386 -T linker.ld -z noexecstack
 
 ```
 CactKernel-x86_32/
-├── Lux/
+├── Cact/
 │   ├── kernel/
 │   │   ├── core/           kernel.c, kernel.h, klib.c, syscall.c, multiboot2.c
 │   │   ├── memory/         rust_mm/ (PMM, VMM, mmap, swap, slab, shm — Rust)

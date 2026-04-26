@@ -1,75 +1,75 @@
 # ==============================================================================
-# Lux Kernel Makefile
+# Cact Kernel Makefile
 # ==============================================================================
 
 
 
 
-KERN_CORE_DIR    = Lux/kernel/core
-KERN_VER_DIR     = Lux/kernel/core/kern_ver
-KERN_SYSCALLS_DIR    = Lux/kernel/core/syscalls
-KERN_GDT_DIR     = Lux/kernel/gdt
-KERN_ELF_DIR     = Lux/kernel/elf
-KERN_DYNLINK_DIR = Lux/kernel/elf/dynlink
-KERN_SHELL_DIR   = Lux/kernel/shell
-KERN_CMDS_DIR    = Lux/kernel/shell/commands
-KERN_MEM_DIR     = Lux/kernel/memory
-KERN_PROC_DIR    = Lux/kernel/proc
-SCHED_DIR    = Lux/kernel/proc/sched
-SCHED_TARGET = $(SCHED_DIR)/target/i686-lux/release/libsched.a
+KERN_CORE_DIR    = Cact/kernel/core
+KERN_VER_DIR     = Cact/kernel/core/kern_ver
+KERN_SYSCALLS_DIR    = Cact/kernel/core/syscalls
+KERN_GDT_DIR     = Cact/kernel/gdt
+KERN_ELF_DIR     = Cact/kernel/elf
+KERN_DYNLINK_DIR = Cact/kernel/elf/dynlink
+KERN_SHELL_DIR   = Cact/kernel/shell
+KERN_CMDS_DIR    = Cact/kernel/shell/commands
+KERN_MEM_DIR     = Cact/kernel/memory
+KERN_PROC_DIR    = Cact/kernel/proc
+SCHED_DIR    = Cact/kernel/proc/sched
+SCHED_TARGET = $(SCHED_DIR)/target/i686-cact/release/libsched.a
 CARGO        = cargo +nightly
-KERN_SYNC_DIR    = Lux/kernel/sync
+KERN_SYNC_DIR    = Cact/kernel/sync
 
 # Rust memory manager
-RUST_MM_DIR  = Lux/kernel/memory/rust_mm
-RUST_MM_LIB  = $(RUST_MM_DIR)/target/i686-lux/release/liblux_mm.a
-KERN_IDT_DIR     = Lux/kernel/idt
-DRIVER_INPUT_DIR     = Lux/drivers/input
-DRIVER_PS2_KBD_DIR   = Lux/drivers/input/ps_2/keyboard
-DRIVER_PS2_MOUSE_DIR = Lux/drivers/input/ps_2/mouse
-DRIVER_PCI_DIR        = Lux/drivers/pci
-DRIVER_PCI_ENUM_DIR   = Lux/drivers/pci/enum
-DRIVER_PCI_DRV_DIR    = Lux/drivers/pci/driver
-DRIVER_PCI_LOADER_DIR = Lux/drivers/pci/loader
-DRIVER_BLK_BLOCK_DIR  = Lux/drivers/block/blkdev
-DRIVER_AHCI_DIR  = Lux/drivers/block/AHCI
-DRIVER_NVME_DIR  = Lux/drivers/block/NVMe
-DRIVER_BUF_DIR   = Lux/drivers/block/buf
-DRIVER_USB_DIR       = Lux/drivers/usb
-DRIVER_USB_XHCI_DIR  = Lux/drivers/usb/xHCI
-DRIVER_USB_HID_DIR   = Lux/drivers/usb/hid
-DRIVER_USB_HUB_DIR   = Lux/drivers/usb/hub
-FS_VFS_DIR       = Lux/fs/vfs
-FS_PIPE_DIR      = Lux/pipe
-FS_DEVFS_DIR     = Lux/fs/vfs/devfs
-FS_PG_DIR        = Lux/drivers/block/pagecache
-FS_EXT4_DIR      = Lux/fs/ext4
-FS_PROCFS_DIR    = Lux/fs/vfs/procfs
-FS_MNTFS_DIR     = Lux/fs/vfs/mntfs
-FS_ETCFS_DIR     = Lux/fs/vfs/etcfs
-FS_TMPFS_DIR     = Lux/fs/vfs/tmpfs
-FS_BINFS_DIR     = Lux/fs/vfs/binfs
-NET_DIR          = Lux/net
-NET_ARP_DIR      = Lux/net/arp
-NET_ETH_DIR      = Lux/net/ethernet
-NET_IP_DIR       = Lux/net/ip
-NET_ICMP_DIR     = Lux/net/icmp
-NET_UDP_DIR      = Lux/net/protocols/udp
-NET_TCP_DIR      = Lux/net/protocols/tcp
-NET_SOCKET_DIR   = Lux/net/socket
-DRIVER_NET_DIR   = Lux/drivers/network/virtio_net
-DRIVER_FB_DIR    = Lux/drivers/video/fb
-DRIVER_FONT_DIR  = Lux/drivers/video/font
+RUST_MM_DIR  = Cact/kernel/memory/rust_mm
+RUST_MM_LIB  = $(RUST_MM_DIR)/target/i686-cact/release/libcact_mm.a
+KERN_IDT_DIR     = Cact/kernel/idt
+DRIVER_INPUT_DIR     = Cact/drivers/input
+DRIVER_PS2_KBD_DIR   = Cact/drivers/input/ps_2/keyboard
+DRIVER_PS2_MOUSE_DIR = Cact/drivers/input/ps_2/mouse
+DRIVER_PCI_DIR        = Cact/drivers/pci
+DRIVER_PCI_ENUM_DIR   = Cact/drivers/pci/enum
+DRIVER_PCI_DRV_DIR    = Cact/drivers/pci/driver
+DRIVER_PCI_LOADER_DIR = Cact/drivers/pci/loader
+DRIVER_BLK_BLOCK_DIR  = Cact/drivers/block/blkdev
+DRIVER_AHCI_DIR  = Cact/drivers/block/AHCI
+DRIVER_NVME_DIR  = Cact/drivers/block/NVMe
+DRIVER_BUF_DIR   = Cact/drivers/block/buf
+DRIVER_USB_DIR       = Cact/drivers/usb
+DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xHCI
+DRIVER_USB_HID_DIR   = Cact/drivers/usb/hid
+DRIVER_USB_HUB_DIR   = Cact/drivers/usb/hub
+FS_VFS_DIR       = Cact/fs/vfs
+FS_PIPE_DIR      = Cact/pipe
+FS_DEVFS_DIR     = Cact/fs/vfs/devfs
+FS_PG_DIR        = Cact/drivers/block/pagecache
+FS_EXT4_DIR      = Cact/fs/ext4
+FS_PROCFS_DIR    = Cact/fs/vfs/procfs
+FS_MNTFS_DIR     = Cact/fs/vfs/mntfs
+FS_ETCFS_DIR     = Cact/fs/vfs/etcfs
+FS_TMPFS_DIR     = Cact/fs/vfs/tmpfs
+FS_BINFS_DIR     = Cact/fs/vfs/binfs
+NET_DIR          = Cact/net
+NET_ARP_DIR      = Cact/net/arp
+NET_ETH_DIR      = Cact/net/ethernet
+NET_IP_DIR       = Cact/net/ip
+NET_ICMP_DIR     = Cact/net/icmp
+NET_UDP_DIR      = Cact/net/protocols/udp
+NET_TCP_DIR      = Cact/net/protocols/tcp
+NET_SOCKET_DIR   = Cact/net/socket
+DRIVER_NET_DIR   = Cact/drivers/network/virtio_net
+DRIVER_FB_DIR    = Cact/drivers/video/fb
+DRIVER_FONT_DIR  = Cact/drivers/video/font
 BUILD_DIR        = build
 
 # Version metadata from VERSION file
-LUX_VERSION    := $(shell cat VERSION 2>/dev/null || echo "unknown")
-LUX_COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "no-git")
-LUX_BUILD_TIME := $(shell date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
+CACT_VERSION    := $(shell cat VERSION 2>/dev/null || echo "unknown")
+CACT_COMMIT     := $(shell git rev-parse --short HEAD 2>/dev/null || echo "no-git")
+CACT_BUILD_TIME := $(shell date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
 
-VERSION_DEFS = -DLUX_VERSION=$(LUX_VERSION) \
-               -DLUX_COMMIT_HASH=$(LUX_COMMIT) \
-               -DLUX_BUILD_TIME="$(LUX_BUILD_TIME)"
+VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
+               -DCACT_COMMIT_HASH=$(CACT_COMMIT) \
+               -DCACT_BUILD_TIME="$(CACT_BUILD_TIME)"
 
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
@@ -181,25 +181,25 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/font.o
 
 
-all: $(BUILD_DIR)/lux.iso
+all: $(BUILD_DIR)/cact.iso
 	@echo "--------------------------------------------------"
-	@echo "Lux kernel build complete!"
-	@echo "  Version: $(LUX_VERSION)"
-	@echo "  Commit:  $(LUX_COMMIT)"
-	@echo "  Built:   $(LUX_BUILD_TIME)"
+	@echo "Cact kernel build complete!"
+	@echo "  Version: $(CACT_VERSION)"
+	@echo "  Commit:  $(CACT_COMMIT)"
+	@echo "  Built:   $(CACT_BUILD_TIME)"
 	@echo "  Kernel:  $(BUILD_DIR)/kernel.bin"
-	@echo "  Image:   $(BUILD_DIR)/lux.iso"
+	@echo "  Image:   $(BUILD_DIR)/cact.iso"
 	@KERN_SIZE=$$(wc -c < $(BUILD_DIR)/kernel.bin); \
 	 KERN_SECTORS=$$(( ($$KERN_SIZE + 511) / 512 )); \
 	 echo "  Kernel size: $$KERN_SIZE bytes ($$KERN_SECTORS sectors)";
 	@echo "--------------------------------------------------"
 
 
-$(BUILD_DIR)/lux.iso: $(BUILD_DIR)/kernel.bin grub.cfg
+$(BUILD_DIR)/cact.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 	@mkdir -p $(BUILD_DIR)/isodir/boot/grub
 	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir/boot/kernel.bin
 	cp grub.cfg $(BUILD_DIR)/isodir/boot/grub/grub.cfg
-	grub2-mkrescue -o $(BUILD_DIR)/lux.iso $(BUILD_DIR)/isodir
+	grub2-mkrescue -o $(BUILD_DIR)/cact.iso $(BUILD_DIR)/isodir
 
 
 $(RUST_MM_LIB): FORCE
@@ -260,7 +260,7 @@ $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(SCHED_TARGET): $(wildcard $(SCHED_DIR)/src/*.rs) $(SCHED_DIR)/Cargo.toml $(SCHED_DIR)/targets/i686-lux.json
+$(SCHED_TARGET): $(wildcard $(SCHED_DIR)/src/*.rs) $(SCHED_DIR)/Cargo.toml $(SCHED_DIR)/targets/i686-cact.json
 	cd $(SCHED_DIR) && $(CARGO) build --release \
 		-Z json-target-spec \
 		-Z build-std=core,compiler_builtins \
