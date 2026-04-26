@@ -65,7 +65,7 @@ drop:
    TX: send an ICMP echo request (ping)
    ─────────────────────────────────────────────── */
 void icmp_send_echo_request(uint32_t dst_ip, uint16_t id, uint16_t seq) {
-    static const char payload[] = "LuxOS ping!";
+    static const char payload[] = "CactOS ping!";
     uint16_t payload_len = sizeof(payload) - 1;
     uint16_t total       = sizeof(icmp_header_t) + payload_len;
 
