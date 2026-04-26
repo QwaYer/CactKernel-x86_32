@@ -4,6 +4,7 @@
 #include "pci_enum.h"
 #include "pci_driver.h"
 #include "ps_2_keyboard.h"
+#include "keyboard.h"
 #include "ps_2_mouse.h"
 #include "memory.h"
 #include "gdt.h"
@@ -271,9 +272,9 @@ void terminal_task() {
             draw_cursor(cursor_visible);
         }
 
-        if (key_event_happened) {
-            char key = last_char;
-            key_event_happened = 0;
+        int _k = keyboard_read_char();
+        if (_k >= 0) {
+            char key = (char)_k;
 
             draw_cursor(0);
 

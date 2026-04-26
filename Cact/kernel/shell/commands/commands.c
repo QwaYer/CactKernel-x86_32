@@ -1,6 +1,7 @@
 #include "commands.h"
 #include "mntfs.h"
 #include "etcfs.h"
+#include "devfs.h"
 #include "procfs.h"
 #include "shell.h"
 #include "task.h"
@@ -575,6 +576,17 @@ static void cmd_run(char* args) {
                 _copy_cwd_to_task(_newtask);
                 kprint("[run] task created (dynamic), cwd=");
                 kprint(_newtask->cwd); kprint("\n");
+                devfs_entry_t* _tty_e = devfs_find("tty");
+                if (_tty_e) {
+                    vfs_node_t* _tty = &_tty_e->dir_node;
+                    open_vfs(_tty); open_vfs(_tty); open_vfs(_tty);
+                    _newtask->fd_table[0] = _tty;
+                    _newtask->fd_table[1] = _tty;
+                    _newtask->fd_table[2] = _tty;
+                }
+                extern int sched_waitpid(int, int*);
+                int _ex = 0;
+                sched_waitpid((int)_newtask->pid, &_ex);
             } else {
                 dynlink_unload_all(ctx);
                 kfree_heap(ctx);
@@ -613,6 +625,17 @@ static void cmd_run(char* args) {
                 _copy_cwd_to_task(_newtask);
                 kprint("[run] task created (static), cwd=");
                 kprint(_newtask->cwd); kprint("\n");
+                devfs_entry_t* _tty_e = devfs_find("tty");
+                if (_tty_e) {
+                    vfs_node_t* _tty = &_tty_e->dir_node;
+                    open_vfs(_tty); open_vfs(_tty); open_vfs(_tty);
+                    _newtask->fd_table[0] = _tty;
+                    _newtask->fd_table[1] = _tty;
+                    _newtask->fd_table[2] = _tty;
+                }
+                extern int sched_waitpid(int, int*);
+                int _ex = 0;
+                sched_waitpid((int)_newtask->pid, &_ex);
             } else {
                 proc_free_pages(tracker);
                 kfree_heap(tracker);
