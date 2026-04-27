@@ -71,7 +71,7 @@ VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
                -DCACT_COMMIT_HASH=$(CACT_COMMIT) \
                -DCACT_BUILD_TIME="$(CACT_BUILD_TIME)"
 
-CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
+CFLAGS = -m32 -ffreestanding -fno-pie -fstack-protector-strong -nostdlib \
          -I$(KERN_CORE_DIR) \
          -I$(KERN_VER_DIR) \
 		 -I$(KERN_SYSCALLS_DIR) \
