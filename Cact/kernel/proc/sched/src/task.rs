@@ -670,8 +670,27 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
         ffi::kprint(b"\n\0".as_ptr());
     }
 
+    // Hold the lock to atomically set zombie state and reparent children.
+    // Disabling interrupts prevents the timer from calling schedule() between
+    // these two steps, which would leave orphaned children with a dangling parent_pid.
+    crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+
     (*t).exit_code = exit_code;
     (*t).state = TaskState::Zombie;
+
+    // Reparent all live and zombie children: set their parent_pid to 0 so
+    // task_reap() can collect them without a parent ever calling waitpid().
+    let my_pid = (*t).pid;
+    let mut child = task_list_head;
+    while !child.is_null() {
+        let next_child = (*child).next;
+        if (*child).parent_pid == my_pid {
+            (*child).parent_pid = 0;
+        }
+        child = next_child;
+    }
+
+    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
     crate::mlfq::schedule();
 }
@@ -709,9 +728,12 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
                 && (target_pid <= 0 || (*t).pid == target_pid as u32)
             {
                 if matches!((*t).state, TaskState::Zombie) {
-                    let child_pid = (*t).pid;
+                    let child_pid  = (*t).pid;
                     let child_exit = (*t).exit_code;
-                    (*t).parent_pid = 0; // mark reaped — won't match again
+                    // Remove from task list under the lock before releasing it,
+                    // so no other code (task_reap, another waitpid) touches this node.
+                    task_list_remove(t);
+                    let to_free = t;
                     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
                     {
@@ -724,6 +746,8 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
                         ffi::kprint(buf.as_ptr());
                         ffi::kprint(b"\n\0".as_ptr());
                     }
+
+                    reap_task_free(to_free);
 
                     if !status.is_null() {
                         *status = child_exit;
@@ -1086,6 +1110,32 @@ unsafe fn wake_if_sigsuspend(t: *mut TaskStruct, signal: u32) {
     }
 }
 
+// Free all resources held by a task struct that has already been removed
+// from the global task list. Must be called WITHOUT the scheduler lock held.
+unsafe fn reap_task_free(t: *mut TaskStruct) {
+    for j in 0..MAX_FD {
+        if !(*t).fd_table[j].is_null() {
+            ffi::close_vfs((*t).fd_table[j]);
+            (*t).fd_table[j] = ptr::null_mut();
+        }
+    }
+
+    if !(*t).dyn_ctx.is_null() {
+        ffi::dynlink_unload_all((*t).dyn_ctx);
+        ffi::kfree_heap((*t).dyn_ctx as *mut c_void);
+    }
+
+    ffi::shm_detach_all((*t).pid, (*t).page_directory);
+    ffi::proc_free_pages(&raw mut (*t).mm);
+
+    (*t).page_directory = ptr::null_mut();
+    (*t).ustack_phys    = ptr::null_mut();
+
+    if !(*t).stack_base.is_null() { ffi::kfree_page((*t).stack_base); }
+
+    ffi::kfree_heap(t as *mut c_void);
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn task_reap() {
     let mut to_reap: [*mut TaskStruct; 64] = [ptr::null_mut(); 64];
@@ -1096,38 +1146,22 @@ pub unsafe extern "C" fn task_reap() {
     while !cur.is_null() && count < 64 {
         let next = (*cur).next;
         if matches!((*cur).state, TaskState::Zombie) {
-            task_list_remove(cur);
-            to_reap[count] = cur;
-            count += 1;
+            // Only reap if exit code already collected (parent_pid==0 set by waitpid)
+            // or parent no longer exists (orphan whose parent exited without waitpid).
+            let reapable = (*cur).parent_pid == 0
+                || find_task_by_pid((*cur).parent_pid).is_null();
+            if reapable {
+                task_list_remove(cur);
+                to_reap[count] = cur;
+                count += 1;
+            }
         }
         cur = next;
     }
     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+
     for i in 0..count {
-        let t = to_reap[i];
-
-        for j in 0..MAX_FD {
-            if !(*t).fd_table[j].is_null() {
-                ffi::close_vfs((*t).fd_table[j]);
-                (*t).fd_table[j] = ptr::null_mut();
-            }
-        }
-
-        if !(*t).dyn_ctx.is_null() {
-            ffi::dynlink_unload_all((*t).dyn_ctx);
-            ffi::kfree_heap((*t).dyn_ctx as *mut c_void);
-        }
-
-        ffi::shm_detach_all((*t).pid, (*t).page_directory);
-
-        ffi::proc_free_pages(&raw mut (*t).mm);
-
-        (*t).page_directory = ptr::null_mut();
-        (*t).ustack_phys    = ptr::null_mut();
-
-        if !(*t).stack_base.is_null() { ffi::kfree_page((*t).stack_base); }
-
-        ffi::kfree_heap(t as *mut c_void);
+        reap_task_free(to_reap[i]);
     }
 }
 

@@ -90,6 +90,7 @@ static mut SLEEP_QUEUE: MlfqQueue = MlfqQueue::empty();
 static mut BOOST_COUNTER: u32 = 0;
 
 static SCHEDULE_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static REAP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 
 //Public api
@@ -156,6 +157,12 @@ pub unsafe extern "C" fn schedule() {
         .is_err()
     {
         return;
+    }
+
+    // Periodically reap zombie tasks whose parent is gone or already called waitpid().
+    // Called here before acquiring SCHEDULER_LOCK so task_reap() can acquire it freely.
+    if REAP_COUNTER.fetch_add(1, Ordering::Relaxed) % 128 == 127 {
+        crate::task::task_reap();
     }
 
     irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
