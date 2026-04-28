@@ -14,6 +14,14 @@ pub struct MmapTable {
 }
 
 #[repr(C)]
+pub struct TaskFdTable {
+    pub fd_table:   [*mut VfsNode; 256],
+    pub fd_offset:  [u32; 256],
+    pub fd_flags:   [u32; 256],
+    pub fd_cloexec: [u32; 256],
+}
+
+#[repr(C)]
 pub struct DynCtx {
     _opaque: [u8; 0],
 }
@@ -80,6 +88,7 @@ extern "C" {
         src_pd: *mut u32,
         dst_pd: *mut u32,
     );
+    pub fn mmap_table_free(table: *mut MmapTable, pd: *mut u32);
 
     pub fn shm_detach_all(pid: u32, pd: *mut u32);
 

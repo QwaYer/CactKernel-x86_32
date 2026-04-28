@@ -162,6 +162,14 @@ pub struct MmapTable {
 }
 
 #[repr(C)]
+pub struct TaskFdTable {
+    pub fd_table:   [*mut VfsNode; MAX_FD],
+    pub fd_offset:  [u32; MAX_FD],
+    pub fd_flags:   [u32; MAX_FD],
+    pub fd_cloexec: [u32; MAX_FD],
+}
+
+#[repr(C)]
 pub struct DynCtx {
     _opaque: [u8; 0],
 }
@@ -178,6 +186,9 @@ pub struct TaskStruct {
     pub page_directory: *mut u32,
     pub next: *mut TaskStruct,
     pub queue_next: *mut TaskStruct,
+    pub priority: u32,
+    pub time_slice: u32,
+    pub ticks_used: u32,
     pub pending_signals: u32,
     pub signal_mask: u32,
     pub saved_signal_mask: u32,
@@ -187,12 +198,9 @@ pub struct TaskStruct {
     pub alarm_ticks: u32,
     pub itimer_value: u32,
     pub itimer_interval: u32,
-    pub fd_table: [*mut VfsNode; MAX_FD],
-    pub fd_offset: [u32; MAX_FD],
-    pub fd_flags: [u32; MAX_FD],
-    pub fd_cloexec: [u32; MAX_FD],
+    pub fds: *mut TaskFdTable,
     pub mm: ProcPageTracker,
-    pub mmap_table: MmapTable,
+    pub mmap_table: *mut MmapTable,
     pub dyn_ctx: *mut DynCtx,
     pub parent_pid: u32,
     pub exit_code: i32,

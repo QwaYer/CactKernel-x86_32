@@ -36,6 +36,13 @@ typedef uint32_t gid_t;
 #define SIG_DFL  ((uint32_t)0)
 #define SIG_IGN  ((uint32_t)1)
 
+typedef struct {
+    struct vfs_node* fd_table[MAX_FD];
+    uint32_t         fd_offset[MAX_FD];
+    uint32_t         fd_flags[MAX_FD];
+    uint32_t         fd_cloexec[MAX_FD];
+} task_fd_table_t;
+
 #define SIG_UNCATCHABLE  (SIGKILL | SIGSTOP)
 
 
@@ -94,13 +101,10 @@ struct task_struct {
     uint32_t alarm_ticks;     
     uint32_t itimer_value;     
     uint32_t itimer_interval;   
-    struct vfs_node* fd_table[MAX_FD];
-    uint32_t fd_offset[MAX_FD];
-    uint32_t fd_flags[MAX_FD];  
-    uint32_t fd_cloexec[MAX_FD];  
+    task_fd_table_t *fds;
     proc_page_tracker_t mm;
 
-    mmap_table_t mmap_table;
+    mmap_table_t *mmap_table;
     dyn_ctx_t* dyn_ctx;
 
     uint32_t parent_pid;

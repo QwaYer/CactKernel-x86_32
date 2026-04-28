@@ -13,8 +13,12 @@ fn fd_to_node(fd: i32) -> *mut VfsNode {
     if fd < 0 || fd as usize >= MAX_FD {
         return core::ptr::null_mut();
     }
-    // SAFETY: t is valid and fd is in bounds.
-    unsafe { (*t).fd_table[fd as usize] }
+    // SAFETY: t is valid; fds is heap-allocated and non-null for all live tasks.
+    unsafe {
+        let fds = (*t).fds;
+        if fds.is_null() { return core::ptr::null_mut(); }
+        (*fds).fd_table[fd as usize]
+    }
 }
 
 fn prot_to_page_flags(prot: i32, user: bool) -> i32 {

@@ -104,13 +104,10 @@ pub struct TaskStruct {
     pub itimer_value:       u32,   // следующий fire абс. тик
     pub itimer_interval:    u32,   // интервал перезарядки
 
-    pub fd_table:           [*mut VfsNode; MAX_FD],
-    pub fd_offset:          [u32; MAX_FD],
-    pub fd_flags:           [u32; MAX_FD],
-    pub fd_cloexec:         [u32; MAX_FD],
+    pub fds:                *mut ffi::TaskFdTable,
 
     pub mm:                 ProcPageTracker,
-    pub mmap_table:         MmapTable,
+    pub mmap_table:         *mut MmapTable,
     pub dyn_ctx:            *mut DynCtx,
 
     pub parent_pid:         u32,
@@ -200,8 +197,22 @@ pub unsafe fn find_task_by_pid(pid: u32) -> *mut TaskStruct {
 }
 
 
-unsafe fn task_zero_init(t: *mut TaskStruct) {
+unsafe fn task_zero_init(t: *mut TaskStruct) -> bool {
     ffi::memory_set(t as *mut c_void, 0, core::mem::size_of::<TaskStruct>());
+
+    let fds = ffi::kmalloc(core::mem::size_of::<ffi::TaskFdTable>()) as *mut ffi::TaskFdTable;
+    if fds.is_null() { return false; }
+    ffi::memory_set(fds as *mut c_void, 0, core::mem::size_of::<ffi::TaskFdTable>());
+    (*t).fds = fds;
+
+    let mmap_tbl = ffi::kmalloc(core::mem::size_of::<MmapTable>()) as *mut MmapTable;
+    if mmap_tbl.is_null() {
+        ffi::kfree_heap(fds as *mut c_void);
+        (*t).fds = ptr::null_mut();
+        return false;
+    }
+    ffi::mmap_table_init(mmap_tbl);
+    (*t).mmap_table = mmap_tbl;
 
     (*t).state      = TaskState::Ready;
     (*t).priority   = mlfq::MLFQ_LEVEL_INTERACTIVE;
@@ -210,7 +221,7 @@ unsafe fn task_zero_init(t: *mut TaskStruct) {
     for i in 0..NSIG {
         (*t).signal_handlers[i] = SIG_DFL;
     }
-    ffi::mmap_table_init(&raw mut (*t).mmap_table);
+    true
 }
 
 #[no_mangle]
@@ -269,7 +280,11 @@ pub unsafe extern "C" fn create_task(entry_point: *const c_void) -> *mut TaskStr
     let stack = ffi::kalloc() as *mut u32;
     if stack.is_null() { ffi::kfree_heap(t as *mut c_void); return ptr::null_mut(); }
 
-    task_zero_init(t);
+    if !task_zero_init(t) {
+        ffi::kfree_page(stack as *mut c_void);
+        ffi::kfree_heap(t as *mut c_void);
+        return ptr::null_mut();
+    }
 
     let stack_top = (stack as usize + KERNEL_STACK_SIZE) as *mut u32;
 
@@ -316,7 +331,12 @@ unsafe fn create_user_task_internal(entry_point: *const c_void, add_to_list: boo
         return ptr::null_mut();
     }
 
-    task_zero_init(t);
+    if !task_zero_init(t) {
+        ffi::kfree_page(ustack_phys as *mut c_void);
+        ffi::kfree_page(kstack as *mut c_void);
+        ffi::kfree_heap(t as *mut c_void);
+        return ptr::null_mut();
+    }
 
     let ustack_virt: u32 = 0xBFFF_F000;
 
@@ -540,11 +560,39 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     // proc_free_pages(&child.mm), что:
     //   1) освобождает родительский массив pages (heap corruption),
     //   2) вызывает vmm_free_address_space на PD РОДИТЕЛЯ.
-    // Также mmap_table содержит копию параметров родителя; mmap_table_clone
-    // ниже заполнит её заново от начального состояния.
+    // Также fds/mmap_table после memcpy указывают на структуры родителя;
+    // выделяем отдельные копии для дочернего процесса.
     ffi::proc_tracker_init(&raw mut (*child).mm);
     (*child).mm.page_dir = child_pd;
-    ffi::mmap_table_init(&raw mut (*child).mmap_table);
+
+    // Allocate independent fds for child, copy parent's fd data
+    let child_fds = ffi::kmalloc(core::mem::size_of::<ffi::TaskFdTable>()) as *mut ffi::TaskFdTable;
+    if child_fds.is_null() {
+        ffi::kfree_page(ustack_phys as *mut c_void);
+        ffi::kfree_page(kstack as *mut c_void);
+        ffi::kfree_heap(child as *mut c_void);
+        ffi::vmm_free_address_space(child_pd);
+        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+        return ptr::null_mut();
+    }
+    ffi::memory_copy(child_fds as *mut c_void, (*parent).fds as *const c_void,
+                     core::mem::size_of::<ffi::TaskFdTable>());
+    (*child).fds = child_fds;
+
+    // Allocate independent mmap_table for child
+    let child_mmap = ffi::kmalloc(core::mem::size_of::<MmapTable>()) as *mut MmapTable;
+    if child_mmap.is_null() {
+        ffi::kfree_heap(child_fds as *mut c_void);
+        (*child).fds = ptr::null_mut();
+        ffi::kfree_page(ustack_phys as *mut c_void);
+        ffi::kfree_page(kstack as *mut c_void);
+        ffi::kfree_heap(child as *mut c_void);
+        ffi::vmm_free_address_space(child_pd);
+        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+        return ptr::null_mut();
+    }
+    ffi::mmap_table_init(child_mmap);
+    (*child).mmap_table = child_mmap;
 
     // Клонировать адресное пространство (COW)
     if !(*parent).page_directory.is_null() {
@@ -553,8 +601,8 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 
     // Клонировать mmap-таблицу (COW для private, share для shared)
     ffi::mmap_table_clone(
-        &raw mut (*parent).mmap_table,
-        &raw mut (*child).mmap_table,
+        (*parent).mmap_table,
+        (*child).mmap_table,
         (*parent).page_directory,
         child_pd,
     );
@@ -566,8 +614,8 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 
     // Инкрементировать refcount файловых дескрипторов
     for i in 0..MAX_FD {
-        if !(*child).fd_table[i].is_null() {
-            ffi::open_vfs((*child).fd_table[i]);
+        if !(*(*child).fds).fd_table[i].is_null() {
+            ffi::open_vfs((*(*child).fds).fd_table[i]);
         }
     }
 
@@ -829,15 +877,15 @@ pub unsafe extern "C" fn task_exec(
         (*t).shm_attachments[i].shm_vaddr = 0;
     }
 
-    ffi::mmap_table_init(&raw mut (*t).mmap_table);
+    ffi::mmap_table_init((*t).mmap_table);
 
     for i in 3..MAX_FD {
-        if !(*t).fd_table[i].is_null() && (*t).fd_cloexec[i] != 0 {
-            ffi::close_vfs((*t).fd_table[i]);
-            (*t).fd_table[i]   = ptr::null_mut();
-            (*t).fd_offset[i]  = 0;
-            (*t).fd_flags[i]   = 0;
-            (*t).fd_cloexec[i] = 0;
+        if !(*(*t).fds).fd_table[i].is_null() && (*(*t).fds).fd_cloexec[i] != 0 {
+            ffi::close_vfs((*(*t).fds).fd_table[i]);
+            (*(*t).fds).fd_table[i]   = ptr::null_mut();
+            (*(*t).fds).fd_offset[i]  = 0;
+            (*(*t).fds).fd_flags[i]   = 0;
+            (*(*t).fds).fd_cloexec[i] = 0;
         }
     }
 
@@ -1113,11 +1161,19 @@ unsafe fn wake_if_sigsuspend(t: *mut TaskStruct, signal: u32) {
 // Free all resources held by a task struct that has already been removed
 // from the global task list. Must be called WITHOUT the scheduler lock held.
 unsafe fn reap_task_free(t: *mut TaskStruct) {
-    for j in 0..MAX_FD {
-        if !(*t).fd_table[j].is_null() {
-            ffi::close_vfs((*t).fd_table[j]);
-            (*t).fd_table[j] = ptr::null_mut();
+    if !(*t).fds.is_null() {
+        for j in 0..MAX_FD {
+            if !(*(*t).fds).fd_table[j].is_null() {
+                ffi::close_vfs((*(*t).fds).fd_table[j]);
+            }
         }
+        ffi::kfree_heap((*t).fds as *mut c_void);
+        (*t).fds = ptr::null_mut();
+    }
+
+    if !(*t).mmap_table.is_null() {
+        ffi::kfree_heap((*t).mmap_table as *mut c_void);
+        (*t).mmap_table = ptr::null_mut();
     }
 
     if !(*t).dyn_ctx.is_null() {

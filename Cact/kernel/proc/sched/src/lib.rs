@@ -50,29 +50,26 @@ const _ABI_CHECK: () = {
     assert!(offset_of!(TaskStruct, alarm_ticks)    == 124, "alarm_ticks offset mismatch");
     assert!(offset_of!(TaskStruct, itimer_value)   == 128, "itimer_value offset mismatch");
     assert!(offset_of!(TaskStruct, itimer_interval) == 132, "itimer_interval offset mismatch");
-    // FD tables: each 256 * 4 = 1024
-    assert!(offset_of!(TaskStruct, fd_table)       == 136, "fd_table offset mismatch");
-    assert!(offset_of!(TaskStruct, fd_offset)      == 1160, "fd_offset offset mismatch");
-    assert!(offset_of!(TaskStruct, fd_flags)       == 2184, "fd_flags offset mismatch");
-    assert!(offset_of!(TaskStruct, fd_cloexec)     == 3208, "fd_cloexec offset mismatch");
-    // mm: ProcPageTracker = 16 bytes (4 pointers/u32)
-    assert!(offset_of!(TaskStruct, mm)             == 4232, "mm offset mismatch");
-    // mmap_table: 7172 bytes
-    assert!(offset_of!(TaskStruct, mmap_table)     == 4248, "mmap_table offset mismatch");
-    assert!(offset_of!(TaskStruct, dyn_ctx)        == 11420, "dyn_ctx offset mismatch");
-    assert!(offset_of!(TaskStruct, parent_pid)     == 11424, "parent_pid offset mismatch");
-    assert!(offset_of!(TaskStruct, exit_code)      == 11428, "exit_code offset mismatch");
-    assert!(offset_of!(TaskStruct, wait_for_pid)   == 11432, "wait_for_pid offset mismatch");
-    assert!(offset_of!(TaskStruct, brk_start)      == 11436, "brk_start offset mismatch");
-    assert!(offset_of!(TaskStruct, brk_current)    == 11440, "brk_current offset mismatch");
-    assert!(offset_of!(TaskStruct, sleep_until)    == 11444, "sleep_until offset mismatch");
-    assert!(offset_of!(TaskStruct, cwd)            == 11448, "cwd offset mismatch");
-    // cwd: 256 bytes → ends at 11704
-    assert!(offset_of!(TaskStruct, uid)            == 11704, "uid offset mismatch");
-    assert!(offset_of!(TaskStruct, gid)            == 11708, "gid offset mismatch");
-    assert!(offset_of!(TaskStruct, euid)           == 11712, "euid offset mismatch");
-    assert!(offset_of!(TaskStruct, egid)           == 11716, "egid offset mismatch");
+    // fds: heap pointer replacing the four embedded FD arrays
+    assert!(offset_of!(TaskStruct, fds)            == 136, "fds offset mismatch");
+    // mm: ProcPageTracker = 16 bytes
+    assert!(offset_of!(TaskStruct, mm)             == 140, "mm offset mismatch");
+    // mmap_table: heap pointer (was 7172-byte embedded struct)
+    assert!(offset_of!(TaskStruct, mmap_table)     == 156, "mmap_table offset mismatch");
+    assert!(offset_of!(TaskStruct, dyn_ctx)        == 160, "dyn_ctx offset mismatch");
+    assert!(offset_of!(TaskStruct, parent_pid)     == 164, "parent_pid offset mismatch");
+    assert!(offset_of!(TaskStruct, exit_code)      == 168, "exit_code offset mismatch");
+    assert!(offset_of!(TaskStruct, wait_for_pid)   == 172, "wait_for_pid offset mismatch");
+    assert!(offset_of!(TaskStruct, brk_start)      == 176, "brk_start offset mismatch");
+    assert!(offset_of!(TaskStruct, brk_current)    == 180, "brk_current offset mismatch");
+    assert!(offset_of!(TaskStruct, sleep_until)    == 184, "sleep_until offset mismatch");
+    assert!(offset_of!(TaskStruct, cwd)            == 188, "cwd offset mismatch");
+    // cwd: 256 bytes → ends at 444
+    assert!(offset_of!(TaskStruct, uid)            == 444, "uid offset mismatch");
+    assert!(offset_of!(TaskStruct, gid)            == 448, "gid offset mismatch");
+    assert!(offset_of!(TaskStruct, euid)           == 452, "euid offset mismatch");
+    assert!(offset_of!(TaskStruct, egid)           == 456, "egid offset mismatch");
     // shm_attachments: 16 * 8 = 128
-    assert!(offset_of!(TaskStruct, shm_attachments) == 11720, "shm_attachments offset mismatch");
-    assert!(offset_of!(TaskStruct, wait_next)       == 11848, "wait_next offset mismatch");
+    assert!(offset_of!(TaskStruct, shm_attachments) == 460, "shm_attachments offset mismatch");
+    assert!(offset_of!(TaskStruct, wait_next)       == 588, "wait_next offset mismatch");
 };

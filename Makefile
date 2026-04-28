@@ -71,7 +71,7 @@ VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
                -DCACT_COMMIT_HASH=$(CACT_COMMIT) \
                -DCACT_BUILD_TIME="$(CACT_BUILD_TIME)"
 
-CFLAGS = -m32 -ffreestanding -fno-pie -fstack-protector-strong -nostdlib \
+CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
          -I$(KERN_VER_DIR) \
 		 -I$(KERN_SYSCALLS_DIR) \
@@ -178,7 +178,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/ksocket.o \
       $(BUILD_DIR)/virtio_net.o \
       $(BUILD_DIR)/fb.o \
-      $(BUILD_DIR)/font.o
+      $(BUILD_DIR)/font.o \
+      $(BUILD_DIR)/stack_guard.o
 
 
 all: $(BUILD_DIR)/cact.iso
@@ -397,6 +398,10 @@ $(BUILD_DIR)/fb.o: $(DRIVER_FB_DIR)/fb.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/font.o: $(DRIVER_FONT_DIR)/font.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

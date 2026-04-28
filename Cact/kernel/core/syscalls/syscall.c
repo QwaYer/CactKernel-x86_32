@@ -183,7 +183,7 @@ static int sys_getdents(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    struct vfs_node* node = current_task->fd_table[fd];
+    struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) return -1;
     if (node->type != VFS_DIRECTORY) return -1;
 
@@ -192,7 +192,7 @@ static int sys_getdents(struct syscall_frame* regs) {
     if (count < entry_size) return -1;
 
     uint32_t written = 0;
-    uint32_t index = current_task->fd_offset[fd];
+    uint32_t index = current_task->fds->fd_offset[fd];
 
     while (written + entry_size <= count) {
         struct vfs_dirent* de = readdir_vfs(node, index);
@@ -209,7 +209,7 @@ static int sys_getdents(struct syscall_frame* regs) {
         index++;
     }
 
-    current_task->fd_offset[fd] = index;
+    current_task->fds->fd_offset[fd] = index;
     return (int)written;
 }
 
@@ -249,11 +249,11 @@ static int sys_open(char* name, int flags) {
     }
 
     for (int i = 3; i < MAX_FD; i++) {
-        if (!current_task->fd_table[i]) {
-            current_task->fd_table[i] = node;
-            current_task->fd_offset[i] = 0;
-            current_task->fd_flags[i]   = (uint32_t)flags;
-            current_task->fd_cloexec[i] = 0;
+        if (!current_task->fds->fd_table[i]) {
+            current_task->fds->fd_table[i] = node;
+            current_task->fds->fd_offset[i] = 0;
+            current_task->fds->fd_flags[i]   = (uint32_t)flags;
+            current_task->fds->fd_cloexec[i] = 0;
             /* Increment refcount so unlink-while-open defers free until close. */
             open_vfs(node);
             kprint("[DBG] sys_open: fd=");
@@ -271,11 +271,11 @@ static int sys_read(int fd, char* buf, unsigned int size) {
     if (!current_task)                 return -1;
     if (fd < 0 || fd >= MAX_FD)        return -1;
 
-    struct vfs_node* node = current_task->fd_table[fd];
+    struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) return -1;
-    int ret = read_vfs(node, current_task->fd_offset[fd], size, buf);
+    int ret = read_vfs(node, current_task->fds->fd_offset[fd], size, buf);
     if (ret > 0)
-        current_task->fd_offset[fd] += (uint32_t)ret;
+        current_task->fds->fd_offset[fd] += (uint32_t)ret;
     return ret;
 }
 
@@ -284,23 +284,23 @@ static int sys_write(int fd, char* buf, unsigned int size) {
     if (!validate_user_ptr(buf, size)) return -1;
     if (!current_task)                 return -1;
     if (fd < 0 || fd >= MAX_FD)        return -1;
-    struct vfs_node* node = current_task->fd_table[fd];
+    struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) return -1;
-    int ret = write_vfs(node, current_task->fd_offset[fd], size, buf);
+    int ret = write_vfs(node, current_task->fds->fd_offset[fd], size, buf);
     if (ret > 0)
-        current_task->fd_offset[fd] += (uint32_t)ret;
+        current_task->fds->fd_offset[fd] += (uint32_t)ret;
     return ret;
 }
 
 static int sys_close(int fd) {
     if (!current_task)          return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
-    struct vfs_node* node = current_task->fd_table[fd];
+    struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) return -1;
-    current_task->fd_table[fd]   = 0;
-    current_task->fd_offset[fd]  = 0;
-    current_task->fd_flags[fd]   = 0;
-    current_task->fd_cloexec[fd] = 0;
+    current_task->fds->fd_table[fd]   = 0;
+    current_task->fds->fd_offset[fd]  = 0;
+    current_task->fds->fd_flags[fd]   = 0;
+    current_task->fds->fd_cloexec[fd] = 0;
     close_vfs(node);
     return 0;
 }
@@ -496,7 +496,7 @@ static int sys_mmap(struct syscall_frame* regs) {
     if (!current_task) return (int)MAP_FAILED;
     void* result = do_mmap(
         current_task->page_directory,
-        &current_task->mmap_table,
+        current_task->mmap_table,
         args->addr,
         args->length,
         args->prot,
@@ -513,7 +513,7 @@ static int sys_munmap(struct syscall_frame* regs) {
     if (!current_task) return -1;
     return do_munmap(
         current_task->page_directory,
-        &current_task->mmap_table,
+        current_task->mmap_table,
         addr, length
     );
 }
@@ -525,7 +525,7 @@ static int sys_mprotect(struct syscall_frame* regs) {
     if (!current_task) return -1;
     return do_mprotect(
         current_task->page_directory,
-        &current_task->mmap_table,
+        current_task->mmap_table,
         addr, length, prot
     );
 }
@@ -540,7 +540,7 @@ static int sys_pipe(struct syscall_frame* regs) {
 
     int rfd = -1, wfd = -1;
     for (int i = 3; i < MAX_FD && (rfd < 0 || wfd < 0); i++) {
-        if (!current_task->fd_table[i]) {
+        if (!current_task->fds->fd_table[i]) {
             if (rfd < 0) rfd = i;
             else         wfd = i;
         }
@@ -556,14 +556,14 @@ static int sys_pipe(struct syscall_frame* regs) {
      * pipe_t.ref_count once per node, which balances the close_vfs in
      * sys_close.  Unlike regular files, pipe nodes are not in any
      * directory tree so there is no separate "dir-link" refcount. */
-    current_task->fd_table[rfd]   = pipefd[0];
-    current_task->fd_table[wfd]   = pipefd[1];
-    current_task->fd_offset[rfd]  = 0;
-    current_task->fd_offset[wfd]  = 0;
-    current_task->fd_flags[rfd]   = 0;
-    current_task->fd_flags[wfd]   = 1;
-    current_task->fd_cloexec[rfd] = 0;
-    current_task->fd_cloexec[wfd] = 0;
+    current_task->fds->fd_table[rfd]   = pipefd[0];
+    current_task->fds->fd_table[wfd]   = pipefd[1];
+    current_task->fds->fd_offset[rfd]  = 0;
+    current_task->fds->fd_offset[wfd]  = 0;
+    current_task->fds->fd_flags[rfd]   = 0;
+    current_task->fds->fd_flags[wfd]   = 1;
+    current_task->fds->fd_cloexec[rfd] = 0;
+    current_task->fds->fd_cloexec[wfd] = 0;
 
     user_fds[0] = rfd;
     user_fds[1] = wfd;
@@ -581,7 +581,7 @@ static int sys_dup2(struct syscall_frame* regs) {
     /* POSIX: dup2(fd, fd) is a no-op that returns fd. */
     if (oldfd == newfd) return newfd;
 
-    struct vfs_node* node = current_task->fd_table[oldfd];
+    struct vfs_node* node = current_task->fds->fd_table[oldfd];
     if (!node) return -1;
 
     /* Increment first so the node is never transiently unreferenced even if
@@ -589,11 +589,11 @@ static int sys_dup2(struct syscall_frame* regs) {
      * dup2). This prevents use-after-free when old_newnode == node. */
     open_vfs(node);
 
-    struct vfs_node* old_newnode = current_task->fd_table[newfd];
-    current_task->fd_table[newfd]   = node;
-    current_task->fd_offset[newfd]  = current_task->fd_offset[oldfd];
-    current_task->fd_flags[newfd]   = current_task->fd_flags[oldfd];
-    current_task->fd_cloexec[newfd] = 0;
+    struct vfs_node* old_newnode = current_task->fds->fd_table[newfd];
+    current_task->fds->fd_table[newfd]   = node;
+    current_task->fds->fd_offset[newfd]  = current_task->fds->fd_offset[oldfd];
+    current_task->fds->fd_flags[newfd]   = current_task->fds->fd_flags[oldfd];
+    current_task->fds->fd_cloexec[newfd] = 0;
 
     /* Decrement the evicted slot only after the new reference is established. */
     if (old_newnode)
@@ -772,7 +772,7 @@ static int sys_lseek(struct syscall_frame* regs) {
 
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
-    struct vfs_node* node = current_task->fd_table[fd];
+    struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) return -1;
 
     uint32_t new_off;
@@ -782,7 +782,7 @@ static int sys_lseek(struct syscall_frame* regs) {
             new_off = (uint32_t)offset;
             break;
         case SEEK_CUR: {
-            int cur = (int)current_task->fd_offset[fd] + offset;
+            int cur = (int)current_task->fds->fd_offset[fd] + offset;
             if (cur < 0) return -1;
             new_off = (uint32_t)cur;
             break;
@@ -796,7 +796,7 @@ static int sys_lseek(struct syscall_frame* regs) {
         default:
             return -1;
     }
-    current_task->fd_offset[fd] = new_off;
+    current_task->fds->fd_offset[fd] = new_off;
     return (int)new_off;
 }
 
@@ -1003,7 +1003,7 @@ static int sys_fstat(struct syscall_frame* regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(ubuf, 16)) return -1;
 
-    struct vfs_node* node = current_task->fd_table[fd];
+    struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) {
         kprint("[DBG] sys_fstat: bad fd=");
         char tmp[16]; itoa(fd, tmp); kprint(tmp); kprint("\n");
@@ -1051,7 +1051,7 @@ static int sys_ioctl(struct syscall_frame* regs) {
         return 0;
     }
 
-    struct vfs_node* node = current_task->fd_table[fd];
+    struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) return -1;
 
     if (arg && !validate_user_ptr(arg, 1)) return -1;
@@ -1065,7 +1065,7 @@ static int sys_fcntl(int fd, int cmd, int arg) {
     if (!current_task)          return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    struct vfs_node* node = current_task->fd_table[fd];
+    struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) return -1;
 
     switch (cmd) {
@@ -1073,11 +1073,11 @@ static int sys_fcntl(int fd, int cmd, int arg) {
     case 0: { 
         if (arg < 0 || arg >= MAX_FD) return -1;
         for (int i = arg; i < MAX_FD; i++) {
-            if (!current_task->fd_table[i]) {
-                current_task->fd_table[i]   = node;
-                current_task->fd_offset[i]  = current_task->fd_offset[fd];
-                current_task->fd_flags[i]   = current_task->fd_flags[fd];
-                current_task->fd_cloexec[i] = 0; 
+            if (!current_task->fds->fd_table[i]) {
+                current_task->fds->fd_table[i]   = node;
+                current_task->fds->fd_offset[i]  = current_task->fds->fd_offset[fd];
+                current_task->fds->fd_flags[i]   = current_task->fds->fd_flags[fd];
+                current_task->fds->fd_cloexec[i] = 0; 
                 open_vfs(node);
                 return i;
             }
@@ -1086,19 +1086,19 @@ static int sys_fcntl(int fd, int cmd, int arg) {
     }
 
     case 1:
-        return (int)current_task->fd_cloexec[fd]; 
+        return (int)current_task->fds->fd_cloexec[fd]; 
 
     case 2: 
-        current_task->fd_cloexec[fd] = (arg & 1) ? 1 : 0;
+        current_task->fds->fd_cloexec[fd] = (arg & 1) ? 1 : 0;
         return 0;
 
     case 3: 
-        return (int)current_task->fd_flags[fd];
+        return (int)current_task->fds->fd_flags[fd];
 
     case 4: { 
-        uint32_t new_flags = (current_task->fd_flags[fd] & ~(uint32_t)SETFL_MASK)
+        uint32_t new_flags = (current_task->fds->fd_flags[fd] & ~(uint32_t)SETFL_MASK)
                            | ((uint32_t)arg & SETFL_MASK);
-        current_task->fd_flags[fd] = new_flags;
+        current_task->fds->fd_flags[fd] = new_flags;
 
         if (node->type == VFS_PIPE && node->priv) {
             pipe_t* p = (pipe_t*)node->priv;
@@ -1186,11 +1186,11 @@ static int sys_nanosleep(struct syscall_frame* regs) {
 
 static int alloc_fd(vfs_node_t *node) {
     for (int i = 3; i < MAX_FD; i++) {
-        if (!current_task->fd_table[i]) {
-            current_task->fd_table[i]   = node;
-            current_task->fd_offset[i]  = 0;
-            current_task->fd_flags[i]   = 0;
-            current_task->fd_cloexec[i] = 0;
+        if (!current_task->fds->fd_table[i]) {
+            current_task->fds->fd_table[i]   = node;
+            current_task->fds->fd_offset[i]  = 0;
+            current_task->fds->fd_flags[i]   = 0;
+            current_task->fds->fd_cloexec[i] = 0;
             open_vfs(node);
             return i;
         }
@@ -1223,7 +1223,7 @@ static int sys_bind(struct syscall_frame *regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(addr, sizeof(struct sockaddr_in))) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t *ks = ksock_from_node(node);
@@ -1260,7 +1260,7 @@ static int sys_connect(struct syscall_frame *regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(addr, sizeof(struct sockaddr_in))) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t *ks = ksock_from_node(node);
@@ -1277,7 +1277,7 @@ static int sys_listen(struct syscall_frame *regs) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t *ks = ksock_from_node(node);
@@ -1300,7 +1300,7 @@ static int sys_accept(struct syscall_frame *regs) {
     if (peer_addrlen && !validate_user_ptr(peer_addrlen, sizeof(uint32_t)))
         return -1;
 
-    vfs_node_t *listen_node = current_task->fd_table[fd];
+    vfs_node_t *listen_node = current_task->fds->fd_table[fd];
     if (!listen_node || listen_node->type != VFS_SOCKET) return -1;
 
     vfs_node_t *conn_node = ksock_tcp_accept(listen_node, peer_addr);
@@ -1325,7 +1325,7 @@ static int sys_send(struct syscall_frame *regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(buf, len)) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     return write_vfs(node, 0, len, buf);
@@ -1340,7 +1340,7 @@ static int sys_recv(struct syscall_frame *regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(buf, len)) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     return read_vfs(node, 0, len, buf);
@@ -1360,7 +1360,7 @@ static int sys_sendto(struct syscall_frame *regs) {
     if (!validate_user_ptr(buf, len)) return -1;
     if (!validate_user_ptr(dest, sizeof(struct sockaddr_in))) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t *ks = ksock_from_node(node);
@@ -1394,7 +1394,7 @@ static int sys_recvfrom(struct syscall_frame *regs) {
     if (src && !validate_user_ptr(src, sizeof(struct sockaddr_in))) return -1;
     if (addrlen && !validate_user_ptr(addrlen, sizeof(uint32_t))) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t *ks = ksock_from_node(node);
@@ -1449,7 +1449,7 @@ static int sys_shutdown(struct syscall_frame *regs) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     return ksock_shutdown(node, how);
@@ -1470,7 +1470,7 @@ static int sys_setsockopt(struct syscall_frame *regs) {
     if (!optval || optlen < sizeof(int)) return -1;
     if (!validate_user_ptr(optval, optlen)) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t *ks = ksock_from_node(node);
@@ -1522,7 +1522,7 @@ static int sys_getsockopt(struct syscall_frame *regs) {
     if (*optlen < sizeof(int)) return -1;
     if (!validate_user_ptr(optval, *optlen)) return -1;
 
-    vfs_node_t *node = current_task->fd_table[fd];
+    vfs_node_t *node = current_task->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t *ks = ksock_from_node(node);
@@ -1792,7 +1792,7 @@ static int sys_select(struct syscall_frame *regs) {
         int ready = 0;
 
         for (int fd = 0; fd < nfds; fd++) {
-            vfs_node_t *node = t->fd_table[fd];
+            vfs_node_t *node = t->fds->fd_table[fd];
 
             if (urfds && SEL_ISSET(fd, &orig_r)) {
                 if (node && fd_read_ready(node)) { SEL_SET(fd, &res_r); ready++; }
@@ -1847,7 +1847,7 @@ static int sys_poll(struct syscall_frame *regs) {
             fds[i].revents = 0;
             int fd = fds[i].fd;
             if (fd < 0 || fd >= MAX_FD) { fds[i].revents = POLLNVAL; continue; }
-            vfs_node_t *node = t->fd_table[fd];
+            vfs_node_t *node = t->fds->fd_table[fd];
             if (!node)                  { fds[i].revents = POLLNVAL; continue; }
 
             short ev = 0;

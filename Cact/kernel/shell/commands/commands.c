@@ -580,9 +580,9 @@ static void cmd_run(char* args) {
                 if (_tty_e) {
                     vfs_node_t* _tty = &_tty_e->dir_node;
                     open_vfs(_tty); open_vfs(_tty); open_vfs(_tty);
-                    _newtask->fd_table[0] = _tty;
-                    _newtask->fd_table[1] = _tty;
-                    _newtask->fd_table[2] = _tty;
+                    _newtask->fds->fd_table[0] = _tty;
+                    _newtask->fds->fd_table[1] = _tty;
+                    _newtask->fds->fd_table[2] = _tty;
                 }
                 extern int sched_waitpid(int, int*);
                 int _ex = 0;
@@ -629,9 +629,9 @@ static void cmd_run(char* args) {
                 if (_tty_e) {
                     vfs_node_t* _tty = &_tty_e->dir_node;
                     open_vfs(_tty); open_vfs(_tty); open_vfs(_tty);
-                    _newtask->fd_table[0] = _tty;
-                    _newtask->fd_table[1] = _tty;
-                    _newtask->fd_table[2] = _tty;
+                    _newtask->fds->fd_table[0] = _tty;
+                    _newtask->fds->fd_table[1] = _tty;
+                    _newtask->fds->fd_table[2] = _tty;
                 }
                 extern int sched_waitpid(int, int*);
                 int _ex = 0;
