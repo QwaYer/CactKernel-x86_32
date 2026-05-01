@@ -398,13 +398,11 @@ pub extern "C" fn mmap_table_clone(
         return;
     }
 
-    // SAFETY: src and dst are valid MmapTable pointers.
     unsafe {
         (*dst).next_base = (*src).next_base;
     }
 
     for i in 0..MMAP_MAX_REGIONS {
-        // SAFETY: src and dst are valid.
         let sr = unsafe { &(*src).regions[i] };
         let dr = unsafe { &mut (*dst).regions[i] };
 
@@ -413,14 +411,11 @@ pub extern "C" fn mmap_table_clone(
             continue;
         }
 
-        // SAFETY: copy the region metadata.
         unsafe { core::ptr::write(dr, core::ptr::read(sr)); }
 
         let pages = sr.length / PAGE_SIZE;
 
         if sr.flags & MAP_SHARED as u32 != 0 {
-            // SAFETY: src_pd and dst_pd are valid page directories; indices
-            // are computed from a va within the region bounds.
             unsafe {
                 for p in 0..pages {
                     let va = sr.base + p * PAGE_SIZE;
@@ -443,7 +438,7 @@ pub extern "C" fn mmap_table_clone(
                         }
                         core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                         *dst_pd.add(pdi) =
-                            (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+                            (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER | PDE_PRIVATE;
                     }
                     let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
                     *dst_pt.add(pti) = pte;
@@ -454,8 +449,6 @@ pub extern "C" fn mmap_table_clone(
                 }
             }
         } else {
-            // SAFETY: src_pd and dst_pd are valid page directories; indices
-            // are computed from a va within the region bounds.
             unsafe {
                 for p in 0..pages {
                     let va = sr.base + p * PAGE_SIZE;
@@ -475,7 +468,7 @@ pub extern "C" fn mmap_table_clone(
                         }
                         core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                         *dst_pd.add(pdi) =
-                            (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+                            (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER | PDE_PRIVATE;
                     }
                     let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
 

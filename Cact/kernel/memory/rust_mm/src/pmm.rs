@@ -5,17 +5,11 @@ use crate::safe::{KStatic, lock_acquire, lock_release,
 static MEMORY_BITMAP: KStatic<[u8; BITMAP_SIZE as usize]> =
     KStatic::new([0u8; BITMAP_SIZE as usize]);
 
-/// Reference-count per page (enables COW / shared pages).
 static PAGE_REFCOUNTS: KStatic<[u16; TOTAL_PAGES as usize]> =
     KStatic::new([0u16; TOTAL_PAGES as usize]);
 
-/// Next page index to try on the next kalloc() call (first-fit hint).
 static FIRST_AVAILABLE_PAGE: KStatic<u32> = KStatic::new(0);
 
-/// Spinlock protecting all bitmap / refcount mutations.
-///
-/// `pub(crate)` so that fault handlers can hold the lock while performing an
-/// atomic refcount-check + PTE-update for COW resolution (see `vmm_handle_cow`).
 pub(crate) static PAGE_LOCK: KStatic<IrqSpinlock> =
     KStatic::new(IrqSpinlock { spin_locked: 0, saved_flags: 0 });
 
@@ -206,42 +200,50 @@ pub extern "C" fn init_memory_manager() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kalloc() -> *mut u8 {
-    lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+    const MAX_RECLAIM_ROUNDS: u32 = 4;
 
-    let hint = *FIRST_AVAILABLE_PAGE.get_mut();
-    let mut i = hint;
+    let mut round: u32 = 0;
     loop {
-        if i >= TOTAL_PAGES { break; }
-        if !bitmap_test(i) {
-            bitmap_set(i);
-            PAGE_REFCOUNTS.get_mut()[i as usize] = 1;
-            // Advance hint past this page for next call.
-            *FIRST_AVAILABLE_PAGE.get_mut() = i + 1;
-            lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
-            return page_to_addr(i) as *mut u8;
+        lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+        let hint = *FIRST_AVAILABLE_PAGE.get_mut();
+        let mut i = hint;
+        while i < TOTAL_PAGES {
+            if !bitmap_test(i) {
+                bitmap_set(i);
+                PAGE_REFCOUNTS.get_mut()[i as usize] = 1;
+                *FIRST_AVAILABLE_PAGE.get_mut() = i + 1;
+                lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+                return page_to_addr(i) as *mut u8;
+            }
+            i += 1;
         }
-        i += 1;
-    }
-    lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
 
-    // Out of pages in the linear scan.  Try swap-eviction first.
-    if crate::fault::swap::swap_is_enabled() {
-        let pd = crate::safe::current_page_dir();
-        if !pd.is_null() && crate::fault::swap::swap_evict_page(pd) == 0 {
-            return kalloc();
+        if round >= MAX_RECLAIM_ROUNDS {
+            break;
         }
-    }
+        round += 1;
 
-    // Last resort: OOM killer.
-    if crate::fault::oom::oom_kill() == 0 {
-        return kalloc();
+        let reclaimed = if crate::fault::swap::swap_is_enabled() {
+            let pd = crate::safe::current_page_dir();
+            if !pd.is_null() && crate::fault::swap::swap_evict_page(pd) == 0 {
+                true
+            } else {
+                crate::fault::oom::oom_kill() == 0
+            }
+        } else {
+            crate::fault::oom::oom_kill() == 0
+        };
+
+        if !reclaimed {
+            break;
+        }
     }
 
     kprint_str(b"[PMM] kalloc: OUT OF MEMORY\n\0".as_ptr());
     core::ptr::null_mut()
 }
 
-/// Free a previously allocated physical page.
 #[unsafe(no_mangle)]
 pub extern "C" fn kfree_page(ptr: *mut u8) {
     if ptr.is_null() { return; }
