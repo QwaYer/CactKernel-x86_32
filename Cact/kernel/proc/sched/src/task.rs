@@ -144,11 +144,8 @@ pub static mut task_list_head: *mut TaskStruct = ptr::null_mut();
 #[no_mangle]
 pub static mut next_pid: u32 = 1;
 
-#[no_mangle]
+#[export_name = "scheduler_lock"]
 pub static mut SCHEDULER_LOCK: irq_spinlock_t = irq_spinlock_t::new();
-
-#[no_mangle]
-pub static mut scheduler_lock: *mut irq_spinlock_t = &raw mut SCHEDULER_LOCK;
 
 static mut task_list_tail: *mut TaskStruct = ptr::null_mut();
 
