@@ -918,8 +918,22 @@ pub unsafe extern "C" fn task_exec(
     let mut argv_vaddrs: [u32; 256] = [0; 256];
     let mut envp_vaddrs: [u32; 256] = [0; 256];
 
-    let argc = copy_strings_to_ustack(argv, EXEC_MAX_ARGS, phys_base, (*t).ustack_virt, &mut sp, &mut argv_vaddrs);
-    let envc = copy_strings_to_ustack(envp, EXEC_MAX_ENVS, phys_base, (*t).ustack_virt, &mut sp, &mut envp_vaddrs);
+    let argc = match copy_strings_to_ustack(argv, EXEC_MAX_ARGS, phys_base, (*t).ustack_virt, &mut sp, &mut argv_vaddrs) {
+        Some(n) => n,
+        None => { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK); return -1; }
+    };
+    let envc = match copy_strings_to_ustack(envp, EXEC_MAX_ENVS, phys_base, (*t).ustack_virt, &mut sp, &mut envp_vaddrs) {
+        Some(n) => n,
+        None => { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK); return -1; }
+    };
+
+    // Pre-flight: ensure remaining space fits pointer arrays + main() scalars:
+    // (argc+1) NULL-terminated argv[], (envc+1) NULL-terminated envp[], 3 scalars.
+    let ptr_overhead = (argc as u32 + envc as u32 + 5) * 4;
+    if sp < (*t).ustack_virt + ptr_overhead {
+        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+        return -1;
+    }
 
     // envp[] array
     sp -= 4;
@@ -1338,8 +1352,8 @@ unsafe fn copy_strings_to_ustack(
     ustack_virt: u32,
     sp:          &mut u32,
     vaddrs:      &mut [u32; 256],
-) -> usize {
-    if arr.is_null() { return 0; }
+) -> Option<usize> {
+    if arr.is_null() { return Some(0); }
     let mut count = 0usize;
 
     for i in 0..max {
@@ -1350,8 +1364,13 @@ unsafe fn copy_strings_to_ustack(
         while len < EXEC_MAX_STRLEN && *s.add(len) != 0 { len += 1; }
         len += 1;
 
-        *sp -= len as u32;
-        *sp &= !3u32; 
+        // Compute new sp without committing; detect stack overflow / wrap-around.
+        // Align down first, then check lower bound.
+        let new_sp = (*sp).wrapping_sub(len as u32) & !3u32;
+        if new_sp >= *sp || new_sp < ustack_virt {
+            return None; // stack overflow: abort exec
+        }
+        *sp = new_sp;
         let off = (*sp - ustack_virt) as usize;
         for j in 0..len {
             *phys_base.add(off + j) = *s.add(j);
@@ -1359,5 +1378,5 @@ unsafe fn copy_strings_to_ustack(
         vaddrs[count] = *sp;
         count += 1;
     }
-    count
+    Some(count)
 }
