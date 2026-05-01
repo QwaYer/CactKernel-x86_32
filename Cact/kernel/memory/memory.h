@@ -3,25 +3,41 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "multiboot2.h"
 
 #define PAGE_SIZE 4096
-#define MEM_START 0x100000
-#define MEM_SIZE  (128 * 1024 * 1024)
-#define TOTAL_PAGES (MEM_SIZE / PAGE_SIZE)
-#define BITMAP_SIZE (TOTAL_PAGES / 8)
 
-#define HEAP_START (MEM_START + (BITMAP_SIZE * PAGE_SIZE))
-#define HEAP_SIZE  (16 * 1024 * 1024)
-#define HEAP_MAGIC 0xDEADBEEF
+/* Kernel load address */
+#define MEM_START 0x00100000u
+
+/*
+ * PMM manages physical addresses 0 … PCI_HOLE_START.
+ * PCI_HOLE_START = 0xE0000000 (3584 MB) — start of MMIO/PCI window.
+ */
+#define PCI_HOLE_START  0xE0000000u
+#define MEM_SIZE        PCI_HOLE_START          /* 3584 MB */
+#define TOTAL_PAGES     (MEM_SIZE / PAGE_SIZE)  /* 917 504 pages */
+#define BITMAP_SIZE     (TOTAL_PAGES / 8)       /* ~112 KB */
+
+/*
+ * Heap window.  The heap slab allocator is initialised starting at 16 MB
+ * so it sits entirely above the kernel BSS and static page tables.
+ */
+#define HEAP_START (16u * 1024u * 1024u)   /* 0x01000000 */
+#define HEAP_SIZE  (16u * 1024u * 1024u)   /* 16 MB heap window */
+#define HEAP_MAGIC 0xDEADBEEFu
+
+/* Hard reservation: everything below RESERVED_END is never given to kalloc(). */
+#define RESERVED_END (16u * 1024u * 1024u)
 
 #define PAGE_PRESENT 0x1
 #define PAGE_RW      0x2
 #define PAGE_USER    0x4
+#define PAGE_PWT     0x8   /* write-through cache policy for MMIO mappings */
+#define PAGE_PCD     0x10  /* cache-disable for MMIO/device memory */
 
-#define PD_INDEX(vaddr) ((vaddr >> 22) & 0x3FF)
-#define PT_INDEX(vaddr) ((vaddr >> 12) & 0x3FF)
 
-/* Rust-exported functions (rust_mm crate) */
+void      pmm_init_from_mmap(const mb2_mmap_table_t* mmap);
 void      init_memory_manager(void);
 void*     kalloc(void);
 void      kfree_page(void* ptr);
@@ -36,8 +52,6 @@ void      vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, i
 uint32_t* vmm_create_address_space(void);
 void      vmm_free_address_space(uint32_t* pd);
 void      vmm_copy_address_space(uint32_t* src_pd, uint32_t* dst_pd);
-
-/* Assembly helpers */
 extern void load_page_directory(uint32_t* directory);
 extern void enable_paging(void);
 
