@@ -555,13 +555,6 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     (*child).dyn_ctx        = ptr::null_mut();
     (*child).ticks_used     = 0;
 
-    // КРИТИЧНО: после memcpy у ребёнка mm.pages и mm.page_dir указывают
-    // на объекты родителя. Без сброса task_reap на зомби-ребёнке вызвал бы
-    // proc_free_pages(&child.mm), что:
-    //   1) освобождает родительский массив pages (heap corruption),
-    //   2) вызывает vmm_free_address_space на PD РОДИТЕЛЯ.
-    // Также fds/mmap_table после memcpy указывают на структуры родителя;
-    // выделяем отдельные копии для дочернего процесса.
     ffi::proc_tracker_init(&raw mut (*child).mm);
     (*child).mm.page_dir = child_pd;
 
@@ -1139,6 +1132,9 @@ pub unsafe extern "C" fn task_check_timers() {
 
 unsafe fn check_alarm_timers() {
     let now = timer_wheel::timer_current_tick();
+
+    crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+
     let mut cur = task_list_head;
     while !cur.is_null() {
         let next = (*cur).next;
@@ -1159,6 +1155,8 @@ unsafe fn check_alarm_timers() {
 
         cur = next;
     }
+
+    crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 }
 
 unsafe fn wake_if_sigsuspend(t: *mut TaskStruct, signal: u32) {
@@ -1172,8 +1170,7 @@ unsafe fn wake_if_sigsuspend(t: *mut TaskStruct, signal: u32) {
     }
 }
 
-// Free all resources held by a task struct that has already been removed
-// from the global task list. Must be called WITHOUT the scheduler lock held.
+
 unsafe fn reap_task_free(t: *mut TaskStruct) {
     if !(*t).fds.is_null() {
         for j in 0..MAX_FD {

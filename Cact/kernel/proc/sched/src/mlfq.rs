@@ -328,8 +328,9 @@ pub unsafe extern "C" fn on_timer_tick() {
 
     crate::task::task_check_timers();
 
-    if !cur.is_null() {
-        crate::task::task_handle_signals(cur);
+    let live = crate::task::current_task;
+    if !live.is_null() {
+        crate::task::task_handle_signals(live);
     }
 
     if need_preempt {
