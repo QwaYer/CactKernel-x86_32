@@ -238,11 +238,25 @@ pub extern "C" fn swap_evict_page(pd: *mut u32) -> i32 {
             continue;
         }
 
+        if pde & PDE_PRIVATE == 0 {
+            pdi += 1;
+            ptj = 0;
+            continue;
+        }
+
         let pt = (pde & !0xFFF) as *mut u32;
         // SAFETY: pt is valid.
         let pte = unsafe { *pt.add(ptj as usize) };
 
         if pte & PAGE_PRESENT == 0 || swap_pte_is_swapped(pte) {
+            ptj += 1;
+            if ptj >= 1024 {
+                ptj = 0;
+                pdi += 1;
+            }
+            continue;
+        }
+        if pte & PAGE_USER == 0 {
             ptj += 1;
             if ptj >= 1024 {
                 ptj = 0;
