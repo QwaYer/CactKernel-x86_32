@@ -126,6 +126,11 @@ struct task_struct {
     task_shm_attach_t shm_attachments[TASK_SHM_MAX];
 
     struct task_struct* wait_next;  /* timer_wheel linkage (managed by Rust) */
+
+    uint32_t    pgid;   /* process group ID */
+    uint32_t    sid;    /* session ID */
+    uint32_t    umask;  /* file creation mask */
+    vfs_node_t *root;   /* chroot root (NULL = global vfs_root) */
 };
 
 typedef struct sched_queue {

@@ -129,6 +129,11 @@ pub struct TaskStruct {
     pub shm_attachments:    [TaskShmAttach; TASK_SHM_MAX],
 
     pub wait_next:          *mut TaskStruct,
+
+    pub pgid:  u32,            /* process group ID */
+    pub sid:   u32,            /* session ID */
+    pub umask: u32,            /* file creation mask */
+    pub root:  *mut VfsNode,   /* chroot root (NULL = global vfs_root) */
 }
 
 unsafe impl Send for TaskStruct {}
@@ -1261,11 +1266,13 @@ pub unsafe extern "C" fn task_setup_sigreturn(t: *mut TaskStruct) {
 
     for i in 0..(PAGE_SIZE as usize) { *phys.add(i) = 0; }
 
-    // Трамплин сигнала:
-    // sub esp, 4          — восстановить esp до основания signal_frame_t
     *phys.add(0) = 0x83; *phys.add(1) = 0xEC; *phys.add(2) = 0x04;
-    // mov eax, 16 (SYS_SIGRETURN)
-    *phys.add(3) = 0xB8; *phys.add(4) = 0x10; *phys.add(5) = 0x00; *phys.add(6) = 0x00; *phys.add(7) = 0x00;
+    let sigret_num: u32 = ffi::sys_sigreturn_num;
+    *phys.add(3) = 0xB8;
+    *phys.add(4) = (sigret_num        & 0xFF) as u8;
+    *phys.add(5) = ((sigret_num >> 8)  & 0xFF) as u8;
+    *phys.add(6) = ((sigret_num >> 16) & 0xFF) as u8;
+    *phys.add(7) = ((sigret_num >> 24) & 0xFF) as u8;
     // int 0x80
     *phys.add(8) = 0xCD; *phys.add(9) = 0x80;
     // hlt

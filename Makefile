@@ -8,6 +8,16 @@
 KERN_CORE_DIR    = Cact/kernel/core
 KERN_VER_DIR     = Cact/kernel/core/kern_ver
 KERN_SYSCALLS_DIR    = Cact/kernel/core/syscalls
+KERN_SC_PROC_DIR     = $(KERN_SYSCALLS_DIR)/proc
+KERN_SC_FD_DIR       = $(KERN_SYSCALLS_DIR)/fd
+KERN_SC_FILE_DIR     = $(KERN_SYSCALLS_DIR)/file
+KERN_SC_PATH_DIR     = $(KERN_SYSCALLS_DIR)/path
+KERN_SC_SYS_DIR      = $(KERN_SYSCALLS_DIR)/sys
+KERN_SC_MM_DIR       = $(KERN_SYSCALLS_DIR)/mm
+KERN_SC_IPC_DIR      = $(KERN_SYSCALLS_DIR)/ipc
+KERN_SC_TIME_DIR     = $(KERN_SYSCALLS_DIR)/time
+KERN_SC_USER_DIR     = $(KERN_SYSCALLS_DIR)/user
+KERN_SC_NET_DIR      = $(KERN_SYSCALLS_DIR)/net
 KERN_GDT_DIR     = Cact/kernel/gdt
 KERN_ELF_DIR     = Cact/kernel/elf
 KERN_DYNLINK_DIR = Cact/kernel/elf/dynlink
@@ -159,7 +169,22 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
 	  $(BUILD_DIR)/ahci.o \
       $(BUILD_DIR)/nvme.o \
       $(BUILD_DIR)/buf.o \
-      $(BUILD_DIR)/syscall.o \
+      $(BUILD_DIR)/sc_mod.o \
+      $(BUILD_DIR)/sc_validate.o \
+      $(BUILD_DIR)/sc_resolve.o \
+      $(BUILD_DIR)/sc_helper.o \
+      $(BUILD_DIR)/sc_proc.o \
+      $(BUILD_DIR)/sc_signal.o \
+      $(BUILD_DIR)/sc_session.o \
+      $(BUILD_DIR)/sc_fd.o \
+      $(BUILD_DIR)/sc_file.o \
+      $(BUILD_DIR)/sc_path.o \
+      $(BUILD_DIR)/sc_sys.o \
+      $(BUILD_DIR)/sc_mm.o \
+      $(BUILD_DIR)/sc_ipc.o \
+      $(BUILD_DIR)/sc_time.o \
+      $(BUILD_DIR)/sc_user.o \
+      $(BUILD_DIR)/sc_net.o \
       $(BUILD_DIR)/keyboard.o \
       $(BUILD_DIR)/mouse.o \
       $(BUILD_DIR)/ps_2_keyboard.o \
@@ -253,9 +278,69 @@ $(BUILD_DIR)/multiboot2.o: $(KERN_CORE_DIR)/multiboot2.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/syscall.o: $(KERN_SYSCALLS_DIR)/syscall.c
+$(BUILD_DIR)/sc_mod.o: $(KERN_SYSCALLS_DIR)/mod.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sc_validate.o: $(KERN_SYSCALLS_DIR)/validate.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sc_resolve.o: $(KERN_SYSCALLS_DIR)/resolve.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sc_helper.o: $(KERN_SYSCALLS_DIR)/helper.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sc_proc.o: $(KERN_SC_PROC_DIR)/proc.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_PROC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_signal.o: $(KERN_SC_PROC_DIR)/signal.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_PROC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_session.o: $(KERN_SC_PROC_DIR)/session.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_PROC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_fd.o: $(KERN_SC_FD_DIR)/fd.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_FD_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_file.o: $(KERN_SC_FILE_DIR)/file.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_FILE_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_path.o: $(KERN_SC_PATH_DIR)/path.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_PATH_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_sys.o: $(KERN_SC_SYS_DIR)/sys.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_SYS_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_mm.o: $(KERN_SC_MM_DIR)/mm.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_MM_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_ipc.o: $(KERN_SC_IPC_DIR)/ipc.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_IPC_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_time.o: $(KERN_SC_TIME_DIR)/time.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_TIME_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_user.o: $(KERN_SC_USER_DIR)/user.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_USER_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_net.o: $(KERN_SC_NET_DIR)/net.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_NET_DIR) -c $< -o $@
 
 $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	@mkdir -p $(BUILD_DIR)

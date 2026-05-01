@@ -10,7 +10,7 @@ pub struct ProcPageTracker {
 
 #[repr(C)]
 pub struct MmapTable {
-    _opaque: [u8; 7172],  // sizeof(mmap_table_t): 256 * 28 (mmap_region_t) + 4 (next_base)
+    _opaque: [u8; 7172],  
 }
 
 #[repr(C)]
@@ -111,6 +111,7 @@ extern "C" {
     pub static mut tss_entry: TssEntry;
     pub static mut vfs_root: *mut VfsNode;
     pub static mut terminal_fg_pid: u32;
+    pub static sys_sigreturn_num: u32;
 }
 
 #[repr(C)]
