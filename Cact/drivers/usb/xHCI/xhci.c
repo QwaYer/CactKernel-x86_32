@@ -575,9 +575,12 @@ static uint8_t xhci_port_speed_to_usb(uint32_t portsc) {
 static int xhci_init_one(uint32_t phys_base) {
     extern uint32_t page_directory[1024];
     uint32_t map_size = 0x10000;
+    /* PAGE_PCD | PAGE_PWT: xHCI MMIO registers must bypass the CPU cache.
+     * Without these flags writes to capability/operational registers stay
+     * in the L1/L2 write buffer and never reach the host controller. */
     for (uint32_t off = 0; off < map_size; off += 0x1000)
         vmm_map(page_directory, phys_base + off, phys_base + off,
-                PAGE_PRESENT | PAGE_RW);
+                PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
 
     xhci_priv_t *priv = (xhci_priv_t *)kmalloc(sizeof(xhci_priv_t));
     if (!priv) { kprint("[XHCI] DBG: kmalloc priv failed\n"); return -1; }

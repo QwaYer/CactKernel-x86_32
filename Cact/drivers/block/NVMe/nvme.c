@@ -341,9 +341,12 @@ void nvme_init(void) {
 
     kprint("[NVMe] mapping BAR0 into virtual address space (16 KB)\n");
     uint32_t bar_size = 0x4000;
+    /* PAGE_PCD | PAGE_PWT: NVMe BAR registers are MMIO — must bypass cache.
+     * Without these flags writes to ndev.bar->cc / doorbell registers stay
+     * in the CPU write-back buffer and never reach the controller. */
     for (uint32_t off = 0; off < bar_size; off += 0x1000)
         vmm_map(get_current_pd(), ndev.bar_phys + off, ndev.bar_phys + off,
-                PAGE_PRESENT | PAGE_RW);
+                PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
 
     ndev.bar = (volatile struct nvme_bar *)(uintptr_t)ndev.bar_phys;
 
@@ -395,7 +398,10 @@ uint32_t nvme_get_max_lba(void) { return ndev.max_lba; }
 //public api
 int nvme_read(vfs_node_t *node, uint32_t offset, uint32_t size, char *buffer) {
     (void)node;
-    struct buf *b = bread(0, offset / 512);
+    uint64_t byte_off = (uint64_t)offset;
+    uint64_t lba64 = byte_off / NVME_SECTOR_SIZE;
+    if (lba64 > 0xFFFFFFFFull) return 0;
+    struct buf *b = bread(0, (uint32_t)lba64);
     if (!b) return 0;
     for (unsigned int i = 0; i < size; i++) buffer[i] = b->data[i];
     brelse(b);
@@ -404,7 +410,10 @@ int nvme_read(vfs_node_t *node, uint32_t offset, uint32_t size, char *buffer) {
 
 int nvme_write(vfs_node_t *node, uint32_t offset, uint32_t size, char *buffer) {
     (void)node;
-    struct buf *b = bread(0, offset / 512);
+    uint64_t byte_off = (uint64_t)offset;
+    uint64_t lba64 = byte_off / NVME_SECTOR_SIZE;
+    if (lba64 > 0xFFFFFFFFull) return 0;
+    struct buf *b = bread(0, (uint32_t)lba64);
     if (!b) return 0;
     for (unsigned int i = 0; i < size; i++) b->data[i] = buffer[i];
     bwrite(b);
@@ -418,9 +427,9 @@ static vfs_ops_t nvme_ops = {
 };
 
 vfs_node_t *init_nvme_device(void) {
-    vfs_node_t *node = (vfs_node_t *)kalloc();
+    vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
     if (!node) return 0;
-    memory_set(node->name, 0, 128);
+    memory_set(node, 0, sizeof(vfs_node_t));
     node->name[0] = 'n'; node->name[1] = 'v'; node->name[2] = 'm';
     node->name[3] = 'e'; node->name[4] = '0';
     node->type = VFS_BLOCKDEVICE;

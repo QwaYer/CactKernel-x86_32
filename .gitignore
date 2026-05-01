@@ -7,18 +7,11 @@
 
 build/
 
-ktest/
-libc.a
-
-test/
-
 .vscode/
 *.swp
 *~
 
 *.log
-qemu.dmp
-qemu.txt
+run_qemu.txt
 
-# Rust build artifacts
 **/target/

@@ -297,9 +297,12 @@ static void ahci_probe_ports(void) {
 
 static int ahci_init_controller(uint32_t mmio) {
     uint32_t bar_size = 0x2000;
+    /* PAGE_PCD | PAGE_PWT: AHCI HBA registers are MMIO — must bypass cache.
+     * Without these flags writes to abar->ghc / port registers stay in the
+     * CPU write-back buffer and never reach the controller. */
     for (uint32_t off = 0; off < bar_size; off += 0x1000)
         vmm_map(get_current_pd(), mmio + off, mmio + off,
-                PAGE_PRESENT | PAGE_RW);
+                PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
 
     abar = (hba_mem_t *)(uintptr_t)mmio;
 

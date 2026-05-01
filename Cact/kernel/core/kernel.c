@@ -349,29 +349,11 @@ static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
     return 0;
 }
 
-void kernel_setup_hardware(multiboot_info_t *mbi) {
+void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     init_gdt();
-    init_memory_manager();
+    pmm_init_from_mmap(mmap);   
+    init_memory_manager();      
     init_heap();
-
-    {
-        uint32_t fb_phys = (uint32_t)fb_get_buffer();
-        if (fb_phys != 0) {
-            uint32_t fb_size = fb_get_height() * fb_get_pitch();
-            fb_size = (fb_size + 0xFFF) & ~0xFFF;
-            char buf[16];
-            kprint("[KRNL] mapping framebuffer 0x");
-            hex_to_ascii(fb_phys, buf); kprint(buf);
-            kprint("  size="); itoa((int)(fb_size / 1024), buf); kprint(buf); kprint(" KB\n");
-            for (uint32_t off = 0; off < fb_size; off += 0x1000)
-                vmm_map(page_directory, fb_phys + off, fb_phys + off,
-                        PAGE_PRESENT | PAGE_RW);
-            klog(LOG_OK, "framebuffer identity-mapped");
-        } else {
-            klog(LOG_WARN, "framebuffer not yet mapped — skipping VMM map");
-        }
-    }
-
     init_paging();
     slab_init();
     page_fault_init();
@@ -498,8 +480,9 @@ void kernel_setup_hardware(multiboot_info_t *mbi) {
 }
 
 void init(uint32_t magic, uint32_t mb2_info_addr) {
-    static multiboot_info_t mbi_storage;
-    multiboot2_parse(mb2_info_addr, &mbi_storage);
+    static multiboot_info_t  mbi_storage;
+    static mb2_mmap_table_t  mmap_storage;
+    multiboot2_parse(mb2_info_addr, &mbi_storage, &mmap_storage);
     multiboot_info_t* mbi = &mbi_storage;
 
     fb_init(mbi);
@@ -520,7 +503,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
         while(1) __asm__ __volatile__("hlt");
     }
 
-    kernel_setup_hardware(mbi);
+    kernel_setup_hardware(mbi, &mmap_storage);
 
     kprint("\n");
     kprint_color("Cact Kernel ", COLOR_LIGHT_BROWN);

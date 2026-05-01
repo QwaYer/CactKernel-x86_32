@@ -8,8 +8,8 @@
  * See: https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html
  */
 
-#define MB2_BOOTLOADER_MAGIC 0x36D76289u  /* value in eax at entry */
-#define MB2_HEADER_MAGIC     0xE85250D6u  /* value in the kernel header */
+#define MB2_BOOTLOADER_MAGIC 0x36D76289u  
+#define MB2_HEADER_MAGIC     0xE85250D6u  
 
 #define MB2_TAG_END           0
 #define MB2_TAG_CMDLINE       1
@@ -32,7 +32,8 @@
 #define MB2_MMAP_TYPE_NVS       4
 #define MB2_MMAP_TYPE_BADRAM    5
 
-/* Raw tag header. All tags are 8-byte aligned. size includes this header. */
+#define MB2_MMAP_MAX_ENTRIES 128
+
 struct mb2_tag {
     uint32_t type;
     uint32_t size;
@@ -79,4 +80,15 @@ struct mb2_tag_string {
     char     string[];
 } __attribute__((packed));
 
-#endif /* MULTIBOOT2_H */
+typedef struct {
+    uint32_t base;   
+    uint32_t len;    
+    uint32_t type;   
+} mb2_mmap_flat_t;
+
+typedef struct {
+    mb2_mmap_flat_t entries[MB2_MMAP_MAX_ENTRIES];
+    uint32_t        count;
+} mb2_mmap_table_t;
+
+#endif 

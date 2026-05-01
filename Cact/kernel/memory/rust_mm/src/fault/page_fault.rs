@@ -5,6 +5,36 @@ use crate::fault::swap::{swap_pte_is_swapped, swap_handle_fault};
 use crate::fault::oom::oom_kill;
 use crate::safe::{KStatic, zero_page, flush_tlb, kprint_str, read_cr2_val, current_page_dir};
 
+/// Ensure that pd[pdi] is a private (PDE_PRIVATE) page table.
+/// If it currently points to a shared kernel page table, COW it into a
+/// freshly allocated private copy.  Returns a pointer to the private PT
+/// (which is already set in pd[pdi]), or null on OOM.
+unsafe fn ensure_private_pt(pd: *mut u32, pdi: usize, extra_flags: u32) -> *mut u32 {
+    let pde = &mut *pd.add(pdi);
+
+    if *pde & PAGE_PRESENT == 0 {
+        let pt = kalloc() as *mut u32;
+        if pt.is_null() { return core::ptr::null_mut(); }
+        zero_page(pt as *mut u8);
+        *pde = (pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | (extra_flags & PAGE_USER) | PDE_PRIVATE;
+        return pt;
+    }
+
+    if *pde & PDE_PRIVATE == 0 {
+        // Shared kernel page table — COW it.
+        let shared = (*pde & !0xFFF) as *const u32;
+        let priv_pt = kalloc() as *mut u32;
+        if priv_pt.is_null() { return core::ptr::null_mut(); }
+        core::ptr::copy_nonoverlapping(shared, priv_pt, 1024);
+        let old_flags = *pde & 0xFFF;
+        *pde = (priv_pt as u32 & !0xFFF)
+            | (old_flags | (extra_flags & PAGE_USER) | PDE_PRIVATE);
+        return priv_pt;
+    }
+
+    (*pde & !0xFFF) as *mut u32
+}
+
 static G_STATS: KStatic<PfStats> = KStatic::new(PfStats {
     total_faults: 0,
     demand_allocs: 0,
@@ -109,15 +139,71 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
     };
 
     if (err & PF_PRESENT != 0) && (err & PF_WRITE != 0) {
-        let pte = pte_get(pd, fault_addr);
-        if !pte.is_null() && unsafe { *pte & PAGE_COW != 0 } {
+        let pte_ptr = pte_get(pd, fault_addr);
+
+        // COW handler: present + write + PAGE_COW in PTE.
+        if !pte_ptr.is_null() && unsafe { *pte_ptr & PAGE_COW != 0 } {
             if vmm_handle_cow(pd, fault_addr & !0xFFF) == 0 {
                 G_STATS.get_mut().cow_copies += 1;
                 return;
             }
         }
+
+        // Protection fault from user mode: page is present but lacks PAGE_USER.
+        // This happens when the stack grows into a page that was inherited from
+        // the kernel identity map (PAGE_PRESENT|PAGE_RW, no PAGE_USER).
+        // Allocate a fresh zero user page and remap it properly.
+        if (err & PF_USER_BIT != 0)
+            && fault_addr >= USER_STACK_LIMIT
+            && fault_addr < USER_STACK_TOP
+            && !pte_ptr.is_null()
+            && unsafe { *pte_ptr & PAGE_USER == 0 }
+        {
+            let page_va = fault_addr & !0xFFF;
+            let mut phys = kalloc();
+            if phys.is_null() && oom_kill() == 0 {
+                phys = kalloc();
+            }
+            if phys.is_null() {
+                kill_current(fault_addr, err, eip);
+                return;
+            }
+            zero_page(phys);
+            vmm_map(pd, page_va, phys as u32, (PAGE_PRESENT | PAGE_RW | PAGE_USER) as i32);
+            flush_tlb(page_va);
+            G_STATS.get_mut().stack_grows += 1;
+            return;
+        }
+
         kill_current(fault_addr, err, eip);
         return;
+    }
+
+    // Read protection fault from user mode (PF_PRESENT=1, no PF_WRITE) on a
+    // page in the stack region that has no PAGE_USER.  Same root cause as the
+    // write case above: kernel identity-map entry without PAGE_USER.
+    if (err & PF_PRESENT != 0)
+        && (err & PF_USER_BIT != 0)
+        && fault_addr >= USER_STACK_LIMIT
+        && fault_addr < USER_STACK_TOP
+    {
+        let pte_ptr = pte_get(pd, fault_addr);
+        if !pte_ptr.is_null() && unsafe { *pte_ptr & PAGE_USER == 0 } {
+            let page_va = fault_addr & !0xFFF;
+            let mut phys = kalloc();
+            if phys.is_null() && oom_kill() == 0 {
+                phys = kalloc();
+            }
+            if phys.is_null() {
+                kill_current(fault_addr, err, eip);
+                return;
+            }
+            zero_page(phys);
+            vmm_map(pd, page_va, phys as u32, (PAGE_PRESENT | PAGE_RW | PAGE_USER) as i32);
+            flush_tlb(page_va);
+            G_STATS.get_mut().stack_grows += 1;
+            return;
+        }
     }
 
     if err & PF_PRESENT == 0 {
@@ -196,25 +282,32 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
         }
 
         if fault_addr >= USER_STACK_LIMIT && fault_addr < USER_STACK_TOP {
-            let mut phys = kalloc();
-            if phys.is_null() && oom_kill() == 0 {
-                phys = kalloc();
-            }
-            if phys.is_null() {
-                kill_current(fault_addr, err, eip);
+            // Stack grow: missing page OR present kernel-only page (no PAGE_USER).
+            let existing = pte_get(pd, fault_addr);
+            let need_alloc = existing.is_null()
+                || unsafe { *existing & PAGE_PRESENT == 0 }
+                || unsafe { *existing & PAGE_USER == 0 };
+
+            if need_alloc {
+                let mut phys = kalloc();
+                if phys.is_null() && oom_kill() == 0 {
+                    phys = kalloc();
+                }
+                if phys.is_null() {
+                    kill_current(fault_addr, err, eip);
+                    return;
+                }
+                zero_page(phys);
+                vmm_map(
+                    pd,
+                    page_va,
+                    phys as u32,
+                    (PAGE_PRESENT | PAGE_RW | PAGE_USER) as i32,
+                );
+                flush_tlb(page_va);
+                G_STATS.get_mut().stack_grows += 1;
                 return;
             }
-            zero_page(phys);
-            vmm_map(
-                pd,
-                page_va,
-                phys as u32,
-                (PAGE_PRESENT | PAGE_RW | PAGE_USER) as i32,
-            );
-            flush_tlb(page_va);
-
-            G_STATS.get_mut().stack_grows += 1;
-            return;
         }
 
         if fault_addr < 0xC0000000 && (err & PF_USER_BIT != 0) {
@@ -266,16 +359,8 @@ pub extern "C" fn vmm_map_demand(
 
         // SAFETY: pd is valid.
         unsafe {
-            if *pd.add(pdi) & PAGE_PRESENT == 0 {
-                let pt = kalloc() as *mut u32;
-                if pt.is_null() {
-                    return -1;
-                }
-                zero_page(pt as *mut u8);
-                *pd.add(pdi) = (pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | (flags & PAGE_USER);
-            }
-
-            let pt = (*pd.add(pdi) & !0xFFF) as *mut u32;
+            let pt = ensure_private_pt(pd, pdi, flags);
+            if pt.is_null() { return -1; }
             *pt.add(pt_index(va) as usize) = PAGE_DEMAND | (flags & PAGE_USER);
         }
         va += PAGE_SIZE;
@@ -304,16 +389,8 @@ pub extern "C" fn vmm_map_zero(
 
         // SAFETY: pd is valid.
         unsafe {
-            if *pd.add(pdi) & PAGE_PRESENT == 0 {
-                let pt = kalloc() as *mut u32;
-                if pt.is_null() {
-                    return -1;
-                }
-                zero_page(pt as *mut u8);
-                *pd.add(pdi) = (pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | (flags & PAGE_USER);
-            }
-
-            let pt = (*pd.add(pdi) & !0xFFF) as *mut u32;
+            let pt = ensure_private_pt(pd, pdi, flags);
+            if pt.is_null() { return -1; }
             *pt.add(pt_index(va) as usize) = PAGE_DEMAND | PAGE_ZERO | (flags & PAGE_USER);
         }
         va += PAGE_SIZE;

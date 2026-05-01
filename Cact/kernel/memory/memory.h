@@ -20,15 +20,15 @@
 #define BITMAP_SIZE     (TOTAL_PAGES / 8)       /* ~112 KB */
 
 /*
- * Heap window.  The heap slab allocator is initialised starting at 16 MB
- * so it sits entirely above the kernel BSS and static page tables.
+ * Heap window.  The heap allocator starts right after the hard-reserved
+ * low-memory zone so kmalloc() never overlaps kernel-reserved pages.
  */
-#define HEAP_START (16u * 1024u * 1024u)   /* 0x01000000 */
+#define HEAP_START (32u * 1024u * 1024u)   /* 0x02000000 */
 #define HEAP_SIZE  (16u * 1024u * 1024u)   /* 16 MB heap window */
 #define HEAP_MAGIC 0xDEADBEEFu
 
 /* Hard reservation: everything below RESERVED_END is never given to kalloc(). */
-#define RESERVED_END (16u * 1024u * 1024u)
+#define RESERVED_END (32u * 1024u * 1024u)
 
 #define PAGE_PRESENT 0x1
 #define PAGE_RW      0x2

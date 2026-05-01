@@ -1,5 +1,4 @@
 use crate::ffi::*;
-use crate::pmm::kfree_page;
 use crate::alloc::heap::{kmalloc, kfree_heap};
 use crate::vmm::paging::vmm_free_address_space;
 

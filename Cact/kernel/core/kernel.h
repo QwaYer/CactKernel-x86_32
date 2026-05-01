@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "pci.h"
+#include "multiboot2.h"
 
 // Forward declarations
 struct context_frame;
@@ -34,8 +35,13 @@ typedef struct {
     uint8_t  framebuffer_type;
 } multiboot_info_t;
 
-/* Parse raw multiboot2 info (pointer from ebx) into multiboot_info_t. */
-void multiboot2_parse(uint32_t mb2_info_addr, multiboot_info_t* out);
+/* Parse raw multiboot2 info (pointer from ebx) into multiboot_info_t.
+ * Also fills mmap_out with a flat, 32-bit-clipped copy of all MMAP entries
+ * so the Rust PMM can be initialised from real hardware memory map data.
+ * mmap_out may be NULL if the caller does not need the MMAP table. */
+void multiboot2_parse(uint32_t mb2_info_addr,
+                      multiboot_info_t* out,
+                      mb2_mmap_table_t* mmap_out);
 
 // Framebuffer Colors
 typedef enum {
@@ -170,7 +176,7 @@ extern void blkdev_read_sector (uint32_t lba, uint8_t* buf);
 extern void blkdev_write_sector(uint32_t lba, uint8_t* buf);
 
 // Kernel Entry Point Helpers
-void kernel_setup_hardware(multiboot_info_t *mbi);
+void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap);
 
 // ELF Loader
 struct proc_page_tracker_t;

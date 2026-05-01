@@ -1,24 +1,81 @@
 #![allow(dead_code)]
 
 pub const PAGE_SIZE: u32 = 4096;
-pub const MEM_START: u32 = 0x100000;
-pub const MEM_SIZE: u32 = 128 * 1024 * 1024;
-pub const TOTAL_PAGES: u32 = MEM_SIZE / PAGE_SIZE;
-pub const BITMAP_SIZE: u32 = TOTAL_PAGES / 8;
-pub const HEAP_START: u32 = MEM_START + BITMAP_SIZE * PAGE_SIZE;
-pub const HEAP_SIZE: u32 = 16 * 1024 * 1024;
-pub const HEAP_MAGIC: u32 = 0xDEADBEEF;
 
-pub const PAGE_PRESENT: u32 = 0x1;
-pub const PAGE_RW: u32 = 0x2;
-pub const PAGE_USER: u32 = 0x4;
-pub const PAGE_COW: u32 = 0x200;
-pub const PAGE_DEMAND: u32 = 0x400;
-pub const PAGE_ZERO: u32 = 0x800;
-/// Bit 3 — available for software when PRESENT=0.
-/// Used to mark a PTE whose backing page has been swapped out to disk.
+/// Physical address where the kernel is loaded (1 MB mark).
+pub const MEM_START: u32 = 0x0010_0000;
+
+/// ---------------------------------------------------------------------------
+/// 4 GB address-space layout
+/// ---------------------------------------------------------------------------
+///
+/// We manage the full 32-bit physical address space (4 GB), minus the
+/// PCI/MMIO hole that occupies the top ~512 MB (0xE000_0000 – 0xFFFF_FFFF).
+/// The actual upper bound is capped to the last 32-bit address supported by
+/// the hardware, which is conveyed by the Multiboot2 MMAP.  For sizing
+/// static data structures we use the worst-case maximum.
+///
+///   0x0000_0000 – 0x000F_FFFF :  1 MB  BIOS / IVT / ROM (reserved)
+///   0x0010_0000 – 0x01FF_FFFF : 31 MB  kernel text + BSS + static page tables
+///   0x0200_0000 – 0x02FF_FFFF : 16 MB  heap window
+///   0x0200_0000 – 0xDFFF_FFFF : ~3.5 GB  general-purpose physical RAM
+///   0xE000_0000 – 0xFFFF_FFFF : PCI/MMIO hole — never touched by PMM
+///
+/// TOTAL_PAGES covers every 4K frame from address 0 up to PCI_HOLE_START.
+/// ---------------------------------------------------------------------------
+
+/// Upper boundary of the region managed by PMM (= start of PCI/MMIO hole).
+/// 0xE000_0000 = 3584 MB.  Change this if your board has RAM above 3.5 GB.
+pub const PCI_HOLE_START: u32 = 0xE000_0000;
+
+/// Manageable physical memory: 0 … PCI_HOLE_START.
+pub const MEM_SIZE: u32 = PCI_HOLE_START; /* 3584 MB */
+
+/// Total number of 4K pages in the managed range.
+pub const TOTAL_PAGES: u32 = MEM_SIZE / PAGE_SIZE; /* 917 504 pages */
+
+/// Bitmap byte count (1 bit per page).
+pub const BITMAP_SIZE: u32 = TOTAL_PAGES / 8; /* 114 688 bytes ≈ 112 KB */
+
+/// Heap starts right after the hard-reserved 32 MB low-memory region.
+pub const HEAP_START: u32 = 32 * 1024 * 1024; /* 0x0200_0000 */
+pub const HEAP_SIZE: u32 = 16 * 1024 * 1024;  /* 16 MB heap window */
+pub const HEAP_MAGIC: u32 = 0xDEAD_BEEF;
+
+/// Hard reservation: every physical page below RESERVED_END is permanently
+/// marked "used" in the PMM bitmap so it is never handed out via kalloc().
+///
+/// 0 … 32 MB covers:
+///   BIOS / IVT / ROM        0x0000_0000 – 0x000F_FFFF
+///   Kernel text/data/BSS    0x0010_0000 – (kernel_end)
+///   Static page-tables BSS  up to 0x00BF_FFFF
+pub const RESERVED_END: u32 = 32 * 1024 * 1024; /* 0x0200_0000 */
+
+/// Maximum number of MMAP entries copied from the MB2 boot info.
+pub const MB2_MMAP_MAX_ENTRIES: usize = 128;
+pub const MB2_MMAP_TYPE_AVAILABLE: u32 = 1;
+
+pub const PAGE_PRESENT: u32 = 0x001;
+pub const PAGE_RW:      u32 = 0x002;
+pub const PAGE_USER:    u32 = 0x004;
+/// Bit 9 in a PDE — marks a page table as privately allocated for this
+/// process (as opposed to a shared static kernel page table).  The CPU
+/// ignores this bit in PDEs; we use it to decide which page tables to
+/// free in vmm_free_address_space and to COW-copy in vmm_fork.
+pub const PDE_PRIVATE:  u32 = 0x200;
+/// Bit 3 — Page Write-Through (PWT).  Set for MMIO/PCI-hole PTEs so that
+/// writes are not held in write buffers.  Also reused as PAGE_SWAPPED marker
+/// when PRESENT=0 (non-overlapping use: hw only checks PWT when PRESENT=1).
+pub const PAGE_PWT:     u32 = 0x008;
+/// Alias: software swap marker reuses bit 3 (safe — PRESENT=0 when swapped).
 pub const PAGE_SWAPPED: u32 = 0x008;
-pub const PTE_ACCESSED: u32 = 0x20;
+/// Bit 4 — Page Cache Disable (PCD).  Set for MMIO/PCI-hole PTEs so that
+/// reads/writes bypass L1/L2 cache and reach device registers directly.
+pub const PAGE_PCD:     u32 = 0x010;
+pub const PTE_ACCESSED: u32 = 0x020;
+pub const PAGE_COW:     u32 = 0x200;
+pub const PAGE_DEMAND:  u32 = 0x400;
+pub const PAGE_ZERO:    u32 = 0x800;
 
 pub const USER_STACK_TOP: u32 = 0xC0000000;
 pub const USER_STACK_LIMIT: u32 = 0xBF000000;
@@ -245,6 +302,24 @@ pub struct OomStats {
     pub oom_kills: u32,
     pub pages_reclaimed: u32,
     pub last_killed_pid: u32,
+}
+
+/// Flat MMAP entry passed from the C multiboot2 parser.
+/// Must match `mb2_mmap_flat_t` in multiboot2.h exactly.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Mb2MmapFlat {
+    pub base: u32,
+    pub len:  u32,
+    pub ty:   u32,
+}
+
+/// Table of flat MMAP entries.
+/// Must match `mb2_mmap_table_t` in multiboot2.h exactly.
+#[repr(C)]
+pub struct Mb2MmapTable {
+    pub entries: [Mb2MmapFlat; MB2_MMAP_MAX_ENTRIES],
+    pub count:   u32,
 }
 
 extern "C" {
