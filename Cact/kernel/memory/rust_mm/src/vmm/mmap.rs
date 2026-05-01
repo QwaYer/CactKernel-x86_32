@@ -5,7 +5,6 @@ use crate::fault::page_fault::vmm_map_zero;
 use crate::safe::{zero_page, flush_tlb, flush_tlb_all, kprint_str};
 
 fn fd_to_node(fd: i32) -> *mut VfsNode {
-    // SAFETY: reading current_task is a kernel global; we check for null.
     let t = unsafe { current_task };
     if t.is_null() {
         return core::ptr::null_mut();
@@ -13,7 +12,6 @@ fn fd_to_node(fd: i32) -> *mut VfsNode {
     if fd < 0 || fd as usize >= MAX_FD {
         return core::ptr::null_mut();
     }
-    // SAFETY: t is valid; fds is heap-allocated and non-null for all live tasks.
     unsafe {
         let fds = (*t).fds;
         if fds.is_null() { return core::ptr::null_mut(); }
@@ -136,6 +134,9 @@ pub extern "C" fn do_mmap(
     let va;
     if (flags & MAP_FIXED != 0) && hint != 0 {
         if hint % PAGE_SIZE != 0 {
+            return MAP_FAILED as *mut u8;
+        }
+        if hint >= USER_STACK_TOP || hint.saturating_add(length) > USER_STACK_TOP {
             return MAP_FAILED as *mut u8;
         }
         va = hint;

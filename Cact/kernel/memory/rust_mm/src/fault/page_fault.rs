@@ -5,10 +5,6 @@ use crate::fault::swap::{swap_pte_is_swapped, swap_handle_fault};
 use crate::fault::oom::oom_kill;
 use crate::safe::{KStatic, zero_page, flush_tlb, kprint_str, read_cr2_val, current_page_dir};
 
-/// Ensure that pd[pdi] is a private (PDE_PRIVATE) page table.
-/// If it currently points to a shared kernel page table, COW it into a
-/// freshly allocated private copy.  Returns a pointer to the private PT
-/// (which is already set in pd[pdi]), or null on OOM.
 unsafe fn ensure_private_pt(pd: *mut u32, pdi: usize, extra_flags: u32) -> *mut u32 {
     let pde = &mut *pd.add(pdi);
 
@@ -90,7 +86,6 @@ fn kill_current(fault_addr: u32, err: u32, eip: u32) {
 
     if !t.is_null() && unsafe { (*t).is_kernel } == 0 {
         let pid = unsafe { (*t).pid };
-        // SAFETY: task_signal and schedule are kernel FFI entry points.
         unsafe {
             task_signal(pid, SIGSEGV);
             schedule();
@@ -98,7 +93,6 @@ fn kill_current(fault_addr: u32, err: u32, eip: u32) {
         return;
     }
 
-    // SAFETY: kernel page fault — system must halt.
     unsafe {
         kprint_color(
             b"[PF] KERNEL PAGE FAULT \xe2\x80\x94 SYSTEM HALTED\n\0".as_ptr(),
@@ -357,7 +351,11 @@ pub extern "C" fn vmm_map_demand(
     }
     let flags = flags as u32;
     let start = virtual_addr & !0xFFF;
-    let end = (virtual_addr + size + 0xFFF) & !0xFFF;
+    let end = virtual_addr.saturating_add(size).saturating_add(0xFFF) & !0xFFF;
+    
+    if start >= USER_STACK_TOP || end > USER_STACK_TOP {
+        return -1;
+    }
 
     let mut va = start;
     while va < end {
@@ -387,7 +385,14 @@ pub extern "C" fn vmm_map_zero(
     }
     let flags = flags as u32;
     let start = virtual_addr & !0xFFF;
-    let end = (virtual_addr + size + 0xFFF) & !0xFFF;
+    // Use saturating arithmetic so an overflowing range is caught by the
+    // kernel-space boundary check below rather than wrapping to a low address.
+    let end = virtual_addr.saturating_add(size).saturating_add(0xFFF) & !0xFFF;
+    // C-08: never install demand entries inside kernel space (≥ 0xC000_0000).
+    // A saturated end will be ≥ USER_STACK_TOP and is therefore also rejected.
+    if start >= USER_STACK_TOP || end > USER_STACK_TOP {
+        return -1;
+    }
 
     let mut va = start;
     while va < end {
