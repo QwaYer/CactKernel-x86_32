@@ -1099,6 +1099,13 @@ pub unsafe extern "C" fn task_sigaction(
     handler: u32,
 ) -> i32 {
     if t.is_null() || signum >= NSIG as u32 || signum == 0 { return -1; }
+
+    if handler != SIG_DFL && handler != SIG_IGN && handler >= KERNEL_BASE {
+        return -1;
+    }
+
+    if (1u32 << signum) & SIG_UNCATCHABLE != 0 { return -1; }
+
     (*t).signal_handlers[signum as usize] = handler;
     0
 }
