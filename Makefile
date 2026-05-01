@@ -21,8 +21,6 @@ KERN_SC_NET_DIR      = $(KERN_SYSCALLS_DIR)/net
 KERN_GDT_DIR     = Cact/kernel/gdt
 KERN_ELF_DIR     = Cact/kernel/elf
 KERN_DYNLINK_DIR = Cact/kernel/elf/dynlink
-KERN_SHELL_DIR   = Cact/kernel/shell
-KERN_CMDS_DIR    = Cact/kernel/shell/commands
 KERN_MEM_DIR     = Cact/kernel/memory
 KERN_PROC_DIR    = Cact/kernel/proc
 SCHED_DIR    = Cact/kernel/proc/sched
@@ -88,8 +86,6 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_GDT_DIR) \
          -I$(KERN_ELF_DIR) \
          -I$(KERN_DYNLINK_DIR) \
-         -I$(KERN_SHELL_DIR) \
-         -I$(KERN_CMDS_DIR) \
          -I$(KERN_MEM_DIR) \
          -I$(KERN_PROC_DIR) \
          -I$(KERN_SYNC_DIR) \
@@ -148,8 +144,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/dynlink.o \
       $(BUILD_DIR)/idt.o \
-      $(BUILD_DIR)/shell.o \
-      $(BUILD_DIR)/commands.o \
       $(BUILD_DIR)/klib.o \
       $(BUILD_DIR)/vfs.o \
       $(BUILD_DIR)/pipe.o \
@@ -357,14 +351,6 @@ $(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/dynlink.o: $(KERN_DYNLINK_DIR)/dynlink.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/shell.o: $(KERN_SHELL_DIR)/shell.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/commands.o: $(KERN_CMDS_DIR)/commands.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

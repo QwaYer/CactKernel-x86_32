@@ -264,13 +264,7 @@ pub unsafe extern "C" fn init_scheduler() -> i32 {
     task_list_head  = idle;
     task_list_tail  = idle;
 
-    ffi::kprint(b"[SCHED] spawning terminal_task (pid=1)\n\0".as_ptr());
-
-    // terminal_task объявлена в C-коде (kernel.c)
-    extern "C" { fn terminal_task(); }
-    create_task(terminal_task as *const c_void);
-
-    ffi::klog(LOG_OK, b"scheduler ready: idle(0) + terminal(1)\0".as_ptr());
+    ffi::klog(LOG_OK, b"scheduler ready: idle(0)\0".as_ptr());
     0
 }
 

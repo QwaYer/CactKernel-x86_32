@@ -228,7 +228,6 @@ extern struct task_struct* volatile task_list_head;
 extern uint32_t next_pid;
 extern irq_spinlock_t scheduler_lock;
 
-extern void terminal_task();
 extern void switch_to(uint32_t* old_esp, uint32_t new_esp);
 
 #endif

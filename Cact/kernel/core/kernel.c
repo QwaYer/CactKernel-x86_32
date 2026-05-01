@@ -13,7 +13,6 @@
 #include "devfs.h"
 #include "klib.h"
 #include "task.h"
-#include "shell.h"
 #include "fb.h"
 #include "font.h"
 #include "swap.h"
@@ -29,10 +28,6 @@ extern uint32_t page_directory[1024];
 
 int cursor_x = 0;
 int cursor_y = 0;
-
-char* key_buffer;
-int buffer_idx = 0;
-volatile int system_ready = 0;
 
 struct winsize terminal_winsize;
 uint32_t       terminal_fg_pid = 0;
@@ -108,19 +103,6 @@ void kprint_color(char* message, uint32_t color) {
 
 void kprint(char* message) {
     kprint_color(message, COLOR_WHITE);
-}
-
-void backspace_visual_update() {
-    uint32_t w = fb_get_width();
-    if (w == 0) return;
-
-    cursor_x -= CHAR_W;
-    if (cursor_x < 0) {
-        cursor_x = ((int)w / CHAR_W - 1) * CHAR_W;
-        cursor_y -= CHAR_H;
-        if (cursor_y < 0) { cursor_x = 0; cursor_y = 0; return; }
-    }
-    fb_fill_rect(cursor_x, cursor_y, CHAR_W, CHAR_H, COLOR_BLACK);
 }
 
 void kprint_at(char* message, int x, int y) {
@@ -229,83 +211,6 @@ void init_timer(unsigned int frequency) {
     port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF));
 }
 
-extern uint32_t timer_ticks_get(void);
-
-static void draw_cursor(int visible) {
-    uint32_t color = visible ? COLOR_LIGHT_GREY : COLOR_BLACK;
-    fb_fill_rect(cursor_x, cursor_y + CHAR_H - 3, CHAR_W, 3, color);
-}
-
-void terminal_task() {
-    char* cmd_buffer = (char*)kmalloc(1024);
-    int idx = 0;
-
-    while (!system_ready);
-
-    /* Compute initial terminal size from framebuffer dimensions */
-    uint32_t fb_w = fb_get_width();
-    uint32_t fb_h = fb_get_height();
-    terminal_winsize.ws_col    = (uint16_t)(fb_w / CHAR_W);
-    terminal_winsize.ws_row    = (uint16_t)(fb_h / CHAR_H);
-    terminal_winsize.ws_xpixel = (uint16_t)fb_w;
-    terminal_winsize.ws_ypixel = (uint16_t)fb_h;
-
-    kprint("\n");
-    kprint_color("Cact Shell", COLOR_LIGHT_CYAN);
-    kprint(" ready!\n");
-    kprint_color("kernel", COLOR_LIGHT_GREEN);
-    kprint("@");
-    kprint_color("cact", COLOR_LIGHT_RED);
-    kprint(":");
-    kprint_color("~", COLOR_LIGHT_BLUE);
-    kprint("$ ");
-
-    uint32_t last_blink = 0;
-    int cursor_visible  = 1;
-    draw_cursor(1);
-
-    while (1) {
-        uint32_t ticks = timer_ticks_get();
-        if (ticks - last_blink >= 50) {
-            last_blink = ticks;
-            cursor_visible = !cursor_visible;
-            draw_cursor(cursor_visible);
-        }
-
-        int _k = keyboard_read_char();
-        if (_k >= 0) {
-            char key = (char)_k;
-
-            draw_cursor(0);
-
-            if (key == '\n') {
-                cmd_buffer[idx] = '\0';
-                kprint("\n");
-                shell_execute(cmd_buffer);
-                idx = 0;
-                kprint_color("kernel", COLOR_LIGHT_GREEN);
-                kprint("@");
-                kprint_color("cact", COLOR_LIGHT_RED);
-                kprint(":");
-                kprint_color("~", COLOR_LIGHT_BLUE);
-                kprint("$ ");
-            } else if (key == '\b' && idx > 0) {
-                idx--;
-                backspace_visual_update();
-            } else if (idx < 1024 - 1 && key >= 32) {
-                cmd_buffer[idx++] = key;
-                char temp[2] = {key, 0};
-                kprint(temp);
-            }
-
-            cursor_visible = 1;
-            last_blink = timer_ticks_get();
-            draw_cursor(1);
-        }
-    }
-    kfree_heap(cmd_buffer);
-}
-
 void klog(log_level_t level, const char* message) {
     kprint("        ");
     switch (level) {
@@ -362,6 +267,15 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     init_idt();
 
     init_framebuffer();
+
+    {
+        uint32_t fb_w = fb_get_width();
+        uint32_t fb_h = fb_get_height();
+        terminal_winsize.ws_col    = (uint16_t)(fb_w / CHAR_W);
+        terminal_winsize.ws_row    = (uint16_t)(fb_h / CHAR_H);
+        terminal_winsize.ws_xpixel = (uint16_t)fb_w;
+        terminal_winsize.ws_ypixel = (uint16_t)fb_h;
+    }
 
     ps2_keyboard_init();
     ps2_mouse_init();
@@ -459,24 +373,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     kprint("  freq=100 Hz\n");
     init_timer(100);
     klog(LOG_OK, "PIT timer @ 100 Hz — IRQ0 active");
-
-    kprint("[SHELL] registering built-in commands\n");
-    extern void commands_init();
-    commands_init();
-    klog(LOG_OK, "shell commands registered");
-
-    extern void shell_init();
-    shell_init();
-
-    kprint("[KRNL] allocating key input buffer (2 KB)\n");
-    key_buffer = (char*)kmalloc(2048);
-    if (key_buffer != 0) {
-        klog(LOG_OK, "key buffer ready");
-    } else {
-        static char key_buffer_fallback[2048];
-        key_buffer = key_buffer_fallback;
-        klog(LOG_WARN, "heap alloc failed — using static fallback buffer");
-    }
 }
 
 void init(uint32_t magic, uint32_t mb2_info_addr) {
@@ -514,10 +410,15 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     kprint("  built=");      kprint((char*)kernel_build_time);
     kprint("\n");
 
-    kprint_color("Kernel is ready. Starting terminal...\n", COLOR_LIGHT_GREEN);
+    kprint_color("Kernel is ready. Launching init...\n", COLOR_LIGHT_GREEN);
 
-    system_ready = 1;
     __asm__ __volatile__("sti");
+
+    struct task_struct* init = create_elf_task("bin/init");
+    if (!init) {
+        kprint_color("[FAIL] create_elf_task: /bin/init not found\n", COLOR_LIGHT_RED);
+    }
+
     while (1) {
         __asm__ __volatile__("hlt");
     }
