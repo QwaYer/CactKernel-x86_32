@@ -212,15 +212,17 @@ pub unsafe extern "C" fn sema_down(s: *mut semaphore_t) {
                 Ordering::Acquire,
                 Ordering::Relaxed,
             ).is_ok() {
-                return;  
+                return;
             }
             continue;
         }
 
+        irq_spinlock_acquire(&raw mut crate::task::SCHEDULER_LOCK);
         spinlock_acquire(&raw mut (*s).guard);
 
         if (*s).count.load(Ordering::Relaxed) > 0 {
             spinlock_release(&raw mut (*s).guard);
+            irq_spinlock_release(&raw mut crate::task::SCHEDULER_LOCK);
             continue;
         }
 
@@ -230,14 +232,15 @@ pub unsafe extern "C" fn sema_down(s: *mut semaphore_t) {
             (*s).waiters[idx] = cur;
             (*s).waiter_count += 1;
 
-            irq_spinlock_acquire(&raw mut crate::task::SCHEDULER_LOCK);
             (*cur).state = crate::task::TaskState::Sleeping;
-            irq_spinlock_release(&raw mut crate::task::SCHEDULER_LOCK);
 
             spinlock_release(&raw mut (*s).guard);
+            irq_spinlock_release(&raw mut crate::task::SCHEDULER_LOCK);
+
             crate::mlfq::schedule();
         } else {
             spinlock_release(&raw mut (*s).guard);
+            irq_spinlock_release(&raw mut crate::task::SCHEDULER_LOCK);
             ffi::pause();
         }
     }
