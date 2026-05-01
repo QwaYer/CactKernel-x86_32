@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::pmm::{kalloc, kfree_page, page_ref_get};
+use crate::pmm::{kalloc, kfree_page, page_ref_get_locked, PAGE_LOCK};
 use crate::vmm::paging::vmm_map;
 use crate::fault::swap::{swap_pte_is_swapped, swap_handle_fault};
 use crate::fault::oom::oom_kill;
@@ -247,6 +247,23 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
 
         if !pte.is_null() && unsafe { *pte & PAGE_COW != 0 } {
             let old_phys = unsafe { *pte & !0xFFF } as *mut u8;
+
+            // ── Sole-owner check + act under PAGE_LOCK (C-01 fix) ────────────
+            crate::safe::lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+            let rc = page_ref_get_locked(old_phys);
+            if rc <= 1 {
+                // Sole owner — promote the existing frame to writable in-place.
+                let pte_val = unsafe { *pte };
+                let flags = ((pte_val & 0xFFF) & !PAGE_COW) | PAGE_PRESENT | PAGE_RW;
+                unsafe { *pte = (old_phys as u32 & !0xFFF) | flags; }
+                crate::safe::lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+                flush_tlb(page_va);
+                G_STATS.get_mut().cow_copies += 1;
+                return;
+            }
+            crate::safe::lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+
+            // ── Multi-owner — allocate a private copy ────────────────────────
             let mut phys = kalloc();
             if phys.is_null() && oom_kill() == 0 {
                 phys = kalloc();
@@ -256,25 +273,14 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 return;
             }
 
-            if page_ref_get(old_phys) <= 1 {
-                // Sole owner — just make writable, no copy needed
-                let pte_val = unsafe { *pte };
-                let flags = (pte_val & 0xFFF) & !PAGE_COW;
-                let flags = flags | PAGE_PRESENT | PAGE_RW;
-                unsafe { *pte = (old_phys as u32 & !0xFFF) | flags; }
-                kfree_page(phys);
-            } else {
-                // Multiple refs — copy old content
-                // SAFETY: copying page contents.
-                unsafe {
-                    core::ptr::copy_nonoverlapping(old_phys as *const u8, phys, PAGE_SIZE as usize);
-                }
-                let pte_val = unsafe { *pte };
-                let flags = (pte_val & 0xFFF) & !PAGE_COW;
-                let flags = flags | PAGE_PRESENT | PAGE_RW;
-                unsafe { *pte = (phys as u32 & !0xFFF) | flags; }
-                kfree_page(old_phys);
+            // SAFETY: copying page contents.
+            unsafe {
+                core::ptr::copy_nonoverlapping(old_phys as *const u8, phys, PAGE_SIZE as usize);
             }
+            let pte_val = unsafe { *pte };
+            let flags = ((pte_val & 0xFFF) & !PAGE_COW) | PAGE_PRESENT | PAGE_RW;
+            unsafe { *pte = (phys as u32 & !0xFFF) | flags; }
+            kfree_page(old_phys);
             flush_tlb(page_va);
 
             G_STATS.get_mut().cow_copies += 1;
@@ -433,17 +439,23 @@ pub extern "C" fn vmm_handle_cow(pd: *mut u32, virtual_addr: u32) -> i32 {
     // SAFETY: pte is valid and has COW flag.
     let old_phys = unsafe { *pte & !0xFFF } as *mut u8;
     let pte_val = unsafe { *pte };
-    let flags = (pte_val & 0xFFF) & !PAGE_COW;
-    let flags = flags | PAGE_RW | PAGE_PRESENT;
+    let flags = ((pte_val & 0xFFF) & !PAGE_COW) | PAGE_RW | PAGE_PRESENT;
 
-    // Sole owner — just make writable again, no copy needed
-    if page_ref_get(old_phys) == 1 {
+    // ── Sole-owner fast path ─────────────────────────────────────────────────
+    // Hold PAGE_LOCK for the entire check + PTE-update so that no other CPU
+    // can observe rc == 1 and also promote its own PTE to RW for the same
+    // physical frame (C-01: two processes writing to one physical frame).
+    crate::safe::lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+    if page_ref_get_locked(old_phys) == 1 {
         unsafe { *pte = (old_phys as u32 & !0xFFF) | flags; }
+        crate::safe::lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
         flush_tlb(virtual_addr & !0xFFF);
         return 0;
     }
+    crate::safe::lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
 
-    // Multiple references — allocate a private copy
+    // ── Multi-owner copy path ────────────────────────────────────────────────
+    // Allocate the new frame outside the lock (kalloc takes PAGE_LOCK itself).
     let new_phys = kalloc();
     if new_phys.is_null() {
         return -1;
@@ -455,7 +467,7 @@ pub extern "C" fn vmm_handle_cow(pd: *mut u32, virtual_addr: u32) -> i32 {
         *pte = (new_phys as u32 & !0xFFF) | flags;
     }
 
-    // Release our reference to the shared page
+    // Release our reference to the shared frame.
     kfree_page(old_phys);
 
     flush_tlb(virtual_addr & !0xFFF);

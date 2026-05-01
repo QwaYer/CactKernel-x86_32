@@ -13,7 +13,10 @@ static PAGE_REFCOUNTS: KStatic<[u16; TOTAL_PAGES as usize]> =
 static FIRST_AVAILABLE_PAGE: KStatic<u32> = KStatic::new(0);
 
 /// Spinlock protecting all bitmap / refcount mutations.
-static PAGE_LOCK: KStatic<IrqSpinlock> =
+///
+/// `pub(crate)` so that fault handlers can hold the lock while performing an
+/// atomic refcount-check + PTE-update for COW resolution (see `vmm_handle_cow`).
+pub(crate) static PAGE_LOCK: KStatic<IrqSpinlock> =
     KStatic::new(IrqSpinlock { spin_locked: 0, saved_flags: 0 });
 
 static MMAP_TABLE: KStatic<Mb2MmapTable> = KStatic::new(Mb2MmapTable {
@@ -285,7 +288,29 @@ pub fn page_ref_inc(phys: *const u8) {
     lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
 }
 
+/// Read the reference count of a physical page under `PAGE_LOCK`.
+///
+/// The lock guarantees that the value is not stale: `page_ref_inc` and
+/// `kfree_page` both modify the count under the same lock, so holding it
+/// here provides a sequentially-consistent view of the refcount.
 pub fn page_ref_get(phys: *const u8) -> u16 {
+    let addr = phys as u32;
+    if addr < RESERVED_END { return 0; }
+    let idx = addr_to_page(addr);
+    if idx >= TOTAL_PAGES { return 0; }
+    lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+    let rc = PAGE_REFCOUNTS.get_mut()[idx as usize];
+    lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+    rc
+}
+
+/// Read the reference count **without** acquiring `PAGE_LOCK`.
+///
+/// # Safety
+/// The caller **must** already hold `PAGE_LOCK`.  Use this inside a critical
+/// section where the lock is acquired around a check-then-act sequence (e.g.
+/// the COW sole-owner fast path in `vmm_handle_cow`).
+pub(crate) fn page_ref_get_locked(phys: *const u8) -> u16 {
     let addr = phys as u32;
     if addr < RESERVED_END { return 0; }
     let idx = addr_to_page(addr);
