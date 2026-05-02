@@ -6,11 +6,12 @@
 #include "pipe.h"
 #include "blkdev.h"
 
+// Global devfs state
 static vfs_node_t    devfs_root;
-static devfs_entry_t *dev_list   = 0;   
+static devfs_entry_t *dev_list   = 0;    // singly-linked list of registered devices
 static int            devfs_ready = 0;
 
-
+// data node ops (read/write/ioctl)
 static int _data_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     devfs_entry_t *e = (devfs_entry_t *)node->priv;
     if (!e || !e->drv || !e->drv->read) return -1;
@@ -35,7 +36,7 @@ static vfs_ops_t data_ops = {
     .ioctl = _data_ioctl,
 };
 
-
+// ctl node ops (write-only control channel)
 static int _ctl_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     (void)off;
     devfs_entry_t *e = (devfs_entry_t *)node->priv;
@@ -47,7 +48,7 @@ static vfs_ops_t ctl_ops = {
     .write = _ctl_write,
 };
 
-
+// status node ops (read-only diagnostic text)
 static int _status_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     devfs_entry_t *e = (devfs_entry_t *)node->priv;
     if (!e || !e->drv || !e->drv->status) return 0;
@@ -64,7 +65,7 @@ static vfs_ops_t status_ops = {
     .read = _status_read,
 };
 
-
+// per-device directory ops (data, ctl, status sub-nodes)
 static vfs_node_t *_dev_dir_walk(vfs_node_t *dir, const char *name) {
     devfs_entry_t *e = (devfs_entry_t *)dir->priv;
     if (!e) return 0;
@@ -118,7 +119,7 @@ static vfs_ops_t dev_dir_ops = {
     .listdir = _dev_dir_listdir,
 };
 
-
+// devfs root directory ops
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     for (devfs_entry_t *e = dev_list; e; e = e->next)
@@ -158,7 +159,7 @@ static vfs_ops_t root_ops = {
     .listdir = _root_listdir,
 };
 
-
+// populate a devfs_entry_t with its VFS nodes (simple or directory-based)
 static void _fill_entry(devfs_entry_t *e) {
     memset(&e->dir_node, 0, sizeof(vfs_node_t));
     strlcpy(e->dir_node.name, e->name, 128);
@@ -168,9 +169,10 @@ static void _fill_entry(devfs_entry_t *e) {
         e->dir_node.type = (e->flags & DEVFS_F_BLOCK)
                            ? VFS_BLOCKDEVICE : VFS_CHARDEVICE;
         e->dir_node.ops  = &data_ops;
-        return;  
+        return;  // simple devices expose only the data node
     }
 
+    // complex devices have a directory with data/ctl/status children
     e->dir_node.type = VFS_DIRECTORY;
     e->dir_node.ops  = &dev_dir_ops;
 
@@ -194,7 +196,7 @@ static void _fill_entry(devfs_entry_t *e) {
     e->status_node.priv = e;
 }
 
-
+// built-in drivers
 static int _null_read (void *p, uint32_t o, uint32_t s, char *b)
     { (void)p;(void)o;(void)s;(void)b; return 0; }
 static int _null_write(void *p, uint32_t o, uint32_t s, char *b)
@@ -299,16 +301,17 @@ static devfs_driver_t drv_tty = {
     .read=_tty_read, .write=_tty_write, .status=_tty_status
 };
 
-
-//Public api
+// return the devfs root node (registered in VFS mount table)
 vfs_node_t *devfs_get_root(void) { return &devfs_root; }
 
+// find a device by name in the global list
 devfs_entry_t *devfs_find(const char *name) {
     for (devfs_entry_t *e = dev_list; e; e = e->next)
         if (streq(e->name, name)) return e;
     return 0;
 }
 
+// register a new device in devfs; returns the entry or NULL on duplicate/allocation failure
 devfs_entry_t *devfs_register(const char *name, uint32_t flags,
                                devfs_driver_t *drv, void *drv_priv) {
     if (!name || !drv) return 0;
@@ -332,6 +335,7 @@ devfs_entry_t *devfs_register(const char *name, uint32_t flags,
     return e;
 }
 
+// remove a device from devfs by name; returns 0 on success, -1 if not found
 int devfs_unregister(const char *name) {
     devfs_entry_t **pp = &dev_list;
     while (*pp) {
@@ -346,6 +350,7 @@ int devfs_unregister(const char *name) {
     return -1;
 }
 
+// one-time initialisation: set up root node and register built-in devices
 void devfs_init(void) {
     if (devfs_ready) return;
 
@@ -366,7 +371,8 @@ void devfs_init(void) {
 
     blkdev_t *boot = blkdev_get_boot();
     if (boot) {
-        kprint("[devfs] registering /dev/"); kprint((char*)boot->name); kprint("  (block, boot disk)\n");
+        kprint("[devfs] registering /dev/"); kprint((char*)boot->name);
+        kprint("  (block, boot disk)\n");
         devfs_register(boot->name, DEVFS_F_BLOCK, &drv_disk, 0);
     } else {
         kprint("[devfs] no boot disk — skipping block device node\n");

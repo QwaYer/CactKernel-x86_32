@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "vfs.h"
 
-//Public api
+// Initialise tmpfs and return its root VFS node
 void        tmpfs_init    (void);
 vfs_node_t *tmpfs_get_root(void);
 

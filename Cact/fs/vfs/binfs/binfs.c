@@ -4,15 +4,18 @@
 #include "memory.h"
 #include "klib.h"
 
+// binfs root node — all ops forward to ext4's /bin directory
 static vfs_node_t  binfs_root;
 static vfs_node_t *ext4_root   = 0;
 static int         binfs_ready = 0;
 
+// Helper: resolve ext4's /bin directory (lazy, on first use)
 static vfs_node_t *_bin_dir(void) {
     if (!ext4_root || !ext4_root->ops || !ext4_root->ops->walk) return 0;
     return ext4_root->ops->walk(ext4_root, "bin");
 }
 
+// Forward walk to ext4 /bin/<name>
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     vfs_node_t *bin = _bin_dir();
@@ -20,6 +23,7 @@ static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     return bin->ops->walk(bin, name);
 }
 
+// Forward readdir to ext4 /bin
 static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     (void)dir;
     vfs_node_t *bin = _bin_dir();
@@ -27,6 +31,7 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     return bin->ops->readdir(bin, index);
 }
 
+// Forward listdir to ext4 /bin (with fallback for empty directory)
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     vfs_node_t *bin = _bin_dir();
@@ -44,6 +49,7 @@ static void _root_listdir(vfs_node_t *dir) {
     if (!any) kprint("  (empty)\n");
 }
 
+// Forward create/delete/mkdir/rmdir to ext4 /bin
 static int _root_create(vfs_node_t *dir, const char *name) {
     (void)dir;
     vfs_node_t *bin = _bin_dir();
@@ -72,6 +78,7 @@ static int _root_rmdir(vfs_node_t *dir, const char *name) {
     return bin->ops->rmdir(bin, name);
 }
 
+// VFS ops table for binfs root
 static vfs_ops_t root_ops = {
     .walk    = _root_walk,
     .readdir = _root_readdir,
@@ -82,10 +89,10 @@ static vfs_ops_t root_ops = {
     .rmdir   = _root_rmdir,
 };
 
-
-/* Public API */
+// Return the binfs root node (registered in VFS mount table)
 vfs_node_t *binfs_get_root(void) { return &binfs_root; }
 
+// Initialise binfs: bind to ext4's /bin, create directory if missing
 void binfs_init(vfs_node_t *ext4_node) {
     if (binfs_ready) return;
 
@@ -97,6 +104,7 @@ void binfs_init(vfs_node_t *ext4_node) {
     binfs_root.mode = 0755;
     binfs_root.ops  = &root_ops;
 
+    // Ensure /bin exists on ext4
     if (ext4_root && ext4_root->ops && ext4_root->ops->walk) {
         if (!ext4_root->ops->walk(ext4_root, "bin")) {
             if (ext4_root->ops->mkdir)

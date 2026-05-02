@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-
+// VFS node types
 #define VFS_FILE        0x01
 #define VFS_DIRECTORY   0x02
 #define VFS_CHARDEVICE  0x03
@@ -12,21 +12,21 @@
 #define VFS_SOCKET      0x06
 #define VFS_SYMLINK     0x07
 
-/* Permission check bits */
+// Permission check bits (match POSIX r=4, w=2, x=1)
 #define VFS_PERM_READ    0x04
 #define VFS_PERM_WRITE   0x02
 #define VFS_PERM_EXEC    0x01
 
-/* Symlink resolution depth limit */
+// Symlink resolution depth limit
 #define VFS_SYMLINK_MAX_DEPTH 8
 
-/* Error code returned when symlink depth is exceeded */
+// Error code returned when symlink depth is exceeded
 #define ELOOP 40
 
 struct vfs_node;
 struct vfs_dirent;
 
-
+// Per-filesystem operations table — each method may be NULL if unsupported
 typedef struct vfs_ops {
     int  (*read)   (struct vfs_node *node, uint32_t off, uint32_t size, char *buf);
     int  (*write)  (struct vfs_node *node, uint32_t off, uint32_t size, char *buf);
@@ -43,7 +43,7 @@ typedef struct vfs_ops {
     int (*rmdir)   (struct vfs_node *dir, const char *name);
     int (*rename)  (struct vfs_node *dir, const char *oldname, const char *newname);
 
-    /* Symlink and hard-link operations (may be NULL if not supported) */
+    // Symlink and hard-link operations (optional)
     int (*symlink) (struct vfs_node *dir, const char *name, const char *target);
     int (*link)    (struct vfs_node *dir, const char *name, struct vfs_node *target);
     int (*unlink)  (struct vfs_node *dir, const char *name);
@@ -52,49 +52,50 @@ typedef struct vfs_ops {
     int (*ioctl) (struct vfs_node *node, uint32_t cmd, void *arg);
 } vfs_ops_t;
 
+// Generic VFS node — embedded by each filesystem
 typedef struct vfs_node {
     char          name[128];
     uint32_t      type;
     uint32_t      size;
     uint32_t      inode;
-    uint32_t      refcount;   /* hard-link / reference count */
-    uint32_t      mode;       /* permission bits (rwxrwxrwx), 0777 default */
-    uint32_t      uid;        /* owner user id  */
-    uint32_t      gid;        /* owner group id */
-    vfs_ops_t    *ops;
-    void         *priv;
+    uint32_t      refcount;   // hard-link / reference count
+    uint32_t      mode;       // permission bits (rwxrwxrwx), 0777 default
+    uint32_t      uid;        // owner user id
+    uint32_t      gid;        // owner group id
+    vfs_ops_t    *ops;        // per-type operations
+    void         *priv;       // filesystem-private data
 } vfs_node_t;
 
+// Directory entry returned by readdir
 typedef struct vfs_dirent {
     char     name[128];
     uint32_t inode;
 } vfs_dirent_t;
 
+// Global VFS root — set by the first filesystem mount
 extern vfs_node_t *vfs_root;
 
-
-/* Public API */
+// Initialise VFS layer (clears mount table, initialises mutexes)
 void          vfs_init     (void);
 
-
+// Mount/unmount a filesystem on a host directory
 int           vfs_mount    (vfs_node_t *host, const char *name, vfs_node_t *target);
 int           vfs_umount   (vfs_node_t *host, const char *name);
 
-
-/* Walk a path without following symlinks */
+// Walk a path WITHOUT following symlinks
 vfs_node_t   *vfs_walk_path       (vfs_node_t *start, const char *path);
 
-/* Walk a path following symlinks; sets *err_out to ELOOP on depth overflow */
+// Walk a path following symlinks; sets *err_out to ELOOP on depth overflow
 vfs_node_t   *vfs_walk_path_follow(vfs_node_t *start, const char *path, int *err_out);
 
-
+// Generic I/O wrappers
 int           read_vfs     (vfs_node_t *node, uint32_t off, uint32_t size, char *buf);
 int           write_vfs    (vfs_node_t *node, uint32_t off, uint32_t size, char *buf);
 void          open_vfs     (vfs_node_t *node);
 void          close_vfs    (vfs_node_t *node);
 int           ioctl_vfs    (vfs_node_t *node, uint32_t cmd, void *arg);
 
-
+// Directory operations
 vfs_dirent_t *readdir_vfs  (vfs_node_t *dir, uint32_t index);
 vfs_node_t   *finddir_vfs  (vfs_node_t *dir, char *name);
 void          listdir_vfs  (vfs_node_t *dir);
@@ -104,18 +105,18 @@ int           mkdir_vfs    (vfs_node_t *dir, char *name);
 int           rmdir_vfs    (vfs_node_t *dir, char *name);
 int           rename_vfs   (vfs_node_t *dir, const char *oldname, const char *newname);
 
-/* Symlink and hard-link VFS operations */
+// Symlink and hard-link VFS operations
 vfs_node_t   *vfs_symlink_alloc  (const char *target, uint32_t target_len);
 int           vfs_readlink_node  (vfs_node_t *node, char *buf, uint32_t bufsz);
 int           vfs_symlink        (vfs_node_t *dir, const char *name, const char *target);
 int           vfs_link           (vfs_node_t *dir, const char *name, vfs_node_t *target_node);
 int           vfs_unlink         (vfs_node_t *dir, const char *name);
 
-/* Reference counting */
+// Reference counting
 void          vfs_node_ref       (vfs_node_t *node);
 void          vfs_node_unref     (vfs_node_t *node);
 
-/* Permission checking (returns 0 on success, -1 on deny) */
+// Permission checking (returns 0 on success, -1 on deny)
 int           vfs_check_perm     (vfs_node_t *node, uint32_t perm);
 
 #endif

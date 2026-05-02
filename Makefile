@@ -59,6 +59,7 @@ FS_MNTFS_DIR     = Cact/fs/vfs/mntfs
 FS_ETCFS_DIR     = Cact/fs/vfs/etcfs
 FS_TMPFS_DIR     = Cact/fs/vfs/tmpfs
 FS_BINFS_DIR     = Cact/fs/vfs/binfs
+FS_LIBFS_DIR     = Cact/fs/vfs/libfs
 NET_DIR          = Cact/net
 NET_ARP_DIR      = Cact/net/arp
 NET_ETH_DIR      = Cact/net/ethernet
@@ -117,6 +118,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_ETCFS_DIR) \
          -I$(FS_TMPFS_DIR) \
          -I$(FS_BINFS_DIR) \
+         -I$(FS_LIBFS_DIR) \
          -I$(NET_DIR) \
          -I$(NET_ARP_DIR) \
          -I$(NET_ETH_DIR) \
@@ -162,6 +164,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/etcfs.o \
       $(BUILD_DIR)/tmpfs.o \
       $(BUILD_DIR)/binfs.o \
+      $(BUILD_DIR)/libfs.o \
       $(BUILD_DIR)/pci.o \
       $(BUILD_DIR)/pci_enum.o \
       $(BUILD_DIR)/pci_driver.o \
@@ -403,6 +406,10 @@ $(BUILD_DIR)/tmpfs.o: $(FS_TMPFS_DIR)/tmpfs.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/binfs.o: $(FS_BINFS_DIR)/binfs.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/libfs.o: $(FS_LIBFS_DIR)/libfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

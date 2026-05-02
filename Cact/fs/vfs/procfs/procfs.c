@@ -6,22 +6,24 @@
 #include "task.h"
 #include "version.h"
 
-
+// A read-only virtual file (e.g. cpuinfo, meminfo)
 typedef struct proc_file {
     char            name[64];
-    procfs_read_fn  read_fn;    
+    procfs_read_fn  read_fn;      // generates file content on demand
     vfs_node_t      node;
     struct proc_file *next;
 } proc_file_t;
 
+// A read/write command node under /proc/cmd/
 typedef struct proc_cmd {
     char            name[64];
-    procfs_read_fn  help_fn;    /* NULL → "no help\n" */
-    procfs_cmd_fn   cmd_fn;
+    procfs_read_fn  help_fn;      // read returns help text (NULL → default)
+    procfs_cmd_fn   cmd_fn;       // write invokes the command
     vfs_node_t      node;
     struct proc_cmd *next;
 } proc_cmd_t;
 
+// Global lists
 static proc_file_t *file_list = 0;
 static proc_cmd_t  *cmd_list  = 0;
 
@@ -29,7 +31,7 @@ static vfs_node_t procfs_root;
 static vfs_node_t cmd_dir;
 static int        procfs_ready = 0;
 
-
+// File read: delegate to the registered read_fn
 static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     proc_file_t *f = (proc_file_t *)node->priv;
     if (!f || !f->read_fn) return 0;
@@ -38,7 +40,7 @@ static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 
 static vfs_ops_t file_ops = { .read = _file_read };
 
-
+// Command read: return help text (or default "cmd: <name>")
 static int _cmd_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     proc_cmd_t *c = (proc_cmd_t *)node->priv;
     if (!c) return 0;
@@ -64,6 +66,7 @@ static int _cmd_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
+// Command write: invoke the registered cmd_fn
 static int _cmd_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     (void)off;
     proc_cmd_t *c = (proc_cmd_t *)node->priv;
@@ -74,7 +77,7 @@ static int _cmd_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 
 static vfs_ops_t cmd_ops = { .read = _cmd_read, .write = _cmd_write };
 
-
+// cmd/ directory ops
 static vfs_node_t *_cmd_dir_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     for (proc_cmd_t *c = cmd_list; c; c = c->next)
@@ -110,7 +113,7 @@ static vfs_ops_t cmd_dir_ops = {
     .listdir = _cmd_dir_listdir,
 };
 
-
+// procfs root directory ops (cmd/ + virtual files)
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     if (streq(name, "cmd")) return &cmd_dir;
@@ -154,6 +157,7 @@ static vfs_ops_t root_ops = {
     .listdir = _root_listdir,
 };
 
+// cpuid wrapper (leaf only)
 static void _cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
                    uint32_t *ecx, uint32_t *edx) {
     __asm__ volatile("cpuid"
@@ -161,6 +165,7 @@ static void _cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
         : "a"(leaf) : );
 }
 
+// cpuid wrapper with subleaf
 static void _cpuid_ext(uint32_t leaf, uint32_t subleaf,
                         uint32_t *eax, uint32_t *ebx,
                         uint32_t *ecx, uint32_t *edx) {
@@ -169,6 +174,7 @@ static void _cpuid_ext(uint32_t leaf, uint32_t subleaf,
         : "a"(leaf), "c"(subleaf) : );
 }
 
+// Crude TSC-based frequency estimate (~10 ms busy-wait)
 static uint32_t _tsc_mhz(void) {
     uint32_t lo1, hi1, lo2, hi2;
     __asm__ volatile("rdtsc" : "=a"(lo1), "=d"(hi1));
@@ -179,6 +185,7 @@ static uint32_t _tsc_mhz(void) {
     return delta / 10000u;
 }
 
+// /proc/cpuinfo generator
 static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[512];
     int  p = 0;
@@ -234,7 +241,7 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     if (max_ext >= 0x80000006) {
         uint32_t c6;
         _cpuid(0x80000006, &eax, &ebx, &c6, &edx);
-        cache_kb = (c6 >> 16) & 0xFFFF;  
+        cache_kb = (c6 >> 16) & 0xFFFF;
     }
 
     #define _APP(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
@@ -290,6 +297,7 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
+// Memory total (set by mntfs during init)
 static uint32_t _mb_mem_total_kb = 0;
 
 void procfs_set_meminfo(uint32_t mem_total_kb) {
@@ -300,6 +308,7 @@ static uint32_t _get_total_memory_kb(void) {
     return _mb_mem_total_kb;
 }
 
+// /proc/meminfo generator
 static int _meminfo_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[256]; int p = 0;
 
@@ -328,6 +337,7 @@ static int _meminfo_read(uint32_t off, uint32_t size, char *buf) {
 
 extern unsigned int timer_ticks_get(void);
 
+// /proc/uptime generator
 static int _uptime_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[64];
     int  p = 0;
@@ -342,6 +352,7 @@ static int _uptime_read(uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
+// /proc/version generator
 static int _version_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[512];
     int  p = 0;
@@ -363,9 +374,11 @@ static int _version_read(uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
+// Snapshot entry for /proc/tasks
 typedef struct { uint32_t pid; task_state state; uint8_t is_kernel; } task_snap_t;
 #define TASKS_SNAP_MAX 64
 
+// /proc/tasks generator
 static int _tasks_read(uint32_t off, uint32_t size, char *buf) {
     task_snap_t snap[TASKS_SNAP_MAX];
     int count = 0;
@@ -417,10 +430,10 @@ static int _tasks_read(uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
-
-//Public api
+// Return the procfs root VFS node (to be registered in mount table)
 vfs_node_t *procfs_get_root(void) { return &procfs_root; }
 
+// Register a read-only virtual file under /proc
 int procfs_register_file(const char *name, procfs_read_fn read_fn) {
     if (!name) return -1;
     for (proc_file_t *f = file_list; f; f = f->next)
@@ -444,6 +457,7 @@ int procfs_register_file(const char *name, procfs_read_fn read_fn) {
     return 0;
 }
 
+// Register a read/write command node under /proc/cmd
 int procfs_register_cmd(const char *name,
                          procfs_read_fn read_fn,
                          procfs_cmd_fn  cmd_fn) {
@@ -470,6 +484,7 @@ int procfs_register_cmd(const char *name,
     return 0;
 }
 
+// Unregister a virtual file
 int procfs_unregister_file(const char *name) {
     proc_file_t **pp = &file_list;
     while (*pp) {
@@ -484,6 +499,7 @@ int procfs_unregister_file(const char *name) {
     return -1;
 }
 
+// Unregister a command node
 int procfs_unregister_cmd(const char *name) {
     proc_cmd_t **pp = &cmd_list;
     while (*pp) {
@@ -498,6 +514,7 @@ int procfs_unregister_cmd(const char *name) {
     return -1;
 }
 
+// One-time initialisation: set up root + cmd/ directories and default files
 void procfs_init(void) {
     if (procfs_ready) return;
     kprint("[procfs] setting up cmd/ directory node\n");

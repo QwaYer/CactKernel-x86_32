@@ -4,37 +4,39 @@
 #include "memory.h"
 #include "klib.h"
 
-
+// Internal entry descriptor — one per file in /etc
 typedef struct etc_entry etc_entry_t;
 
 struct etc_entry {
     char          name[ETCFS_NAME_LEN];
-    char         *data;
-    uint32_t      size;
-    uint32_t      cap;      
-    int           dirty;
-    vfs_node_t    node;
+    char         *data;       // file contents (heap-allocated, cap-sized)
+    uint32_t      size;       // current data length
+    uint32_t      cap;        // allocated capacity
+    int           dirty;      // writeback pending
+    vfs_node_t    node;       // VFS node for this file
     etc_entry_t  *next;
 };
 
+// Global state
 static etc_entry_t *etc_list   = 0;
 static vfs_node_t   etc_root;
-static vfs_node_t  *ext4_root  = 0;  
+static vfs_node_t  *ext4_root  = 0;    // bound ext4 root for disk I/O
 static int          etcfs_ready = 0;
 
-
+// Find an entry by name in the linked list
 static etc_entry_t *_find(const char *name) {
     for (etc_entry_t *e = etc_list; e; e = e->next)
         if (streq(e->name, name)) return e;
     return 0;
 }
 
-
+// Resolve ext4 /etc directory (lazy, on first use)
 static vfs_node_t *_ext4_etc_dir(void) {
     if (!ext4_root || !ext4_root->ops || !ext4_root->ops->walk) return 0;
     return ext4_root->ops->walk(ext4_root, "etc");
 }
 
+// Read a file from ext4 /etc/<name> into buf (up to maxsize bytes)
 static int _disk_read(const char *name, char *buf, uint32_t maxsize) {
     vfs_node_t *etc_dir = _ext4_etc_dir();
     if (!etc_dir) return 0;
@@ -49,6 +51,7 @@ static int _disk_read(const char *name, char *buf, uint32_t maxsize) {
     return file->ops->read(file, 0, sz, buf);
 }
 
+// Write a file to ext4 /etc/<name> (create/mkdir /etc if needed)
 static int _disk_write(const char *name, const char *buf, uint32_t size) {
     if (!ext4_root) return -1;
 
@@ -60,6 +63,7 @@ static int _disk_write(const char *name, const char *buf, uint32_t size) {
         if (!etc_dir) return -1;
     }
 
+    // Remove existing file before creating a new one
     if (etc_dir->ops && etc_dir->ops->walk) {
         vfs_node_t *old = etc_dir->ops->walk(etc_dir, name);
         if (old && etc_dir->ops->delete)
@@ -76,7 +80,7 @@ static int _disk_write(const char *name, const char *buf, uint32_t size) {
     return file->ops->write(file, 0, size, (char*)buf);
 }
 
-
+// Grow entry capacity to at least 'needed' bytes (doubling strategy)
 static int _ensure_cap(etc_entry_t *e, uint32_t needed) {
     if (needed <= e->cap) return 0;
     uint32_t newcap = e->cap ? e->cap * 2 : ETCFS_INIT_SIZE;
@@ -93,7 +97,7 @@ static int _ensure_cap(etc_entry_t *e, uint32_t needed) {
     return 0;
 }
 
-
+// VFS file ops: read/write from in-memory entry with disk writeback
 static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     etc_entry_t *e = (etc_entry_t *)node->priv;
     if (!e || !e->data) return 0;
@@ -123,7 +127,7 @@ static int _file_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf)
 
 static vfs_ops_t file_ops = { .read = _file_read, .write = _file_write };
 
-
+// etcfs root directory ops
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     etc_entry_t *e = _find(name);
@@ -173,7 +177,7 @@ static vfs_ops_t root_ops = {
     .delete  = _root_delete,
 };
 
-
+// Load all files from ext4 /etc into memory on first init
 static void _load_all(void) {
     vfs_node_t *etc_dir = _ext4_etc_dir();
     if (!etc_dir) {
@@ -189,7 +193,7 @@ static void _load_all(void) {
     vfs_dirent_t *de;
     while ((de = etc_dir->ops->readdir(etc_dir, idx++)) != 0) {
         if (de->name[0] == '.') continue;
-        if (_find(de->name)) continue;   
+        if (_find(de->name)) continue;   // already loaded
 
         etc_entry_t *slot = (etc_entry_t *)kmalloc(sizeof(etc_entry_t));
         if (!slot) { kprint("[etcfs] kmalloc failed\n"); break; }
@@ -218,10 +222,10 @@ static void _load_all(void) {
     }
 }
 
-
-//Public api
+// Return the etcfs root VFS node (to be registered in mount table)
 vfs_node_t *etcfs_get_root(void) { return &etc_root; }
 
+// Initialise etcfs, bind to ext4 root, load files, seed users
 void etcfs_init(vfs_node_t *ext4_node) {
     if (etcfs_ready) return;
 
@@ -241,6 +245,7 @@ void etcfs_init(vfs_node_t *ext4_node) {
     etcfs_seed_users();
 }
 
+// Read a file from etcfs by name; returns bytes read, 0 if not found
 int etcfs_read(const char *name, char *buf, uint32_t size) {
     etc_entry_t *e = _find(name);
     if (!e || !e->data) return 0;
@@ -249,6 +254,7 @@ int etcfs_read(const char *name, char *buf, uint32_t size) {
     return (int)sz;
 }
 
+// Write a file to etcfs by name; creates if not exists
 int etcfs_write(const char *name, const char *buf, uint32_t size) {
     etc_entry_t *e = _find(name);
     if (!e) {
@@ -266,8 +272,9 @@ int etcfs_write(const char *name, const char *buf, uint32_t size) {
     return (int)size;
 }
 
+// Create an empty file in etcfs (no-op if already exists)
 int etcfs_create(const char *name) {
-    if (_find(name)) return 0;   
+    if (_find(name)) return 0;   // already exists
 
     etc_entry_t *e = (etc_entry_t *)kmalloc(sizeof(etc_entry_t));
     if (!e) return -1;
@@ -295,6 +302,7 @@ int etcfs_create(const char *name) {
     return 0;
 }
 
+// Delete a file from etcfs by name; removes from disk as well
 int etcfs_delete(const char *name) {
     etc_entry_t **pp = &etc_list;
     while (*pp) {
@@ -314,6 +322,7 @@ int etcfs_delete(const char *name) {
     return -1;
 }
 
+// Flush all dirty entries to disk
 void etcfs_flush(void) {
     for (etc_entry_t *e = etc_list; e; e = e->next) {
         if (e->dirty) {
@@ -323,17 +332,19 @@ void etcfs_flush(void) {
     }
 }
 
-
+// Default /etc/passwd if none exists
 static const char default_passwd[] =
     "root:x:0:0:root:/:/shell\n"
     "daemon:x:1:1:daemon:/:/shell\n"
     "nobody:x:65534:65534:nobody:/:/shell\n";
 
+// Default /etc/group if none exists
 static const char default_group[] =
     "root:x:0:\n"
     "daemon:x:1:\n"
     "nogroup:x:65534:\n";
 
+// Seed default passwd and group files if they don't exist
 void etcfs_seed_users(void) {
     char tmp[8];
     if (etcfs_read("passwd", tmp, 4) <= 0)
@@ -342,6 +353,7 @@ void etcfs_seed_users(void) {
         etcfs_write("group", default_group, sizeof(default_group) - 1);
 }
 
+// Parse an unsigned integer from a string, advancing the pointer
 static uint32_t _parse_uint(const char *s, const char **end) {
     uint32_t v = 0;
     while (*s >= '0' && *s <= '9') { v = v * 10 + (uint32_t)(*s - '0'); s++; }
@@ -351,6 +363,7 @@ static uint32_t _parse_uint(const char *s, const char **end) {
 
 static char _uid_name_buf[64];
 
+// Look up a user name by UID from /etc/passwd
 const char *etcfs_uid_to_name(uint32_t uid) {
     char raw[1024];
     int n = etcfs_read("passwd", raw, sizeof(raw) - 1);
@@ -362,7 +375,7 @@ const char *etcfs_uid_to_name(uint32_t uid) {
         const char *name_start = p;
         while (*p && *p != ':') p++;
         int name_len = (int)(p - name_start);
-        if (*p == ':') p++;   
+        if (*p == ':') p++;   // skip passwd field
         while (*p && *p != ':') p++;
         if (*p == ':') p++;
         uint32_t file_uid = _parse_uint(p, &p);
@@ -379,6 +392,7 @@ const char *etcfs_uid_to_name(uint32_t uid) {
     return _uid_name_buf;
 }
 
+// Look up a UID by user name from /etc/passwd
 uint32_t etcfs_name_to_uid(const char *name) {
     char raw[1024];
     int n = etcfs_read("passwd", raw, sizeof(raw) - 1);
@@ -410,6 +424,7 @@ uint32_t etcfs_name_to_uid(const char *name) {
     return (uint32_t)-1;
 }
 
+// Look up a GID by group name from /etc/group
 uint32_t etcfs_name_to_gid(const char *name) {
     char raw[1024];
     int n = etcfs_read("group", raw, sizeof(raw) - 1);
