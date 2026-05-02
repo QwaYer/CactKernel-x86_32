@@ -150,7 +150,12 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/vfs.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
-      $(BUILD_DIR)/ext4.o \
+      $(BUILD_DIR)/ext4_blk.o \
+      $(BUILD_DIR)/ext4_jbd.o \
+      $(BUILD_DIR)/ext4_alloc.o \
+      $(BUILD_DIR)/ext4_extent.o \
+      $(BUILD_DIR)/ext4_dir.o \
+      $(BUILD_DIR)/ext4_vfs.o \
 	  $(BUILD_DIR)/pagecache.o \
       $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/mntfs.o \
@@ -377,7 +382,7 @@ $(BUILD_DIR)/pagecache.o: $(FS_PG_DIR)/pagecache.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ext4.o: $(FS_EXT4_DIR)/ext4.c
+$(BUILD_DIR)/ext4_%.o: $(FS_EXT4_DIR)/ext4_%.c $(FS_EXT4_DIR)/ext4.h $(FS_EXT4_DIR)/ext4_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
