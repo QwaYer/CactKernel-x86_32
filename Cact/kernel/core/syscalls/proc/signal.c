@@ -2,30 +2,36 @@
 #include "validate.h"
 #include "helper.h"
 
+// Timer frequency for alarm/setitimer conversions
 #define TIMER_HZ_SIGNALS 100
 
+// kill() — send a signal to a process (simplified: always SIGKILL)
 static int sys_kill_impl(uint32_t pid) {
     task_kill(pid);
     return 0;
 }
 
+// signal() — send any signal to a process by PID
 static int sys_signal_impl(uint32_t pid, uint32_t signal) {
     if (!pid) return -1;
     task_signal(pid, signal);
     return 0;
 }
 
+// sigaction() — set the handler for a signal
 static int sys_sigaction_impl(struct syscall_frame* regs) {
     uint32_t signum  = regs->ebx;
     uint32_t handler = regs->ecx;
 
     if (!current_task) return -1;
 
+    // Reject handlers that lie in kernel space (C-07 fix)
     if (handler > SIG_IGN && (handler < USER_SPACE_START || handler >= KERNEL_BASE)) return -1;
 
     return task_sigaction(current_task, signum, handler);
 }
 
+// sigprocmask() — examine or change the signal mask
 static int sys_sigprocmask_impl(struct syscall_frame* regs) {
     int       how    = (int)regs->ebx;
     uint32_t* set    = (uint32_t*)regs->ecx;
@@ -38,12 +44,14 @@ static int sys_sigprocmask_impl(struct syscall_frame* regs) {
     return task_sigprocmask(current_task, how, set, oldset);
 }
 
+// sigreturn() — restore user context from the signal frame on the stack
 static int sys_sigreturn_impl(struct syscall_frame* regs) {
     if (!current_task || current_task->is_kernel) return -1;
 
     uint32_t user_esp = regs->useresp;
     if (user_esp < USER_SPACE_START || user_esp >= KERNEL_BASE) return -1;
 
+    // Walk the user page tables to find the signal frame (identity-mapped)
     uint32_t* pd  = current_task->page_directory;
     uint32_t  pdi = PD_INDEX(user_esp);
     uint32_t  pti = PT_INDEX(user_esp);
@@ -57,6 +65,7 @@ static int sys_sigreturn_impl(struct syscall_frame* regs) {
 
     signal_frame_t* frame = (signal_frame_t*)(phys_page + page_off);
 
+    // Restore all registers from the frame
     regs->eax     = frame->eax;
     regs->ecx     = frame->ecx;
     regs->edx     = frame->edx;
@@ -71,6 +80,7 @@ static int sys_sigreturn_impl(struct syscall_frame* regs) {
     return 0;
 }
 
+// sigpending() — get the set of pending signals
 static int sys_sigpending_impl(struct syscall_frame* regs) {
     uint32_t* set = (uint32_t*)regs->ebx;
 
@@ -81,6 +91,7 @@ static int sys_sigpending_impl(struct syscall_frame* regs) {
     return 0;
 }
 
+// sigsuspend() — wait for a signal with a temporary mask
 static int sys_sigsuspend_impl(struct syscall_frame* regs) {
     uint32_t* mask = (uint32_t*)regs->ebx;
 
@@ -92,10 +103,11 @@ static int sys_sigsuspend_impl(struct syscall_frame* regs) {
     current_task->in_sigsuspend = 1;
     current_task->state = TASK_SLEEPING;
 
-    schedule();
+    schedule();   // will be woken by a delivered signal
     return -1;
 }
 
+// alarm() — schedule an SIGALRM after a given number of seconds
 static int sys_alarm_impl(struct syscall_frame* regs) {
     uint32_t seconds = (uint32_t)regs->ebx;
 
@@ -104,6 +116,7 @@ static int sys_alarm_impl(struct syscall_frame* regs) {
     uint32_t now = timer_ticks_get();
     uint32_t remaining = 0;
 
+    // Return remaining time of the previous alarm, if any
     if (current_task->alarm_ticks) {
         uint32_t left_ticks = (current_task->alarm_ticks > now)
                               ? (current_task->alarm_ticks - now) : 0;
@@ -111,7 +124,7 @@ static int sys_alarm_impl(struct syscall_frame* regs) {
     }
 
     if (seconds == 0) {
-        current_task->alarm_ticks = 0;
+        current_task->alarm_ticks = 0;   // cancel
     } else {
         current_task->alarm_ticks = now + seconds * TIMER_HZ_SIGNALS;
     }
@@ -119,18 +132,20 @@ static int sys_alarm_impl(struct syscall_frame* regs) {
     return (int)remaining;
 }
 
+// setitimer() — set an interval timer (ITIMER_REAL only)
 static int sys_setitimer_impl(struct syscall_frame* regs) {
     int which                    = (int)regs->ebx;
     struct itimerval_k* newval   = (struct itimerval_k*)regs->ecx;
     struct itimerval_k* oldval   = (struct itimerval_k*)regs->edx;
 
     if (!current_task) return -1;
-    if (which != 0) return -1;
+    if (which != 0) return -1;   // only ITIMER_REAL supported
     if (newval && !validate_user_ptr(newval, sizeof(struct itimerval_k))) return -1;
     if (oldval && !validate_user_ptr(oldval, sizeof(struct itimerval_k))) return -1;
 
     uint32_t now = timer_ticks_get();
 
+    // Return old value if requested
     if (oldval) {
         if (current_task->itimer_value && current_task->itimer_value > now) {
             uint32_t left = current_task->itimer_value - now;
@@ -146,6 +161,7 @@ static int sys_setitimer_impl(struct syscall_frame* regs) {
                                               (1000000 / TIMER_HZ_SIGNALS));
     }
 
+    // Set new value
     if (newval) {
         uint32_t val_ticks = (uint32_t)(newval->it_value.tv_sec * TIMER_HZ_SIGNALS) +
                              (uint32_t)((newval->it_value.tv_usec * TIMER_HZ_SIGNALS) / 1000000);
@@ -164,7 +180,7 @@ static int sys_setitimer_impl(struct syscall_frame* regs) {
     return 0;
 }
 
-/* Публичные обёртки — имена без суффикса _impl используются в syscall_table */
+// Public wrappers — called from syscall_table
 int sys_kill(uint32_t pid)                     { return sys_kill_impl(pid); }
 int sys_signal(uint32_t pid, uint32_t signal)  { return sys_signal_impl(pid, signal); }
 int sys_sigaction(struct syscall_frame* regs)   { return sys_sigaction_impl(regs); }

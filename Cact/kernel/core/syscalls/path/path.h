@@ -27,4 +27,4 @@ int sys_chdir(struct syscall_frame* regs);
 int sys_getcwd(struct syscall_frame* regs);
 int sys_chroot(char* path);
 
-#endif /* SC_PATH_H */
+#endif 
