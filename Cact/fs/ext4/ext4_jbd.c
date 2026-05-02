@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "pagecache.h"
 
+// Raw physical write to a journal block (bypasses page cache)
 static void ext4_jbd_write_phys(struct ext4_ctx* ctx, uint32_t block, uint8_t* buf) {
     uint32_t spb = ctx->block_size / 512;
     uint32_t lba = block * spb;
@@ -11,14 +12,14 @@ static void ext4_jbd_write_phys(struct ext4_ctx* ctx, uint32_t block, uint8_t* b
         blkdev_write_sector(lba + i, buf + i * 512);
 }
 
+// Write a journal block through the journal inode (extent or legacy)
 static uint32_t ext4_jbd_write_via_inode(struct ext4_ctx* ctx, uint32_t jblock, uint8_t* buf) {
     struct ext4_inode ji;
     ext4_read_inode(ctx, ctx->journal.j_inum, &ji);
 
     struct ext4_extent_header* eh = (struct ext4_extent_header*)ji.i_block;
     if (eh->eh_magic == 0xF30A) {
-        struct ext4_extent* ee =
-            (struct ext4_extent*)((uint8_t*)ji.i_block + sizeof(*eh));
+        struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)ji.i_block + sizeof(*eh));
         for (uint16_t i = 0; i < eh->eh_entries; i++) {
             if (jblock >= ee[i].ee_block && jblock < ee[i].ee_block + ee[i].ee_len) {
                 uint32_t phys = ee[i].ee_start_lo + (jblock - ee[i].ee_block);
@@ -35,6 +36,7 @@ static uint32_t ext4_jbd_write_via_inode(struct ext4_ctx* ctx, uint32_t jblock, 
     return 0;
 }
 
+// Commit the running transaction: write descriptor blocks, data blocks, commit block
 static void ext4_journal_commit(struct ext4_ctx* ctx) {
     struct jbd2_journal* j = &ctx->journal;
     if (!j->j_sb || !j->j_running_transaction) return;
@@ -43,6 +45,7 @@ static void ext4_journal_commit(struct ext4_ctx* ctx) {
     struct jbd2_transaction* t = j->j_running_transaction;
     uint32_t start = j->j_head;
 
+    // Build descriptor block
     uint8_t* dbuf = (uint8_t*)kmalloc(ctx->block_size);
     if (!dbuf) return;
     memory_set(dbuf, 0, ctx->block_size);
@@ -62,7 +65,7 @@ static void ext4_journal_commit(struct ext4_ctx* ctx) {
     uint32_t tc = 0;
     while (b && tc < max_tags) {
         tag->t_blocknr = b->b_blocknr;
-        tag->t_flags   = (!b->b_next || tc + 1 >= max_tags) ? 8 : 0;
+        tag->t_flags   = (!b->b_next || tc + 1 >= max_tags) ? 8 : 0;  // last tag flag
         ext4_jbd_write_via_inode(ctx, cur, b->b_data);
         cur++;
         if (cur >= j->j_maxlen) cur = j->j_first;
@@ -72,6 +75,7 @@ static void ext4_journal_commit(struct ext4_ctx* ctx) {
     ext4_jbd_write_via_inode(ctx, start, dbuf);
     kfree_heap(dbuf);
 
+    // Commit block
     uint8_t* cbuf = (uint8_t*)kmalloc(ctx->block_size);
     if (!cbuf) return;
     memory_set(cbuf, 0, ctx->block_size);
@@ -82,6 +86,7 @@ static void ext4_journal_commit(struct ext4_ctx* ctx) {
     ext4_jbd_write_via_inode(ctx, cur, cbuf);
     kfree_heap(cbuf);
 
+    // Advance journal head and update superblock
     cur++;
     if (cur >= j->j_maxlen) cur = j->j_first;
     j->j_head = cur;
@@ -97,6 +102,7 @@ static void ext4_journal_commit(struct ext4_ctx* ctx) {
     }
 }
 
+// Begin a new journal transaction
 void ext4_journal_start(struct ext4_ctx* ctx) {
     struct jbd2_journal* j = &ctx->journal;
     if (!j->j_sb || j->j_running_transaction) return;
@@ -109,6 +115,7 @@ void ext4_journal_start(struct ext4_ctx* ctx) {
     j->j_running_transaction = t;
 }
 
+// Stop and commit the running transaction, flush page cache
 void ext4_journal_stop(struct ext4_ctx* ctx) {
     struct jbd2_journal* j = &ctx->journal;
     if (!j->j_sb || !j->j_running_transaction) return;
@@ -125,6 +132,7 @@ void ext4_journal_stop(struct ext4_ctx* ctx) {
     j->j_running_transaction = 0;
 }
 
+// Log a modified block to the running transaction (deduplicated by blocknr)
 void ext4_journal_log(struct ext4_ctx* ctx, uint32_t blocknr, uint8_t* data) {
     struct jbd2_journal* j = &ctx->journal;
     if (!j->j_sb || !j->j_running_transaction) return;
@@ -140,24 +148,21 @@ void ext4_journal_log(struct ext4_ctx* ctx, uint32_t blocknr, uint8_t* data) {
     if (!b) return;
     b->b_blocknr = blocknr;
     b->b_data    = (uint8_t*)kmalloc(ctx->block_size);
-    if (!b->b_data) {
-        kfree_heap(b);
-        return;
-    }
+    if (!b->b_data) { kfree_heap(b); return; }
     memory_copy(b->b_data, data, ctx->block_size);
     b->b_next = j->j_running_transaction->t_buffers;
     j->j_running_transaction->t_buffers = b;
     j->j_running_transaction->t_nr_buffers++;
 }
 
+// Read a block from the journal inode (for recovery or mount-time init)
 uint32_t ext4_jbd_read(struct ext4_ctx* ctx, uint32_t jblock, uint8_t* buf) {
     struct ext4_inode ji;
     ext4_read_inode(ctx, ctx->journal.j_inum, &ji);
 
     struct ext4_extent_header* eh = (struct ext4_extent_header*)ji.i_block;
     if (eh->eh_magic == 0xF30A) {
-        struct ext4_extent* ee =
-            (struct ext4_extent*)((uint8_t*)ji.i_block + sizeof(*eh));
+        struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)ji.i_block + sizeof(*eh));
         for (uint16_t i = 0; i < eh->eh_entries; i++) {
             if (jblock >= ee[i].ee_block && jblock < ee[i].ee_block + ee[i].ee_len) {
                 ext4_read_block(ctx, ee[i].ee_start_lo + (jblock - ee[i].ee_block), buf);

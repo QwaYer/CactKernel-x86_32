@@ -2,15 +2,18 @@
 #include "klib.h"
 #include "memory.h"
 
+// Initialise an inode's i_block[] as an empty extent tree (depth=0)
 void ext4_extent_init(struct ext4_inode* inode) {
     memory_set(inode->i_block, 0, sizeof(inode->i_block));
     struct ext4_extent_header* eh = (struct ext4_extent_header*)inode->i_block;
     eh->eh_magic   = 0xF30A;
     eh->eh_entries = 0;
-    eh->eh_max     = 4;
+    eh->eh_max     = 4;   // 4 extents fit in the 60-byte i_block[] without depth
     eh->eh_depth   = 0;
 }
 
+// Translate a logical file block to a physical block using extent tree.
+// Returns 0 if no mapping exists.
 uint32_t ext4_extent_pblock(struct ext4_inode* inode, uint32_t fb) {
     struct ext4_extent_header* eh = (struct ext4_extent_header*)inode->i_block;
     if (eh->eh_magic != 0xF30A || eh->eh_depth != 0) return 0;
@@ -21,6 +24,7 @@ uint32_t ext4_extent_pblock(struct ext4_inode* inode, uint32_t fb) {
     return 0;
 }
 
+// Add a new extent to the extent tree. Caller must ensure eh->eh_entries < eh->eh_max.
 int ext4_extent_add(struct ext4_inode* inode, uint32_t fb, uint32_t pb, uint16_t len) {
     struct ext4_extent_header* eh = (struct ext4_extent_header*)inode->i_block;
     if (eh->eh_entries >= eh->eh_max) return -1;
@@ -34,13 +38,18 @@ int ext4_extent_add(struct ext4_inode* inode, uint32_t fb, uint32_t pb, uint16_t
     return 0;
 }
 
+// Translate a logical file block to a physical block for legacy (non-extent) inodes.
+// Supports direct (0-11), singly-indirect (12), doubly-indirect (13),
+// and triply-indirect (14) block mappings.
 uint32_t ext4_legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32_t fb) {
-    uint32_t ppb = ctx->block_size / 4;
+    uint32_t ppb = ctx->block_size / 4;   // pointers per block
 
+    // Direct blocks
     if (fb < 12) return inode->i_block[fb];
 
     fb -= 12;
 
+    // Singly-indirect
     if (fb < ppb) {
         uint32_t ind = inode->i_block[12];
         if (!ind) return 0;
@@ -54,6 +63,7 @@ uint32_t ext4_legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32
 
     fb -= ppb;
 
+    // Doubly-indirect
     if (fb < ppb * ppb) {
         uint32_t dind = inode->i_block[13];
         if (!dind) return 0;
@@ -61,10 +71,7 @@ uint32_t ext4_legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32
         if (!buf) return 0;
         ext4_read_block(ctx, dind, (uint8_t*)buf);
         uint32_t ind = buf[fb / ppb];
-        if (!ind) {
-            kfree_heap(buf);
-            return 0;
-        }
+        if (!ind) { kfree_heap(buf); return 0; }
         ext4_read_block(ctx, ind, (uint8_t*)buf);
         uint32_t pb = buf[fb % ppb];
         kfree_heap(buf);
@@ -73,6 +80,7 @@ uint32_t ext4_legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32
 
     fb -= ppb * ppb;
 
+    // Triply-indirect
     if (fb < ppb * ppb * ppb) {
         uint32_t tind = inode->i_block[14];
         if (!tind) return 0;
@@ -80,16 +88,10 @@ uint32_t ext4_legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32
         if (!buf) return 0;
         ext4_read_block(ctx, tind, (uint8_t*)buf);
         uint32_t dind = buf[fb / (ppb * ppb)];
-        if (!dind) {
-            kfree_heap(buf);
-            return 0;
-        }
+        if (!dind) { kfree_heap(buf); return 0; }
         ext4_read_block(ctx, dind, (uint8_t*)buf);
         uint32_t ind = buf[(fb / ppb) % ppb];
-        if (!ind) {
-            kfree_heap(buf);
-            return 0;
-        }
+        if (!ind) { kfree_heap(buf); return 0; }
         ext4_read_block(ctx, ind, (uint8_t*)buf);
         uint32_t pb = buf[fb % ppb];
         kfree_heap(buf);

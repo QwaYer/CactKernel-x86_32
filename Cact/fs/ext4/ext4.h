@@ -6,6 +6,7 @@
 
 #define EXT4_SUPER_MAGIC 0xEF53
 
+// Directory entry file types
 #define EXT4_FT_UNKNOWN  0
 #define EXT4_FT_REG_FILE 1
 #define EXT4_FT_DIR      2
@@ -14,6 +15,8 @@
 #define EXT4_FT_FIFO     5
 #define EXT4_FT_SOCK     6
 #define EXT4_FT_SYMLINK  7
+
+// On-disk structures (packed)
 
 struct ext4_superblock {
     uint32_t s_inodes_count;
@@ -109,6 +112,7 @@ struct ext4_superblock {
     uint32_t s_checksum;
 } __attribute__((packed));
 
+// Group descriptor (32 or 64 bytes depending on s_desc_size)
 struct ext4_group_desc {
     uint32_t bg_block_bitmap_lo;
     uint32_t bg_inode_bitmap_lo;
@@ -122,6 +126,7 @@ struct ext4_group_desc {
     uint16_t bg_inode_bitmap_csum_lo;
     uint16_t bg_itable_unused_lo;
     uint16_t bg_checksum;
+    // 64-byte extension fields
     uint32_t bg_block_bitmap_hi;
     uint32_t bg_inode_bitmap_hi;
     uint32_t bg_inode_table_hi;
@@ -135,6 +140,7 @@ struct ext4_group_desc {
     uint32_t bg_reserved;
 } __attribute__((packed));
 
+// Inode structure (ext4, 256 bytes)
 struct ext4_inode {
     uint16_t i_mode;
     uint16_t i_uid;
@@ -148,7 +154,7 @@ struct ext4_inode {
     uint32_t i_blocks_lo;
     uint32_t i_flags;
     uint32_t i_osd1;
-    uint32_t i_block[15];
+    uint32_t i_block[15];    // extent tree or legacy block pointers
     uint32_t i_generation;
     uint32_t i_file_acl_lo;
     uint32_t i_size_hi;
@@ -165,8 +171,9 @@ struct ext4_inode {
     uint32_t i_projid;
 } __attribute__((packed));
 
+// Extent tree structures
 struct ext4_extent_header {
-    uint16_t eh_magic;
+    uint16_t eh_magic;    // 0xF30A
     uint16_t eh_entries;
     uint16_t eh_max;
     uint16_t eh_depth;
@@ -187,14 +194,17 @@ struct ext4_extent_idx {
     uint16_t ei_unused;
 } __attribute__((packed));
 
+// Directory entry (variable-length, rec_len determines stride)
 struct ext4_dir_entry_2 {
     uint32_t inode;
     uint16_t rec_len;
     uint8_t  name_len;
     uint8_t  file_type;
-    char     name[];
+    char     name[];         // flexible array member
 } __attribute__((packed));
 
+
+// JBD2 Journal structures 
 #define JBD2_MAGIC_NUMBER     0xc03b3998U
 #define JBD2_DESCRIPTOR_BLOCK 1
 #define JBD2_COMMIT_BLOCK     2
@@ -235,6 +245,8 @@ struct jbd2_block_tag {
     uint32_t t_flags;
 } __attribute__((packed));
 
+
+// In-memory journal state 
 struct jbd2_transaction {
     uint32_t             t_tid;
     uint32_t             t_state;
@@ -250,7 +262,7 @@ struct jbd2_buffer {
 
 struct jbd2_journal {
     uint32_t                  j_inum;
-    vfs_node_t*          j_node;
+    vfs_node_t*               j_node;
     struct jbd2_superblock*   j_sb;
     uint32_t                  j_maxlen;
     uint32_t                  j_first;
@@ -260,6 +272,8 @@ struct jbd2_journal {
     struct jbd2_transaction*  j_running_transaction;
 };
 
+
+// Per-mount ext4 context
 struct ext4_ctx {
     struct ext4_superblock  sb;
     uint32_t                block_size;
@@ -268,17 +282,17 @@ struct ext4_ctx {
 };
 
 
-//Public api
-void             ext4_init(void);
-vfs_node_t* ext4_mount_disk(uint32_t dev);
+// Public API 
+void         ext4_init(void);
+vfs_node_t*  ext4_mount_disk(uint32_t dev);
 
-int              ext4_read_file  (vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer);
-int              ext4_write_file (vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer);
-vfs_node_t* ext4_finddir    (vfs_node_t* node, char* name);
-void             ext4_list_dir   (vfs_node_t* node);
-int              ext4_mkdir      (vfs_node_t* node, char* name);
-int              ext4_rmdir      (vfs_node_t* node, char* name);
-int              ext4_create     (vfs_node_t* node, char* name);
-int              ext4_delete     (vfs_node_t* node, char* name);
+int          ext4_read_file (vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer);
+int          ext4_write_file(vfs_node_t* node, uint32_t offset, uint32_t size, char* buffer);
+vfs_node_t*  ext4_finddir   (vfs_node_t* node, char* name);
+void         ext4_list_dir  (vfs_node_t* node);
+int          ext4_mkdir     (vfs_node_t* node, char* name);
+int          ext4_rmdir     (vfs_node_t* node, char* name);
+int          ext4_create    (vfs_node_t* node, char* name);
+int          ext4_delete    (vfs_node_t* node, char* name);
 
 #endif
