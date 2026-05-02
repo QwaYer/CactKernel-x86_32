@@ -1,9 +1,42 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page, page_ref_get_locked, PAGE_LOCK};
-use crate::vmm::paging::vmm_map;
+use crate::vmm::paging::{get_kernel_pd, vmm_map};
 use crate::fault::swap::{swap_pte_is_swapped, swap_handle_fault};
 use crate::fault::oom::oom_kill;
 use crate::safe::{KStatic, zero_page, flush_tlb, kprint_str, read_cr2_val, current_page_dir};
+
+/// Switch to the kernel page directory for the rest of this fault handler so PTE
+/// walks cannot recurse with user `CR3` when the faulting `pd` omits its own tables.
+struct Cr3Guard {
+    saved: u32,
+    restore: bool,
+}
+
+impl Cr3Guard {
+    fn install_kernel_pd() -> Self {
+        let saved: u32;
+        // SAFETY: reading CR3 is side-effect-free.
+        unsafe { core::arch::asm!("mov {}, cr3", out(reg) saved, options(nomem, nostack)) };
+        let k = get_kernel_pd() as u32;
+        // SAFETY: kernel PD is identity-mapped and valid.
+        unsafe { core::arch::asm!("mov cr3, {}", in(reg) k, options(nomem, nostack)) };
+        Self { saved, restore: true }
+    }
+
+    /// Do not restore previous `CR3` on drop (caller will schedule or halt).
+    fn dismiss(&mut self) {
+        self.restore = false;
+    }
+}
+
+impl Drop for Cr3Guard {
+    fn drop(&mut self) {
+        if self.restore {
+            // SAFETY: `saved` was read from CR3 at handler entry; valid for restore before iret.
+            unsafe { core::arch::asm!("mov cr3, {}", in(reg) self.saved, options(nomem, nostack)) };
+        }
+    }
+}
 
 unsafe fn ensure_private_pt(pd: *mut u32, pdi: usize, extra_flags: u32) -> *mut u32 {
     let pde = &mut *pd.add(pdi);
@@ -60,7 +93,7 @@ fn pte_get(pd: *mut u32, vaddr: u32) -> *mut u32 {
     unsafe { pt.add(pt_index(vaddr) as usize) }
 }
 
-fn kill_current(fault_addr: u32, err: u32, eip: u32) {
+fn kill_current(fault_addr: u32, err: u32, eip: u32, cr3: &mut Cr3Guard) {
     let t = unsafe { current_task };
 
     // SAFETY: kprint_color is a C function that takes valid strings.
@@ -86,6 +119,7 @@ fn kill_current(fault_addr: u32, err: u32, eip: u32) {
 
     if !t.is_null() && unsafe { (*t).is_kernel } == 0 {
         let pid = unsafe { (*t).pid };
+        cr3.dismiss();
         unsafe {
             task_signal(pid, SIGSEGV);
             schedule();
@@ -93,6 +127,7 @@ fn kill_current(fault_addr: u32, err: u32, eip: u32) {
         return;
     }
 
+    cr3.dismiss();
     unsafe {
         kprint_color(
             b"[PF] KERNEL PAGE FAULT \xe2\x80\x94 SYSTEM HALTED\n\0".as_ptr(),
@@ -132,6 +167,8 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
         current_page_dir()
     };
 
+    let mut cr3_guard = Cr3Guard::install_kernel_pd();
+
     if (err & PF_PRESENT != 0) && (err & PF_WRITE != 0) {
         let pte_ptr = pte_get(pd, fault_addr);
 
@@ -159,7 +196,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 phys = kalloc();
             }
             if phys.is_null() {
-                kill_current(fault_addr, err, eip);
+                kill_current(fault_addr, err, eip, &mut cr3_guard);
                 return;
             }
             zero_page(phys);
@@ -169,7 +206,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
             return;
         }
 
-        kill_current(fault_addr, err, eip);
+        kill_current(fault_addr, err, eip, &mut cr3_guard);
         return;
     }
 
@@ -189,7 +226,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 phys = kalloc();
             }
             if phys.is_null() {
-                kill_current(fault_addr, err, eip);
+                kill_current(fault_addr, err, eip, &mut cr3_guard);
                 return;
             }
             zero_page(phys);
@@ -209,7 +246,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 G_STATS.get_mut().swap_ins += 1;
                 return;
             }
-            kill_current(fault_addr, err, eip);
+            kill_current(fault_addr, err, eip, &mut cr3_guard);
             return;
         }
 
@@ -219,7 +256,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 phys = kalloc();
             }
             if phys.is_null() {
-                kill_current(fault_addr, err, eip);
+                kill_current(fault_addr, err, eip, &mut cr3_guard);
                 return;
             }
 
@@ -263,7 +300,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 phys = kalloc();
             }
             if phys.is_null() {
-                kill_current(fault_addr, err, eip);
+                kill_current(fault_addr, err, eip, &mut cr3_guard);
                 return;
             }
 
@@ -294,7 +331,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                     phys = kalloc();
                 }
                 if phys.is_null() {
-                    kill_current(fault_addr, err, eip);
+                    kill_current(fault_addr, err, eip, &mut cr3_guard);
                     return;
                 }
                 zero_page(phys);
@@ -332,10 +369,10 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
         }
 
         G_STATS.get_mut().invalid_access += 1;
-        kill_current(fault_addr, err, eip);
+        kill_current(fault_addr, err, eip, &mut cr3_guard);
         return;
     }
-    kill_current(fault_addr, err, eip);
+    kill_current(fault_addr, err, eip, &mut cr3_guard);
 }
 
 //public api

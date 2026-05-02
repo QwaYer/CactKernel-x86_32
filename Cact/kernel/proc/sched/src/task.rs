@@ -39,6 +39,10 @@ pub const EXEC_MAX_ARGS:   usize = 256;
 pub const EXEC_MAX_ENVS:   usize = 256;
 pub const EXEC_MAX_STRLEN: usize = 4096;
 
+/// User-mode stack: `USER_STACK_TOP` is the first byte *above* the mapping (4 KiB pages).
+pub const USER_STACK_PAGES: u32 = 4;
+pub const USER_STACK_BYTES: u32 = USER_STACK_PAGES * PAGE_SIZE;
+
 
 #[repr(u32)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -134,6 +138,7 @@ pub struct TaskStruct {
     pub sid:   u32,            /* session ID */
     pub umask: u32,            /* file creation mask */
     pub root:  *mut VfsNode,   /* chroot root (NULL = global vfs_root) */
+    pub ustack_phys_extra: [*mut c_void; 3],
 }
 
 unsafe impl Send for TaskStruct {}
@@ -198,6 +203,48 @@ pub unsafe fn find_task_by_pid(pid: u32) -> *mut TaskStruct {
     ptr::null_mut()
 }
 
+unsafe fn ustack_phys_page(t: *mut TaskStruct, idx: usize) -> *mut c_void {
+    if idx == 0 {
+        (*t).ustack_phys
+    } else {
+        (*t).ustack_phys_extra[idx - 1]
+    }
+}
+
+unsafe fn ustack_kernel_byte_mut(t: *mut TaskStruct, uva: u32) -> *mut u8 {
+    let base = (*t).ustack_virt;
+    let off = uva.wrapping_sub(base) as usize;
+    debug_assert!(off < USER_STACK_BYTES as usize);
+    let pi = off / PAGE_SIZE as usize;
+    let po = off % PAGE_SIZE as usize;
+    ustack_phys_page(t, pi).cast::<u8>().add(po)
+}
+
+unsafe fn ustack_write_u32(t: *mut TaskStruct, uva: u32, val: u32) {
+    *(ustack_kernel_byte_mut(t, uva) as *mut u32) = val;
+}
+
+unsafe fn map_user_stack_in_pd(pd: *mut u32, t: *mut TaskStruct) {
+    if pd.is_null() || t.is_null() {
+        return;
+    }
+    for i in 0..USER_STACK_PAGES {
+        let vaddr = (*t).ustack_virt.wrapping_add(i.wrapping_mul(PAGE_SIZE));
+        let phys = ustack_phys_page(t, i as usize) as u32;
+        ffi::vmm_map(pd, vaddr, phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
+    }
+}
+
+unsafe fn free_user_stack_pages(t: *mut TaskStruct) {
+    for i in 0..USER_STACK_PAGES as usize {
+        let p = ustack_phys_page(t, i);
+        if !p.is_null() {
+            ffi::kfree_page(p);
+        }
+    }
+    (*t).ustack_phys = ptr::null_mut();
+    (*t).ustack_phys_extra = [ptr::null_mut(); 3];
+}
 
 unsafe fn task_zero_init(t: *mut TaskStruct) -> bool {
     ffi::memory_set(t as *mut c_void, 0, core::mem::size_of::<TaskStruct>());
@@ -320,28 +367,38 @@ unsafe fn create_user_task_internal(entry_point: *const c_void, add_to_list: boo
     let kstack = ffi::kalloc() as *mut u32;
     if kstack.is_null() { ffi::kfree_heap(t as *mut c_void); return ptr::null_mut(); }
 
-    let ustack_phys = ffi::kalloc() as *mut u32;
-    if ustack_phys.is_null() {
-        ffi::kfree_page(kstack as *mut c_void);
-        ffi::kfree_heap(t as *mut c_void);
-        return ptr::null_mut();
+    let mut ustack_pages: [*mut c_void; USER_STACK_PAGES as usize] =
+        [ptr::null_mut(); USER_STACK_PAGES as usize];
+    for i in 0..USER_STACK_PAGES as usize {
+        let p = ffi::kalloc() as *mut c_void;
+        if p.is_null() {
+            for j in 0..i {
+                ffi::kfree_page(ustack_pages[j]);
+            }
+            ffi::kfree_page(kstack as *mut c_void);
+            ffi::kfree_heap(t as *mut c_void);
+            return ptr::null_mut();
+        }
+        ustack_pages[i] = p;
     }
 
     if !task_zero_init(t) {
-        ffi::kfree_page(ustack_phys as *mut c_void);
+        for p in ustack_pages {
+            ffi::kfree_page(p);
+        }
         ffi::kfree_page(kstack as *mut c_void);
         ffi::kfree_heap(t as *mut c_void);
         return ptr::null_mut();
     }
 
-    let ustack_virt: u32 = 0xBFFF_F000;
+    let ustack_virt: u32 = KERNEL_BASE - USER_STACK_BYTES;
 
     let stack_top = (kstack as usize + KERNEL_STACK_SIZE) as *mut u32;
     let mut esp = stack_top;
 
     // iretd frame for ring3 (user_task_trampoline will iretd using this)
     esp = esp.sub(1); *esp = USER_DATA_SEL;                        // ss
-    esp = esp.sub(1); *esp = ustack_virt + PAGE_SIZE - 4;         // useresp
+    esp = esp.sub(1); *esp = ustack_virt + USER_STACK_BYTES - 4;   // useresp
     esp = esp.sub(1); *esp = 0x0000_0202;                          // eflags (IF=1)
     esp = esp.sub(1); *esp = USER_CODE_SEL;                        // cs
     esp = esp.sub(1); *esp = entry_point as u32;                   // eip
@@ -357,7 +414,9 @@ unsafe fn create_user_task_internal(entry_point: *const c_void, add_to_list: boo
 
     (*t).esp          = esp as u32;
     (*t).stack_base   = kstack as *mut c_void;
-    (*t).ustack_phys  = ustack_phys as *mut c_void;
+    (*t).ustack_phys  = ustack_pages[0];
+    (*t).ustack_phys_extra =
+        [ustack_pages[1], ustack_pages[2], ustack_pages[3]];
     (*t).ustack_virt  = ustack_virt;
     (*t).pid          = next_pid;
     next_pid         += 1;
@@ -401,8 +460,7 @@ pub unsafe extern "C" fn create_task_with_entry(
     *stk.add(5) = entry as u32;
 
     // Маппинг user-стека в page directory
-    ffi::vmm_map(pd, (*t).ustack_virt, (*t).ustack_phys as u32,
-                 PAGE_USER | PAGE_RW | PAGE_PRESENT);
+    map_user_stack_in_pd(pd, t);
 
     // Вычислить brk
     let highest = calc_highest_mapped_va(pd);
@@ -410,10 +468,9 @@ pub unsafe extern "C" fn create_task_with_entry(
     (*t).brk_current = highest;
 
     // Пустые args на user stack
-    let ustack_top = (*t).ustack_virt + PAGE_SIZE;
-    let phys = (*t).ustack_phys as *mut u8;
+    let ustack_top = (*t).ustack_virt + USER_STACK_BYTES;
     let mut sp = ustack_top - 4;
-    push_empty_args(phys, (*t).ustack_virt, &mut sp);
+    push_empty_args(t, &mut sp);
     // Исправить useresp на стеке (offset 8)
     *stk.add(8) = sp;
 
@@ -456,7 +513,7 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     let entry = ffi::load_elf(path, pd, &raw mut (*t).mm);
     if entry.is_null() {
         ffi::kfree_page((*t).stack_base);
-        ffi::kfree_page((*t).ustack_phys);
+        free_user_stack_pages(t);
         ffi::kfree_heap(t as *mut c_void);
         ffi::vmm_free_address_space(pd);
         return ptr::null_mut();
@@ -467,17 +524,15 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     let stk = (*t).esp as *mut u32;
     *stk.add(5) = entry as u32;
 
-    ffi::vmm_map(pd, (*t).ustack_virt, (*t).ustack_phys as u32,
-                 PAGE_USER | PAGE_RW | PAGE_PRESENT);
+    map_user_stack_in_pd(pd, t);
 
     let highest = calc_highest_mapped_va(pd);
     (*t).brk_start   = highest;
     (*t).brk_current = highest;
 
-    let ustack_top = (*t).ustack_virt + PAGE_SIZE;
-    let phys = (*t).ustack_phys as *mut u8;
+    let ustack_top = (*t).ustack_virt + USER_STACK_BYTES;
     let mut sp = ustack_top - 4;
-    push_empty_args(phys, (*t).ustack_virt, &mut sp);
+    push_empty_args(t, &mut sp);
     *stk.add(8) = sp;
 
     task_setup_sigreturn(t);
@@ -521,13 +576,21 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         return ptr::null_mut();
     }
 
-    let ustack_phys = ffi::kalloc() as *mut u32;
-    if ustack_phys.is_null() {
-        ffi::kfree_page(kstack as *mut c_void);
-        ffi::kfree_heap(child as *mut c_void);
-        ffi::vmm_free_address_space(child_pd);
-        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
-        return ptr::null_mut();
+    let mut ustack_pages: [*mut c_void; USER_STACK_PAGES as usize] =
+        [ptr::null_mut(); USER_STACK_PAGES as usize];
+    for i in 0..USER_STACK_PAGES as usize {
+        let p = ffi::kalloc() as *mut c_void;
+        if p.is_null() {
+            for j in 0..i {
+                ffi::kfree_page(ustack_pages[j]);
+            }
+            ffi::kfree_page(kstack as *mut c_void);
+            ffi::kfree_heap(child as *mut c_void);
+            ffi::vmm_free_address_space(child_pd);
+            crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+            return ptr::null_mut();
+        }
+        ustack_pages[i] = p;
     }
 
     // Скопировать всю структуру parent → child
@@ -538,7 +601,9 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     next_pid               += 1;
     (*child).state          = TaskState::Ready;
     (*child).stack_base     = kstack as *mut c_void;
-    (*child).ustack_phys    = ustack_phys as *mut c_void;
+    (*child).ustack_phys    = ustack_pages[0];
+    (*child).ustack_phys_extra =
+        [ustack_pages[1], ustack_pages[2], ustack_pages[3]];
     (*child).page_directory = child_pd;
     (*child).parent_pid     = (*parent).pid;
     (*child).exit_code      = 0;
@@ -557,7 +622,9 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     // Allocate independent fds for child, copy parent's fd data
     let child_fds = ffi::kmalloc(core::mem::size_of::<ffi::TaskFdTable>()) as *mut ffi::TaskFdTable;
     if child_fds.is_null() {
-        ffi::kfree_page(ustack_phys as *mut c_void);
+        for p in ustack_pages {
+            ffi::kfree_page(p);
+        }
         ffi::kfree_page(kstack as *mut c_void);
         ffi::kfree_heap(child as *mut c_void);
         ffi::vmm_free_address_space(child_pd);
@@ -573,7 +640,9 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     if child_mmap.is_null() {
         ffi::kfree_heap(child_fds as *mut c_void);
         (*child).fds = ptr::null_mut();
-        ffi::kfree_page(ustack_phys as *mut c_void);
+        for p in ustack_pages {
+            ffi::kfree_page(p);
+        }
         ffi::kfree_page(kstack as *mut c_void);
         ffi::kfree_heap(child as *mut c_void);
         ffi::vmm_free_address_space(child_pd);
@@ -596,10 +665,17 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         child_pd,
     );
 
-    // Маппинг и копирование user stack
-    ffi::vmm_map(child_pd, (*child).ustack_virt, ustack_phys as u32,
-                 PAGE_USER | PAGE_RW | PAGE_PRESENT);
-    ffi::memory_copy(ustack_phys as *mut c_void, (*parent).ustack_phys as *const c_void, PAGE_SIZE as usize);
+    // Маппинг и копирование user stack (несколько физстраниц)
+    for i in 0..USER_STACK_PAGES as usize {
+        let vaddr = (*child).ustack_virt.wrapping_add((i as u32).wrapping_mul(PAGE_SIZE));
+        let cphys = ustack_phys_page(child, i) as u32;
+        ffi::vmm_map(child_pd, vaddr, cphys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
+        ffi::memory_copy(
+            ustack_phys_page(child, i),
+            ustack_phys_page(parent, i) as *const c_void,
+            PAGE_SIZE as usize,
+        );
+    }
 
     // Инкрементировать refcount файловых дескрипторов
     for i in 0..MAX_FD {
@@ -845,22 +921,135 @@ pub unsafe extern "C" fn task_exec(
 
     let entry = ffi::load_elf(path, new_pd, &raw mut (*t).mm);
     if entry.is_null() {
+        ffi::kprint(b"[EXEC] load_elf failed (null entry), aborting exec\n\0".as_ptr());
         ffi::vmm_free_address_space(new_pd);
         return -1;
     }
 
-    crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+    {
+        let mut hbuf = [0u8; 12];
+        ffi::kprint(b"[EXEC] load_elf entry=0x\0".as_ptr());
+        ffi::hex_to_ascii(entry as u32, hbuf.as_mut_ptr());
+        ffi::kprint(hbuf.as_ptr());
+        ffi::kprint(b" pid=\0".as_ptr());
+        ffi::itoa((*t).pid as i32, hbuf.as_mut_ptr());
+        ffi::kprint(hbuf.as_ptr());
+        ffi::kprint(b"\n\0".as_ptr());
 
-    if !(*t).page_directory.is_null() {
-        ffi::proc_free_pages(&raw mut (*t).mm);
-        ffi::vmm_free_address_space((*t).page_directory);
+        let pdi = (entry as usize) >> 22;
+        let pti = ((entry as usize) >> 12) & 0x3FF;
+        let pde = unsafe { *new_pd.add(pdi) };
+        ffi::kprint(b"[EXEC] PDE for entry pdi=\0".as_ptr());
+        ffi::itoa(pdi as i32, hbuf.as_mut_ptr());
+        ffi::kprint(hbuf.as_ptr());
+        ffi::kprint(b": 0x\0".as_ptr());
+        ffi::hex_to_ascii(pde, hbuf.as_mut_ptr());
+        ffi::kprint(hbuf.as_ptr());
+        if pde == 0 || pde & PAGE_PRESENT == 0 {
+            ffi::kprint(b" ABSENT (no exec mapping)\n\0".as_ptr());
+        } else {
+            ffi::kprint(b" OK\n\0".as_ptr());
+            let pt = (pde & !0xFFFu32) as *mut u32;
+            let pte = unsafe { *pt.add(pti) };
+            ffi::kprint(b"[EXEC] PTE for entry pdi=\0".as_ptr());
+            ffi::itoa(pdi as i32, hbuf.as_mut_ptr());
+            ffi::kprint(hbuf.as_ptr());
+            ffi::kprint(b" pti=\0".as_ptr());
+            ffi::itoa(pti as i32, hbuf.as_mut_ptr());
+            ffi::kprint(hbuf.as_ptr());
+            ffi::kprint(b": 0x\0".as_ptr());
+            ffi::hex_to_ascii(pte, hbuf.as_mut_ptr());
+            ffi::kprint(hbuf.as_ptr());
+            if pte == 0 || pte & PAGE_PRESENT == 0 {
+                ffi::kprint(b" ABSENT (page not mapped)\n\0".as_ptr());
+            } else {
+                ffi::kprint(b" OK\n\0".as_ptr());
+            }
+        }
     }
 
-    (*t).page_directory  = new_pd;
+    crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+
+    /* Пока CR3 ещё старый: copy_strings_to_ustack читает argv/envp по старым
+     * пользовательским VA. Иначе после раннего switch_paging эти страницы в new_pd
+     * отсутствуют — исполняется мусор / #GP при возврате в user с -1. */
+    map_user_stack_in_pd(new_pd, t);
+
+    for pi in 0..USER_STACK_PAGES as usize {
+        let us = ustack_phys_page(t, pi) as *mut u8;
+        ffi::memory_set(us as *mut c_void, 0, PAGE_SIZE as usize);
+    }
+
+    {
+        let file = ffi::vfs_walk_path(ffi::vfs_root, path);
+        if !file.is_null() {
+            let brk = ffi::elf_get_brk_start(file);
+            (*t).brk_start   = brk;
+            (*t).brk_current = brk;
+        }
+    }
+
+    map_sigreturn_trampoline_on_pd(t, new_pd);
+
+    ffi::tss_entry.esp0 = (*t).stack_base as u32 + KERNEL_STACK_SIZE as u32;
+
+    let ustack_top = (*t).ustack_virt + USER_STACK_BYTES;
+    let mut sp     = ustack_top - 4;
+
+    let mut argv_vaddrs: [u32; 256] = [0; 256];
+    let mut envp_vaddrs: [u32; 256] = [0; 256];
+
+    let argc = match copy_strings_to_ustack(argv, EXEC_MAX_ARGS, t, &mut sp, &mut argv_vaddrs) {
+        Some(n) => n,
+        None => {
+            ffi::kprint(b"[EXEC] abort: argv copy / stack overflow\n\0".as_ptr());
+            ffi::vmm_free_address_space(new_pd);
+            crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+            return -1;
+        }
+    };
+    let envc = match copy_strings_to_ustack(envp, EXEC_MAX_ENVS, t, &mut sp, &mut envp_vaddrs) {
+        Some(n) => n,
+        None => {
+            ffi::kprint(b"[EXEC] abort: envp copy / stack overflow\n\0".as_ptr());
+            ffi::vmm_free_address_space(new_pd);
+            crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+            return -1;
+        }
+    };
+
+    let ptr_overhead = (argc as u32 + envc as u32 + 5) * 4;
+    if sp < (*t).ustack_virt + ptr_overhead {
+        ffi::kprint(b"[EXEC] abort: stack layout preflight failed\n\0".as_ptr());
+        ffi::vmm_free_address_space(new_pd);
+        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+        return -1;
+    }
+
+    sp -= 4;
+    ustack_write_u32(t, sp, 0);
+    for i in (0..envc).rev() {
+        sp -= 4;
+        ustack_write_u32(t, sp, envp_vaddrs[i]);
+    }
+    let envp_arr = sp;
+
+    sp -= 4;
+    ustack_write_u32(t, sp, 0);
+    for i in (0..argc).rev() {
+        sp -= 4;
+        ustack_write_u32(t, sp, argv_vaddrs[i]);
+    }
+    let argv_arr = sp;
+
+    sp -= 4; ustack_write_u32(t, sp, envp_arr);
+    sp -= 4; ustack_write_u32(t, sp, argv_arr);
+    sp -= 4; ustack_write_u32(t, sp, argc as u32);
+
     (*t).pending_signals = 0;
     for i in 0..NSIG { (*t).signal_handlers[i] = SIG_DFL; }
 
-    ffi::shm_detach_all((*t).pid, (*t).page_directory);
+    ffi::shm_detach_all((*t).pid, new_pd);
     for i in 0..TASK_SHM_MAX {
         (*t).shm_attachments[i].shm_id    = 0;
         (*t).shm_attachments[i].shm_vaddr = 0;
@@ -878,96 +1067,121 @@ pub unsafe extern "C" fn task_exec(
         }
     }
 
-    // Маппинг user stack
-    ffi::vmm_map(new_pd, (*t).ustack_virt, (*t).ustack_phys as u32,
-                 PAGE_USER | PAGE_RW | PAGE_PRESENT);
+    /* После shm/mmap и cloexec снова фиксируем стек с RW (USER|P без W даёт #PF err=0x07). */
+    map_user_stack_in_pd(new_pd, t);
 
-    let us = (*t).ustack_phys as *mut u8;
-    for i in 0..(PAGE_SIZE as usize) { *us.add(i) = 0; }
+    let old_pd = (*t).page_directory;
+    (*t).page_directory = new_pd;
+    ffi::switch_paging(new_pd);
+    if !old_pd.is_null() {
+        ffi::vmm_free_address_space(old_pd);
+    }
+
+    /* Entire TLB was flushed by CR3 reload, but invalidate the image page
+     * explicitly in case a hypervisor/CPU quirk leaves a stale mapping for
+     * this linear address across AS switches. */
+    unsafe {
+        core::arch::asm!(
+            "invlpg [{}]",
+            in(reg) entry as u32,
+            options(nostack),
+        );
+    }
 
     {
-        let file = ffi::vfs_walk_path(ffi::vfs_root, path);
-        if !file.is_null() {
-            let brk = ffi::elf_get_brk_start(file);
-            (*t).brk_start   = brk;
-            (*t).brk_current = brk;
+        let mut hbuf = [0u8; 12];
+        let ent = entry as u32;
+        let pdi = (ent as usize) >> 22;
+        let pti = ((ent as usize) >> 12) & 0x3FF;
+        let pde = unsafe { *new_pd.add(pdi) };
+        let pte = if pde & PAGE_PRESENT == 0 {
+            0u32
+        } else {
+            let pt = (pde & !0xFFFu32) as *const u32;
+            unsafe { *pt.add(pti) }
+        };
+        let user_ok = (pde & PAGE_PRESENT != 0)
+            && (pde & PAGE_USER != 0)
+            && (pte & PAGE_PRESENT != 0)
+            && (pte & PAGE_USER != 0);
+        if !user_ok {
+            ffi::kprint(b"[EXEC] POST-FREE entry map not user: PDE=0x\0".as_ptr());
+            ffi::hex_to_ascii(pde, hbuf.as_mut_ptr());
+            ffi::kprint(hbuf.as_ptr());
+            ffi::kprint(b" PTE=0x\0".as_ptr());
+            ffi::hex_to_ascii(pte, hbuf.as_mut_ptr());
+            ffi::kprint(hbuf.as_ptr());
+            ffi::kprint(b"\n\0".as_ptr());
         }
     }
 
-    task_setup_sigreturn(t);
-
-    // Обновить TSS.esp0
-    ffi::tss_entry.esp0 = (*t).stack_base as u32 + KERNEL_STACK_SIZE as u32;
-
-    // Построить стек с аргументами
-    let ustack_top = (*t).ustack_virt + PAGE_SIZE;
-    let phys_base  = (*t).ustack_phys as *mut u8;
-    let mut sp     = ustack_top - 4;
-
-    let mut argv_vaddrs: [u32; 256] = [0; 256];
-    let mut envp_vaddrs: [u32; 256] = [0; 256];
-
-    let argc = match copy_strings_to_ustack(argv, EXEC_MAX_ARGS, phys_base, (*t).ustack_virt, &mut sp, &mut argv_vaddrs) {
-        Some(n) => n,
-        None => { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK); return -1; }
-    };
-    let envc = match copy_strings_to_ustack(envp, EXEC_MAX_ENVS, phys_base, (*t).ustack_virt, &mut sp, &mut envp_vaddrs) {
-        Some(n) => n,
-        None => { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK); return -1; }
-    };
-
-    // Pre-flight: ensure remaining space fits pointer arrays + main() scalars:
-    // (argc+1) NULL-terminated argv[], (envc+1) NULL-terminated envp[], 3 scalars.
-    let ptr_overhead = (argc as u32 + envc as u32 + 5) * 4;
-    if sp < (*t).ustack_virt + ptr_overhead {
-        crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
-        return -1;
-    }
-
-    // envp[] array
-    sp -= 4;
-    *(phys_base.add((sp - (*t).ustack_virt) as usize) as *mut u32) = 0;
-    for i in (0..envc).rev() {
-        sp -= 4;
-        *(phys_base.add((sp - (*t).ustack_virt) as usize) as *mut u32) = envp_vaddrs[i];
-    }
-    let envp_arr = sp;
-
-    // argv[] array
-    sp -= 4;
-    *(phys_base.add((sp - (*t).ustack_virt) as usize) as *mut u32) = 0;
-    for i in (0..argc).rev() {
-        sp -= 4;
-        *(phys_base.add((sp - (*t).ustack_virt) as usize) as *mut u32) = argv_vaddrs[i];
-    }
-    let argv_arr = sp;
-
-    // main(argc, argv, envp)
-    sp -= 4; *(phys_base.add((sp - (*t).ustack_virt) as usize) as *mut u32) = envp_arr;
-    sp -= 4; *(phys_base.add((sp - (*t).ustack_virt) as usize) as *mut u32) = argv_arr;
-    sp -= 4; *(phys_base.add((sp - (*t).ustack_virt) as usize) as *mut u32) = argc as u32;
+    ffi::kprint(b"[EXEC] committed: new AS; iretd next\n\0".as_ptr());
 
     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-    // Переключить страничную адресацию и прыгнуть в user-space
-    ffi::switch_paging(new_pd);
+    /* CR3 = new_pd. Перед iretd снова загружаем тот же PD в asm. */
     ffi::terminal_fg_pid = (*t).pid;
 
-    core::arch::asm!(
-        "mov eax, 0x23",
-        "mov ds, ax",
-        "mov es, ax",
-        "push 0x23",    // ss
-        "push {sp}",    // useresp
-        "pushfd",
-        "or dword ptr [esp], 0x200",  // IF=1
-        "push 0x1B",    // cs
-        "push {entry}", // eip
-        "iretd",
-        sp    = in(reg) sp,
-        entry = in(reg) entry as u32,
-        options(noreturn)
-    );
+    let pd_val = new_pd as u32;
+    let entry_u = entry as u32;
+    let sp_u = sp;
+
+    {
+        let mut hbuf = [0u8; 12];
+        let ustack_hi = (*t).ustack_virt.wrapping_add(USER_STACK_BYTES);
+        ffi::kprint(b"[EXEC] iretd esp=0x\0".as_ptr());
+        ffi::hex_to_ascii(sp_u, hbuf.as_mut_ptr());
+        ffi::kprint(hbuf.as_ptr());
+        ffi::kprint(b" ustack_page=[0x\0".as_ptr());
+        ffi::hex_to_ascii((*t).ustack_virt, hbuf.as_mut_ptr());
+        ffi::kprint(hbuf.as_ptr());
+        ffi::kprint(b"..0x\0".as_ptr());
+        ffi::hex_to_ascii(ustack_hi, hbuf.as_mut_ptr());
+        ffi::kprint(hbuf.as_ptr());
+        ffi::kprint(b") e_entry=0x\0".as_ptr());
+        ffi::hex_to_ascii(entry_u, hbuf.as_mut_ptr());
+        ffi::kprint(hbuf.as_ptr());
+        ffi::kprint(b"\n\0".as_ptr());
+
+        const ADDR_HINT: u32 = 0x0800_0EAD;
+        if sp_u.abs_diff(ADDR_HINT) < 0x1000 {
+            ffi::kprint(
+                b"[EXEC] WARNING: esp within 4KiB of 0x08000EAD (stack vs code?)\n\0".as_ptr(),
+            );
+        }
+        if sp_u >= 0x0800_0000 && sp_u < 0x0B00_0000 {
+            ffi::kprint(
+                b"[EXEC] WARNING: esp in low 0x0800_0000..0x0B00_0000 (expect ~0xBFF...)\n\0".as_ptr(),
+            );
+        }
+        if sp_u < (*t).ustack_virt || sp_u >= ustack_hi {
+            ffi::kprint(b"[EXEC] WARNING: esp outside mapped ustack region\n\0".as_ptr());
+        }
+    }
+
+    unsafe {
+        // (NT/IOPL и др.) — иначе iretd может вести себя как nested-task return (#GP).
+        // entry_u и sp_u — только в ecx/edx: иначе LLVM кладёт entry в eax, а mov eax,0x23
+        // затирает его и на стек вместо EIP попадает 0x23 (селектор данных → #PF с eip=0x23).
+        core::arch::asm!(
+            "mov cr3, ebx",
+            "mov eax, 0x23",
+            "mov ds, ax",
+            "mov es, ax",
+            "mov fs, ax",
+            "mov gs, ax",
+            "push 0x23",
+            "push ecx",
+            "push 0x202",
+            "push 0x1B",
+            "push edx",
+            "iretd",
+            in("ebx") pd_val,
+            in("ecx") sp_u,
+            in("edx") entry_u,
+            options(noreturn),
+        );
+    }
 }
 
 #[no_mangle]
@@ -1200,6 +1414,7 @@ unsafe fn reap_task_free(t: *mut TaskStruct) {
 
     (*t).page_directory = ptr::null_mut();
     (*t).ustack_phys    = ptr::null_mut();
+    (*t).ustack_phys_extra = [ptr::null_mut(); 3];
 
     if !(*t).stack_base.is_null() { ffi::kfree_page((*t).stack_base); }
 
@@ -1252,28 +1467,41 @@ pub unsafe extern "C" fn task_set_state(
 
 #[no_mangle]
 pub unsafe extern "C" fn task_setup_sigreturn(t: *mut TaskStruct) {
-    if t.is_null() || (*t).page_directory.is_null() { return; }
+    if t.is_null() || (*t).page_directory.is_null() {
+        return;
+    }
+    map_sigreturn_trampoline_on_pd(t, (*t).page_directory);
+}
+
+unsafe fn map_sigreturn_trampoline_on_pd(t: *mut TaskStruct, pd: *mut u32) {
+    if t.is_null() || pd.is_null() {
+        return;
+    }
 
     let tramp_vaddr: u32 = 0xBEFFF000;
     let phys = ffi::kalloc() as *mut u8;
-    if phys.is_null() { return; }
+    if phys.is_null() {
+        return;
+    }
 
-    for i in 0..(PAGE_SIZE as usize) { *phys.add(i) = 0; }
+    for i in 0..(PAGE_SIZE as usize) {
+        *phys.add(i) = 0;
+    }
 
-    *phys.add(0) = 0x83; *phys.add(1) = 0xEC; *phys.add(2) = 0x04;
+    *phys.add(0) = 0x83;
+    *phys.add(1) = 0xEC;
+    *phys.add(2) = 0x04;
     let sigret_num: u32 = ffi::sys_sigreturn_num;
     *phys.add(3) = 0xB8;
-    *phys.add(4) = (sigret_num        & 0xFF) as u8;
-    *phys.add(5) = ((sigret_num >> 8)  & 0xFF) as u8;
+    *phys.add(4) = (sigret_num & 0xFF) as u8;
+    *phys.add(5) = ((sigret_num >> 8) & 0xFF) as u8;
     *phys.add(6) = ((sigret_num >> 16) & 0xFF) as u8;
     *phys.add(7) = ((sigret_num >> 24) & 0xFF) as u8;
-    // int 0x80
-    *phys.add(8) = 0xCD; *phys.add(9) = 0x80;
-    // hlt
+    *phys.add(8) = 0xCD;
+    *phys.add(9) = 0x80;
     *phys.add(10) = 0xF4;
 
-    ffi::vmm_map((*t).page_directory, tramp_vaddr, phys as u32,
-                 PAGE_USER | PAGE_PRESENT);
+    ffi::vmm_map(pd, tramp_vaddr, phys as u32, PAGE_USER | PAGE_RW | PAGE_PRESENT);
     (*t).sigreturn_trampoline = tramp_vaddr;
 }
 
@@ -1330,32 +1558,32 @@ unsafe fn calc_highest_mapped_va(pd: *mut u32) -> u32 {
     highest
 }
 
-unsafe fn push_empty_args(phys: *mut u8, ustack_virt: u32, sp: &mut u32) {
+unsafe fn push_empty_args(t: *mut TaskStruct, sp: &mut u32) {
     *sp -= 4;
-    *(phys.add((*sp - ustack_virt) as usize) as *mut u32) = 0;  // envp = NULL
+    ustack_write_u32(t, *sp, 0);  // envp = NULL
     let envp_vaddr = *sp;
 
     *sp -= 4;
-    *(phys.add((*sp - ustack_virt) as usize) as *mut u32) = 0;  // argv = NULL
+    ustack_write_u32(t, *sp, 0);  // argv = NULL
     let argv_vaddr = *sp;
 
     *sp -= 4;
-    *(phys.add((*sp - ustack_virt) as usize) as *mut u32) = envp_vaddr;
+    ustack_write_u32(t, *sp, envp_vaddr);
     *sp -= 4;
-    *(phys.add((*sp - ustack_virt) as usize) as *mut u32) = argv_vaddr;
+    ustack_write_u32(t, *sp, argv_vaddr);
     *sp -= 4;
-    *(phys.add((*sp - ustack_virt) as usize) as *mut u32) = 0;  // argc = 0
+    ustack_write_u32(t, *sp, 0);  // argc = 0
 }
 
 unsafe fn copy_strings_to_ustack(
-    arr:         *mut *mut u8,
-    max:         usize,
-    phys_base:   *mut u8,
-    ustack_virt: u32,
-    sp:          &mut u32,
-    vaddrs:      &mut [u32; 256],
+    arr:    *mut *mut u8,
+    max:    usize,
+    t:      *mut TaskStruct,
+    sp:     &mut u32,
+    vaddrs: &mut [u32; 256],
 ) -> Option<usize> {
     if arr.is_null() { return Some(0); }
+    let ustack_virt = (*t).ustack_virt;
     let mut count = 0usize;
 
     for i in 0..max {
@@ -1373,9 +1601,9 @@ unsafe fn copy_strings_to_ustack(
             return None; // stack overflow: abort exec
         }
         *sp = new_sp;
-        let off = (*sp - ustack_virt) as usize;
+        let base = *sp;
         for j in 0..len {
-            *phys_base.add(off + j) = *s.add(j);
+            *ustack_kernel_byte_mut(t, base.wrapping_add(j as u32)) = *s.add(j);
         }
         vaddrs[count] = *sp;
         count += 1;

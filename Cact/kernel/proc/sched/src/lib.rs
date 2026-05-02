@@ -72,4 +72,9 @@ const _ABI_CHECK: () = {
     // shm_attachments: 16 * 8 = 128
     assert!(offset_of!(TaskStruct, shm_attachments) == 460, "shm_attachments offset mismatch");
     assert!(offset_of!(TaskStruct, wait_next)       == 588, "wait_next offset mismatch");
+    assert!(offset_of!(TaskStruct, pgid)            == 592, "pgid offset mismatch");
+    assert!(offset_of!(TaskStruct, sid)             == 596, "sid offset mismatch");
+    assert!(offset_of!(TaskStruct, umask)           == 600, "umask offset mismatch");
+    assert!(offset_of!(TaskStruct, root)             == 604, "root offset mismatch");
+    assert!(offset_of!(TaskStruct, ustack_phys_extra) == 608, "ustack_phys_extra offset mismatch");
 };

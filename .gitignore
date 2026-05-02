@@ -12,6 +12,6 @@ build/
 *~
 
 *.log
-run_qemu.txt
+*.sh
 
 **/target/

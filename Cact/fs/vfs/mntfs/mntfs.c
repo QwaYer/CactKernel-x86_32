@@ -437,5 +437,14 @@ void mntfs_init(void) {
     mntfs_mount(sys_bin, "binfs", binfs_get_root(), 0);
     kprint("[mntfs] binfs mounted at "); kprint(sys_bin); kprint("\n");
 
+    /* Стандартные имена в корне VFS: create_elf_task("bin/init") и execve("/bin/…") */
+    extern int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target);
+    vfs_mount(vfs_root, "bin",  binfs_get_root());
+    vfs_mount(vfs_root, "dev",  devfs_get_root());
+    vfs_mount(vfs_root, "proc", procfs_get_root());
+    vfs_mount(vfs_root, "tmp",  tmpfs_get_root());
+    vfs_mount(vfs_root, "etc",  etcfs_get_root());
+    kprint("[mntfs] /bin /dev /proc /tmp /etc at VFS root (for bin/init, /dev/tty)\n");
+
     klog(LOG_OK, "mntfs ready — ext4/etcfs/devfs/procfs/tmpfs/binfs mounted");
 }

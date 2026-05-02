@@ -3,7 +3,6 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "memory.h"
-#include "page_fault.h"
 #include "proc_mm.h"
 #include "klib.h"
 
@@ -93,14 +92,33 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 
                 vmm_map(pd, va, (uint32_t)phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
             } else {
-                if (vmm_map_zero(pd, va, PAGE_SIZE, PAGE_USER) != 0) {
-                    kprint("[ELF] ERR: vmm_map_zero failed\n");
+                /* p_memsz > p_filesz: .bss / zero tail — need present mappings (not demand-only). */
+                void* zphys = kalloc();
+                if (!zphys) {
+                    kprint("[ELF] ERR: OOM (bss)\n");
                     proc_free_pages(tracker);
                     return 0;
                 }
+                if (proc_tracker_add(tracker, zphys) < 0) {
+                    kprint("[ELF] ERR: tracker_add failed (bss)\n");
+                    kfree_page(zphys);
+                    proc_free_pages(tracker);
+                    return 0;
+                }
+                uint8_t* zp = (uint8_t*)zphys;
+                for (int k = 0; k < (int)PAGE_SIZE; k++) zp[k] = 0;
+                vmm_map(pd, va, (uint32_t)zphys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
             }
         }
     }
+
+    kprint("[ELF] e_entry=0x");
+    {
+        char ebuf[12];
+        hex_to_ascii(hdr.e_entry, ebuf);
+        kprint(ebuf);
+    }
+    kprint("\n");
 
     return (void*)hdr.e_entry;
 }
@@ -186,10 +204,20 @@ void* load_elf_dynamic(char*                path,
 
                     vmm_map(pd, va, (uint32_t)phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
                 } else {
-                    if (vmm_map_zero(pd, va, PAGE_SIZE, PAGE_USER) != 0) {
+                    void* zphys = kalloc();
+                    if (!zphys) {
+                        kprint("[ELF-DYN] ERR: OOM (bss)\n");
                         proc_free_pages(tracker);
                         return 0;
                     }
+                    if (proc_tracker_add(tracker, zphys) < 0) {
+                        kfree_page(zphys);
+                        proc_free_pages(tracker);
+                        return 0;
+                    }
+                    uint8_t* zp = (uint8_t*)zphys;
+                    for (int k = 0; k < (int)PAGE_SIZE; k++) zp[k] = 0;
+                    vmm_map(pd, va, (uint32_t)zphys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
                 }
             }
         }

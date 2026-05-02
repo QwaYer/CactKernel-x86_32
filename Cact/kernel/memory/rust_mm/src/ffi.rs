@@ -271,6 +271,12 @@ pub struct TaskStruct {
     pub euid: u32,
     pub egid: u32,
     pub shm_attachments: [ShmAttachment; TASK_SHM_MAX],
+    pub wait_next: *mut TaskStruct,
+    pub pgid: u32,
+    pub sid: u32,
+    pub umask: u32,
+    pub root: *mut VfsNode,
+    pub ustack_phys_extra: [*mut u8; 3],
 }
 
 #[repr(C)]

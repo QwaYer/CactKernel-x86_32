@@ -19,6 +19,35 @@ fn fd_to_node(fd: i32) -> *mut VfsNode {
     }
 }
 
+#[derive(Copy, Clone)]
+enum EnsurePteTable {
+    Absent,
+    Oom,
+}
+
+/// Before changing PTEs in `pd`, the page table for `pdi` must be private
+/// (`PDE_PRIVATE`). Otherwise `do_munmap` / `mmap_table_free` / etc. would
+/// mutate or `kfree` the global kernel page tables copied into every process.
+unsafe fn ensure_pde_private(pd: *mut u32, pdi: usize) -> Result<*mut u32, EnsurePteTable> {
+    let pde = &mut *pd.add(pdi);
+    if *pde & PAGE_PRESENT == 0 {
+        return Err(EnsurePteTable::Absent);
+    }
+    if *pde & PDE_PRIVATE != 0 {
+        return Ok((*pde & !0xFFF) as *mut u32);
+    }
+    let shared = (*pde & !0xFFF) as *const u32;
+    let priv_pt = kalloc() as *mut u32;
+    if priv_pt.is_null() {
+        return Err(EnsurePteTable::Oom);
+    }
+    core::ptr::copy_nonoverlapping(shared, priv_pt, 1024);
+    let old_flags = *pde & 0xFFF;
+    *pde = (priv_pt as u32 & !0xFFF)
+        | (old_flags | PAGE_USER | PAGE_RW | PDE_PRIVATE);
+    Ok(priv_pt)
+}
+
 fn prot_to_page_flags(prot: i32, user: bool) -> i32 {
     let mut f = PAGE_PRESENT as i32;
     if prot & PROT_WRITE != 0 {
@@ -246,13 +275,16 @@ pub extern "C" fn do_munmap(
     for i in 0..pages {
         let va = addr + i * PAGE_SIZE;
         let pdi = pd_index(va) as usize;
-        // SAFETY: pd is valid.
-        let pde = unsafe { *pd.add(pdi) };
-        if pde & PAGE_PRESENT == 0 {
+        let pde_val = unsafe { *pd.add(pdi) };
+        if pde_val & PAGE_PRESENT == 0 {
             continue;
         }
-        let pt = (pde & !0xFFF) as *mut u32;
-        // SAFETY: pt is a valid page table.
+        let pt = match unsafe { ensure_pde_private(pd, pdi) } {
+            Ok(p) => p,
+            Err(EnsurePteTable::Absent) => continue,
+            Err(EnsurePteTable::Oom) => return -1,
+        };
+        // SAFETY: pt is a valid private page table.
         let pte = unsafe { *pt.add(pt_index(va) as usize) };
 
         if pte & PAGE_PRESENT != 0 {
@@ -308,13 +340,16 @@ pub extern "C" fn do_mprotect(
     for i in 0..pages {
         let va = addr + i * PAGE_SIZE;
         let pdi = pd_index(va) as usize;
-        // SAFETY: pd is valid.
-        let pde = unsafe { *pd.add(pdi) };
-        if pde & PAGE_PRESENT == 0 {
+        let pde_val = unsafe { *pd.add(pdi) };
+        if pde_val & PAGE_PRESENT == 0 {
             continue;
         }
-        let pt = (pde & !0xFFF) as *mut u32;
-        // SAFETY: pt is a valid page table.
+        let pt = match unsafe { ensure_pde_private(pd, pdi) } {
+            Ok(p) => p,
+            Err(EnsurePteTable::Absent) => continue,
+            Err(EnsurePteTable::Oom) => return -1,
+        };
+        // SAFETY: pt is valid.
         let pte = unsafe { *pt.add(pt_index(va) as usize) };
         if pte & PAGE_PRESENT == 0 {
             continue;
@@ -348,12 +383,15 @@ pub extern "C" fn mmap_handle_fault(
     let pdi = pd_index(page_va) as usize;
     let pti = pt_index(page_va) as usize;
 
-    // SAFETY: pd is valid.
-    let pde = unsafe { *pd.add(pdi) };
-    if pde & PAGE_PRESENT == 0 {
+    let pde_val = unsafe { *pd.add(pdi) };
+    if pde_val & PAGE_PRESENT == 0 {
         return -1;
     }
-    let pt = (pde & !0xFFF) as *mut u32;
+    let pt = match unsafe { ensure_pde_private(pd, pdi) } {
+        Ok(p) => p,
+        Err(EnsurePteTable::Absent) => return -1,
+        Err(EnsurePteTable::Oom) => return -1,
+    };
 
     // SAFETY: pt is valid.
     let pte = unsafe { *pt.add(pti) };
@@ -439,6 +477,8 @@ pub extern "C" fn mmap_table_clone(
                         core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                         *dst_pd.add(pdi) =
                             (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER | PDE_PRIVATE;
+                    } else if let Err(EnsurePteTable::Oom) = ensure_pde_private(dst_pd, pdi) {
+                        continue;
                     }
                     let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
                     *dst_pt.add(pti) = pte;
@@ -458,8 +498,8 @@ pub extern "C" fn mmap_table_clone(
                     if *src_pd.add(pdi) & PAGE_PRESENT == 0 {
                         continue;
                     }
-                    let src_pt = (*src_pd.add(pdi) & !0xFFF) as *mut u32;
-                    let pte = *src_pt.add(pti);
+                    let src_pt_before = (*src_pd.add(pdi) & !0xFFF) as *mut u32;
+                    let pte = *src_pt_before.add(pti);
 
                     if *dst_pd.add(pdi) & PAGE_PRESENT == 0 {
                         let new_pt = kalloc() as *mut u32;
@@ -469,6 +509,8 @@ pub extern "C" fn mmap_table_clone(
                         core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                         *dst_pd.add(pdi) =
                             (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER | PDE_PRIVATE;
+                    } else if let Err(EnsurePteTable::Oom) = ensure_pde_private(dst_pd, pdi) {
+                        continue;
                     }
                     let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
 
@@ -476,6 +518,11 @@ pub extern "C" fn mmap_table_clone(
                         *dst_pt.add(pti) = pte;
                         continue;
                     }
+
+                    if let Err(EnsurePteTable::Oom) = ensure_pde_private(src_pd, pdi) {
+                        continue;
+                    }
+                    let src_pt = (*src_pd.add(pdi) & !0xFFF) as *mut u32;
 
                     let cow_pte = (pte & !PAGE_RW) | PAGE_COW;
                     *src_pt.add(pti) = cow_pte;

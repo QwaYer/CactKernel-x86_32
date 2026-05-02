@@ -108,6 +108,14 @@ pub extern "C" fn vmm_map(pd: *mut u32,
     if physical_addr >= PCI_HOLE_START {
         flags |= PAGE_PCD | PAGE_PWT;
     }
+    // User stack lives in [USER_STACK_LIMIT, USER_STACK_TOP). A present+user page
+    // without R/W faults with #PF err=0x07 on the first push/store (W/R=1, U/S=1).
+    if virtual_addr >= USER_STACK_LIMIT
+        && virtual_addr < USER_STACK_TOP
+        && flags & PAGE_USER != 0
+    {
+        flags |= PAGE_RW;
+    }
 
     unsafe {
         let pde = &mut *pd.add(pdi);

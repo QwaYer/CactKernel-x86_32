@@ -131,6 +131,7 @@ struct task_struct {
     uint32_t    sid;    /* session ID */
     uint32_t    umask;  /* file creation mask */
     vfs_node_t *root;   /* chroot root (NULL = global vfs_root) */
+    void *ustack_phys_extra[3]; /* user stack pages 1..3 (page 0 is ustack_phys) */
 };
 
 typedef struct sched_queue {

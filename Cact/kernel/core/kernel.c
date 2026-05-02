@@ -412,12 +412,12 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
 
     kprint_color("Kernel is ready. Launching init...\n", COLOR_LIGHT_GREEN);
 
-    __asm__ __volatile__("sti");
-
     struct task_struct* init = create_elf_task("bin/init");
     if (!init) {
         kprint_color("[FAIL] create_elf_task: /bin/init not found\n", COLOR_LIGHT_RED);
     }
+
+    __asm__ __volatile__("sti");
 
     while (1) {
         __asm__ __volatile__("hlt");
