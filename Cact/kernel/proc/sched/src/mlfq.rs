@@ -1,3 +1,4 @@
+use core::cell::SyncUnsafeCell;
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
 use crate::task::{TaskStruct, TaskState, SCHEDULER_LOCK};
@@ -14,10 +15,9 @@ pub const MLFQ_LEVEL_BACKGROUND:  u32 = 3;
 pub const MLFQ_QUANTUM: [u32; MLFQ_LEVELS] = [5, 1, 2, 4];
 
 const BOOST_INTERVAL: u32 = 50;
-
 const BOOST_TARGET: u32 = MLFQ_LEVEL_INTERACTIVE;
 
-
+#[derive(Copy, Clone)]
 struct MlfqQueue {
     head:  *mut TaskStruct,
     tail:  *mut TaskStruct,
@@ -29,86 +29,123 @@ impl MlfqQueue {
         Self { head: ptr::null_mut(), tail: ptr::null_mut(), count: 0 }
     }
 
-    unsafe fn push(&mut self, task: *mut TaskStruct) {
-        (*task).queue_next = ptr::null_mut();
+    fn push(&mut self, task: &mut TaskStruct) {
+        let tp: *mut TaskStruct = task;
+        task.queue_next = ptr::null_mut();
         if self.tail.is_null() {
-            self.head = task;
-            self.tail = task;
+            self.head = tp;
+            self.tail = tp;
         } else {
-            (*self.tail).queue_next = task;
-            self.tail = task;
+            unsafe {
+                (*self.tail).queue_next = tp;
+            }
+            self.tail = tp;
         }
         self.count += 1;
     }
 
-    unsafe fn pop(&mut self) -> *mut TaskStruct {
-        if self.head.is_null() { return ptr::null_mut(); }
-        let t = self.head;
-        self.head = (*t).queue_next;
-        if self.head.is_null() { self.tail = ptr::null_mut(); }
-        (*t).queue_next = ptr::null_mut();
-        self.count -= 1;
-        t
+    fn pop(&mut self) -> *mut TaskStruct {
+        if self.head.is_null() {
+            return ptr::null_mut();
+        }
+        unsafe {
+            let t = self.head;
+            self.head = (*t).queue_next;
+            if self.head.is_null() {
+                self.tail = ptr::null_mut();
+            }
+            (*t).queue_next = ptr::null_mut();
+            self.count -= 1;
+            t
+        }
     }
 
-    unsafe fn remove(&mut self, task: *mut TaskStruct) {
-        let mut prev: *mut TaskStruct = ptr::null_mut();
-        let mut cur = self.head;
-        while !cur.is_null() {
-            if cur == task {
-                if prev.is_null() {
-                    self.head = (*task).queue_next;
-                } else {
-                    (*prev).queue_next = (*task).queue_next;
+    fn remove(&mut self, task: *mut TaskStruct) {
+        if task.is_null() {
+            return;
+        }
+        unsafe {
+            let mut prev: *mut TaskStruct = ptr::null_mut();
+            let mut cur = self.head;
+            while !cur.is_null() {
+                if cur == task {
+                    if prev.is_null() {
+                        self.head = (*task).queue_next;
+                    } else {
+                        (*prev).queue_next = (*task).queue_next;
+                    }
+                    if self.tail == task {
+                        self.tail = prev;
+                    }
+                    self.count -= 1;
+                    (*task).queue_next = ptr::null_mut();
+                    return;
                 }
-                if self.tail == task {
-                    self.tail = prev;
-                }
-                self.count -= 1;
-                (*task).queue_next = ptr::null_mut();
-                return;
+                prev = cur;
+                cur  = (*cur).queue_next;
             }
-            prev = cur;
-            cur  = (*cur).queue_next;
         }
     }
 }
 
-unsafe impl Send for MlfqQueue {}
-unsafe impl Sync for MlfqQueue {}
+struct MlfqState {
+    queues:        [MlfqQueue; MLFQ_LEVELS],
+    sleep_queue:   MlfqQueue,
+    boost_counter: u32,
+}
 
+/// Queue nodes are kernel `TaskStruct` pointers; all accesses go through `SCHEDULER_LOCK` or init.
+unsafe impl Sync for MlfqState {}
 
-static mut QUEUES: [MlfqQueue; MLFQ_LEVELS] = [
-    MlfqQueue::empty(),
-    MlfqQueue::empty(),
-    MlfqQueue::empty(),
-    MlfqQueue::empty(),
-];
+impl MlfqState {
+    const fn new() -> Self {
+        Self {
+            queues: [
+                MlfqQueue::empty(),
+                MlfqQueue::empty(),
+                MlfqQueue::empty(),
+                MlfqQueue::empty(),
+            ],
+            sleep_queue:   MlfqQueue::empty(),
+            boost_counter: 0,
+        }
+    }
+}
 
-static mut SLEEP_QUEUE: MlfqQueue = MlfqQueue::empty();
-
-static mut BOOST_COUNTER: u32 = 0;
+static MLFQ_STATE: SyncUnsafeCell<MlfqState> = SyncUnsafeCell::new(MlfqState::new());
 
 static SCHEDULE_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static REAP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-
-//Public api
-pub unsafe fn mlfq_init() {
-    for i in 0..MLFQ_LEVELS {
-        let q = ptr::addr_of_mut!(QUEUES[i]);
-        (*q).head  = ptr::null_mut();
-        (*q).tail  = ptr::null_mut();
-        (*q).count = 0;
-    }
-    ptr::addr_of_mut!(SLEEP_QUEUE).write(MlfqQueue::empty());
-    BOOST_COUNTER = 0;
+#[inline]
+fn mlfq_state_mut() -> *mut MlfqState {
+    MLFQ_STATE.get()
 }
 
-pub unsafe fn mlfq_enqueue_locked(task: *mut TaskStruct, level: u32) {
-    let level = level.min(MLFQ_LEVELS as u32 - 1) as usize;
-    (*task).priority = level as u32;
-    (*ptr::addr_of_mut!(QUEUES[level])).push(task);
+pub fn mlfq_init() {
+    unsafe {
+        let s = &mut *mlfq_state_mut();
+        for q in &mut s.queues {
+            q.head  = ptr::null_mut();
+            q.tail  = ptr::null_mut();
+            q.count = 0;
+        }
+        s.sleep_queue = MlfqQueue::empty();
+        s.boost_counter = 0;
+    }
+}
+
+pub fn mlfq_enqueue_locked(task: *mut TaskStruct, level: u32) {
+    if task.is_null() {
+        return;
+    }
+    unsafe {
+        let s = &mut *mlfq_state_mut();
+        let level = level.min(MLFQ_LEVELS as u32 - 1) as usize;
+        let t = &mut *task;
+        t.priority = level as u32;
+        s.queues[level].push(t);
+    }
 }
 
 #[no_mangle]
@@ -116,44 +153,68 @@ pub unsafe extern "C" fn sched_mlfq_enqueue_locked(task: *mut TaskStruct, level:
     mlfq_enqueue_locked(task, level);
 }
 
-pub unsafe fn mlfq_sleep_locked(task: *mut TaskStruct) {
-    (*ptr::addr_of_mut!(SLEEP_QUEUE)).push(task);
-}
-
-pub unsafe fn mlfq_remove_from_sleep(task: *mut TaskStruct) {
-    (*ptr::addr_of_mut!(SLEEP_QUEUE)).remove(task);
-}
-
-pub unsafe fn mlfq_remove(task: *mut TaskStruct) {
-    let level = (*task).priority.min(MLFQ_LEVELS as u32 - 1) as usize;
-    (*ptr::addr_of_mut!(QUEUES[level])).remove(task);
-}
-
-unsafe fn pick_next_task() -> *mut TaskStruct {
-    for i in 0..MLFQ_LEVELS {
-        let t = (*ptr::addr_of_mut!(QUEUES[i])).pop();
-        if !t.is_null() { return t; }
+pub fn mlfq_sleep_locked(task: *mut TaskStruct) {
+    if task.is_null() {
+        return;
     }
-    ptr::null_mut()
+    unsafe {
+        let s = &mut *mlfq_state_mut();
+        s.sleep_queue.push(&mut *task);
+    }
 }
 
-unsafe fn do_priority_boost() {
-    for level in 2..MLFQ_LEVELS {
-        loop {
-            let t = (*ptr::addr_of_mut!(QUEUES[level])).pop();
-            if t.is_null() { break; }
-            (*t).ticks_used = 0;
-            (*ptr::addr_of_mut!(QUEUES[BOOST_TARGET as usize])).push(t);
-            (*t).priority = BOOST_TARGET;
+pub fn mlfq_remove_from_sleep(task: *mut TaskStruct) {
+    unsafe {
+        let s = &mut *mlfq_state_mut();
+        s.sleep_queue.remove(task);
+    }
+}
+
+pub fn mlfq_remove(task: *mut TaskStruct) {
+    if task.is_null() {
+        return;
+    }
+    unsafe {
+        let s = &mut *mlfq_state_mut();
+        let level = (*task).priority.min(MLFQ_LEVELS as u32 - 1) as usize;
+        s.queues[level].remove(task);
+    }
+}
+
+fn pick_next_task() -> *mut TaskStruct {
+    unsafe {
+        let s = &mut *mlfq_state_mut();
+        for i in 0..MLFQ_LEVELS {
+            let t = s.queues[i].pop();
+            if !t.is_null() {
+                return t;
+            }
+        }
+        ptr::null_mut()
+    }
+}
+
+fn do_priority_boost() {
+    unsafe {
+        let s = &mut *mlfq_state_mut();
+        for level in 2..MLFQ_LEVELS {
+            loop {
+                let t = s.queues[level].pop();
+                if t.is_null() {
+                    break;
+                }
+                (*t).ticks_used = 0;
+                (*t).priority = BOOST_TARGET;
+                s.queues[BOOST_TARGET as usize].push(&mut *t);
+            }
+        }
+        let cur = crate::task::current_task;
+        if !cur.is_null() && (*cur).priority > BOOST_TARGET && (*cur).priority != MLFQ_LEVEL_RT {
+            (*cur).priority   = BOOST_TARGET;
+            (*cur).ticks_used = 0;
         }
     }
-    let cur = crate::task::current_task;
-    if !cur.is_null() && (*cur).priority > BOOST_TARGET && (*cur).priority != MLFQ_LEVEL_RT {
-        (*cur).priority  = BOOST_TARGET;
-        (*cur).ticks_used = 0;
-    }
 }
-
 
 #[no_mangle]
 pub unsafe extern "C" fn schedule() {
@@ -164,8 +225,6 @@ pub unsafe extern "C" fn schedule() {
         return;
     }
 
-    // Periodically reap zombie tasks whose parent is gone or already called waitpid().
-    // Called here before acquiring SCHEDULER_LOCK so task_reap() can acquire it freely.
     if REAP_COUNTER.fetch_add(1, Ordering::Relaxed) % 128 == 127 {
         crate::task::task_reap();
     }
@@ -227,10 +286,8 @@ pub unsafe extern "C" fn schedule() {
         TaskState::Sleeping => {
             mlfq_sleep_locked(prev);
         }
-        TaskState::Waiting | TaskState::Zombie => {
-        }
-        TaskState::Ready => {
-        }
+        TaskState::Waiting | TaskState::Zombie => {}
+        TaskState::Ready => {}
     }
 
     (*next).state = TaskState::Running;
@@ -272,32 +329,35 @@ pub unsafe extern "C" fn schedule() {
     }
 }
 
-unsafe fn wake_expired_sleepers() {
+fn wake_expired_sleepers() {
     let now = crate::timer_wheel::timer_current_tick();
-    let sq = ptr::addr_of_mut!(SLEEP_QUEUE);
-    let mut prev: *mut TaskStruct = ptr::null_mut();
-    let mut cur = (*sq).head;
+    unsafe {
+        let s = &mut *mlfq_state_mut();
+        let sq = &mut s.sleep_queue;
+        let mut prev: *mut TaskStruct = ptr::null_mut();
+        let mut cur = sq.head;
 
-    while !cur.is_null() {
-        let next = (*cur).queue_next;
-        if (*cur).sleep_until != 0 && now >= (*cur).sleep_until {
-            if prev.is_null() {
-                (*sq).head = next;
+        while !cur.is_null() {
+            let next = (*cur).queue_next;
+            if (*cur).sleep_until != 0 && now >= (*cur).sleep_until {
+                if prev.is_null() {
+                    sq.head = next;
+                } else {
+                    (*prev).queue_next = next;
+                }
+                if sq.tail == cur {
+                    sq.tail = prev;
+                }
+                sq.count -= 1;
+
+                (*cur).sleep_until = 0;
+                (*cur).state = TaskState::Ready;
+                mlfq_enqueue_locked(cur, (*cur).priority);
             } else {
-                (*prev).queue_next = next;
+                prev = cur;
             }
-            if (*sq).tail == cur {
-                (*sq).tail = prev;
-            }
-            (*sq).count -= 1;
-
-            (*cur).sleep_until = 0;
-            (*cur).state = TaskState::Ready;
-            mlfq_enqueue_locked(cur, (*cur).priority);
-        } else {
-            prev = cur;
+            cur = next;
         }
-        cur = next;
     }
 }
 
@@ -323,10 +383,13 @@ pub unsafe extern "C" fn on_timer_tick() {
         (*cur).ticks_used = 0;
     }
 
-    BOOST_COUNTER += 1;
-    if BOOST_COUNTER >= BOOST_INTERVAL {
-        BOOST_COUNTER = 0;
-        do_priority_boost();
+    {
+        let s = &mut *mlfq_state_mut();
+        s.boost_counter = s.boost_counter.saturating_add(1);
+        if s.boost_counter >= BOOST_INTERVAL {
+            s.boost_counter = 0;
+            do_priority_boost();
+        }
     }
 
     irq_spinlock_release(&raw mut SCHEDULER_LOCK);
@@ -345,11 +408,13 @@ pub unsafe extern "C" fn on_timer_tick() {
 
 #[no_mangle]
 pub unsafe extern "C" fn mlfq_wake_task(task: *mut TaskStruct) {
-    if task.is_null() { return; }
+    if task.is_null() {
+        return;
+    }
     irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
     match (*task).state {
         TaskState::Sleeping => {
-            (*ptr::addr_of_mut!(SLEEP_QUEUE)).remove(task);
+            mlfq_remove_from_sleep(task);
             (*task).state = TaskState::Ready;
             mlfq_enqueue_locked(task, (*task).priority);
         }
@@ -357,19 +422,25 @@ pub unsafe extern "C" fn mlfq_wake_task(task: *mut TaskStruct) {
             (*task).state = TaskState::Ready;
             mlfq_enqueue_locked(task, (*task).priority);
         }
-        _ => {} 
+        _ => {}
     }
     irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 }
 
-pub unsafe fn task_voluntary_block(task: *mut TaskStruct, new_state: TaskState) {
-    let quantum = MLFQ_QUANTUM[(*task).priority.min(MLFQ_LEVELS as u32 - 1) as usize];
-    if (*task).ticks_used < quantum / 2 + 1 && (*task).priority > MLFQ_LEVEL_INTERACTIVE {
-        (*task).priority -= 1;
+pub fn task_voluntary_block(task: *mut TaskStruct, new_state: TaskState) {
+    if task.is_null() {
+        return;
     }
-    (*task).ticks_used = 0;
-    (*task).state = new_state;
-    if matches!(new_state, TaskState::Sleeping) {
-        mlfq_sleep_locked(task);
+    unsafe {
+        let t = &mut *task;
+        let quantum = MLFQ_QUANTUM[t.priority.min(MLFQ_LEVELS as u32 - 1) as usize];
+        if t.ticks_used < quantum / 2 + 1 && t.priority > MLFQ_LEVEL_INTERACTIVE {
+            t.priority -= 1;
+        }
+        t.ticks_used = 0;
+        t.state = new_state;
+        if matches!(new_state, TaskState::Sleeping) {
+            mlfq_sleep_locked(task);
+        }
     }
 }

@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(sync_unsafe_cell)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
