@@ -6,8 +6,7 @@ use crate::mlfq;
 use crate::timer_wheel;
 
 pub const MAX_FD:     usize = 256;
-pub const NSIG:       usize = 13;
-pub const TASK_SHM_MAX: usize = 16;
+pub use cact_sync::task_abi::{NSIG, TASK_SHM_MAX};
 
 pub const USER_CODE_SEL: u32 = 0x1B;
 pub const USER_DATA_SEL: u32 = 0x23;
@@ -43,107 +42,9 @@ pub const EXEC_MAX_STRLEN: usize = 4096;
 pub const USER_STACK_PAGES: u32 = 4;
 pub const USER_STACK_BYTES: u32 = USER_STACK_PAGES * PAGE_SIZE;
 
-
-#[repr(u32)]
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum TaskState {
-    Ready    = 0,
-    Running  = 1,
-    Sleeping = 2,
-    Zombie   = 3,
-    Waiting  = 4,
-}
-
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct TaskShmAttach {
-    pub shm_id:    u32,
-    pub shm_vaddr: u32,
-}
+pub use cact_sync::task_abi::{TaskShmAttach, TaskState, TaskStruct};
 
 pub use crate::ffi::VfsNode;
-
-
-#[repr(C)]
-pub struct TaskStruct {
-    pub esp:            u32,
-    // offset 4
-    pub pid:            u32,
-    // offset 8
-    pub state:          TaskState,
-    // offset 12
-    pub is_kernel:      u8,
-    pub _pad0:          [u8; 3],   // выравнивание до 16
-    // offset 16 — используется в interrupt.asm как [eax+16]
-    pub stack_base:     *mut c_void,
-    // offset 20
-    pub ustack_phys:    *mut c_void,
-    // offset 24
-    pub ustack_virt:    u32,
-    // offset 28 — используется в interrupt.asm как [eax+28]
-    pub page_directory: *mut u32,
-    // offset 32
-    pub next:           *mut TaskStruct,
-    // offset 36
-    pub queue_next:     *mut TaskStruct,
-
-    // === MLFQ-поля (не трогаются из C/asm) ===
-    // offset 40
-    pub priority:       u32,    // уровень MLFQ 0-3
-    // offset 44
-    pub time_slice:     u32,    // квант в тиках (не используется напрямую)
-    // offset 48
-    pub ticks_used:     u32,    // тиков использовано за текущий квант
-
-    pub pending_signals:    u32,
-    pub signal_mask:        u32,
-    pub saved_signal_mask:  u32,
-    pub in_sigsuspend:      u8,
-    pub _pad1:              [u8; 3],
-    pub signal_handlers:    [u32; NSIG],
-    pub sigreturn_trampoline: u32,
-
-    pub alarm_ticks:        u32,   // абсолютный тик для SIGALRM (0=нет)
-    pub itimer_value:       u32,   // следующий fire абс. тик
-    pub itimer_interval:    u32,   // интервал перезарядки
-
-    pub fds:                *mut ffi::TaskFdTable,
-
-    pub mm:                 ProcPageTracker,
-    pub mmap_table:         *mut MmapTable,
-    pub dyn_ctx:            *mut DynCtx,
-
-    pub parent_pid:         u32,
-    pub exit_code:          i32,
-    pub wait_for_pid:       u32,
-
-    pub brk_start:          u32,
-    pub brk_current:        u32,
-
-    pub sleep_until:        u32,
-
-    pub cwd:                [u8; 256],
-
-    pub uid:                u32,
-    pub gid:                u32,
-    pub euid:               u32,
-    pub egid:               u32,
-
-    pub shm_attachments:    [TaskShmAttach; TASK_SHM_MAX],
-
-    pub wait_next:          *mut TaskStruct,
-
-    pub pgid:  u32,            /* process group ID */
-    pub sid:   u32,            /* session ID */
-    pub umask: u32,            /* file creation mask */
-    pub root:  *mut VfsNode,   /* chroot root (NULL = global vfs_root) */
-    pub ustack_phys_extra: [*mut c_void; 3],
-}
-
-unsafe impl Send for TaskStruct {}
-unsafe impl Sync for TaskStruct {}
-
 
 #[no_mangle]
 pub static mut current_task: *mut TaskStruct = ptr::null_mut();

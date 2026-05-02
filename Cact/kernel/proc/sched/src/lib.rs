@@ -4,10 +4,13 @@
 #![allow(non_upper_case_globals)]
 #![allow(clippy::missing_safety_doc)]
 pub mod ffi;
-pub mod sync;
 pub mod task;
 pub mod mlfq;
 pub mod timer_wheel;
+
+pub mod sync {
+    pub use cact_sync::*;
+}
 
 #[panic_handler]
 fn panic_handler(_info: &core::panic::PanicInfo) -> ! {
@@ -21,7 +24,7 @@ fn panic_handler(_info: &core::panic::PanicInfo) -> ! {
 
 const _ABI_CHECK: () = {
     use core::mem::offset_of;
-    use task::TaskStruct;
+    use cact_sync::task_abi::TaskStruct;
 
     assert!(offset_of!(TaskStruct, esp)            ==  0, "esp offset mismatch");
     assert!(offset_of!(TaskStruct, pid)            ==  4, "pid offset mismatch");

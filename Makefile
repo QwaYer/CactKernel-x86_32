@@ -23,10 +23,12 @@ KERN_ELF_DIR     = Cact/kernel/elf
 KERN_DYNLINK_DIR = Cact/kernel/elf/dynlink
 KERN_MEM_DIR     = Cact/kernel/memory
 KERN_PROC_DIR    = Cact/kernel/proc
+KERN_SYNC_DIR    = Cact/kernel/sync
 SCHED_DIR    = Cact/kernel/proc/sched
+SCHED_RS_SOURCES := $(shell find $(SCHED_DIR)/src -type f -name '*.rs' 2>/dev/null | LC_ALL=C sort)
+CACT_SYNC_RS := $(shell find $(KERN_SYNC_DIR)/src -type f -name '*.rs' 2>/dev/null | LC_ALL=C sort)
 SCHED_TARGET = $(SCHED_DIR)/target/i686-cact/release/libsched.a
 CARGO        = cargo +nightly
-KERN_SYNC_DIR    = Cact/kernel/sync
 
 # Rust memory manager
 RUST_MM_DIR  = Cact/kernel/memory/rust_mm
@@ -340,7 +342,7 @@ $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(SCHED_TARGET): $(wildcard $(SCHED_DIR)/src/*.rs) $(SCHED_DIR)/Cargo.toml $(SCHED_DIR)/targets/i686-cact.json
+$(SCHED_TARGET): $(SCHED_RS_SOURCES) $(CACT_SYNC_RS) $(SCHED_DIR)/Cargo.toml $(SCHED_DIR)/targets/i686-cact.json $(KERN_SYNC_DIR)/Cargo.toml $(KERN_SYNC_DIR)/targets/i686-cact.json
 	cd $(SCHED_DIR) && $(CARGO) build --release \
 		-Z json-target-spec \
 		-Z build-std=core,compiler_builtins \
@@ -517,6 +519,7 @@ $(BUILD_DIR)/ksocket.o: $(NET_SOCKET_DIR)/socket.c
 clean:
 	rm -rf $(BUILD_DIR)
 	cd $(SCHED_DIR) && cargo +nightly clean
+	cd $(KERN_SYNC_DIR) && cargo +nightly clean
 	cd $(RUST_MM_DIR) && cargo clean
 
 .PHONY: all clean sched FORCE

@@ -111,6 +111,11 @@ pub unsafe fn mlfq_enqueue_locked(task: *mut TaskStruct, level: u32) {
     (*ptr::addr_of_mut!(QUEUES[level])).push(task);
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn sched_mlfq_enqueue_locked(task: *mut TaskStruct, level: u32) {
+    mlfq_enqueue_locked(task, level);
+}
+
 pub unsafe fn mlfq_sleep_locked(task: *mut TaskStruct) {
     (*ptr::addr_of_mut!(SLEEP_QUEUE)).push(task);
 }

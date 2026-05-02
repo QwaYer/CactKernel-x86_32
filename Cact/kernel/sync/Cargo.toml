@@ -1,14 +1,11 @@
 [package]
-name    = "sched"
+name    = "cact_sync"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
-cact_sync = { path = "../../sync" }
-
 [lib]
-name       = "sched"
-crate-type = ["staticlib"]
+name       = "cact_sync"
+crate-type = ["lib"]
 
 [profile.release]
 panic           = "abort"

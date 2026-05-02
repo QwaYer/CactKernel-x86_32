@@ -5,10 +5,3 @@ version = 4
 [[package]]
 name = "cact_sync"
 version = "0.1.0"
-
-[[package]]
-name = "sched"
-version = "0.1.0"
-dependencies = [
- "cact_sync",
-]
