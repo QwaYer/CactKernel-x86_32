@@ -4,29 +4,32 @@
 #include <stdint.h>
 #include "pci.h"
 
+// Scanner limits
 #define MAX_PCI_DEVICES          64
 #define PCI_MAX_DEV              32
 #define PCI_MAX_FN               8
 
+// Header type fields
+#define PCI_HEADER_TYPE_NORMAL   0x00   // standard device
+#define PCI_HEADER_TYPE_BRIDGE   0x01   // PCI-to-PCI bridge
+#define PCI_HEADER_MULTIFUNCTION 0x80   // bit 7: multi-function device
 
-#define PCI_HEADER_TYPE_NORMAL   0x00
-#define PCI_HEADER_TYPE_BRIDGE   0x01   
-#define PCI_HEADER_MULTIFUNCTION 0x80
-
-
+// Bridge class codes
 #define PCI_CLASS_BRIDGE         0x06
 #define PCI_SUBCLASS_PCI_BRIDGE  0x04
 
+// BAR type flags
+#define PCI_BAR_IO               0x01   // I/O space BAR
+#define PCI_BAR_MEM_TYPE_32      0x00   // 32-bit memory BAR
 
-#define PCI_BAR_IO               0x01
-#define PCI_BAR_MEM_TYPE_32      0x00
-
+// Decoded Base Address Register descriptor
 typedef struct {
     uint32_t base;
     uint32_t size;
-    uint8_t  is_io;   
+    uint8_t  is_io;      // 1 = I/O port, 0 = MMIO
 } pci_bar_t;
 
+// Enumerated PCI device — populated during bus scan
 typedef struct pci_device {
     uint8_t   bus, dev, fn;
 
@@ -38,20 +41,26 @@ typedef struct pci_device {
     uint8_t   revision;
     uint8_t   header_type;
 
-    pci_bar_t bars[6];   
+    pci_bar_t bars[6];   // up to 6 BARs (some may be unused)
 
     uint8_t   irq_line;
     uint8_t   irq_pin;
 
-    struct pci_device *next;  
+    struct pci_device *next;   // global device list
 } pci_device_t;
 
+// Global device list — populated by pci_enumerate()
 extern pci_device_t *pci_device_list;
 extern uint32_t      pci_device_count;
 
+// Walk the PCI bus hierarchy and populate pci_device_list
 void          pci_enumerate(void);
+
+// Search by class/subclass or vendor/device ID; returns NULL if not found
 pci_device_t *pci_find_by_class(uint8_t class_code, uint8_t subclass);
 pci_device_t *pci_find_by_id(uint16_t vendor_id, uint16_t device_id);
+
+// Debug: dump all enumerated devices
 void          pci_enum_dump(void);
 
-#endif 
+#endif

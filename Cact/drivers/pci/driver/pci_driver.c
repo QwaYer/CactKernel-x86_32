@@ -3,9 +3,12 @@
 #include "kernel.h"
 #include "klib.h"
 
+// Singly-linked list of registered drivers
 static pci_driver_t *driver_list  = NULL;
 static uint32_t      driver_count = 0;
 
+// Check whether a driver claims a given PCI device.
+// PCI_ANY_ID (0xFFFF) acts as a wildcard for vendor/device/class/subclass.
 static int driver_matches(const pci_driver_t *drv, const pci_device_t *dev) {
     if (drv->vendor_id  != PCI_ANY_ID          && drv->vendor_id  != dev->vendor_id)  return 0;
     if (drv->device_id  != PCI_ANY_ID          && drv->device_id  != dev->device_id)  return 0;
@@ -14,8 +17,7 @@ static int driver_matches(const pci_driver_t *drv, const pci_device_t *dev) {
     return 1;
 }
 
-
-//Public api
+// Register a PCI driver. Duplicate names are rejected.
 int pci_register_driver(pci_driver_t *drv) {
     if (!drv || !drv->probe) return -1;
     if (driver_count >= MAX_PCI_DRIVERS) {
@@ -34,6 +36,7 @@ int pci_register_driver(pci_driver_t *drv) {
     return 0;
 }
 
+// Unregister a PCI driver (must match exact pointer).
 int pci_unregister_driver(pci_driver_t *drv) {
     pci_driver_t **pp = &driver_list;
     while (*pp) {
@@ -47,10 +50,13 @@ int pci_unregister_driver(pci_driver_t *drv) {
     return -1;
 }
 
+// Walk the driver list and invoke the first matching probe.
+// If the driver has a module_path but no probe yet, attempt lazy module load.
 void pci_driver_match(pci_device_t *dev) {
     for (pci_driver_t *drv = driver_list; drv; drv = drv->next) {
         if (!driver_matches(drv, dev)) continue;
 
+        // Lazy-load module if path is set and probe is not yet populated
         if (drv->module_path && !drv->probe) {
             if (pci_load_module(drv->module_path, drv) != 0) {
                 kprint("[DRV] Module load failed: ");
@@ -62,10 +68,11 @@ void pci_driver_match(pci_device_t *dev) {
         if (drv->probe(dev) != 0)
             kprint("[DRV] probe() failed\n");
 
-        return;
+        return;  // first match wins
     }
 }
 
+// Dump all registered drivers to debug output.
 void pci_driver_dump(void) {
     kprint("[DRV] Registered drivers:\n");
     for (pci_driver_t *d = driver_list; d; d = d->next) {

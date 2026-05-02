@@ -1,16 +1,19 @@
 #include "pci.h"
 #include "kernel.h"
 
+// Read a 32-bit value from PCI configuration space.
+// reg must be DWORD-aligned (lower 2 bits are masked off).
 uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg) {
-    uint32_t addr = (1u << 31)
+    uint32_t addr = (1u << 31)              // enable bit
                   | ((uint32_t)bus  << 16)
                   | ((uint32_t)dev  << 11)
                   | ((uint32_t)fn   <<  8)
-                  | (reg & 0xFC);
+                  | (reg & 0xFC);           // DWORD-aligned
     port_dword_out(PCI_CONFIG_ADDRESS, addr);
     return port_dword_in(PCI_CONFIG_DATA);
 }
 
+// Write a 32-bit value to PCI configuration space.
 void pci_write32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg, uint32_t val) {
     uint32_t addr = (1u << 31)
                   | ((uint32_t)bus  << 16)
@@ -21,6 +24,8 @@ void pci_write32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg, uint32_t val
     port_dword_out(PCI_CONFIG_DATA, val);
 }
 
+// Probe for PCI Mechanism #1 by writing the enable bit and reading back.
+// Returns 0 if mechanism is present, 1 otherwise.
 int search_pci(void) {
     kprint("[PCI] probing config space (addr=0xCF8 data=0xCFC)\n");
     port_dword_out(PCI_CONFIG_ADDRESS, 0x80000000);

@@ -1,14 +1,16 @@
-#include "pci_enum.h"
 #include "pci_driver.h"
 #include "kernel.h"
 #include "klib.h"
 
+// Static device pool — avoids dynamic allocation during early boot
 static pci_device_t  pool[MAX_PCI_DEVICES];
 static uint32_t      pool_idx = 0;
 
+// Global device list (built during enumeration, consumed by drivers)
 pci_device_t *pci_device_list  = NULL;
 uint32_t      pci_device_count = 0;
 
+// Allocate a device descriptor from the static pool
 static pci_device_t *alloc_dev(void) {
     if (pool_idx >= MAX_PCI_DEVICES) return NULL;
     pci_device_t *d = &pool[pool_idx++];
@@ -16,6 +18,7 @@ static pci_device_t *alloc_dev(void) {
     return d;
 }
 
+// Append device to the tail of the global list
 static void list_push(pci_device_t *d) {
     d->next = NULL;
     if (!pci_device_list) {
@@ -28,21 +31,26 @@ static void list_push(pci_device_t *d) {
     pci_device_count++;
 }
 
+// Probe a device's BARs: write all-ones, read back mask, determine base/size/type.
+// Skips 64-bit BARs (type != PCI_BAR_MEM_TYPE_32) by consuming the next slot.
 static void decode_bars(pci_device_t *d) {
     for (int i = 0; i < 6; i++) {
         uint8_t  off  = 0x10 + i * 4;
         uint32_t orig = pci_read32(d->bus, d->dev, d->fn, off);
         if (!orig) continue;
 
+        // BAR sizing: write ~0, read mask, restore original
         pci_write32(d->bus, d->dev, d->fn, off, 0xFFFFFFFF);
         uint32_t mask = pci_read32(d->bus, d->dev, d->fn, off);
         pci_write32(d->bus, d->dev, d->fn, off, orig);
 
         if (orig & PCI_BAR_IO) {
+            // I/O BAR — 4-byte aligned, lower 16 bits of size
             d->bars[i].is_io = 1;
             d->bars[i].base  = orig & 0xFFFC;
             d->bars[i].size  = (~(mask & 0xFFFC) + 1) & 0xFFFF;
         } else {
+            // Memory BAR — 32-bit only; skip 64-bit BARs
             uint8_t type = (orig >> 1) & 0x3;
             if (type != PCI_BAR_MEM_TYPE_32) { i++; continue; }
             d->bars[i].is_io = 0;
@@ -52,12 +60,14 @@ static void decode_bars(pci_device_t *d) {
     }
 }
 
+// Forward declarations for mutual recursion (probe_fn ↔ scan_bus)
 static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn);
 static void scan_bus(uint8_t bus);
 
+// Probe a single PCI function: read IDs, decode BARs, match drivers, recurse bridges
 static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     uint32_t id = pci_read32(bus, dev, fn, 0x00);
-    if (id == 0xFFFFFFFF || id == 0x00000000) return;
+    if (id == 0xFFFFFFFF || id == 0x00000000) return;  // absent function
 
     pci_device_t *d = alloc_dev();
     if (!d) { kprint("[PCI] Device pool full!\n"); return; }
@@ -79,6 +89,7 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     d->irq_line  = (uint8_t) irq;
     d->irq_pin   = (uint8_t)(irq >> 8);
 
+    // Only decode BARs for normal (non-bridge) headers
     if ((d->header_type & 0x7F) == PCI_HEADER_TYPE_NORMAL)
         decode_bars(d);
 
@@ -92,25 +103,30 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
 
     list_push(d);
 
+    // If this is a PCI-to-PCI bridge, recursively scan the secondary bus
     if (d->class_code == PCI_CLASS_BRIDGE     &&
         d->subclass   == PCI_SUBCLASS_PCI_BRIDGE &&
         (d->header_type & 0x7F) == PCI_HEADER_TYPE_BRIDGE)
     {
         uint32_t br  = pci_read32(bus, dev, fn, 0x18);
-        uint8_t  sec = (uint8_t)(br >> 8);
+        uint8_t  sec = (uint8_t)(br >> 8);          // secondary bus number
         if (sec) scan_bus(sec);
     }
 
+    // Match and probe registered drivers for this device
     pci_driver_match(d);
 }
 
+// Scan all functions on a given bus
 static void scan_bus(uint8_t bus) {
     for (uint8_t dev = 0; dev < PCI_MAX_DEV; dev++) {
+        // Quick check for device presence by reading vendor/device ID
         if (pci_read32(bus, dev, 0, 0x00) == 0xFFFFFFFF) continue;
         if (pci_read32(bus, dev, 0, 0x00) == 0x00000000) continue;
 
         probe_fn(bus, dev, 0);
 
+        // Check header type for multi-function device
         uint32_t hdr = pci_read32(bus, dev, 0, 0x0C);
         if ((uint8_t)(hdr >> 16) & PCI_HEADER_MULTIFUNCTION) {
             for (uint8_t fn = 1; fn < PCI_MAX_FN; fn++) {
@@ -122,7 +138,7 @@ static void scan_bus(uint8_t bus) {
     }
 }
 
-//Public api
+// Entry point: determine host bridge type, then scan the PCI hierarchy
 void pci_enumerate(void) {
     uint32_t hdr0 = pci_read32(0, 0, 0, 0x0C);
     if (!((uint8_t)(hdr0 >> 16) & PCI_HEADER_MULTIFUNCTION)) {
@@ -142,18 +158,21 @@ void pci_enumerate(void) {
     klog(LOG_OK, "PCI enumeration complete");
 }
 
+// Find first device matching class_code + subclass; returns NULL if none
 pci_device_t *pci_find_by_class(uint8_t cc, uint8_t sc) {
     for (pci_device_t *d = pci_device_list; d; d = d->next)
         if (d->class_code == cc && d->subclass == sc) return d;
     return NULL;
 }
 
+// Find first device matching vendor ID + device ID; returns NULL if none
 pci_device_t *pci_find_by_id(uint16_t vid, uint16_t did) {
     for (pci_device_t *d = pci_device_list; d; d = d->next)
         if (d->vendor_id == vid && d->device_id == did) return d;
     return NULL;
 }
 
+// Debug: print all enumerated PCI devices
 void pci_enum_dump(void) {
     kprint("[PCI] Device list:\n");
     for (pci_device_t *d = pci_device_list; d; d = d->next) {
