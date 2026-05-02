@@ -3,9 +3,11 @@
 
 #include <stdint.h>
 
+// Block device layer limits
 #define BLKDEV_MAX       8
 #define BLKDEV_NAME_MAX  16
 
+// Generic block device descriptor
 typedef struct blkdev {
     char     name[BLKDEV_NAME_MAX];
     uint32_t max_lba;
@@ -14,7 +16,7 @@ typedef struct blkdev {
     void (*write_sector)(uint32_t lba, uint8_t *buf);
 } blkdev_t;
 
-//public api
+// Public API
 void      blkdev_init         (void);
 blkdev_t *blkdev_get_boot     (void);
 blkdev_t *blkdev_find         (const char *name);

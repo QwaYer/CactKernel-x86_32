@@ -5,10 +5,12 @@
 #include "nvme.h"
 #include "ahci.h"
 
+// Static device table and boot device pointer
 static blkdev_t devices[BLKDEV_MAX];
 static int      dev_count = 0;
 static blkdev_t *boot_dev = 0;
 
+// Register a new block device in the static table
 static blkdev_t *_add(const char *name,
                       void (*rd)(uint32_t, uint8_t*),
                       void (*wr)(uint32_t, uint8_t*),
@@ -26,6 +28,7 @@ static blkdev_t *_add(const char *name,
     return d;
 }
 
+// Probe NVMe controller and register nvme0 if ready
 static void _probe_nvme(void) {
     extern int nvme_is_ready(void);
     extern uint32_t nvme_get_max_lba(void);
@@ -41,14 +44,17 @@ static void _probe_nvme(void) {
     if (d) boot_dev = d;
 }
 
+// AHCI read wrapper — queries first active port on each call (safe for init)
 static void _ahci_rd(uint32_t lba, uint8_t *buf) {
     ahci_read_sector((uint32_t)ahci_first_port(), lba, buf);
 }
 
+// AHCI write wrapper — see _ahci_rd
 static void _ahci_wr(uint32_t lba, uint8_t *buf) {
     ahci_write_sector((uint32_t)ahci_first_port(), lba, buf);
 }
 
+// Probe AHCI controller and register sda if a port is active
 static void _probe_ahci(void) {
     ahci_init();
     if (ahci_first_port() < 0) {
@@ -64,7 +70,7 @@ static void _probe_ahci(void) {
     if (d && !boot_dev) boot_dev = d;
 }
 
-//public api
+// Probe AHCI then NVMe; first registered device becomes boot_dev
 void blkdev_init(void) {
     kprint("[BLKDEV] probing AHCI (SATA)\n");
     dev_count = 0;
@@ -95,10 +101,12 @@ void blkdev_init(void) {
     }
 }
 
+// Return the boot device (first successfully probed drive)
 blkdev_t *blkdev_get_boot(void) {
     return boot_dev;
 }
 
+// Find a device by name (linear scan), returns NULL if not found
 blkdev_t *blkdev_find(const char *name) {
     for (int i = 0; i < dev_count; i++)
         if (strcmp(devices[i].name, (char*)name) == 0)
@@ -106,10 +114,12 @@ blkdev_t *blkdev_find(const char *name) {
     return 0;
 }
 
+// Return number of registered block devices
 int blkdev_count(void) {
     return dev_count;
 }
 
+// Print all registered devices with LBA and boot flag
 void blkdev_dump(void) {
     kprint("[blkdev] Devices:\n");
     char b[16];
@@ -121,6 +131,7 @@ void blkdev_dump(void) {
     }
 }
 
+// Read a sector from the boot device (zeroes buffer if no device)
 void blkdev_read_sector(uint32_t lba, uint8_t *buf) {
     if (!boot_dev) {
         kprint("[blkdev] no boot device for read\n");
@@ -130,6 +141,7 @@ void blkdev_read_sector(uint32_t lba, uint8_t *buf) {
     boot_dev->read_sector(lba, buf);
 }
 
+// Write a sector to the boot device (no-op if no device)
 void blkdev_write_sector(uint32_t lba, uint8_t *buf) {
     if (!boot_dev) {
         kprint("[blkdev] no boot device for write\n");
