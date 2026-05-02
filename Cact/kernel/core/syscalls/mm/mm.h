@@ -7,12 +7,15 @@
 #include "mmap.h"
 #include "mod.h"
 
+// mmap protection flags
 #ifndef PROT_READ
 #define PROT_READ  0x1
 #endif
 #ifndef PROT_WRITE
 #define PROT_WRITE 0x2
 #endif
+
+// mmap mapping flags
 #ifndef MAP_SHARED
 #define MAP_SHARED  0x01
 #endif
@@ -29,9 +32,10 @@
 #define MAP_FAILED  ((void*)-1)
 #endif
 
+// Memory management syscalls
 int sys_brk(struct syscall_frame* regs);
 int sys_mmap(struct syscall_frame* regs);
 int sys_munmap(struct syscall_frame* regs);
 int sys_mprotect(struct syscall_frame* regs);
 
-#endif /* SC_MM_H */
+#endif 

@@ -1,8 +1,9 @@
 #include "net.h"
-#include <net.h>       /* ядерные ntohs/htonl/ntohl/htons/MY_IP */
+#include <net.h>       // kernel-internal ntohs/htonl/ntohl/htons/MY_IP
 #include "validate.h"
 #include "helper.h"
 
+// socket() — create a new socket, allocate an fd for it
 int sys_socket(struct syscall_frame* regs) {
     int domain   = (int)regs->ebx;
     int type     = (int)regs->ecx;
@@ -12,7 +13,7 @@ int sys_socket(struct syscall_frame* regs) {
     vfs_node_t* node = ksock_create(domain, type, protocol);
     if (!node) return -1;
 
-    int fd = alloc_fd(node);
+    int fd = alloc_fd(node);   // find free fd, increment VFS refcount
     if (fd < 0) {
         close_vfs(node);
         return -1;
@@ -20,6 +21,7 @@ int sys_socket(struct syscall_frame* regs) {
     return fd;
 }
 
+// bind() — assign a local address and port to a socket
 int sys_bind(struct syscall_frame* regs) {
     int fd = (int)regs->ebx;
     struct sockaddr_in* addr = (struct sockaddr_in*)regs->ecx;
@@ -57,6 +59,7 @@ int sys_bind(struct syscall_frame* regs) {
     return -1;
 }
 
+// connect() — initiate a TCP connection to a remote address
 int sys_connect(struct syscall_frame* regs) {
     int fd = (int)regs->ebx;
     struct sockaddr_in* addr = (struct sockaddr_in*)regs->ecx;
@@ -76,6 +79,7 @@ int sys_connect(struct syscall_frame* regs) {
     return tcp_connect(ks->proto_idx, dst_ip, dst_port);
 }
 
+// listen() — mark a TCP socket as passive, ready to accept connections
 int sys_listen(struct syscall_frame* regs) {
     int fd = (int)regs->ebx;
 
@@ -93,6 +97,7 @@ int sys_listen(struct syscall_frame* regs) {
     return tcp_listen(ks->proto_idx, s->local_port);
 }
 
+// accept() — accept an incoming TCP connection, return a new fd
 int sys_accept(struct syscall_frame* regs) {
     int fd = (int)regs->ebx;
     struct sockaddr_in* peer_addr    = (struct sockaddr_in*)regs->ecx;
@@ -121,6 +126,7 @@ int sys_accept(struct syscall_frame* regs) {
     return new_fd;
 }
 
+// send() — send data on a connected socket
 int sys_send(struct syscall_frame* regs) {
     int      fd  = (int)regs->ebx;
     char*    buf = (char*)regs->ecx;
@@ -136,6 +142,7 @@ int sys_send(struct syscall_frame* regs) {
     return write_vfs(node, 0, len, buf);
 }
 
+// recv() — receive data from a connected socket
 int sys_recv(struct syscall_frame* regs) {
     int      fd  = (int)regs->ebx;
     char*    buf = (char*)regs->ecx;
@@ -151,6 +158,7 @@ int sys_recv(struct syscall_frame* regs) {
     return read_vfs(node, 0, len, buf);
 }
 
+// sendto() — send a UDP datagram to a specific address
 int sys_sendto(struct syscall_frame* regs) {
     sendto_args_t* args = (sendto_args_t*)regs->ebx;
     if (!validate_user_ptr(args, sizeof(sendto_args_t))) return -1;
@@ -183,6 +191,7 @@ int sys_sendto(struct syscall_frame* regs) {
     return -1;
 }
 
+// recvfrom() — receive a UDP datagram with source address
 int sys_recvfrom(struct syscall_frame* regs) {
     recvfrom_args_t* args = (recvfrom_args_t*)regs->ebx;
     if (!validate_user_ptr(args, sizeof(recvfrom_args_t))) return -1;
@@ -230,6 +239,7 @@ int sys_recvfrom(struct syscall_frame* regs) {
     return ret;
 }
 
+// shutdown() — shut down part or all of a socket connection
 int sys_shutdown(struct syscall_frame* regs) {
     int fd  = (int)regs->ebx;
     int how = (int)regs->ecx;
@@ -243,6 +253,7 @@ int sys_shutdown(struct syscall_frame* regs) {
     return ksock_shutdown(node, how);
 }
 
+// setsockopt() — set socket options
 int sys_setsockopt(struct syscall_frame* regs) {
     setsockopt_args_t* args = (setsockopt_args_t*)regs->ebx;
     if (!validate_user_ptr(args, sizeof(setsockopt_args_t))) return -1;
@@ -293,6 +304,7 @@ int sys_setsockopt(struct syscall_frame* regs) {
     return -1;
 }
 
+// getsockopt() — get socket options
 int sys_getsockopt(struct syscall_frame* regs) {
     getsockopt_args_t* args = (getsockopt_args_t*)regs->ebx;
     if (!validate_user_ptr(args, sizeof(getsockopt_args_t))) return -1;
@@ -323,7 +335,7 @@ int sys_getsockopt(struct syscall_frame* regs) {
         case SO_KEEPALIVE: ival = ks->so_keepalive; break;
         case SO_ERROR:
             ival = ks->so_error;
-            ks->so_error = 0;
+            ks->so_error = 0;   // clear after read
             break;
         default: return -1;
         }

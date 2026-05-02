@@ -2,6 +2,7 @@
 #include "validate.h"
 #include "resolve.h"
 
+// create() — create a regular file in a directory
 int sys_create(char* name) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
@@ -23,6 +24,7 @@ int sys_create(char* name) {
     return create_vfs(parent, basename);
 }
 
+// mkdir() — create a new directory
 int sys_mkdir(char* pathname) {
     if (!validate_user_str(pathname)) return -1;
     if (!current_task) return -1;
@@ -38,6 +40,7 @@ int sys_mkdir(char* pathname) {
         return -1;
     }
 
+    // Need write + exec on parent to create entries
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
     kprint("[DBG] sys_mkdir: parent="); kprint(parent->name);
@@ -46,6 +49,7 @@ int sys_mkdir(char* pathname) {
     return mkdir_vfs(parent, basename);
 }
 
+// rmdir() — remove an empty directory
 int sys_rmdir(char* pathname) {
     if (!validate_user_str(pathname)) return -1;
     if (!current_task) return -1;
@@ -68,6 +72,7 @@ int sys_rmdir(char* pathname) {
     return rmdir_vfs(parent, basename);
 }
 
+// delete() — remove a file (legacy name, same as unlink)
 int sys_delete(char* name) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
@@ -86,6 +91,7 @@ int sys_delete(char* name) {
     return delete_vfs(parent, basename);
 }
 
+// unlink() — remove a file or symlink by path (following symlinks)
 int sys_unlink(char* path) {
     if (!validate_user_str(path)) return -1;
     if (!current_task) return -1;
@@ -98,6 +104,7 @@ int sys_unlink(char* path) {
     return vfs_unlink(parent, basename);
 }
 
+// rename() — rename a file or directory within the same parent
 int sys_rename(char* oldpath, char* newpath) {
     if (!validate_user_str(oldpath)) return -1;
     if (!validate_user_str(newpath)) return -1;
@@ -110,11 +117,13 @@ int sys_rename(char* oldpath, char* newpath) {
     if (!old_parent || !new_parent) return -1;
     if (!old_base[0] || !new_base[0]) return -1;
 
+    // Only rename within the same directory for now
     if (old_parent != new_parent) return -1;
 
     return rename_vfs(old_parent, old_base, new_base);
 }
 
+// link() — create a hard link
 int sys_link(struct syscall_frame* regs) {
     char* oldpath = (char*)regs->ebx;
     char* newpath = (char*)regs->ecx;
@@ -132,6 +141,7 @@ int sys_link(struct syscall_frame* regs) {
     return vfs_link(new_parent, basename, target_node);
 }
 
+// symlink() — create a symbolic link
 int sys_symlink(struct syscall_frame* regs) {
     char* target   = (char*)regs->ebx;
     char* linkpath = (char*)regs->ecx;
@@ -146,6 +156,7 @@ int sys_symlink(struct syscall_frame* regs) {
     return vfs_symlink(parent, basename, target);
 }
 
+// readlink() — read the target of a symbolic link
 int sys_readlink(struct syscall_frame* regs) {
     char*    path  = (char*)regs->ebx;
     char*    buf   = (char*)regs->ecx;
@@ -167,6 +178,7 @@ int sys_readlink(struct syscall_frame* regs) {
     return vfs_readlink_node(node, buf, bufsz);
 }
 
+// getdents() — read directory entries into a user buffer
 int sys_getdents(struct syscall_frame* regs) {
     int      fd    = (int)regs->ebx;
     char*    buf   = (char*)regs->ecx;
@@ -184,7 +196,7 @@ int sys_getdents(struct syscall_frame* regs) {
     if (count < entry_size) return -1;
 
     uint32_t written = 0;
-    uint32_t index = current_task->fds->fd_offset[fd];
+    uint32_t index   = current_task->fds->fd_offset[fd];
 
     while (written + entry_size <= count) {
         struct vfs_dirent* de = readdir_vfs(node, index);
@@ -205,12 +217,14 @@ int sys_getdents(struct syscall_frame* regs) {
     return (int)written;
 }
 
+// chdir() — change the current working directory
 int sys_chdir(struct syscall_frame* regs) {
     char* path = (char*)regs->ebx;
 
     if (!current_task) return -1;
     if (!validate_user_str(path)) return -1;
 
+    // Build absolute path from current directory + given path
     char abs[256];
     if (path[0] == '/') {
         int i = 0;
@@ -226,6 +240,7 @@ int sys_chdir(struct syscall_frame* regs) {
         abs[p] = '\0';
     }
 
+    // Normalise: resolve . and .. components without touching the filesystem
     int segs_start[64], segs_len[64];
     int nseg = 0;
     const char* s = abs;
@@ -236,9 +251,9 @@ int sys_chdir(struct syscall_frame* regs) {
         int slen = 0;
         while (*s && *s != '/') { s++; slen++; }
         if (slen == 1 && seg[0] == '.')
-            continue;
+            continue;                          // skip "."
         if (slen == 2 && seg[0] == '.' && seg[1] == '.') {
-            if (nseg > 0) nseg--;
+            if (nseg > 0) nseg--;               // pop for ".."
             continue;
         }
         segs_start[nseg] = (int)(seg - abs);
@@ -260,6 +275,7 @@ int sys_chdir(struct syscall_frame* regs) {
         norm[p] = '\0';
     }
 
+    // Verify the resolved path exists and is a directory
     vfs_node_t* node = vfs_walk_path(vfs_root, norm);
     if (!node) {
         kprint("[DBG] sys_chdir: not found: "); kprint(norm); kprint("\n");
@@ -281,6 +297,7 @@ int sys_chdir(struct syscall_frame* regs) {
     return 0;
 }
 
+// getcwd() — get the current working directory path
 int sys_getcwd(struct syscall_frame* regs) {
     char*    buf  = (char*)regs->ebx;
     uint32_t size = regs->ecx;
@@ -291,7 +308,7 @@ int sys_getcwd(struct syscall_frame* regs) {
 
     uint32_t len = 0;
     while (current_task->cwd[len]) len++;
-    len++;
+    len++;   // include null terminator
 
     if (len > size) return -1;
 
@@ -305,10 +322,11 @@ int sys_getcwd(struct syscall_frame* regs) {
     return (int)buf;
 }
 
+// chroot() — change the root directory (root only)
 int sys_chroot(char* path) {
     if (!validate_user_str(path)) return -1;
     if (!current_task) return -1;
-    if (current_task->euid != 0) return -1;
+    if (current_task->euid != 0) return -1;   // root only
     vfs_node_t* node = _resolve_path(path);
     if (!node || node->type != VFS_DIRECTORY) return -1;
     current_task->root = node;

@@ -8,9 +8,10 @@
 #include "tcp.h"
 #include "udp.h"
 #include "mod.h"
-/* Ядерный net.h (ntohs/htonl/MY_IP) включается в net.c через <net.h>,
- * чтобы избежать именного конфликта с этим файлом (net/net.h). */
+// kernel-internal net.h (ntohs/htonl/MY_IP) is included in net.c as <net.h>
+// to avoid name collision with this file (net/net.h).
 
+// setsockopt/getsockopt argument structs
 typedef struct {
     int         fd;
     int         level;
@@ -27,6 +28,7 @@ typedef struct {
     uint32_t* optlen;
 } getsockopt_args_t;
 
+// Socket syscalls
 int sys_socket(struct syscall_frame* regs);
 int sys_bind(struct syscall_frame* regs);
 int sys_connect(struct syscall_frame* regs);
@@ -40,4 +42,4 @@ int sys_shutdown(struct syscall_frame* regs);
 int sys_setsockopt(struct syscall_frame* regs);
 int sys_getsockopt(struct syscall_frame* regs);
 
-#endif /* SC_NET_H */
+#endif 

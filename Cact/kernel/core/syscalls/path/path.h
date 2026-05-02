@@ -6,11 +6,13 @@
 #include "vfs.h"
 #include "mod.h"
 
+// Directory entry structure for getdents()
 struct cact_dirent {
     uint32_t d_ino;
     char     d_name[124];
 };
 
+// Path manipulation syscalls
 int sys_create(char* name);
 int sys_mkdir(char* pathname);
 int sys_rmdir(char* pathname);

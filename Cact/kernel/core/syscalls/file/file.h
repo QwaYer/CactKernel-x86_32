@@ -6,6 +6,7 @@
 #include "vfs.h"
 #include "mod.h"
 
+// File metadata syscalls
 int sys_stat(struct syscall_frame* regs);
 int sys_fstat(struct syscall_frame* regs);
 int sys_access(char* path, int mode);
@@ -18,4 +19,4 @@ int sys_sync(void);
 int sys_fsync(int fd);
 int sys_mknod(char* path, uint32_t mode, uint32_t dev);
 
-#endif /* SC_FILE_H */
+#endif 
