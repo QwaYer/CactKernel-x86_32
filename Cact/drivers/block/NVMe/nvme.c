@@ -9,22 +9,27 @@
 #include "task.h"
 #include "sync.h"
 
+// Single-controller device state
 static struct nvme_dev ndev;
 static int nvme_ready = 0;
 
+// Disk queue for synchronous/IRQ-driven I/O
 static struct buf *disk_queue      = 0;
 static struct buf *disk_queue_tail = 0;
 static irq_spinlock_t disk_lock;
 
+// Command IDs — incremented per-submission, wrap naturally at 16 bits
 static volatile uint16_t admin_cid = 0;
 static volatile uint16_t io_cid    = 0;
 
+// Queue memory — 4 KiB aligned per NVMe spec
 static uint8_t admin_sq_mem[sizeof(struct nvme_sq_entry) * NVME_ADMIN_QUEUE_SIZE] __attribute__((aligned(4096)));
 static uint8_t admin_cq_mem[sizeof(struct nvme_cq_entry) * NVME_ADMIN_QUEUE_SIZE] __attribute__((aligned(4096)));
 static uint8_t io_sq_mem   [sizeof(struct nvme_sq_entry) * NVME_IO_QUEUE_SIZE]    __attribute__((aligned(4096)));
 static uint8_t io_cq_mem   [sizeof(struct nvme_cq_entry) * NVME_IO_QUEUE_SIZE]    __attribute__((aligned(4096)));
 static uint8_t identify_buf[4096] __attribute__((aligned(4096)));
 
+// Wait for CSTS.RDY to become `expected` (0 after reset, 1 after enable)
 static void nvme_wait_ready(int expected) {
     for (int i = 0; i < 1000000; i++)
         if (((ndev.bar->csts >> 0) & 1) == (uint32_t)expected)
@@ -32,6 +37,7 @@ static void nvme_wait_ready(int expected) {
     kprint("[NVMe] controller timeout\n");
 }
 
+// Submit a command to the admin SQ and ring the doorbell
 static void admin_submit(struct nvme_sq_entry *cmd) {
     struct nvme_queue *q = &ndev.admin_q;
     volatile struct nvme_sq_entry *dst = &q->sq[q->sq_tail];
@@ -40,6 +46,7 @@ static void admin_submit(struct nvme_sq_entry *cmd) {
     *q->sq_db = q->sq_tail;
 }
 
+// Poll admin CQ for completion; returns 0 on success, -1 on error or timeout
 static int admin_poll(void) {
     struct nvme_queue *q = &ndev.admin_q;
     for (int i = 0; i < 2000000; i++) {
@@ -67,11 +74,13 @@ static int admin_poll(void) {
     return -1;
 }
 
+// Submit + poll — used during initialisation
 static int admin_cmd(struct nvme_sq_entry *cmd) {
     admin_submit(cmd);
     return admin_poll();
 }
 
+// Build and submit an I/O SQ entry from a buffer cache block
 static void io_submit_rw(struct buf *b) {
     int is_write = (b->flags & B_DIRTY);
     struct nvme_queue *q = &ndev.io_q;
@@ -92,6 +101,7 @@ static void io_submit_rw(struct buf *b) {
     *q->sq_db = q->sq_tail;
 }
 
+// Enqueue a buffer to the disk queue; submit immediately if queue was empty
 void bio_enqueue_sync(struct buf *b) {
     irq_spinlock_acquire(&disk_lock);
     b->qnext = 0;
@@ -106,6 +116,7 @@ void bio_enqueue_sync(struct buf *b) {
     irq_spinlock_release(&disk_lock);
 }
 
+// IRQ handler: drain IO CQ completions, call bio_irq_complete for each
 void nvme_irq_handler(void) {
     struct nvme_queue *q = &ndev.io_q;
 
@@ -124,6 +135,7 @@ void nvme_irq_handler(void) {
     }
 }
 
+// Complete the head of the disk queue: update flags, wake waiter, invoke callback
 void bio_irq_complete(int error) {
     if (!disk_queue) return;
 
@@ -154,10 +166,12 @@ void bio_irq_complete(int error) {
         done->callback = 0;
     }
 
+    // Submit next queued buffer
     if (disk_queue)
         io_submit_rw(disk_queue);
 }
 
+// Polled read/write — used before scheduler is up (serial output does not use IRQ)
 static int nvme_polled_rw(uint32_t lba, uint8_t *buf, int write) {
     struct nvme_queue *q = &ndev.io_q;
 
@@ -192,6 +206,7 @@ static int nvme_polled_rw(uint32_t lba, uint8_t *buf, int write) {
         }
     }
 
+    // Restore interrupt flag only if it was set before
     if (fl & (1 << 9)) __asm__ __volatile__("sti");
 
     if (result < 0) {
@@ -199,17 +214,20 @@ static int nvme_polled_rw(uint32_t lba, uint8_t *buf, int write) {
     return result;
 }
 
+// Public: read a single sector (zero-fill on error)
 void nvme_read_sector(uint32_t lba, uint8_t *buf) {
     if (!nvme_ready) return;
     if (nvme_polled_rw(lba, buf, 0) < 0)
         memory_set(buf, 0, NVME_SECTOR_SIZE);
 }
 
+// Public: write a single sector
 void nvme_write_sector(uint32_t lba, uint8_t *buf) {
     if (!nvme_ready) return;
     nvme_polled_rw(lba, buf, 1);
 }
 
+// Configure admin SQ/CQ in BAR registers
 static void nvme_setup_admin_queues(void) {
     memory_set(admin_sq_mem, 0, sizeof(admin_sq_mem));
     memory_set(admin_cq_mem, 0, sizeof(admin_cq_mem));
@@ -230,12 +248,13 @@ static void nvme_setup_admin_queues(void) {
     ndev.bar->acq = (uint32_t)admin_cq_mem;
 }
 
+// Tell controller how many I/O queues we want (1 SQ + 1 CQ)
 static int nvme_set_num_queues(void) {
     struct nvme_sq_entry cmd;
     memory_set(&cmd, 0, sizeof(cmd));
     cmd.cdw0  = NVME_OPC_SET_FEATURES | ((uint32_t)(admin_cid++ & 0xFFFF) << 16);
-    cmd.cdw10 = 0x07;
-    cmd.cdw11 = (0 << 16) | 0;
+    cmd.cdw10 = 0x07;          // Number of Queues feature ID
+    cmd.cdw11 = (0 << 16) | 0; // 1 SQ, 1 CQ
     if (admin_cmd(&cmd) < 0) {
         kprint("[NVMe] Set Features (Num Queues) failed\n");
         return -1;
@@ -243,6 +262,7 @@ static int nvme_set_num_queues(void) {
     return 0;
 }
 
+// Create I/O Submission Queue and Completion Queue
 static int nvme_create_io_queues(void) {
     memory_set(io_sq_mem, 0, sizeof(io_sq_mem));
     memory_set(io_cq_mem, 0, sizeof(io_cq_mem));
@@ -260,21 +280,23 @@ static int nvme_create_io_queues(void) {
 
     struct nvme_sq_entry cmd;
 
+    // Create I/O Completion Queue (id=1)
     memory_set(&cmd, 0, sizeof(cmd));
     cmd.cdw0  = NVME_OPC_CREATE_IOCQ | ((uint32_t)(admin_cid++ & 0xFFFF) << 16);
     cmd.prp1  = (uint32_t)io_cq_mem;
-    cmd.cdw10 = ((NVME_IO_QUEUE_SIZE - 1) << 16) | 1;
-    cmd.cdw11 = 0x03;
+    cmd.cdw10 = ((NVME_IO_QUEUE_SIZE - 1) << 16) | 1; // queue size | queue id
+    cmd.cdw11 = 0x03;                                    // physically contiguous | enabled
     if (admin_cmd(&cmd) < 0) {
         kprint("[NVMe] create IO CQ failed\n");
         return -1;
     }
 
+    // Create I/O Submission Queue (id=1, paired with CQ id=1)
     memory_set(&cmd, 0, sizeof(cmd));
     cmd.cdw0  = NVME_OPC_CREATE_IOSQ | ((uint32_t)(admin_cid++ & 0xFFFF) << 16);
     cmd.prp1  = (uint32_t)io_sq_mem;
-    cmd.cdw10 = ((NVME_IO_QUEUE_SIZE - 1) << 16) | 1;
-    cmd.cdw11 = (1 << 16) | 0x01;
+    cmd.cdw10 = ((NVME_IO_QUEUE_SIZE - 1) << 16) | 1; // queue size | queue id
+    cmd.cdw11 = (1 << 16) | 0x01;                       // paired CQ id=1 | contiguous
     if (admin_cmd(&cmd) < 0) {
         kprint("[NVMe] create IO SQ failed\n");
         return -1;
@@ -283,6 +305,7 @@ static int nvme_create_io_queues(void) {
     return 0;
 }
 
+// Identify Controller (CNS=1) and Namespace (CNS=0, NSID=1); extract max LBA
 static int nvme_identify(void) {
     memory_set(identify_buf, 0, sizeof(identify_buf));
 
@@ -290,7 +313,7 @@ static int nvme_identify(void) {
     memory_set(&cmd, 0, sizeof(cmd));
     cmd.cdw0  = NVME_OPC_IDENTIFY | ((uint32_t)(admin_cid++ & 0xFFFF) << 16);
     cmd.prp1  = (uint32_t)identify_buf;
-    cmd.cdw10 = 1;
+    cmd.cdw10 = 1;   // CNS=1 — Identify Controller
     if (admin_cmd(&cmd) < 0) {
         kprint("[NVMe] identify controller failed\n");
         return -1;
@@ -301,7 +324,7 @@ static int nvme_identify(void) {
     cmd.cdw0  = NVME_OPC_IDENTIFY | ((uint32_t)(admin_cid++ & 0xFFFF) << 16);
     cmd.nsid  = 1;
     cmd.prp1  = (uint32_t)identify_buf;
-    cmd.cdw10 = 0;
+    cmd.cdw10 = 0;   // CNS=0 — Identify Namespace
     if (admin_cmd(&cmd) < 0) {
         kprint("[NVMe] identify namespace failed\n");
         return -1;
@@ -309,11 +332,12 @@ static int nvme_identify(void) {
 
     uint32_t *id32 = (uint32_t *)identify_buf;
     ndev.ns_id   = 1;
-    ndev.max_lba = id32[0];
+    ndev.max_lba = id32[0];    // Namespace Size (LBAs)
 
     return 0;
 }
 
+// Full NVMe initialisation sequence
 void nvme_init(void) {
     kprint("[NVMe] initializing buffer cache and disk lock\n");
     binit();
@@ -339,11 +363,9 @@ void nvme_init(void) {
     ndev.bar_phys = bar0 & 0xFFFFF000;
     kprint("[NVMe] BAR0 phys="); kprint_hex(ndev.bar_phys); kprint("\n");
 
+    // Map BAR0 with PCD|PWT — MMIO must bypass CPU cache
     kprint("[NVMe] mapping BAR0 into virtual address space (16 KB)\n");
     uint32_t bar_size = 0x4000;
-    /* PAGE_PCD | PAGE_PWT: NVMe BAR registers are MMIO — must bypass cache.
-     * Without these flags writes to ndev.bar->cc / doorbell registers stay
-     * in the CPU write-back buffer and never reach the controller. */
     for (uint32_t off = 0; off < bar_size; off += 0x1000)
         vmm_map(get_current_pd(), ndev.bar_phys + off, ndev.bar_phys + off,
                 PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
@@ -366,7 +388,7 @@ void nvme_init(void) {
     nvme_setup_admin_queues();
 
     kprint("[NVMe] enabling controller (CC.EN=1, waiting CSTS.RDY=1)\n");
-    ndev.bar->cc = (4 << 20) | (6 << 16) | (0 << 7) | 1;
+    ndev.bar->cc = (4 << 20) | (6 << 16) | (0 << 7) | 1;  // MPS=4K, CSS=NVM, EN=1
     nvme_wait_ready(1);
 
     if (ndev.bar->csts & 0x2) {
@@ -395,7 +417,7 @@ void nvme_init(void) {
 int nvme_is_ready(void) { return nvme_ready; }
 uint32_t nvme_get_max_lba(void) { return ndev.max_lba; }
 
-//public api
+// VFS read: translate offset → LBA, use buffer cache
 int nvme_read(vfs_node_t *node, uint32_t offset, uint32_t size, char *buffer) {
     (void)node;
     uint64_t byte_off = (uint64_t)offset;
@@ -408,6 +430,7 @@ int nvme_read(vfs_node_t *node, uint32_t offset, uint32_t size, char *buffer) {
     return size;
 }
 
+// VFS write: read-modify-write through buffer cache
 int nvme_write(vfs_node_t *node, uint32_t offset, uint32_t size, char *buffer) {
     (void)node;
     uint64_t byte_off = (uint64_t)offset;
@@ -426,6 +449,7 @@ static vfs_ops_t nvme_ops = {
     .write = nvme_write,
 };
 
+// Allocate a VFS node for the NVMe device (called once at init)
 vfs_node_t *init_nvme_device(void) {
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
     if (!node) return 0;

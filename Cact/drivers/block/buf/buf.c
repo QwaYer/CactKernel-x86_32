@@ -5,15 +5,19 @@
 #include "task.h"
 #include "sync.h"
 
+// Number of cache slots — small for a single-user system
 #define NBUF 30
 
+// Global buffer cache: fixed array of buffers + sentinel head
 struct {
     struct buf buf[NBUF];
     struct buf head;
 } bcache;
 
+// Serialises all bcache modifications (LRU list + flags)
 static irq_spinlock_t bcache_lock;
 
+// Initialise the buffer cache: link all buffers into a circular LRU list
 void binit(void) {
     struct buf* b;
     irq_spinlock_init(&bcache_lock);
@@ -31,11 +35,14 @@ void binit(void) {
     }
 }
 
+// Find a buffer by (dev, blockno); if busy, sleep until released.
+// If not found, recycle the least-recently-used clean buffer.
 static struct buf* bget(uint32_t dev, uint32_t blockno) {
     struct buf* b;
 
     irq_spinlock_acquire(&bcache_lock);
 
+    // First pass: exact match
     for (b = bcache.head.next; b != &bcache.head; b = b->next) {
         if (b->dev == dev && b->blockno == blockno) {
             while (b->flags & B_BUSY) {
@@ -49,6 +56,7 @@ static struct buf* bget(uint32_t dev, uint32_t blockno) {
         }
     }
 
+    // Second pass: find a clean, unused buffer from the tail (LRU)
     for (b = bcache.head.prev; b != &bcache.head; b = b->prev) {
         if (!(b->flags & B_BUSY) && !(b->flags & B_DIRTY)) {
             b->dev      = dev;
@@ -67,6 +75,8 @@ static struct buf* bget(uint32_t dev, uint32_t blockno) {
     return 0;
 }
 
+// Wait until the buffer's I/O completes (B_QUEUED cleared).
+// If no scheduler, busy-wait with HLT.
 static void bio_wait(struct buf* b) {
     if (!current_task) {
         while (b->flags & B_QUEUED)
@@ -89,6 +99,7 @@ static void bio_wait(struct buf* b) {
     }
 }
 
+// Synchronous bread: get buffer, wait for I/O, return valid data
 struct buf* bread(uint32_t dev, uint32_t blockno) {
     struct buf* b = bget(dev, blockno);
     if (!b) return 0;
@@ -106,6 +117,7 @@ struct buf* bread(uint32_t dev, uint32_t blockno) {
     return b;
 }
 
+// Synchronous bwrite: mark dirty, enqueue I/O, wait, clear errors
 void bwrite(struct buf* b) {
     if (!(b->flags & B_BUSY)) {
         kprint("[buf] bwrite: buffer not busy\n");
@@ -120,6 +132,7 @@ void bwrite(struct buf* b) {
     }
 }
 
+// Asynchronous bread: callback invoked when I/O completes
 void bread_async(uint32_t dev, uint32_t blockno, io_callback_t cb) {
     struct buf* b = bget(dev, blockno);
     if (!b) { if (cb) cb(0, 1); return; }
@@ -135,6 +148,7 @@ void bread_async(uint32_t dev, uint32_t blockno, io_callback_t cb) {
     bio_enqueue_sync(b);
 }
 
+// Asynchronous bwrite: mark dirty, enqueue, callback on completion
 void bwrite_async(struct buf* b, io_callback_t cb) {
     if (!(b->flags & B_BUSY)) return;
     b->flags   |= B_DIRTY;
@@ -143,6 +157,7 @@ void bwrite_async(struct buf* b, io_callback_t cb) {
     bio_enqueue_sync(b);
 }
 
+// Release a buffer: move to head of LRU and clear BUSY
 void brelse(struct buf* b) {
     if (!(b->flags & B_BUSY)) {
         kprint("[buf] brelse: buffer not busy\n");
