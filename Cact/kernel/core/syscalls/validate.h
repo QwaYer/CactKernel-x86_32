@@ -10,4 +10,4 @@
 int validate_user_ptr(const void* ptr, uint32_t size);
 int validate_user_str(const char* str);
 
-#endif /* SC_VALIDATE_H */
+#endif 

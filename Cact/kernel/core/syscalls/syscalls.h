@@ -1,7 +1,6 @@
 #ifndef SYSCALLS_H
 #define SYSCALLS_H
 
-/* Номера системных вызовов CactOS — соответствуют syscall_table[] в mod.c */
 typedef enum {
     SYS_PRINT         = 0,
 
@@ -109,4 +108,4 @@ typedef enum {
     SYSCALL_COUNT     = 90,
 } syscall_num_t;
 
-#endif /* SYSCALLS_H */
+#endif 
