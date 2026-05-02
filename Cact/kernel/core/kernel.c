@@ -14,138 +14,25 @@
 #include "klib.h"
 #include "task.h"
 #include "fb.h"
-#include "font.h"
 #include "swap.h"
 #include "pagecache.h"
 #include "blkdev.h"
 #include "version.h"
 
+// Kernel page directory (defined in paging.c)
 extern uint32_t page_directory[1024];
 
-#define FONT_SCALE 2
-#define CHAR_W (FONT_WIDTH  * FONT_SCALE)
-#define CHAR_H (FONT_HEIGHT * FONT_SCALE)
-
-int cursor_x = 0;
-int cursor_y = 0;
-
+// Terminal window size for ioctl() calls
 struct winsize terminal_winsize;
 uint32_t       terminal_fg_pid = 0;
 
-static void fb_draw_char_scaled(char c, int px, int py, uint32_t color) {
-    if ((unsigned char)c >= 128) return;
-    const uint8_t* glyph = font8x8_basic[(unsigned char)c];
-    for (int row = 0; row < FONT_HEIGHT; row++) {
-        for (int col = 0; col < FONT_WIDTH; col++) {
-            uint32_t pix = (glyph[row] & (1 << col)) ? color : COLOR_BLACK;
-            for (int sy = 0; sy < FONT_SCALE; sy++)
-                for (int sx = 0; sx < FONT_SCALE; sx++)
-                    fb_put_pixel(px + col * FONT_SCALE + sx,
-                                 py + row * FONT_SCALE + sy, pix);
-        }
-    }
-}
-
-void clear_screen() {
-    fb_clear(COLOR_BLACK);
-    cursor_x = 0;
-    cursor_y = 0;
-}
-
-void scroll() {
-    uint32_t w = fb_get_width();
-    uint32_t h = fb_get_height();
-    uint32_t pitch = fb_get_pitch();
-    uint32_t* buf = fb_get_buffer();
-    if (!buf || w == 0 || h == 0) return;
-
-    uint32_t words_per_row = pitch / 4;
-    for (uint32_t y = 0; y + CHAR_H < h; y++)
-        for (uint32_t x = 0; x < w; x++)
-            buf[y * words_per_row + x] = buf[(y + CHAR_H) * words_per_row + x];
-
-    fb_fill_rect(0, h - CHAR_H, w, CHAR_H, COLOR_BLACK);
-
-    cursor_y -= CHAR_H;
-    if (cursor_y < 0) cursor_y = 0;
-}
-
-void kprint_color(char* message, uint32_t color) {
-    uint32_t w = fb_get_width();
-    uint32_t h = fb_get_height();
-    if (w == 0 || h == 0) return;
-
-    for (int i = 0; message[i] != '\0'; i++) {
-        char c = message[i];
-        if (c == '\n') {
-            cursor_x = 0;
-            cursor_y += CHAR_H;
-        } else if (c == '\r') {
-            cursor_x = 0;
-        } else if (c == '\t') {
-            int tab_w = CHAR_W * 4;
-            cursor_x = (cursor_x / tab_w + 1) * tab_w;
-        } else {
-            fb_draw_char_scaled(c, cursor_x, cursor_y, color);
-            cursor_x += CHAR_W;
-        }
-
-        if (cursor_x + CHAR_W > (int)w) {
-            cursor_x = 0;
-            cursor_y += CHAR_H;
-        }
-
-        if (cursor_y + CHAR_H > (int)h) {
-            scroll();
-        }
-    }
-}
-
-void kprint(char* message) {
-    kprint_color(message, COLOR_WHITE);
-}
-
-void kprint_at(char* message, int x, int y) {
-    cursor_x = x;
-    cursor_y = y;
-    kprint(message);
-}
-
-void init_framebuffer() {
-    kprint("[FB] checking multiboot framebuffer parameters\n");
-    fb_init_result_t status = fb_get_init_status();
-
-    if (status != FB_INIT_OK) {
-        static const char* fb_errors[] = {
-            [FB_INIT_NO_FLAG]    = "multiboot2 framebuffer tag missing",
-            [FB_INIT_HIGH_ADDR]  = "framebuffer address above 4 GB (not mappable)",
-            [FB_INIT_BAD_TYPE]   = "framebuffer type != 1 (not RGB direct-color)",
-            [FB_INIT_BAD_BPP]    = "bpp != 32 (only 32-bit color supported)",
-            [FB_INIT_NULL_PARAM] = "null address or zero width/height",
-        };
-        klog(LOG_ERROR, fb_errors[status]);
-        klog(LOG_FAIL,  "Framebuffer — cannot continue without display");
-        return;
-    }
-
-    char buf[16];
-    kprint("[FB] addr=0x");
-    hex_to_ascii((uint32_t)fb_get_buffer(), buf); kprint(buf);
-    kprint("  res=");
-    itoa((int)fb_get_width(), buf);  kprint(buf); kprint("x");
-    itoa((int)fb_get_height(), buf); kprint(buf);
-    kprint("  32bpp  pitch=");
-    itoa((int)fb_get_pitch(), buf); kprint(buf); kprint("\n");
-    kprint("[FB] cols="); itoa((int)(fb_get_width()  / (8*2)), buf); kprint(buf);
-    kprint("  rows=");   itoa((int)(fb_get_height() / (8*2)), buf); kprint(buf); kprint("\n");
-    klog(LOG_OK, "Framebuffer ready");
-}
-
+// Probe PS/2 controller via port 0x64, return 1 if absent
 int probe_io_ports() {
     if (port_byte_in(0x64) == 0xFF) return 1;
     return 0;
 }
 
+// Read extended memory size from CMOS (regs 0x17/0x18), return 0 if valid
 int detect_memory() {
     port_byte_out(0x70, 0x17);
     unsigned char low = port_byte_in(0x71);
@@ -154,23 +41,20 @@ int detect_memory() {
     return ((high << 8) | low) > 0 ? 0 : 1;
 }
 
+// CPU exception handler — signals for user tasks, panic for kernel
 void exception_handler(struct context_frame* regs) {
     char buf[32];
 
+    // User mode exception → deliver POSIX signal
     if (current_task && !current_task->is_kernel) {
-        /* Map CPU exception to the appropriate POSIX signal:
-         *   #0  Divide Error          -> SIGFPE
-         *   #13 General Protection    -> SIGSEGV
-         *   #16 x87 FPU Exception     -> SIGFPE
-         *   everything else           -> SIGKILL (unrecoverable) */
         uint32_t sig;
         switch (regs->int_no) {
-        case 0:  /* #DE Divide Error */
-        case 16: /* #MF x87 FPU Floating-Point Exception */
+        case 0:  // #DE Divide Error
+        case 16: // #MF x87 FPU exception
             sig = SIGFPE;
             kprint_color("\n[KERNEL] User process: FPE (int=", COLOR_LIGHT_RED);
             break;
-        case 13: /* #GP General Protection Fault */
+        case 13: // #GP General Protection Fault
             sig = SIGSEGV;
             kprint_color("\n[KERNEL] User process: SEGV (int=", COLOR_LIGHT_RED);
             break;
@@ -188,6 +72,7 @@ void exception_handler(struct context_frame* regs) {
         return;
     }
 
+    // Kernel mode exception → fatal panic
     kprint_color("\n=== KERNEL PANIC ===\n", COLOR_LIGHT_RED);
     kprint("Exception: "); itoa((int)regs->int_no, buf); kprint(buf);
     kprint(" Error code: "); hex_to_ascii(regs->err_code, buf); kprint(buf);
@@ -204,13 +89,15 @@ void exception_handler(struct context_frame* regs) {
     while(1);
 }
 
+// Initialize PIT (8253) timer at given frequency (Hz)
 void init_timer(unsigned int frequency) {
-    unsigned int divisor = 1193180 / frequency;
-    port_byte_out(0x43, 0x36);
-    port_byte_out(0x40, (unsigned char)(divisor & 0xFF));
-    port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF));
+    unsigned int divisor = 1193180 / frequency;  // PIT input clock
+    port_byte_out(0x43, 0x36);                  // Channel 0, lobyte/hibyte, rate generator
+    port_byte_out(0x40, (unsigned char)(divisor & 0xFF));       // Low byte
+    port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF)); // High byte
 }
 
+// Kernel logging with color-coded levels
 void klog(log_level_t level, const char* message) {
     kprint("        ");
     switch (level) {
@@ -231,19 +118,18 @@ void klog(log_level_t level, const char* message) {
     kprint("\n");
 }
 
-int get_cursor_x() { return cursor_x; }
-int get_cursor_y() { return cursor_y; }
-
+// Swap I/O callbacks — read from block device (LBA addressing)
 static int swap_disk_read(uint32_t lba, void* buf, uint32_t sectors)
 {
     uint8_t* ptr = (uint8_t*)buf;
     for (uint32_t i = 0; i < sectors; i++) {
         blkdev_read_sector(lba + i, ptr);
-        ptr += 512;
+        ptr += 512;  // Sector size
     }
     return 0;
 }
 
+// Swap I/O callbacks — write to block device
 static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
 {
     const uint8_t* ptr = (const uint8_t*)buf;
@@ -254,32 +140,39 @@ static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
     return 0;
 }
 
+// Main hardware initialisation sequence
 void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
-    init_gdt();
-    pmm_init_from_mmap(mmap);   
-    init_memory_manager();      
-    init_heap();
-    init_paging();
-    slab_init();
-    page_fault_init();
+    // Memory management (order matters!)
+    init_gdt();                     // Global Descriptor Table
+    pmm_init_from_mmap(mmap);       // Physical Memory Manager
+    init_memory_manager();          // Virtual memory manager
+    init_heap();                    // Kernel heap (kmalloc)
+    init_paging();                  // Enable paging, load page directory
+    slab_init();                    // Slab allocator for kernel objects
+    page_fault_init();              // Page fault handler
 
-    init_pic();
-    init_idt();
+    // Interrupts
+    init_pic();                     // Programmable Interrupt Controller
+    init_idt();                     // Interrupt Descriptor Table
 
+    // Display
     init_framebuffer();
 
+    // Terminal window size from framebuffer geometry
     {
         uint32_t fb_w = fb_get_width();
         uint32_t fb_h = fb_get_height();
-        terminal_winsize.ws_col    = (uint16_t)(fb_w / CHAR_W);
-        terminal_winsize.ws_row    = (uint16_t)(fb_h / CHAR_H);
+        terminal_winsize.ws_col    = (uint16_t)(fb_w / FB_CONSOLE_CHAR_WIDTH);
+        terminal_winsize.ws_row    = (uint16_t)(fb_h / FB_CONSOLE_CHAR_HEIGHT);
         terminal_winsize.ws_xpixel = (uint16_t)fb_w;
         terminal_winsize.ws_ypixel = (uint16_t)fb_h;
     }
 
+    // Input devices
     ps2_keyboard_init();
     ps2_mouse_init();
 
+    // Diagnostics
     {
         kprint("[IO] probing PS/2 controller (port 0x64)\n");
         int io_status = probe_io_ports();
@@ -298,6 +191,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
             klog(LOG_OK, "CMOS memory size valid");
     }
 
+    // PCI enumeration and drivers
     kprint("[PCI] scanning bus for devices\n");
     if (search_pci())
         klog(LOG_WARN, "PCI scan reported error");
@@ -315,27 +209,33 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
             klog(LOG_WARN, "no PCI devices — storage/net/USB unavailable");
     }
 
+    // USB xHCI stack
     kprint("[USB] initializing xHCI host controller stack\n");
     extern void usb_init(void);
     usb_init();
     klog(LOG_OK, "USB stack initialised");
 
+    // Block device layer
     blkdev_init();
 
+    // Process control block cache
     pc_init();
 
+    // Swap subsystem (disk-backed virtual memory)
     {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
         if (swap_status)
             klog(LOG_WARN, "swap init failed — OOM killer is last resort");
     }
 
+    // Virtual filesystem
     vfs_init();
 
     kprint("[MNT] mounting virtual filesystems\n");
-    extern void mntfs_init();
+    extern void mntfs_init();  // Mount table filesystem
     mntfs_init();
 
+    // Populate /proc/meminfo
     if (mbi) {
         extern void procfs_set_meminfo(uint32_t);
         char buf[12];
@@ -347,10 +247,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
             kprint("  mem_upper="); kprint(buf); kprint(" KB\n");
         }
 
-        /*
-         * Prefer the multiboot2 memory map total: mem_upper caps around 4 GB
-         * and omits holes, while the mmap gives us the actual available bytes.
-         */
+        // Prefer multiboot2 memory map total (no 4GB cap)
         uint32_t total_kb;
         if (mbi->flags & (1u << 6)) {
             total_kb = (uint32_t)(mbi->mem_total_bytes / 1024ull);
@@ -363,11 +260,14 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     }
     klog(LOG_OK, "EXT4 / devfs / procfs / mntfs mounted");
 
+    // Network stack
     net_init();
 
+    // Multitasking
     task_init();
     init_scheduler();
 
+    // Timer interrupt (100 Hz for scheduler time slices)
     kprint("[PIT] configuring 8253 timer  divisor=");
     { char buf[8]; itoa(1193180 / 100, buf); kprint(buf); }
     kprint("  freq=100 Hz\n");
@@ -375,21 +275,24 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     klog(LOG_OK, "PIT timer @ 100 Hz — IRQ0 active");
 }
 
+// Kernel entry point (called from boot.S)
 void init(uint32_t magic, uint32_t mb2_info_addr) {
     static multiboot_info_t  mbi_storage;
     static mb2_mmap_table_t  mmap_storage;
     multiboot2_parse(mb2_info_addr, &mbi_storage, &mmap_storage);
     multiboot_info_t* mbi = &mbi_storage;
 
+    // Must initialise framebuffer before any output
     fb_init(mbi);
 
+    // No display → completely blind, just halt
     if (fb_get_width() == 0) {
-        /* No display available — cannot print, just halt */
         while(1) __asm__ __volatile__("hlt");
     }
 
     clear_screen();
 
+    // Validate multiboot2 signature
     if (magic != MB2_BOOTLOADER_MAGIC) {
         kprint_color("[FAIL] Bad multiboot2 magic (got 0x", COLOR_LIGHT_RED);
         char buf[16];
@@ -401,6 +304,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
 
     kernel_setup_hardware(mbi, &mmap_storage);
 
+    // Banner
     kprint("\n");
     kprint_color("Cact Kernel ", COLOR_LIGHT_BROWN);
     kprint_color((char*)kernel_version, COLOR_LIGHT_BROWN);
@@ -412,13 +316,16 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
 
     kprint_color("Kernel is ready. Launching init...\n", COLOR_LIGHT_GREEN);
 
+    // Create init process (userspace startup)
     struct task_struct* init = create_elf_task("bin/init");
     if (!init) {
         kprint_color("[FAIL] create_elf_task: /bin/init not found\n", COLOR_LIGHT_RED);
     }
 
+    // Enable interrupts (now that timer/IDT are ready)
     __asm__ __volatile__("sti");
 
+    // Idle loop — scheduler will run tasks
     while (1) {
         __asm__ __volatile__("hlt");
     }

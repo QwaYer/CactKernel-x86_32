@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "multiboot2.h"
 
+// Flags for which fields are valid in multiboot_info_t
 #define MB2_FLAG_MEMINFO     (1u << 0)
 #define MB2_FLAG_MMAP        (1u << 6)
 #define MB2_FLAG_FRAMEBUFFER (1u << 12)
@@ -8,11 +9,12 @@
 #define MB2_TAG_HDR_SIZE  8u
 #define MB2_ALIGN         8u
 
-
+// Parse multiboot2 tag list into simplified kernel structure
 void multiboot2_parse(uint32_t mb2_info_addr,
                       multiboot_info_t*  out,
                       mb2_mmap_table_t*  mmap_out)
 {
+    // Zero output structures
     out->flags             = 0;
     out->mem_lower         = 0;
     out->mem_upper         = 0;
@@ -28,22 +30,22 @@ void multiboot2_parse(uint32_t mb2_info_addr,
         mmap_out->count = 0;
     }
 
+    // Validate input address
     if (mb2_info_addr == 0) return;
-
-    if (mb2_info_addr & (MB2_ALIGN - 1u)) return;
+    if (mb2_info_addr & (MB2_ALIGN - 1u)) return;  // Not aligned
 
     uint32_t total_size = *(volatile uint32_t*)(uintptr_t)mb2_info_addr;
-
     if (total_size < 16u) return;
+    if (mb2_info_addr > (0xFFFFFFFFu - total_size)) return;  // Wraparound
 
-    if (mb2_info_addr > (0xFFFFFFFFu - total_size)) return;
-
-    uint32_t cursor = mb2_info_addr + MB2_ALIGN; 
+    uint32_t cursor = mb2_info_addr + MB2_ALIGN;  // Skip total_size field
     uint32_t end    = mb2_info_addr + total_size;
 
     while (1) {
+        // Bounds check
         if (cursor > end || (end - cursor) < MB2_TAG_HDR_SIZE) break;
 
+        // Align cursor to 8-byte boundary
         if (cursor & (MB2_ALIGN - 1u)) {
             cursor = (cursor + MB2_ALIGN - 1u) & ~(MB2_ALIGN - 1u);
             continue;
@@ -51,9 +53,11 @@ void multiboot2_parse(uint32_t mb2_info_addr,
 
         struct mb2_tag* tag = (struct mb2_tag*)(uintptr_t)cursor;
 
-        if (tag->size < MB2_TAG_HDR_SIZE) break; 
-        if (cursor > end || (end - cursor) < tag->size) break; 
+        // Validate tag header
+        if (tag->size < MB2_TAG_HDR_SIZE) break;
+        if (cursor > end || (end - cursor) < tag->size) break;
 
+        // End tag -> terminate parsing
         if (tag->type == MB2_TAG_END) break;
 
         switch (tag->type) {
@@ -72,38 +76,34 @@ void multiboot2_parse(uint32_t mb2_info_addr,
             if (tag->size < 16u) break;
             struct mb2_tag_mmap* t = (struct mb2_tag_mmap*)(uintptr_t)cursor;
 
-            /* entry_size must be >= sizeof(mb2_mmap_entry) and non-zero. */
+            // entry_size must be at least sizeof(mb2_mmap_entry)
             if (t->entry_size < sizeof(struct mb2_mmap_entry)) break;
 
             uint32_t payload_bytes = tag->size - 16u;
             uint32_t count = payload_bytes / t->entry_size;
-
             uint64_t total_avail = 0;
 
             for (uint32_t i = 0; i < count; i++) {
-                /* Bounds-check each entry pointer. */
                 uint32_t entry_off = 16u + i * t->entry_size;
                 if (entry_off + sizeof(struct mb2_mmap_entry) > tag->size) break;
 
                 struct mb2_mmap_entry* e =
                     (struct mb2_mmap_entry*)((uint8_t*)(uintptr_t)cursor + entry_off);
 
+                // Sum available RAM for total memory count
                 if (e->type == MB2_MMAP_TYPE_AVAILABLE) {
                     total_avail += e->len;
                 }
 
-                /* Copy into flat table for PMM (32-bit clipped). */
+                // Build flat mmap table for PMM (32-bit kernel only)
                 if (mmap_out && mmap_out->count < MB2_MMAP_MAX_ENTRIES) {
-                    /*
-                     * Skip entries that start above 4 GB — a 32-bit kernel
-                     * cannot use them anyway.
-                     */
+                    // Skip regions above 4GB (unusable in 32-bit)
                     if (e->addr > 0xFFFFFFFFULL) continue;
 
                     uint64_t base64 = e->addr;
                     uint64_t end64  = e->addr + e->len;
 
-                    /* Clip to 32-bit address space. */
+                    // Clip to 4GB limit
                     if (end64 > 0x100000000ULL) end64 = 0x100000000ULL;
 
                     uint32_t base32 = (uint32_t)base64;
@@ -141,9 +141,10 @@ void multiboot2_parse(uint32_t mb2_info_addr,
             break;
         }
 
+        // Align tag size to 8 bytes, advance cursor
         uint32_t adv = (tag->size + (MB2_ALIGN - 1u)) & ~(MB2_ALIGN - 1u);
-        if (adv < MB2_TAG_HDR_SIZE) break; /* pathological: would loop forever */
-        if (cursor > end - adv) break;     /* would overflow or escape range   */
+        if (adv < MB2_TAG_HDR_SIZE) break;  // Would loop forever
+        if (cursor > end - adv) break;       // Would overflow
         cursor += adv;
     }
 }

@@ -1,4 +1,6 @@
 [bits 32]
+; boot.asm — Multiboot2 entry point
+
 [global _start]
 
 ; Multiboot2 header
@@ -21,9 +23,9 @@ ireq_start:
     dw 1                                         ; type = information request
     dw 0                                         ; flags
     dd ireq_end - ireq_start                     ; size
-    dd 4                                         ; request BASIC_MEMINFO
-    dd 6                                         ; request MMAP
-    dd 8                                         ; request FRAMEBUFFER
+    dd 4                                         ; BASIC_MEMINFO
+    dd 6                                         ; MMAP
+    dd 8                                         ; FRAMEBUFFER
 ireq_end:
 
     ; Framebuffer tag: ask for 1024x768x32

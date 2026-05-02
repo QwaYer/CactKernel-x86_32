@@ -2,7 +2,12 @@
 #define FB_H
 
 #include <stdint.h>
-#include "kernel.h"    // multiboot_info_t
+#include "kernel.h"    // multiboot_info_t, colors
+#include "font.h"
+
+#define FB_CONSOLE_FONT_SCALE  2
+#define FB_CONSOLE_CHAR_WIDTH  (FONT_WIDTH * FB_CONSOLE_FONT_SCALE)
+#define FB_CONSOLE_CHAR_HEIGHT (FONT_HEIGHT * FB_CONSOLE_FONT_SCALE)
 
 // Return codes for fb_init()
 typedef enum {
@@ -30,5 +35,8 @@ uint32_t  fb_get_width(void);
 uint32_t  fb_get_height(void);
 uint32_t  fb_get_pitch(void);
 uint32_t* fb_get_buffer(void);
+
+/* Post-paging verification / diagnostics (calls kprint/klog). */
+void init_framebuffer(void);
 
 #endif

@@ -6,26 +6,25 @@
 #include "pci.h"
 #include "multiboot2.h"
 
-// Forward declarations
+// Forward declaration for exception frame
 struct context_frame;
 
 /*
  * Parsed multiboot2 information.
  *
- * Populated once, early in init(), by walking the tag list the bootloader
- * handed us in ebx. The rest of the kernel consumes this flattened view
- * instead of poking at raw tag memory.
+ * Populated once in init() by walking bootloader-provided tag list.
+ * Kernel consumes this flat view instead of raw tag memory.
  *
- * `flags` retains multiboot1-style semantics for the bits we care about:
- *   bit 0  = mem_lower / mem_upper are valid
- *   bit 6  = mmap is valid (mem_total_bytes populated)
- *   bit 12 = framebuffer info is valid
+ * flags bit semantics (multiboot1-compatible):
+ *   bit 0  = mem_lower / mem_upper valid
+ *   bit 6  = mmap valid (mem_total_bytes populated)
+ *   bit 12 = framebuffer info valid
  */
 typedef struct {
     uint32_t flags;
-    uint32_t mem_lower;          /* KB of conventional memory */
-    uint32_t mem_upper;          /* KB of extended memory (capped at ~4 GB-1 MB) */
-    uint64_t mem_total_bytes;    /* sum of MMAP available regions (0 if no mmap) */
+    uint32_t mem_lower;          // Conventional memory (KB)
+    uint32_t mem_upper;          // Extended memory (KB, capped at ~4GB-1MB)
+    uint64_t mem_total_bytes;    // Sum of MMAP available regions
 
     uint64_t framebuffer_addr;
     uint32_t framebuffer_pitch;
@@ -35,15 +34,12 @@ typedef struct {
     uint8_t  framebuffer_type;
 } multiboot_info_t;
 
-/* Parse raw multiboot2 info (pointer from ebx) into multiboot_info_t.
- * Also fills mmap_out with a flat, 32-bit-clipped copy of all MMAP entries
- * so the Rust PMM can be initialised from real hardware memory map data.
- * mmap_out may be NULL if the caller does not need the MMAP table. */
+// Parse raw multiboot2 info into multiboot_info_t and MMAP table
 void multiboot2_parse(uint32_t mb2_info_addr,
                       multiboot_info_t* out,
                       mb2_mmap_table_t* mmap_out);
 
-// Framebuffer Colors
+// Framebuffer color definitions (RGB 24-bit)
 typedef enum {
     COLOR_BLACK        = 0x000000,
     COLOR_BLUE         = 0x0000AA,
@@ -65,15 +61,16 @@ typedef enum {
 
 #define WHITE_ON_BLACK COLOR_WHITE
 
-// Paging Constants
+// Page table entry flags
 #define PAGE_PRESENT 0x1
 #define PAGE_RW      0x2
 #define PAGE_USER    0x4
 
+// Page directory / table index extraction
 #define PD_INDEX(vaddr) ((vaddr >> 22) & 0x3FF)
 #define PT_INDEX(vaddr) ((vaddr >> 12) & 0x3FF)
 
-// I/O Port Operations
+// I/O port operations (inline assembly)
 extern void     port_byte_out(uint16_t port, uint8_t data);
 extern uint8_t  port_byte_in (uint16_t port);
 extern void     port_word_out(uint16_t port, uint16_t data);
@@ -84,7 +81,7 @@ extern uint32_t port_long_in (uint16_t port);
 #define port_dword_out port_long_out
 #define port_dword_in  port_long_in
 
-// Interrupt Service Routines
+// Interrupt Service Routine stubs (defined in isr.S)
 extern void timer_isr();
 extern void keyboard_isr();
 extern void syscall_isr();
@@ -101,7 +98,7 @@ extern void isr27(); extern void isr28(); extern void isr29();
 extern void isr30(); extern void isr31();
 extern void isr_common_stub();
 
-// Log levels
+// Log levels for klog()
 typedef enum {
     LOG_OK    = 0,
     LOG_WARN  = 1,
@@ -109,7 +106,7 @@ typedef enum {
     LOG_FAIL  = 3,
 } log_level_t;
 
-// Video / Console
+// Framebuffer console I/O
 void kprint      (char* message);
 void kprint_color(char* message, uint32_t color);
 void kprint_at   (char* message, int x, int y);
@@ -119,35 +116,36 @@ void klog        (log_level_t level, const char* message);
 int  get_cursor_x(void);
 int  get_cursor_y(void);
 
-// Libc-like (Kernel Space)
+// Kernel-space string/number utilities
 void itoa          (int n, char str[]);
 int  atoi          (char* str);
 int  strcmp        (char* s1, char* s2);
 int  compare_string(char* s1, char* s2);
 void hex_to_ascii  (uint32_t n, char str[]);
 
-// Exception Handling
+// CPU exception dispatcher
 void exception_handler(struct context_frame* regs);
 
+// Read CR2 (page fault linear address)
 static inline uint32_t read_cr2(void) {
     uint32_t val;
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(val));
     return val;
 }
 
+// Get current page directory pointer (CR3)
 static inline uint32_t* get_current_pd(void) {
     uint32_t val;
     __asm__ __volatile__("mov %%cr3, %0" : "=r"(val));
     return (uint32_t*)val;
 }
 
-// Hardware Initialization
-void init_framebuffer(void);
+// Hardware detection helpers
 int         probe_io_ports  (void);
 int         detect_memory   (void);
 void init_timer      (uint32_t frequency);
 
-// Task Management & Scheduling
+// Task scheduling
 struct task_struct;
 int                  init_scheduler(void);
 void                 task_init     (void);
@@ -157,7 +155,7 @@ struct task_struct*  create_task   (void (*entry_point)(void));
 extern void          switch_to     (uint32_t* old_esp, uint32_t new_esp);
 extern struct task_struct* volatile current_task;
 
-// Memory Management
+// Paging / memory management
 void      init_paging            (void);
 void      switch_paging          (uint32_t* pd);
 void      vmm_map                (uint32_t* pd, uint32_t virt, uint32_t phys, int flags);
@@ -166,30 +164,30 @@ uint32_t  get_free_heap_memory   (void);
 void      slab_init              (void);
 void      page_fault_init        (void);
 
-// Storage
+// NVMe storage (temporary direct access)
 extern void nvme_init        (void);
 extern void nvme_read_sector (uint32_t lba, uint8_t* buf);
 extern void nvme_write_sector(uint32_t lba, uint8_t* buf);
 
-// Block Device Abstraction
+// Generic block device layer
 extern void blkdev_read_sector (uint32_t lba, uint8_t* buf);
 extern void blkdev_write_sector(uint32_t lba, uint8_t* buf);
 
-// Kernel Entry Point Helpers
+// Hardware setup entry
 void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap);
 
-// ELF Loader
+// ELF loader types
 struct proc_page_tracker_t;
 struct vfs_node;
 void* load_elf(char* path, uint32_t* pd, struct proc_page_tracker_t* tracker);
 uint32_t elf_get_brk_start(struct vfs_node* file);
 
-// Networking
+// Networking stack
 void net_init             (void);
 void net_poll             (void);
 void virtio_net_irq_handler(void);
 
-// Terminal Window Size
+// Terminal window size for TIOCGWINSZ/TIOCSWINSZ ioctls
 #define TIOCGWINSZ 0x5413
 #define TIOCSWINSZ 0x5414
 
@@ -203,10 +201,10 @@ struct winsize {
 extern struct winsize terminal_winsize;
 extern uint32_t       terminal_fg_pid;
 
-// Global State
+// Global input device state
 extern volatile int    keyboard_irq_count;
 extern volatile uint8_t last_scancode_raw;
 extern volatile char   last_char;
 extern volatile int    key_event_happened;
 
-#endif
+#endif  
