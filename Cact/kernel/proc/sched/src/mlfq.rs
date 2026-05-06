@@ -310,6 +310,8 @@ pub unsafe extern "C" fn schedule() {
         prev_pd
     };
 
+    ffi::vmm_sync_kernel_mmio_mappings(effective_next_pd);
+
     if effective_next_pd != effective_prev_pd {
         ffi::switch_paging(effective_next_pd);
     }

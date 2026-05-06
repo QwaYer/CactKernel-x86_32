@@ -38,6 +38,7 @@ extern "C" {
     pub fn vmm_free_address_space(pd: *mut u32);
     pub fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u32);
     pub fn vmm_map(pd: *mut u32, virt: u32, phys: u32, flags: u32);
+    pub fn vmm_sync_kernel_mmio_mappings(pd: *mut u32);
 
     pub fn load_elf(
         path:    *const u8,

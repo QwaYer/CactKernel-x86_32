@@ -21,6 +21,20 @@ pub fn get_kernel_pd() -> *mut u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn vmm_sync_kernel_mmio_mappings(pd: *mut u32) {
+    if pd.is_null() {
+        return;
+    }
+    unsafe {
+        // Keep high MMIO/PCI-hole PDEs consistent in every process PD so
+        // interrupt handlers can touch device registers under any CR3.
+        for i in PD_KERNEL_ENTRIES..PD_TOTAL {
+            *pd.add(i) = page_directory.0[i];
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn init_paging() {
     kprint_str(b"[PAGING] page_directory at 0x\0".as_ptr());
     let pd_addr = unsafe { page_directory.0.as_ptr() as u32 };
@@ -117,6 +131,8 @@ pub extern "C" fn vmm_map(pd: *mut u32,
         flags |= PAGE_RW;
     }
 
+    let is_kernel_mmio = pd == get_kernel_pd() && virtual_addr >= PCI_HOLE_START;
+
     unsafe {
         let pde = &mut *pd.add(pdi);
 
@@ -128,19 +144,38 @@ pub extern "C" fn vmm_map(pd: *mut u32,
                 return;
             }
             for i in 0..1024usize { *pt.add(i) = 0; }
-            *pde = (pt as u32) | flags | PAGE_PRESENT | PDE_PRIVATE;
-        } else if *pde & PDE_PRIVATE == 0 {
-            // Shared kernel page table — COW it into a private copy so we
-            // never mutate the global kernel PT.
-            let shared = (*pde & !0xFFF) as *const u32;
-            let priv_pt = cow_page_table(shared);
-            if priv_pt.is_null() {
-                kprint_str(b"[ERR] vmm_map: COW PT alloc failed\n\0".as_ptr());
-                return;
+            if is_kernel_mmio {
+                *pde = (pt as u32) | flags | PAGE_PRESENT;
+            } else {
+                *pde = (pt as u32) | flags | PAGE_PRESENT | PDE_PRIVATE;
             }
-            let old_flags = *pde & 0xFFF;
-            *pde = (priv_pt as u32 & !0xFFF)
-                | (old_flags | (flags & (PAGE_USER | PAGE_RW)) | PDE_PRIVATE);
+        } else if *pde & PDE_PRIVATE == 0 {
+            if is_kernel_mmio {
+                // Kernel MMIO mappings must stay globally shared across all
+                // process PDs; do not COW these page tables into private ones.
+                *pde |= flags & (PAGE_USER | PAGE_RW);
+                let pt = (*pde & !0xFFF) as *mut u32;
+                let old_pte = *pt.add(pti);
+                if old_pte & PAGE_PRESENT != 0
+                    && old_pte & PAGE_COW  != 0
+                    && (old_pte & !0xFFF) != (physical_addr & !0xFFF)
+                {
+                    kfree_page((old_pte & !0xFFF) as *mut u8);
+                }
+                *pt.add(pti) = (physical_addr & !0xFFF) | flags | PAGE_PRESENT;
+            } else {
+                // Shared kernel page table — COW it into a private copy so we
+                // never mutate the global kernel PT.
+                let shared = (*pde & !0xFFF) as *const u32;
+                let priv_pt = cow_page_table(shared);
+                if priv_pt.is_null() {
+                    kprint_str(b"[ERR] vmm_map: COW PT alloc failed\n\0".as_ptr());
+                    return;
+                }
+                let old_flags = *pde & 0xFFF;
+                *pde = (priv_pt as u32 & !0xFFF)
+                    | (old_flags | (flags & (PAGE_USER | PAGE_RW)) | PDE_PRIVATE);
+            }
         } else {
             // Already a private page table — just propagate permission bits.
             *pde |= flags & (PAGE_USER | PAGE_RW);
@@ -158,6 +193,16 @@ pub extern "C" fn vmm_map(pd: *mut u32,
         }
 
         *pt.add(pti) = (physical_addr & !0xFFF) | flags | PAGE_PRESENT;
+    }
+
+    // If a new kernel/MMIO mapping is added to the kernel template, mirror it
+    // into the currently active PD as well so already-running user tasks do
+    // not fault inside IRQ context before the next scheduler switch.
+    if pd == get_kernel_pd() && virtual_addr >= PCI_HOLE_START {
+        let active = crate::safe::current_page_dir();
+        if !active.is_null() && active != pd {
+            vmm_sync_kernel_mmio_mappings(active);
+        }
     }
 }
 
@@ -184,7 +229,8 @@ pub extern "C" fn vmm_free_address_space(pd: *mut u32) {
     if pd.is_null() { return; }
 
     unsafe {
-        for i in 0..PD_TOTAL {
+        // Free only user-space PDEs; kernel/MMIO half is globally shared.
+        for i in 0..PD_KERNEL_ENTRIES {
             let pde = *pd.add(i);
             // Only free page tables that were privately allocated for this
             // process.  Shared kernel PTs must never be touched here.

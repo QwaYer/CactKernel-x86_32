@@ -923,6 +923,7 @@ pub unsafe extern "C" fn task_exec(
     }
 
     map_sigreturn_trampoline_on_pd(t, new_pd);
+    ffi::vmm_sync_kernel_mmio_mappings(new_pd);
 
     ffi::tss_entry.esp0 = (*t).stack_base as u32 + KERNEL_STACK_SIZE as u32;
 
