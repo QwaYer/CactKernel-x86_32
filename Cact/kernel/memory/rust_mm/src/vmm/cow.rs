@@ -58,6 +58,31 @@ pub extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u32) {
                 continue;
             }
 
+            let va = ((i as u32) << 22) | ((j as u32) << 12);
+            if va >= USER_STACK_LIMIT && va < USER_STACK_TOP {
+                // Keep user stack pages writable right after fork.
+                // Copy-on-write for the stack tends to fault immediately on the
+                // first function prologue/store after returning to user mode,
+                // so we eagerly clone these pages for stability.
+                let new_page = kalloc();
+                if !new_page.is_null() {
+                    let phys = pte & !0xFFFu32;
+                    let mut flags = pte & 0xFFFu32;
+                    flags &= !PAGE_COW;
+                    flags |= PAGE_RW;
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            phys as *const u8,
+                            new_page,
+                            PAGE_SIZE as usize,
+                        );
+                        *dst_pt.add(j) = (new_page as u32 & !0xFFFu32) | flags;
+                    }
+                    continue;
+                }
+                // OOM fallback: keep previous COW behavior below.
+            }
+
             // User page: mark both parent and child COW.
             let phys = pte & !0xFFFu32;
             let flags = pte & 0xFFFu32;
