@@ -151,6 +151,8 @@ static syscall_fn syscall_table[SYSCALL_COUNT] = {
     [SYS_SHUTDOWN]      = (syscall_fn)sys_shutdown,
     [SYS_SETSOCKOPT]    = (syscall_fn)sys_setsockopt,
     [SYS_GETSOCKOPT]    = (syscall_fn)sys_getsockopt,
+    [SYS_PING_ECHO]     = (syscall_fn)sys_ping_echo,
+    [SYS_NETCFG_SET]    = (syscall_fn)sys_netcfg_set,
 };
 
 // Syscalls that take a struct syscall_frame* instead of three scalar arguments.
@@ -215,6 +217,8 @@ static int _needs_frame(uint32_t n) {
     case SYS_SHUTDOWN:
     case SYS_SETSOCKOPT:
     case SYS_GETSOCKOPT:
+    case SYS_PING_ECHO:
+    case SYS_NETCFG_SET:
         return 1;
     default:
         return 0;

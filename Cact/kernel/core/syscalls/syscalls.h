@@ -104,8 +104,10 @@ typedef enum {
     SYS_SHUTDOWN      = 87,
     SYS_SETSOCKOPT    = 88,
     SYS_GETSOCKOPT    = 89,
+    SYS_PING_ECHO     = 90,
+    SYS_NETCFG_SET    = 91,
 
-    SYSCALL_COUNT     = 90,
+    SYSCALL_COUNT     = 92,
 } syscall_num_t;
 
 #endif 

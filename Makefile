@@ -27,12 +27,15 @@ KERN_SYNC_DIR    = Cact/kernel/sync
 SCHED_DIR    = Cact/kernel/proc/sched
 SCHED_RS_SOURCES := $(shell find $(SCHED_DIR)/src -type f -name '*.rs' 2>/dev/null | LC_ALL=C sort)
 CACT_SYNC_RS := $(shell find $(KERN_SYNC_DIR)/src -type f -name '*.rs' 2>/dev/null | LC_ALL=C sort)
-SCHED_TARGET = $(SCHED_DIR)/target/i686-cact/release/libsched.a
+SCHED_TARGET = $(SCHED_DIR)/target/libsched.a
 CARGO        = cargo +nightly
 
 # Rust memory manager
 RUST_MM_DIR  = Cact/kernel/memory/rust_mm
 RUST_MM_LIB  = $(RUST_MM_DIR)/target/i686-cact/release/libcact_mm.a
+# Rust network core
+RUST_NET_DIR = Cact/kernel/net/rust_net
+RUST_NET_LIB = $(RUST_NET_DIR)/target/libcact_net.a
 KERN_IDT_DIR     = Cact/kernel/idt
 DRIVER_INPUT_DIR     = Cact/drivers/input
 DRIVER_PS2_KBD_DIR   = Cact/drivers/input/ps_2/keyboard
@@ -60,14 +63,14 @@ FS_ETCFS_DIR     = Cact/fs/vfs/etcfs
 FS_TMPFS_DIR     = Cact/fs/vfs/tmpfs
 FS_BINFS_DIR     = Cact/fs/vfs/binfs
 FS_LIBFS_DIR     = Cact/fs/vfs/libfs
-NET_DIR          = Cact/net
-NET_ARP_DIR      = Cact/net/arp
-NET_ETH_DIR      = Cact/net/ethernet
-NET_IP_DIR       = Cact/net/ip
-NET_ICMP_DIR     = Cact/net/icmp
-NET_UDP_DIR      = Cact/net/protocols/udp
-NET_TCP_DIR      = Cact/net/protocols/tcp
-NET_SOCKET_DIR   = Cact/net/socket
+NET_DIR          = Cact/kernel/net
+NET_ARP_DIR      = Cact/kernel/net/arp
+NET_ETH_DIR      = Cact/kernel/net/ethernet
+NET_IP_DIR       = Cact/kernel/net/ip
+NET_ICMP_DIR     = Cact/kernel/net/icmp
+NET_UDP_DIR      = Cact/kernel/net/protocols/udp
+NET_TCP_DIR      = Cact/kernel/net/protocols/tcp
+NET_SOCKET_DIR   = Cact/kernel/net/socket
 DRIVER_NET_DIR   = Cact/drivers/network/virtio_net
 DRIVER_FB_DIR    = Cact/drivers/video/fb
 DRIVER_FONT_DIR  = Cact/drivers/video/font
@@ -197,14 +200,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/xhci.o \
       $(BUILD_DIR)/usb_hid.o \
       $(BUILD_DIR)/usb_hub.o \
-      $(BUILD_DIR)/net.o \
-      $(BUILD_DIR)/ethernet.o \
-      $(BUILD_DIR)/arp.o \
-      $(BUILD_DIR)/ip.o \
-      $(BUILD_DIR)/icmp.o \
-      $(BUILD_DIR)/udp.o \
-      $(BUILD_DIR)/tcp.o \
-      $(BUILD_DIR)/ksocket.o \
       $(BUILD_DIR)/virtio_net.o \
       $(BUILD_DIR)/fb.o \
       $(BUILD_DIR)/font.o \
@@ -235,10 +230,19 @@ $(BUILD_DIR)/cact.iso: $(BUILD_DIR)/kernel.bin grub.cfg
 $(RUST_MM_LIB): FORCE
 	cd $(RUST_MM_DIR) && cargo build --release
 
+$(RUST_NET_LIB): FORCE
+	cd $(RUST_NET_DIR) && $(CARGO) build --release \
+		-Z json-target-spec \
+		-Z build-std=core,compiler_builtins \
+		-Z build-std-features=compiler-builtins-mem 2>&1 && \
+	mkdir -p target && \
+	TARGET_DIR="$${CARGO_TARGET_DIR:-target}" && \
+	cp "$$TARGET_DIR/i686-cact/release/libcact_net.a" target/libcact_net.a
+
 FORCE:
 
-$(BUILD_DIR)/kernel.bin: $(OBJ) $(RUST_MM_LIB) $(SCHED_TARGET)
-	ld $(LDFLAGS) -o $@ --start-group $(OBJ) $(RUST_MM_LIB) -L$(dir $(SCHED_TARGET)) -lsched --end-group
+$(BUILD_DIR)/kernel.bin: $(OBJ) $(RUST_MM_LIB) $(RUST_NET_LIB) $(SCHED_TARGET)
+	ld $(LDFLAGS) -o $@ --start-group $(OBJ) $(RUST_MM_LIB) $(RUST_NET_LIB) -L$(dir $(SCHED_TARGET)) -lsched --end-group
 
 
 $(BUILD_DIR)/kernel_entry.o: $(KERN_CORE_DIR)/kernel.asm
@@ -354,7 +358,10 @@ $(SCHED_TARGET): $(SCHED_RS_SOURCES) $(CACT_SYNC_RS) $(SCHED_DIR)/Cargo.toml $(S
 	cd $(SCHED_DIR) && $(CARGO) build --release \
 		-Z json-target-spec \
 		-Z build-std=core,compiler_builtins \
-		-Z build-std-features=compiler-builtins-mem 2>&1
+		-Z build-std-features=compiler-builtins-mem 2>&1 && \
+	mkdir -p target && \
+	TARGET_DIR="$${CARGO_TARGET_DIR:-target}" && \
+	cp "$$TARGET_DIR/i686-cact/release/libsched.a" target/libsched.a
 
 $(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
 	@mkdir -p $(BUILD_DIR)
@@ -533,6 +540,7 @@ clean:
 	cd $(SCHED_DIR) && cargo +nightly clean
 	cd $(KERN_SYNC_DIR) && cargo +nightly clean
 	cd $(RUST_MM_DIR) && cargo clean
+	cd $(RUST_NET_DIR) && cargo +nightly clean
 
 .PHONY: all clean sched FORCE
 .PHONY: sched

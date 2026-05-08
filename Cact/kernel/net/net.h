@@ -82,4 +82,4 @@ void net_poll(void);                  /* call periodically from scheduler    */
 extern semaphore_t net_sema;
 void net_receive(skb_t* skb);        /* drivers call this on RX             */
 
-#endif 
+#endif

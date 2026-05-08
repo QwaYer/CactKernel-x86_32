@@ -2,6 +2,7 @@
 #include <net.h>       // kernel-internal ntohs/htonl/ntohl/htons/MY_IP
 #include "validate.h"
 #include "helper.h"
+#include "rust_net_ffi.h"
 
 // socket() — create a new socket, allocate an fd for it
 int sys_socket(struct syscall_frame* regs) {
@@ -44,7 +45,7 @@ int sys_bind(struct syscall_frame* regs) {
             s = &tcp_sockets[ks->proto_idx];
         if (!s) return -1;
         s->local_port = port;
-        s->local_ip   = htonl(MY_IP);
+        s->local_ip   = htonl(rust_net_get_ip_host());
         return 0;
     }
 
@@ -351,4 +352,24 @@ int sys_getsockopt(struct syscall_frame* regs) {
     *(int*)optval = ival;
     *optlen = sizeof(int);
     return 0;
+}
+
+// ping_echo() — send one ICMP echo request through Rust net stack
+// ebx: dst IPv4 in host byte order, ecx: id, edx: seq
+int sys_ping_echo(struct syscall_frame* regs) {
+    uint32_t dst_ip_h = (uint32_t)regs->ebx;
+    uint16_t id       = (uint16_t)regs->ecx;
+    uint16_t seq      = (uint16_t)regs->edx;
+    return rust_net_ping_echo_host(dst_ip_h, id, seq);
+}
+
+// netcfg_set() — apply runtime IPv4 config in Rust net stack
+// ebx: pointer to netcfg_args_t in userspace
+int sys_netcfg_set(struct syscall_frame* regs) {
+    netcfg_args_t* args = (netcfg_args_t*)regs->ebx;
+    if (!validate_user_ptr(args, sizeof(netcfg_args_t))) return -1;
+    return rust_net_set_ipv4_config(args->ip_host,
+                                    args->netmask_host,
+                                    args->gateway_host,
+                                    args->dns_host);
 }

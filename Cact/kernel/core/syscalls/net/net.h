@@ -28,6 +28,13 @@ typedef struct {
     uint32_t* optlen;
 } getsockopt_args_t;
 
+typedef struct {
+    uint32_t ip_host;
+    uint32_t netmask_host;
+    uint32_t gateway_host;
+    uint32_t dns_host;
+} netcfg_args_t;
+
 // Socket syscalls
 int sys_socket(struct syscall_frame* regs);
 int sys_bind(struct syscall_frame* regs);
@@ -41,5 +48,7 @@ int sys_recvfrom(struct syscall_frame* regs);
 int sys_shutdown(struct syscall_frame* regs);
 int sys_setsockopt(struct syscall_frame* regs);
 int sys_getsockopt(struct syscall_frame* regs);
+int sys_ping_echo(struct syscall_frame* regs);
+int sys_netcfg_set(struct syscall_frame* regs);
 
 #endif 

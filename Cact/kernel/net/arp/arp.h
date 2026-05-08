@@ -27,4 +27,4 @@ void arp_input(skb_t* skb);
 void arp_request(uint32_t target_ip);
 int  arp_lookup(uint32_t ip, mac_addr_t* out_mac);
 
-#endif 
+#endif
