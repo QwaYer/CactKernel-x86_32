@@ -3,9 +3,16 @@
 #include "helper.h"
 #include "resolve.h"
 #include "pipe.h"
+#include "path/path.h"
+#include "file/file.h"
 
 // Flags that may be changed via fcntl F_SETFL
 #define SETFL_MASK  (0x0800 | 0x0400)
+#define OPEN_ACCMODE 0x0003
+#define OPEN_WRONLY  0x0001
+#define OPEN_RDWR    0x0002
+#define OPEN_CREAT   0x0040
+#define OPEN_TRUNC   0x0200
 
 // Open a file by path, allocate an fd starting from 3 (0-2 are stdin/stdout/stderr)
 int sys_open(char* name, int flags) {
@@ -14,14 +21,27 @@ int sys_open(char* name, int flags) {
 
     vfs_node_t* node = _resolve_path(name);
     if (!node) {
-        kprint("[DBG] sys_open: not found: "); kprint(name); kprint("\n");
-        return -1;
+        if ((flags & OPEN_CREAT) == 0) {
+            kprint("[DBG] sys_open: not found: "); kprint(name); kprint("\n");
+            return -1;
+        }
+
+        if (sys_create(name) != 0) {
+            kprint("[DBG] sys_open: create failed: "); kprint(name); kprint("\n");
+            return -1;
+        }
+
+        node = _resolve_path(name);
+        if (!node) {
+            kprint("[DBG] sys_open: created but unresolved: "); kprint(name); kprint("\n");
+            return -1;
+        }
     }
 
     // Permission check based on requested access mode (bits 0-1 of flags)
     {
         uint32_t need = 0;
-        uint32_t acc  = (uint32_t)flags & 3;
+        uint32_t acc  = (uint32_t)flags & OPEN_ACCMODE;
         if (acc == 0 || acc == 2) need |= VFS_PERM_READ;
         if (acc == 1 || acc == 2) need |= VFS_PERM_WRITE;
         if (vfs_check_perm(node, need) < 0) return -1;
@@ -35,6 +55,21 @@ int sys_open(char* name, int flags) {
             current_task->fds->fd_flags[i]   = (uint32_t)flags;
             current_task->fds->fd_cloexec[i] = 0;
             open_vfs(node);   // increment VFS refcount
+
+            // Truncate regular files on open(O_TRUNC) when opened writable.
+            if ((flags & OPEN_TRUNC) &&
+                (((flags & OPEN_ACCMODE) == OPEN_WRONLY) ||
+                 ((flags & OPEN_ACCMODE) == OPEN_RDWR))) {
+                if (sys_ftruncate(i, 0) != 0) {
+                    current_task->fds->fd_table[i]   = 0;
+                    current_task->fds->fd_offset[i]  = 0;
+                    current_task->fds->fd_flags[i]   = 0;
+                    current_task->fds->fd_cloexec[i] = 0;
+                    close_vfs(node);
+                    return -1;
+                }
+            }
+
             kprint("[DBG] sys_open: fd=");
             char tmp[16]; itoa(i, tmp); kprint(tmp);
             kprint(" path="); kprint(name); kprint("\n");

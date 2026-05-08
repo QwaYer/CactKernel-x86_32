@@ -12,7 +12,7 @@ int sys_stat(struct syscall_frame* regs) {
     if (!validate_user_str(path)) return -1;
     if (!validate_user_ptr(ubuf, 16)) return -1;
 
-    struct vfs_node* node = vfs_walk_path(vfs_root, path);
+    struct vfs_node* node = _resolve_path(path);
     if (!node) {
         kprint("[DBG] sys_stat: not found: "); kprint(path); kprint("\n");
         return -1;
