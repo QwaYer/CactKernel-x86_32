@@ -833,6 +833,25 @@ pub unsafe extern "C" fn task_exec(
     let t = current_task;
     if t.is_null() || (*t).is_kernel != 0 { return -1; }
 
+    let old_ustack_pages = [
+        (*t).ustack_phys,
+        (*t).ustack_phys_extra[0],
+        (*t).ustack_phys_extra[1],
+        (*t).ustack_phys_extra[2],
+    ];
+    let mut new_ustack_pages: [*mut c_void; USER_STACK_PAGES as usize] =
+        [ptr::null_mut(); USER_STACK_PAGES as usize];
+    for i in 0..USER_STACK_PAGES as usize {
+        let p = ffi::kalloc() as *mut c_void;
+        if p.is_null() {
+            for j in 0..i {
+                ffi::kfree_page(new_ustack_pages[j]);
+            }
+            return -1;
+        }
+        new_ustack_pages[i] = p;
+    }
+
     crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
     // Выгрузить динамический линкер
@@ -845,6 +864,9 @@ pub unsafe extern "C" fn task_exec(
 
     let new_pd = ffi::vmm_create_address_space();
     if new_pd.is_null() {
+        for p in new_ustack_pages {
+            ffi::kfree_page(p);
+        }
         crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
         return -1;
     }
@@ -856,6 +878,9 @@ pub unsafe extern "C" fn task_exec(
     if entry.is_null() {
         ffi::kprint(b"[EXEC] load_elf failed (null entry), aborting exec\n\0".as_ptr());
         ffi::vmm_free_address_space(new_pd);
+        for p in new_ustack_pages {
+            ffi::kfree_page(p);
+        }
         return -1;
     }
 
@@ -903,13 +928,13 @@ pub unsafe extern "C" fn task_exec(
 
     crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
-    /* Пока CR3 ещё старый: copy_strings_to_ustack читает argv/envp по старым
-     * пользовательским VA. Иначе после раннего switch_paging эти страницы в new_pd
-     * отсутствуют — исполняется мусор / #GP при возврате в user с -1. */
+    /* Пересоздаём user stack на новых физстраницах для exec (чистый процессный стек). */
+    (*t).ustack_phys = new_ustack_pages[0];
+    (*t).ustack_phys_extra = [new_ustack_pages[1], new_ustack_pages[2], new_ustack_pages[3]];
     map_user_stack_in_pd(new_pd, &*t);
 
     for pi in 0..USER_STACK_PAGES as usize {
-        let us = ustack_phys_page(&*t, pi) as *mut u8;
+        let us = new_ustack_pages[pi] as *mut u8;
         ffi::memory_set(us as *mut c_void, 0, PAGE_SIZE as usize);
     }
 
@@ -937,6 +962,8 @@ pub unsafe extern "C" fn task_exec(
         Some(n) => n,
         None => {
             ffi::kprint(b"[EXEC] abort: argv copy / stack overflow\n\0".as_ptr());
+            (*t).ustack_phys = old_ustack_pages[0];
+            (*t).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
             ffi::vmm_free_address_space(new_pd);
             crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
@@ -946,6 +973,8 @@ pub unsafe extern "C" fn task_exec(
         Some(n) => n,
         None => {
             ffi::kprint(b"[EXEC] abort: envp copy / stack overflow\n\0".as_ptr());
+            (*t).ustack_phys = old_ustack_pages[0];
+            (*t).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
             ffi::vmm_free_address_space(new_pd);
             crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
@@ -955,6 +984,8 @@ pub unsafe extern "C" fn task_exec(
     let ptr_overhead = (argc as u32 + envc as u32 + 5) * 4;
     if sp < (*t).ustack_virt + ptr_overhead {
         ffi::kprint(b"[EXEC] abort: stack layout preflight failed\n\0".as_ptr());
+        (*t).ustack_phys = old_ustack_pages[0];
+        (*t).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
         ffi::vmm_free_address_space(new_pd);
         crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
         return -1;

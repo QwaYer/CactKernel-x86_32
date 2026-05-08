@@ -301,7 +301,7 @@ int sys_pipe(struct syscall_frame* regs) {
     current_task->fds->fd_offset[rfd]  = 0;
     current_task->fds->fd_offset[wfd]  = 0;
     current_task->fds->fd_flags[rfd]   = 0;
-    current_task->fds->fd_flags[wfd]   = 1;   // mark write end
+    current_task->fds->fd_flags[wfd]   = 0;
     current_task->fds->fd_cloexec[rfd] = 0;
     current_task->fds->fd_cloexec[wfd] = 0;
 

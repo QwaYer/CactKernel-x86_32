@@ -22,11 +22,13 @@ static int  socket_read_op (struct vfs_node *node, uint32_t off,
                              uint32_t size, char *buf);
 static int  socket_write_op(struct vfs_node *node, uint32_t off,
                              uint32_t size, char *buf);
+static void socket_open_op (struct vfs_node *node);
 static void socket_close_op(struct vfs_node *node);
 
 static vfs_ops_t socket_ops = {
     .read   = socket_read_op,
     .write  = socket_write_op,
+    .open   = socket_open_op,
     .close  = socket_close_op,
     /* everything else is NULL — not meaningful for sockets */
 };
@@ -57,6 +59,7 @@ static vfs_node_t *make_socket_node(ksock_t *ks) {
         ((uint8_t *)node)[i] = 0;
 
     node->type = VFS_SOCKET;
+    node->refcount = 1;
     node->ops  = &socket_ops;
     node->priv = ks;
     return node;
@@ -165,7 +168,19 @@ static int socket_write_op(struct vfs_node *node, uint32_t off,
     return -1;
 }
 
+static void socket_open_op(struct vfs_node *node) {
+    if (!node) return;
+    node->refcount++;
+}
+
 static void socket_close_op(struct vfs_node *node) {
+    if (!node) return;
+
+    if (node->refcount > 1) {
+        node->refcount--;
+        return;
+    }
+
     ksock_t *ks = ksock_from_node(node);
     if (!ks) return;
 

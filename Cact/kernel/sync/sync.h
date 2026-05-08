@@ -23,7 +23,7 @@ void irq_spinlock_acquire(irq_spinlock_t* lock);
 void irq_spinlock_release(irq_spinlock_t* lock);
 
 
-#define MUTEX_WAIT_QUEUE_MAX 16
+#define MUTEX_WAIT_QUEUE_MAX 64
 
 typedef struct {
     volatile int        locked;
