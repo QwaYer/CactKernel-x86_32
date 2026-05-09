@@ -19,7 +19,8 @@ unsafe extern "C" {
     pub fn sema_up(s: *mut Semaphore);
 
     pub fn create_task(entry: extern "C" fn()) -> *mut c_void;
-    pub fn virtio_net_init();
+    pub fn timer_ticks_get() -> u32;
+    pub fn sched_sleep_ticks(ticks: u32);
 
     pub fn read_vfs(node: *mut VfsNode, off: u32, size: u32, buf: *mut c_char) -> c_int;
     pub fn write_vfs(node: *mut VfsNode, off: u32, size: u32, buf: *mut c_char) -> c_int;
@@ -40,6 +41,11 @@ pub const LOG_FAIL: c_int = 3;
 pub fn c_kprint(msg: &'static [u8]) {
     // SAFETY: caller passes NUL-terminated static bytes.
     unsafe { kprint(msg.as_ptr().cast_mut().cast()) }
+}
+
+pub fn c_kprint_hex(v: u32) {
+    // SAFETY: C kernel logger accepts plain u32 value.
+    unsafe { kprint_hex(v) }
 }
 
 pub fn mac_equal(a: &MacAddr, b: &MacAddr) -> bool {

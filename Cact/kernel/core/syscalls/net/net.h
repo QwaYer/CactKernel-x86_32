@@ -33,6 +33,10 @@ typedef struct {
     uint32_t netmask_host;
     uint32_t gateway_host;
     uint32_t dns_host;
+    uint32_t dhcp_server_host;
+    uint32_t lease_s;
+    uint32_t t1_s;
+    uint32_t t2_s;
 } netcfg_args_t;
 
 // Socket syscalls

@@ -18,6 +18,7 @@
 #include "pagecache.h"
 #include "blkdev.h"
 #include "version.h"
+#include "virtio_net.h"
 
 // Kernel page directory (defined in paging.c)
 extern uint32_t page_directory[1024];
@@ -262,6 +263,10 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     // Network stack
     net_init();
+    // Driver bootstrap is platform policy, not net stack policy.
+    // Stack itself accepts any NIC via net_register_driver().
+    kprint("[NET] probing NIC drivers\n");
+    virtio_net_init();
 
     // Multitasking
     task_init();

@@ -1,5 +1,6 @@
 use crate::ethernet;
 use crate::ffi_kernel;
+use crate::dhcp;
 use crate::types::{MacAddr, NetDriver, Semaphore, Skb};
 
 #[no_mangle]
@@ -35,17 +36,28 @@ pub extern "C" fn net_register_driver(drv: *mut NetDriver) {
             get_mac(core::ptr::addr_of_mut!(my_mac));
         }
         my_mac = (*drv).mac;
+        ffi_kernel::c_kprint(b"[RUST-NET] driver registered, mac=\0");
+        ffi_kernel::c_kprint_hex((my_mac.b[0] as u32) << 8 | my_mac.b[1] as u32);
+        ffi_kernel::c_kprint(b":\0");
+        ffi_kernel::c_kprint_hex((my_mac.b[2] as u32) << 8 | my_mac.b[3] as u32);
+        ffi_kernel::c_kprint(b":\0");
+        ffi_kernel::c_kprint_hex((my_mac.b[4] as u32) << 8 | my_mac.b[5] as u32);
+        ffi_kernel::c_kprint(b"\n\0");
     }
 }
 
 #[no_mangle]
 pub extern "C" fn net_init() {
-    ffi_kernel::c_kprint(b"[RUST-NET] init\n\0");
+    ffi_kernel::c_kprint(b"[RUST-NET] init begin\n\0");
     // SAFETY: globals are static and valid.
     unsafe {
         ffi_kernel::sema_init(core::ptr::addr_of_mut!(net_sema), 0);
+        ffi_kernel::c_kprint(b"[RUST-NET] net_sema initialized\n\0");
         let _ = ffi_kernel::create_task(knetd);
-        ffi_kernel::virtio_net_init();
+        ffi_kernel::c_kprint(b"[RUST-NET] knetd task created\n\0");
+        dhcp::rust_net_dhcp_start_daemon();
+        ffi_kernel::c_kprint(b"[RUST-NET] dhcp daemon created\n\0");
+        ffi_kernel::c_kprint(b"[RUST-NET] waiting NIC driver registration via net_register_driver()\n\0");
     }
 }
 

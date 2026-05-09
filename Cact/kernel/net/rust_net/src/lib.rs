@@ -4,6 +4,7 @@
 pub mod arp;
 pub mod checksum;
 pub mod config;
+pub mod dhcp;
 pub mod ethernet;
 pub mod ffi;
 pub mod ffi_kernel;

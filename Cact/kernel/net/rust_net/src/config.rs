@@ -1,3 +1,5 @@
+use crate::ffi_kernel;
+
 static mut NET_IP_HOST: u32 = (10u32 << 24) | (0 << 16) | (2 << 8) | 15;
 static mut NET_MASK_HOST: u32 = (255u32 << 24) | (255 << 16) | (255 << 8) | 0;
 static mut NET_GATEWAY_HOST: u32 = (10u32 << 24) | (0 << 16) | (2 << 8) | 2;
@@ -35,6 +37,15 @@ pub extern "C" fn rust_net_set_ipv4_config(ip_h: u32, mask_h: u32, gw_h: u32, dn
         NET_GATEWAY_HOST = gw_h;
         NET_DNS_HOST = dns_h;
     }
+    ffi_kernel::c_kprint(b"[RUST-NET][CFG] ip=\0");
+    ffi_kernel::c_kprint_hex(ip_h);
+    ffi_kernel::c_kprint(b" mask=\0");
+    ffi_kernel::c_kprint_hex(mask_h);
+    ffi_kernel::c_kprint(b" gw=\0");
+    ffi_kernel::c_kprint_hex(gw_h);
+    ffi_kernel::c_kprint(b" dns=\0");
+    ffi_kernel::c_kprint_hex(dns_h);
+    ffi_kernel::c_kprint(b"\n\0");
     0
 }
 

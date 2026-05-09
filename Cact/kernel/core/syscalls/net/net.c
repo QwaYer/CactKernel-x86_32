@@ -368,8 +368,26 @@ int sys_ping_echo(struct syscall_frame* regs) {
 int sys_netcfg_set(struct syscall_frame* regs) {
     netcfg_args_t* args = (netcfg_args_t*)regs->ebx;
     if (!validate_user_ptr(args, sizeof(netcfg_args_t))) return -1;
-    return rust_net_set_ipv4_config(args->ip_host,
-                                    args->netmask_host,
-                                    args->gateway_host,
-                                    args->dns_host);
+    klog(LOG_OK, "[NET-SYSCALL] SYS_NETCFG_SET received");
+    rust_net_dhcp_lease_cfg_t lease = {
+        .ip_host = args->ip_host,
+        .netmask_host = args->netmask_host,
+        .gateway_host = args->gateway_host,
+        .dns_host = args->dns_host,
+        .server_host = args->dhcp_server_host,
+        .lease_s = args->lease_s,
+        .t1_s = args->t1_s,
+        .t2_s = args->t2_s,
+    };
+    char hx[11];
+    kprint("[NET-SYSCALL] ip=");
+    hex_to_ascii(lease.ip_host, hx); kprint(hx);
+    kprint(" mask=");
+    hex_to_ascii(lease.netmask_host, hx); kprint(hx);
+    kprint(" gw=");
+    hex_to_ascii(lease.gateway_host, hx); kprint(hx);
+    kprint(" dns=");
+    hex_to_ascii(lease.dns_host, hx); kprint(hx);
+    kprint("\n");
+    return rust_net_dhcp_set_lease(&lease);
 }
