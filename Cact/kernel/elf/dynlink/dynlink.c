@@ -4,6 +4,26 @@
 #include "klib.h"
 #include "kernel.h"
 
+static void dldbg_hex(const char* key, uint32_t v) {
+    char b[12];
+    kprint("[DLDBG] ");
+    kprint((char*)key);
+    kprint("=0x");
+    hex_to_ascii(v, b);
+    kprint(b);
+    kprint("\n");
+}
+
+static void dldbg_dec(const char* key, int v) {
+    char b[16];
+    kprint("[DLDBG] ");
+    kprint((char*)key);
+    kprint("=");
+    itoa(v, b);
+    kprint(b);
+    kprint("\n");
+}
+
 static int _so_path_join(char* dst, int dst_sz,
                           const char* dir, const char* name)
 {
@@ -17,25 +37,28 @@ static int _so_path_join(char* dst, int dst_sz,
     return 0;
 }
 
-static uint32_t _elf_map_file(struct vfs_node*     file,
-                               uint32_t*            pd,
-                               proc_page_tracker_t* tracker,
-                               uint32_t*            out_entry,
-                               Elf32_Dyn**          out_dyn,
-                               uint32_t*            out_dyn_size)
+/* Returns 0 on success; *out_load_base is valid (may be 0 for ET_DYN at vaddr 0).
+ * Returns -1 on failure. */
+static int _elf_map_file(struct vfs_node*     file,
+                          uint32_t*            pd,
+                          proc_page_tracker_t* tracker,
+                          uint32_t*            out_load_base,
+                          uint32_t*            out_entry,
+                          Elf32_Dyn**          out_dyn,
+                          uint32_t*            out_dyn_size)
 {
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(hdr), (char*)&hdr) <= 0) {
         kprint("[DL] cannot read ELF header\n");
-        return 0;
+        return -1;
     }
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
         kprint("[DL] bad ELF magic\n");
-        return 0;
+        return -1;
     }
     if (hdr.e_machine != 3) { // EM_386 
         kprint("[DL] not i386\n");
-        return 0;
+        return -1;
     }
 
     uint32_t load_base = 0xFFFFFFFF;
@@ -55,7 +78,7 @@ static uint32_t _elf_map_file(struct vfs_node*     file,
 
     if (load_base == 0xFFFFFFFF) {
         kprint("[DL] no PT_LOAD segments\n");
-        return 0;
+        return -1;
     }
 
     load_base &= ~(PAGE_SIZE - 1);
@@ -76,12 +99,12 @@ static uint32_t _elf_map_file(struct vfs_node*     file,
             void* phys = kalloc();
             if (!phys) {
                 kprint("[DL] out of memory mapping segment\n");
-                return 0; 
+                return -1;
             }
             if (proc_tracker_add(tracker, phys) < 0) {
                 kfree_page(phys);
                 kprint("[DL] tracker overflow\n");
-                return 0;
+                return -1;
             }
 
             memset(phys, 0, PAGE_SIZE);
@@ -113,15 +136,22 @@ static uint32_t _elf_map_file(struct vfs_node*     file,
                      hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                      sizeof(ph), (char*)&ph);
             if (ph.p_type == PT_DYNAMIC) {
-                *out_dyn      = (Elf32_Dyn*)ph.p_vaddr;
+                uint32_t dyn_rt = (hdr.e_type == 3 /* ET_DYN */)
+                                    ? (load_base + ph.p_vaddr)
+                                    : ph.p_vaddr;
+                *out_dyn      = (Elf32_Dyn*)dyn_rt;
                 *out_dyn_size = ph.p_filesz;
                 break;
             }
         }
     }
 
+    if (out_load_base) *out_load_base = load_base;
     if (out_entry) *out_entry = hdr.e_entry;
-    return load_base;
+    dldbg_hex("map.load_base", load_base);
+    dldbg_hex("map.entry", hdr.e_entry);
+    dldbg_hex("map.load_end", load_end);
+    return 0;
 }
 
 
@@ -132,6 +162,9 @@ void dynlink_ctx_init(dyn_ctx_t* ctx, uint32_t* pd,
     ctx->tracker = tracker;
     ctx->count   = 0;
     strncpy(ctx->so_search_path, "/lib:/usr/lib", 256);
+    dldbg_hex("ctx.pd", (uint32_t)pd);
+    dldbg_hex("ctx.tracker", (uint32_t)tracker);
+    kprint("[DLDBG] ctx.search_path=/lib:/usr/lib\n");
     for (int i = 0; i < SO_TABLE_MAX; i++) {
         ctx->table[i].ref_count = 0;
         ctx->table[i].name[0]   = '\0';
@@ -142,6 +175,14 @@ static loaded_so_t* _find_loaded(dyn_ctx_t* ctx, const char* name) {
     for (int i = 0; i < ctx->count; i++) {
         if (strcmp(ctx->table[i].name, (char*)name) == 0 &&
             ctx->table[i].ref_count > 0)
+            return &ctx->table[i];
+    }
+    return 0;
+}
+
+static loaded_so_t* _find_loaded_by_base(dyn_ctx_t* ctx, uint32_t base) {
+    for (int i = 0; i < ctx->count; i++) {
+        if (ctx->table[i].ref_count > 0 && ctx->table[i].load_base == base)
             return &ctx->table[i];
     }
     return 0;
@@ -164,14 +205,50 @@ static loaded_so_t* _alloc_so_slot(dyn_ctx_t* ctx) {
     return e;
 }
 
+static uint32_t _symcount_from_gnu_hash(uint32_t gnu_hash_addr) {
+    if (!gnu_hash_addr) return 0;
+
+    uint32_t* gh = (uint32_t*)gnu_hash_addr;
+    uint32_t nbuckets   = gh[0];
+    uint32_t symoffset  = gh[1];
+    uint32_t bloom_size = gh[2];
+
+    if (nbuckets == 0) return 0;
+
+    uint32_t* buckets = gh + 4 + bloom_size;
+    uint32_t* chains  = buckets + nbuckets;
+
+    uint32_t max_bucket_sym = 0;
+    for (uint32_t i = 0; i < nbuckets; i++) {
+        if (buckets[i] > max_bucket_sym)
+            max_bucket_sym = buckets[i];
+    }
+
+    if (max_bucket_sym < symoffset)
+        return symoffset;
+
+    uint32_t chain_idx = max_bucket_sym - symoffset;
+    for (uint32_t guard = 0; guard < 8192; guard++, chain_idx++) {
+        uint32_t v = chains[chain_idx];
+        if (v & 1u) {
+            return symoffset + chain_idx + 1;
+        }
+    }
+
+    // Conservative fallback when chain walk did not terminate as expected.
+    return symoffset + 8192;
+}
+
 static void _fill_so_from_dynamic(loaded_so_t* so, Elf32_Dyn* dyn) {
     uint32_t hash_addr = 0;
+    uint32_t gnu_hash_addr = 0;
 
     for (Elf32_Dyn* d = dyn; d->d_tag != DT_NULL; d++) {
         switch (d->d_tag) {
         case DT_STRTAB: so->strtab    = (char*)      d->d_un.d_ptr; break;
         case DT_SYMTAB: so->symtab    = (Elf32_Sym*) d->d_un.d_ptr; break;
         case DT_HASH:   hash_addr     = d->d_un.d_ptr;              break;
+        case DT_GNU_HASH: gnu_hash_addr = d->d_un.d_ptr;            break;
         case DT_INIT:   so->init_addr = d->d_un.d_ptr;              break;
         case DT_FINI:   so->fini_addr = d->d_un.d_ptr;              break;
         default: break;
@@ -179,16 +256,34 @@ static void _fill_so_from_dynamic(loaded_so_t* so, Elf32_Dyn* dyn) {
     }
 
     if (hash_addr && so->symtab) {
-        uint32_t* ht    = (uint32_t*)hash_addr;
-        so->symtab_count = ht[1]; 
+        uint32_t* ht = (uint32_t*)hash_addr;
+        so->symtab_count = ht[1];
     }
+
+    if (so->symtab_count == 0 && gnu_hash_addr && so->symtab) {
+        so->symtab_count = _symcount_from_gnu_hash(gnu_hash_addr);
+    }
+
+    if (so->symtab_count == 0 && so->symtab) {
+        // Avoid resolving through an empty table when hash metadata is missing.
+        so->symtab_count = 4096;
+        kprint("[DLDBG] symtab_count fallback=4096\n");
+    }
+
+    dldbg_hex("so.symtab", (uint32_t)so->symtab);
+    dldbg_hex("so.strtab", (uint32_t)so->strtab);
+    dldbg_dec("so.symtab_count", (int)so->symtab_count);
 }
 
 
 loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
+    kprint("[DLDBG] load_so request: ");
+    kprint((char*)name);
+    kprint("\n");
     loaded_so_t* existing = _find_loaded(ctx, name);
     if (existing) {
         existing->ref_count++;
+        dldbg_dec("load_so.reuse_refcount", existing->ref_count);
         return existing;
     }
 
@@ -205,14 +300,23 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
         if (*sp == ':') sp++;
 
         if (_so_path_join(path, 256, dir, name) < 0) continue;
-        file = finddir_vfs(vfs_root, path);
-        if (file) break;
+        kprint("[DLDBG] probing ");
+        kprint(path);
+        kprint("\n");
+        file = vfs_walk_path(vfs_root, path);
+        if (file) {
+            kprint("[DLDBG] found so node: ");
+            kprint(path);
+            kprint("\n");
+            break;
+        }
     }
 
     if (!file) {
         kprint("[DL] shared object not found: ");
         kprint((char*)name);
         kprint("\n");
+        kprint("[DLDBG] so lookup failed in search path\n");
         return 0;
     }
 
@@ -225,18 +329,22 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
     uint32_t   dyn_size = 0;
     uint32_t   entry    = 0;
 
-    uint32_t base = _elf_map_file(file, ctx->pd, ctx->tracker,
-                                   &entry, &dyn_seg, &dyn_size);
-    if (!base) {
+    uint32_t base = 0;
+    if (_elf_map_file(file, ctx->pd, ctx->tracker, &base,
+                      &entry, &dyn_seg, &dyn_size) != 0) {
         kprint("[DL] failed to map: ");
         kprint((char*)name);
         kprint("\n");
-        ctx->count--; 
+        ctx->count--;
         return 0;
     }
 
     so->load_base = base;
     so->ref_count = 1;
+    dldbg_hex("load_so.base", base);
+    dldbg_hex("load_so.entry", entry);
+    dldbg_hex("load_so.dyn_seg", (uint32_t)dyn_seg);
+    dldbg_dec("load_so.dyn_size", (int)dyn_size);
 
     if (dyn_seg)
         _fill_so_from_dynamic(so, dyn_seg);
@@ -246,7 +354,7 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
     kprint("\n");
 
     if (dyn_seg)
-        dynlink_process_dynamic(ctx, base, dyn_seg);
+        dynlink_process_dynamic(ctx, base, base, dyn_seg);
 
     return so;
 }
@@ -275,7 +383,8 @@ uint32_t dynlink_resolve_symbol(dyn_ctx_t* ctx, const char* name) {
 
 
 static void _apply_rel(dyn_ctx_t*  ctx,
-                        uint32_t    load_base,
+                        uint32_t    image_start,
+                        uint32_t    sym_bias,
                         Elf32_Sym*  symtab,
                         char*       strtab,
                         Elf32_Rel*  rel)
@@ -287,7 +396,7 @@ static void _apply_rel(dyn_ctx_t*  ctx,
     uint32_t S = 0;
     uint32_t A = 0;
     uint32_t P = rel->r_offset;
-    uint32_t B = load_base;
+    uint32_t B = image_start;
 
     if (sym_idx != 0 && symtab && strtab) {
         Elf32_Sym* sym = &symtab[sym_idx];
@@ -303,8 +412,14 @@ static void _apply_rel(dyn_ctx_t*  ctx,
                 }
             }
         } else {
-            S = load_base + sym->st_value;
+            S = sym_bias + sym->st_value;
         }
+    }
+
+    if (rel_type != R_386_NONE) {
+        dldbg_dec("rel.type", rel_type);
+        dldbg_hex("rel.target", (uint32_t)target);
+        dldbg_hex("rel.sym", S);
     }
 
     switch (rel_type) {
@@ -349,7 +464,8 @@ static void _apply_rel(dyn_ctx_t*  ctx,
 }
 
 static void _apply_rela(dyn_ctx_t*  ctx,
-                         uint32_t    load_base,
+                         uint32_t    image_start,
+                         uint32_t    sym_bias,
                          Elf32_Sym*  symtab,
                          char*       strtab,
                          Elf32_Rela* rela)
@@ -361,7 +477,7 @@ static void _apply_rela(dyn_ctx_t*  ctx,
     uint32_t S = 0;
     uint32_t A = (uint32_t)rela->r_addend; 
     uint32_t P = rela->r_offset;
-    uint32_t B = load_base;
+    uint32_t B = image_start;
 
     if (sym_idx != 0 && symtab && strtab) {
         Elf32_Sym* sym = &symtab[sym_idx];
@@ -377,8 +493,14 @@ static void _apply_rela(dyn_ctx_t*  ctx,
                 }
             }
         } else {
-            S = load_base + sym->st_value;
+            S = sym_bias + sym->st_value;
         }
+    }
+
+    if (rel_type != R_386_NONE) {
+        dldbg_dec("rela.type", rel_type);
+        dldbg_hex("rela.target", (uint32_t)target);
+        dldbg_hex("rela.sym", S);
     }
 
     switch (rel_type) {
@@ -410,13 +532,26 @@ static void _apply_rela(dyn_ctx_t*  ctx,
 }
 
 
-int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t load_base,
+int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_bias,
                              Elf32_Dyn* dyn)
 {
+    dldbg_hex("process.image_start", image_start);
+    dldbg_hex("process.sym_bias", sym_bias);
+    dldbg_hex("process.dyn", (uint32_t)dyn);
+    for (int i = 0; i < 16; i++) {
+        Elf32_Dyn* e = dyn + i;
+        dldbg_dec("process.raw.tag", e->d_tag);
+        dldbg_hex("process.raw.val", e->d_un.d_val);
+        if (e->d_tag == DT_NULL) {
+            dldbg_dec("process.raw.null_index", i);
+            break;
+        }
+    }
     Elf32_Sym* symtab       = 0;
     char*      strtab       = 0;
     uint32_t   symtab_count = 0;
     uint32_t   hash_addr    = 0;
+    uint32_t   gnu_hash_addr = 0;
 
     Elf32_Rel*  rel      = 0;
     uint32_t    rel_sz   = 0;
@@ -435,6 +570,7 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t load_base,
         case DT_SYMTAB:   symtab    = (Elf32_Sym*) d->d_un.d_ptr; break;
         case DT_STRTAB:   strtab    = (char*)      d->d_un.d_ptr; break;
         case DT_HASH:     hash_addr = d->d_un.d_ptr;              break;
+        case DT_GNU_HASH: gnu_hash_addr = d->d_un.d_ptr;          break;
         case DT_REL:      rel       = (Elf32_Rel*) d->d_un.d_ptr; break;
         case DT_RELSZ:    rel_sz    = d->d_un.d_val;              break;
         case DT_RELENT:   rel_ent   = d->d_un.d_val;              break;
@@ -452,7 +588,28 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t load_base,
         uint32_t* ht = (uint32_t*)hash_addr;
         symtab_count = ht[1];
     }
-    (void)symtab_count;
+    if (symtab_count == 0 && gnu_hash_addr && symtab) {
+        symtab_count = _symcount_from_gnu_hash(gnu_hash_addr);
+    }
+    if (symtab_count == 0 && symtab) {
+        symtab_count = 4096;
+    }
+    dldbg_dec("process.symtab_count", (int)symtab_count);
+
+    /* Make current object visible for cross-object symbol resolution
+     * (e.g. shared libs resolving symbols exported by main binary). */
+    if (symtab && strtab && !_find_loaded_by_base(ctx, image_start)) {
+        loaded_so_t* cur = _alloc_so_slot(ctx);
+        if (cur) {
+            strncpy(cur->name, "<main>", SO_NAME_MAX);
+            cur->load_base = sym_bias;
+            cur->symtab = symtab;
+            cur->strtab = strtab;
+            cur->symtab_count = symtab_count;
+            cur->ref_count = 1;
+            kprint("[DLDBG] registered current object in resolver table\n");
+        }
+    }
 
     for (Elf32_Dyn* d = dyn; d->d_tag != DT_NULL; d++) {
         if (d->d_tag == DT_NEEDED) {
@@ -461,6 +618,9 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t load_base,
                 continue;
             }
             const char* soname = strtab + d->d_un.d_val;
+            kprint("[DLDBG] DT_NEEDED: ");
+            kprint((char*)soname);
+            kprint("\n");
             if (!_find_loaded(ctx, soname))
                 dynlink_load_so(ctx, soname);
         }
@@ -468,37 +628,43 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t load_base,
 
     if (rel && rel_sz > 0) {
         uint32_t n = rel_sz / rel_ent;
+        dldbg_dec("process.rel_count", (int)n);
         for (uint32_t i = 0; i < n; i++) {
             Elf32_Rel* r = (Elf32_Rel*)((uint8_t*)rel + i * rel_ent);
-            _apply_rel(ctx, load_base, symtab, strtab, r);
+            _apply_rel(ctx, image_start, sym_bias, symtab, strtab, r);
         }
     }
 
     if (rela && rela_sz > 0) {
         uint32_t n = rela_sz / rela_ent;
+        dldbg_dec("process.rela_count", (int)n);
         for (uint32_t i = 0; i < n; i++) {
             Elf32_Rela* r = (Elf32_Rela*)((uint8_t*)rela + i * rela_ent);
-            _apply_rela(ctx, load_base, symtab, strtab, r);
+            _apply_rela(ctx, image_start, sym_bias, symtab, strtab, r);
         }
     }
 
     if (jmprel && jmprel_sz > 0) {
+        dldbg_dec("process.jmprel_size", (int)jmprel_sz);
         if (pltrel == DT_RELA) {
             uint32_t n = jmprel_sz / sizeof(Elf32_Rela);
+            dldbg_dec("process.jmprel_rela_count", (int)n);
             for (uint32_t i = 0; i < n; i++) {
                 Elf32_Rela* r = (Elf32_Rela*)((uint8_t*)jmprel
                                                + i * sizeof(Elf32_Rela));
-                _apply_rela(ctx, load_base, symtab, strtab, r);
+                _apply_rela(ctx, image_start, sym_bias, symtab, strtab, r);
             }
         } else {
             uint32_t n = jmprel_sz / sizeof(Elf32_Rel);
+            dldbg_dec("process.jmprel_rel_count", (int)n);
             for (uint32_t i = 0; i < n; i++) {
                 Elf32_Rel* r = (Elf32_Rel*)((uint8_t*)jmprel
                                              + i * sizeof(Elf32_Rel));
-                _apply_rel(ctx, load_base, symtab, strtab, r);
+                _apply_rel(ctx, image_start, sym_bias, symtab, strtab, r);
             }
         }
     }
+    kprint("[DLDBG] process done\n");
 
     return 0;
 }
@@ -516,4 +682,17 @@ void dynlink_unload_all(dyn_ctx_t* ctx) {
         }
     }
     ctx->count = 0;
+}
+
+dyn_ctx_t* dynlink_ctx_create(uint32_t* pd, proc_page_tracker_t* tracker) {
+    dyn_ctx_t* ctx = (dyn_ctx_t*)kmalloc(sizeof(dyn_ctx_t));
+    if (!ctx) return 0;
+    dynlink_ctx_init(ctx, pd, tracker);
+    return ctx;
+}
+
+void dynlink_ctx_destroy(dyn_ctx_t* ctx) {
+    if (!ctx) return;
+    dynlink_unload_all(ctx);
+    kfree_heap(ctx);
 }

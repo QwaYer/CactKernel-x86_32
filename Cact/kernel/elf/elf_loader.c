@@ -6,6 +6,31 @@
 #include "proc_mm.h"
 #include "klib.h"
 
+int elf_is_dynamic(char* path) {
+    if (!path) return 0;
+    vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
+    struct vfs_node* file = vfs_walk_path(base, path);
+    if (!file) return 0;
+
+    Elf32_Ehdr hdr;
+    if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) return 0;
+    if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) return 0;
+    if (hdr.e_machine != 3) return 0;
+    if (hdr.e_type == 3) return 1; // ET_DYN
+
+    for (int i = 0; i < hdr.e_phnum; i++) {
+        Elf32_Phdr ph;
+        if (read_vfs(file,
+                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     sizeof(Elf32_Phdr),
+                     (char*)&ph) <= 0) {
+            return 0;
+        }
+        if (ph.p_type == PT_DYNAMIC) return 1;
+    }
+    return 0;
+}
+
 
 void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 {
@@ -153,6 +178,34 @@ void* load_elf_dynamic(char*                path,
 
     Elf32_Dyn* dyn_vaddr = 0;
     uint32_t   dyn_size  = 0;
+    uint32_t   min_load_vaddr = 0xFFFFFFFFu;
+    uint32_t   max_load_vaddr = 0;
+    uint32_t   load_bias = 0;
+
+    for (int i = 0; i < hdr.e_phnum; i++) {
+        Elf32_Phdr ph;
+        if (read_vfs(file,
+                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     sizeof(Elf32_Phdr),
+                     (char*)&ph) <= 0) {
+            kprint("[ELF-DYN] ERR: cannot read phdr (scan)\n");
+            return 0;
+        }
+        if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
+        uint32_t seg_start = ph.p_vaddr & ~0xFFFu;
+        uint32_t seg_end   = (ph.p_vaddr + ph.p_memsz + 0xFFFu) & ~0xFFFu;
+        if (seg_start < min_load_vaddr) min_load_vaddr = seg_start;
+        if (seg_end > max_load_vaddr) max_load_vaddr = seg_end;
+    }
+
+    if (min_load_vaddr == 0xFFFFFFFFu) {
+        kprint("[ELF-DYN] ERR: no PT_LOAD segments\n");
+        return 0;
+    }
+
+    // Current policy maps to requested virtual addresses; keep explicit bias for correctness.
+    load_bias = min_load_vaddr - min_load_vaddr;
+    uint32_t runtime_base = min_load_vaddr + load_bias;
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
@@ -166,12 +219,13 @@ void* load_elf_dynamic(char*                path,
         }
 
         if (ph.p_type == PT_LOAD && ph.p_memsz > 0) {
-            uint32_t seg_start = ph.p_vaddr & ~0xFFFu;
-            uint32_t seg_end   = (ph.p_vaddr + ph.p_memsz + 0xFFF) & ~0xFFFu;
+            uint32_t seg_start = (ph.p_vaddr + load_bias) & ~0xFFFu;
+            uint32_t seg_end   = (ph.p_vaddr + load_bias + ph.p_memsz + 0xFFF) & ~0xFFFu;
             uint32_t file_end  = ph.p_vaddr + ph.p_filesz;
 
             for (uint32_t va = seg_start; va < seg_end; va += PAGE_SIZE) {
-                if (va < file_end) {
+                uint32_t orig_va = va - load_bias;
+                if (orig_va < file_end) {
                     void* phys = kalloc();
                     if (!phys) {
                         kprint("[ELF-DYN] ERR: OOM\n");
@@ -187,11 +241,11 @@ void* load_elf_dynamic(char*                path,
                     uint8_t* p = (uint8_t*)phys;
                     for (int k = 0; k < (int)PAGE_SIZE; k++) p[k] = 0;
 
-                    uint32_t copy_start = (va > ph.p_vaddr) ? va : ph.p_vaddr;
-                    uint32_t copy_end   = ((va + PAGE_SIZE) < file_end) ? (va + PAGE_SIZE) : file_end;
+                    uint32_t copy_start = (orig_va > ph.p_vaddr) ? orig_va : ph.p_vaddr;
+                    uint32_t copy_end   = ((orig_va + PAGE_SIZE) < file_end) ? (orig_va + PAGE_SIZE) : file_end;
 
                     if (copy_end > copy_start) {
-                        uint32_t page_offset = copy_start - va;
+                        uint32_t page_offset = copy_start - orig_va;
                         uint32_t file_offset = ph.p_offset + (copy_start - ph.p_vaddr);
                         uint32_t copy_sz     = copy_end - copy_start;
 
@@ -223,25 +277,90 @@ void* load_elf_dynamic(char*                path,
         }
 
         if (ph.p_type == PT_DYNAMIC) {
-            dyn_vaddr = (Elf32_Dyn*)ph.p_vaddr;
+            uint32_t dyn_rt = (hdr.e_type == 3 /* ET_DYN */)
+                                ? (runtime_base + ph.p_vaddr)
+                                : (ph.p_vaddr + load_bias);
+            dyn_vaddr = (Elf32_Dyn*)dyn_rt;
             dyn_size  = ph.p_filesz;
+            kprint("[ELF-DYN] PT_DYNAMIC p_vaddr=0x");
+            {
+                char b[12];
+                hex_to_ascii(ph.p_vaddr, b);
+                kprint(b);
+                kprint(" real=0x");
+                hex_to_ascii(dyn_rt, b);
+                kprint(b);
+                kprint(" size=0x");
+                hex_to_ascii(dyn_size, b);
+                kprint(b);
+                kprint("\n");
+            }
         }
     }
 
     if (dyn_vaddr) {
         dynlink_ctx_init(ctx, pd, tracker);
+        uint32_t image_start = runtime_base;
+        uint32_t sym_bias    = (hdr.e_type == 3 /* ET_DYN */) ? image_start : 0;
+        kprint("[ELF-DYN] image_start=0x");
+        {
+            char b[12];
+            hex_to_ascii(image_start, b);
+            kprint(b);
+        }
+        kprint(" sym_bias=0x");
+        {
+            char b[12];
+            hex_to_ascii(sym_bias, b);
+            kprint(b);
+        }
+        kprint(" dyn=0x");
+        {
+            char b[12];
+            hex_to_ascii((uint32_t)dyn_vaddr, b);
+            kprint(b);
+        }
+        kprint("\n");
 
-        uint32_t load_base = 0;
+        /* Image is mapped only in pd; task_exec switches CR3 later. Dereferencing
+         * dyn_vaddr must run while CR3 == pd or we read the wrong address space. */
+        uint32_t* saved_pd = get_current_pd();
+        switch_paging(pd);
 
-        int rc = dynlink_process_dynamic(ctx, load_base, dyn_vaddr);
+        int rc = dynlink_process_dynamic(ctx, image_start, sym_bias, dyn_vaddr);
         if (rc != 0) {
+            switch_paging(saved_pd);
             kprint("[ELF-DYN] ERR: dynamic linking failed\n");
             proc_free_pages(tracker);
             return 0;
         }
+        {
+            Elf32_Dyn* test = dyn_vaddr;
+            kprint("[ELF-DYN] first d_tag=0x");
+            char b[12];
+            hex_to_ascii((uint32_t)test->d_tag, b);
+            kprint(b);
+            kprint("\n");
+            if (test->d_tag == 0 || test->d_tag > 100) {
+                kprint("[ELF-DYN] ERR: bad dynamic section!\n");
+            }
+        }
+
+        switch_paging(saved_pd);
     }
 
-    return (void*)hdr.e_entry;
+    kprint("[ELF-DYN] mapped PT_LOAD range: 0x");
+    {
+        char b[12];
+        hex_to_ascii(min_load_vaddr + load_bias, b);
+        kprint(b);
+        kprint("..0x");
+        hex_to_ascii(max_load_vaddr + load_bias, b);
+        kprint(b);
+        kprint("\n");
+    }
+
+    return (void*)(hdr.e_entry + load_bias);
 }
 
 uint32_t elf_get_brk_start(struct vfs_node* file) {

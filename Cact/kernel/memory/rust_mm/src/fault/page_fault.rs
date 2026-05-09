@@ -1,6 +1,6 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page, page_ref_get_locked, PAGE_LOCK};
-use crate::vmm::paging::{get_kernel_pd, vmm_map};
+use crate::vmm::paging::{get_kernel_pd, vmm_map, PD_KERNEL_ENTRIES};
 use crate::fault::swap::{swap_pte_is_swapped, swap_handle_fault};
 use crate::fault::oom::oom_kill;
 use crate::safe::{KStatic, zero_page, flush_tlb, kprint_str, read_cr2_val, current_page_dir};
@@ -39,6 +39,9 @@ impl Drop for Cr3Guard {
 }
 
 unsafe fn ensure_private_pt(pd: *mut u32, pdi: usize, extra_flags: u32) -> *mut u32 {
+    if pdi >= PD_KERNEL_ENTRIES {
+        return core::ptr::null_mut();
+    }
     let pde = &mut *pd.add(pdi);
 
     if *pde & PAGE_PRESENT == 0 {

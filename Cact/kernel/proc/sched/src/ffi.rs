@@ -45,6 +45,13 @@ extern "C" {
         pd:      *mut u32,
         tracker: *mut ProcPageTracker,
     ) -> *mut c_void;
+    pub fn load_elf_dynamic(
+        path:    *const u8,
+        pd:      *mut u32,
+        tracker: *mut ProcPageTracker,
+        ctx:     *mut DynCtx,
+    ) -> *mut c_void;
+    pub fn elf_is_dynamic(path: *const u8) -> i32;
 
     pub fn elf_get_brk_start(node: *mut VfsNode) -> u32;
 
@@ -67,6 +74,8 @@ extern "C" {
     pub fn shm_detach_all(pid: u32, pd: *mut u32);
 
     pub fn dynlink_unload_all(ctx: *mut DynCtx);
+    pub fn dynlink_ctx_create(pd: *mut u32, tracker: *mut ProcPageTracker) -> *mut DynCtx;
+    pub fn dynlink_ctx_destroy(ctx: *mut DynCtx);
 
     pub fn switch_to(old_esp: *mut u32, new_esp: u32);
     pub fn switch_paging(pd: *mut u32);

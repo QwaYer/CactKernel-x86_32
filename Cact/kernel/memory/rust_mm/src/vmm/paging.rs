@@ -131,7 +131,12 @@ pub extern "C" fn vmm_map(pd: *mut u32,
         flags |= PAGE_RW;
     }
 
-    let is_kernel_mmio = pd == get_kernel_pd() && virtual_addr >= PCI_HOLE_START;
+    // Upper half (PCI hole / MMIO) uses the same page tables as the kernel
+    // identity map in every address space.  Never COW those PDEs for a user
+    // PD: drivers may call vmm_map(get_current_pd(), bar_va, ...) and a
+    // private copy would diverge from the kernel template, break framebuffer
+    // under process CR3, and leak (vmm_free_address_space skips i >= PD_KERNEL_ENTRIES).
+    let is_kernel_mmio = virtual_addr >= PCI_HOLE_START;
 
     unsafe {
         let pde = &mut *pd.add(pdi);

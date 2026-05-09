@@ -1,6 +1,6 @@
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page, page_ref_inc};
-use crate::vmm::paging::vmm_map;
+use crate::vmm::paging::{vmm_map, PD_KERNEL_ENTRIES};
 use crate::fault::page_fault::vmm_map_zero;
 use crate::safe::{zero_page, flush_tlb, flush_tlb_all, kprint_str};
 
@@ -23,12 +23,17 @@ fn fd_to_node(fd: i32) -> *mut VfsNode {
 enum EnsurePteTable {
     Absent,
     Oom,
+    /// PCI hole / MMIO PDEs must stay shared with the kernel template — never COW.
+    KernelMmio,
 }
 
 /// Before changing PTEs in `pd`, the page table for `pdi` must be private
 /// (`PDE_PRIVATE`). Otherwise `do_munmap` / `mmap_table_free` / etc. would
 /// mutate or `kfree` the global kernel page tables copied into every process.
 unsafe fn ensure_pde_private(pd: *mut u32, pdi: usize) -> Result<*mut u32, EnsurePteTable> {
+    if pdi >= PD_KERNEL_ENTRIES {
+        return Err(EnsurePteTable::KernelMmio);
+    }
     let pde = &mut *pd.add(pdi);
     if *pde & PAGE_PRESENT == 0 {
         return Err(EnsurePteTable::Absent);
@@ -281,7 +286,7 @@ pub extern "C" fn do_munmap(
         }
         let pt = match unsafe { ensure_pde_private(pd, pdi) } {
             Ok(p) => p,
-            Err(EnsurePteTable::Absent) => continue,
+            Err(EnsurePteTable::Absent) | Err(EnsurePteTable::KernelMmio) => continue,
             Err(EnsurePteTable::Oom) => return -1,
         };
         // SAFETY: pt is a valid private page table.
@@ -346,7 +351,7 @@ pub extern "C" fn do_mprotect(
         }
         let pt = match unsafe { ensure_pde_private(pd, pdi) } {
             Ok(p) => p,
-            Err(EnsurePteTable::Absent) => continue,
+            Err(EnsurePteTable::Absent) | Err(EnsurePteTable::KernelMmio) => continue,
             Err(EnsurePteTable::Oom) => return -1,
         };
         // SAFETY: pt is valid.
@@ -389,7 +394,7 @@ pub extern "C" fn mmap_handle_fault(
     }
     let pt = match unsafe { ensure_pde_private(pd, pdi) } {
         Ok(p) => p,
-        Err(EnsurePteTable::Absent) => return -1,
+        Err(EnsurePteTable::Absent) | Err(EnsurePteTable::KernelMmio) => return -1,
         Err(EnsurePteTable::Oom) => return -1,
     };
 
@@ -477,7 +482,10 @@ pub extern "C" fn mmap_table_clone(
                         core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                         *dst_pd.add(pdi) =
                             (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER | PDE_PRIVATE;
-                    } else if let Err(EnsurePteTable::Oom) = ensure_pde_private(dst_pd, pdi) {
+                    } else if matches!(
+                        ensure_pde_private(dst_pd, pdi),
+                        Err(EnsurePteTable::Oom) | Err(EnsurePteTable::KernelMmio)
+                    ) {
                         continue;
                     }
                     let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
@@ -509,7 +517,10 @@ pub extern "C" fn mmap_table_clone(
                         core::ptr::write_bytes(new_pt as *mut u8, 0, PAGE_SIZE as usize);
                         *dst_pd.add(pdi) =
                             (new_pt as u32 & !0xFFF) | PAGE_PRESENT | PAGE_RW | PAGE_USER | PDE_PRIVATE;
-                    } else if let Err(EnsurePteTable::Oom) = ensure_pde_private(dst_pd, pdi) {
+                    } else if matches!(
+                        ensure_pde_private(dst_pd, pdi),
+                        Err(EnsurePteTable::Oom) | Err(EnsurePteTable::KernelMmio)
+                    ) {
                         continue;
                     }
                     let dst_pt = (*dst_pd.add(pdi) & !0xFFF) as *mut u32;
@@ -519,7 +530,10 @@ pub extern "C" fn mmap_table_clone(
                         continue;
                     }
 
-                    if let Err(EnsurePteTable::Oom) = ensure_pde_private(src_pd, pdi) {
+                    if matches!(
+                        ensure_pde_private(src_pd, pdi),
+                        Err(EnsurePteTable::Oom) | Err(EnsurePteTable::KernelMmio)
+                    ) {
                         continue;
                     }
                     let src_pt = (*src_pd.add(pdi) & !0xFFF) as *mut u32;

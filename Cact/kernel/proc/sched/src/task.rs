@@ -856,10 +856,8 @@ pub unsafe extern "C" fn task_exec(
 
     // Выгрузить динамический линкер
     if !(*t).dyn_ctx.is_null() {
-        let ctx = (*t).dyn_ctx;
+        ffi::dynlink_ctx_destroy((*t).dyn_ctx);
         (*t).dyn_ctx = ptr::null_mut();
-        ffi::dynlink_unload_all(ctx);
-        ffi::kfree_heap(ctx as *mut c_void);
     }
 
     let new_pd = ffi::vmm_create_address_space();
@@ -874,9 +872,27 @@ pub unsafe extern "C" fn task_exec(
     ffi::proc_tracker_init(&raw mut (*t).mm);
     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-    let entry = ffi::load_elf(path, new_pd, &raw mut (*t).mm);
+    let mut new_dyn_ctx: *mut DynCtx = ptr::null_mut();
+    let is_dynamic = ffi::elf_is_dynamic(path) != 0;
+    let entry = if is_dynamic {
+        new_dyn_ctx = ffi::dynlink_ctx_create(new_pd, &raw mut (*t).mm);
+        if new_dyn_ctx.is_null() {
+            ffi::kprint(b"[EXEC] dynlink_ctx_create failed\n\0".as_ptr());
+            ffi::vmm_free_address_space(new_pd);
+            for p in new_ustack_pages {
+                ffi::kfree_page(p);
+            }
+            return -1;
+        }
+        ffi::load_elf_dynamic(path, new_pd, &raw mut (*t).mm, new_dyn_ctx)
+    } else {
+        ffi::load_elf(path, new_pd, &raw mut (*t).mm)
+    };
     if entry.is_null() {
         ffi::kprint(b"[EXEC] load_elf failed (null entry), aborting exec\n\0".as_ptr());
+        if !new_dyn_ctx.is_null() {
+            ffi::dynlink_ctx_destroy(new_dyn_ctx);
+        }
         ffi::vmm_free_address_space(new_pd);
         for p in new_ustack_pages {
             ffi::kfree_page(p);
@@ -964,6 +980,9 @@ pub unsafe extern "C" fn task_exec(
             ffi::kprint(b"[EXEC] abort: argv copy / stack overflow\n\0".as_ptr());
             (*t).ustack_phys = old_ustack_pages[0];
             (*t).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
+            if !new_dyn_ctx.is_null() {
+                ffi::dynlink_ctx_destroy(new_dyn_ctx);
+            }
             ffi::vmm_free_address_space(new_pd);
             crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
@@ -975,6 +994,9 @@ pub unsafe extern "C" fn task_exec(
             ffi::kprint(b"[EXEC] abort: envp copy / stack overflow\n\0".as_ptr());
             (*t).ustack_phys = old_ustack_pages[0];
             (*t).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
+            if !new_dyn_ctx.is_null() {
+                ffi::dynlink_ctx_destroy(new_dyn_ctx);
+            }
             ffi::vmm_free_address_space(new_pd);
             crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
@@ -986,6 +1008,9 @@ pub unsafe extern "C" fn task_exec(
         ffi::kprint(b"[EXEC] abort: stack layout preflight failed\n\0".as_ptr());
         (*t).ustack_phys = old_ustack_pages[0];
         (*t).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
+        if !new_dyn_ctx.is_null() {
+            ffi::dynlink_ctx_destroy(new_dyn_ctx);
+        }
         ffi::vmm_free_address_space(new_pd);
         crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
         return -1;
@@ -1041,6 +1066,10 @@ pub unsafe extern "C" fn task_exec(
     if !old_pd.is_null() {
         ffi::vmm_free_address_space(old_pd);
     }
+    /* Refresh MMIO / PCI-hole PDEs after tearing down the old AS. Console output
+     * (framebuffer) runs with CR3=new_pd; a stale upper PDE would fault in fb_put_pixel. */
+    ffi::vmm_sync_kernel_mmio_mappings(new_pd);
+    (*t).dyn_ctx = new_dyn_ctx;
 
     /* Entire TLB was flushed by CR3 reload, but invalidate the image page
      * explicitly in case a hypervisor/CPU quirk leaves a stale mapping for

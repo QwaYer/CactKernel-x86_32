@@ -1,4 +1,6 @@
 #include "fb.h"
+#include "memory.h"
+#include <stddef.h>
 
 static int cursor_x = 0;
 static int cursor_y = 0;
@@ -42,6 +44,8 @@ void scroll(void) {
 }
 
 void kprint_color(char* message, uint32_t color) {
+    vmm_sync_kernel_mmio_mappings(get_current_pd());
+
     uint32_t w = fb_get_width();
     uint32_t h = fb_get_height();
     if (w == 0 || h == 0) return;
@@ -176,8 +180,14 @@ fb_init_result_t fb_get_init_status(void) {
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     if (!fb_buffer || x >= fb_width || y >= fb_height) return;
 
-    uint32_t offset = y * (fb_pitch / 4) + x;
-    fb_buffer[offset] = color;
+    uint32_t wpr = fb_pitch / 4u;
+    if (wpr == 0) return;
+
+    uint64_t offset = (uint64_t)y * (uint64_t)wpr + (uint64_t)x;
+    uint64_t max_words = (uint64_t)fb_height * (uint64_t)wpr;
+    if (offset >= max_words) return;
+
+    fb_buffer[(size_t)offset] = color;
 }
 
 // Fill a rectangle with a solid colour (clipped to screen bounds)
@@ -187,9 +197,14 @@ void fb_fill_rect(uint32_t x, uint32_t y,
     if (x + width  > fb_width)  width  = fb_width  - x;
     if (y + height > fb_height) height = fb_height - y;
 
-    uint32_t words_per_row = fb_pitch / 4;
+    uint32_t words_per_row = fb_pitch / 4u;
+    if (words_per_row == 0) return;
+
     for (uint32_t row = 0; row < height; row++) {
-        uint32_t* line = fb_buffer + (y + row) * words_per_row + x;
+        uint64_t off = (uint64_t)(y + row) * (uint64_t)words_per_row + (uint64_t)x;
+        uint64_t maxw = (uint64_t)fb_height * (uint64_t)words_per_row;
+        if (off >= maxw) return;
+        uint32_t* line = fb_buffer + (size_t)off;
         for (uint32_t col = 0; col < width; col++) {
             line[col] = color;
         }

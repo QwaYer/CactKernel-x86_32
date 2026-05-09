@@ -56,6 +56,7 @@ typedef struct {
 #define DT_RELENT   19
 #define DT_PLTREL   20
 #define DT_JMPREL   23
+#define DT_GNU_HASH 0x6ffffef5
 
 #define STB_LOCAL   0
 #define STB_GLOBAL  1
@@ -124,12 +125,20 @@ void dynlink_ctx_init(dyn_ctx_t* ctx, uint32_t* pd,
 
 loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name);
 
-int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t load_base,
+/*
+ * image_start: load address of the object (lowest mapped PT_LOAD vaddr): used as B in
+ *              R_386_RELATIVE and to key the <main> resolver slot.
+ * sym_bias:    added to st_value for defined symbols in *this* object (image_start for
+ *              ET_DYN/PIE, 0 for ET_EXEC where st_value is already absolute).
+ */
+int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_bias,
                              Elf32_Dyn* dyn);
 
 uint32_t dynlink_resolve_symbol(dyn_ctx_t* ctx, const char* name);
 
 void dynlink_unload_all(dyn_ctx_t* ctx);
+dyn_ctx_t* dynlink_ctx_create(uint32_t* pd, proc_page_tracker_t* tracker);
+void dynlink_ctx_destroy(dyn_ctx_t* ctx);
 
 /*
  * load_elf_dynamic lives in elf_loader.c but takes a dyn_ctx_t*, so its
