@@ -1,6 +1,7 @@
 #include "pci_loader.h"
 #include "pci_driver.h"
 #include "pci_enum.h"
+#include "pci_modblob.h"
 #include "vfs.h"
 #include "memory.h"
 #include "kernel.h"
@@ -115,8 +116,31 @@ static uint16_t read_le16(const uint8_t *p) {
 }
 
 // Read ET_REL file from VFS into kmalloc'd buffer; validate header.
+// In-memory blobs (objcopy'd from LocalRepoCactOS/lib) take priority so that
+// modules can load before VFS is up (used by GDD during PCI enumeration).
 // Returns 0 on success; -1 open/read/alloc; -2 bad ELF.
 static int read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t *file_size) {
+    const uint8_t *blob_data = NULL;
+    uint32_t       blob_size = 0;
+
+    if (pci_modblob_get(path, &blob_data, &blob_size) == 0) {
+        if (!blob_size)
+            return -1;
+        uint8_t *buf = (uint8_t *)kmalloc(blob_size);
+        if (!buf)
+            return -1;
+        memcpy(buf, blob_data, blob_size);
+
+        Elf32_Ehdr *eh = (Elf32_Ehdr *)buf;
+        if (eh->e_magic != ELF_MAGIC || eh->e_type != ET_REL || eh->e_machine != EM_386) {
+            kfree_heap(buf);
+            return -2;
+        }
+        *elf_data  = buf;
+        *file_size = blob_size;
+        return 0;
+    }
+
     struct vfs_node *node = _resolve_path(path);
     if (!node)
         return -1;

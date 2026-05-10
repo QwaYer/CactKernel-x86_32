@@ -8,6 +8,28 @@
 #include "klib.h"
 #include "kernel.h"
 
+static int user_str_all_decimal(const char *name) {
+    const char *p;
+    if (!name || !name[0]) return 0;
+    for (p = name; *p; p++) {
+        if (*p < '0' || *p > '9') return 0;
+    }
+    return 1;
+}
+
+static int parse_pci_modinfo_index(const char *name, int *out_idx) {
+    int v = 0;
+    const char *p;
+    for (p = name; *p; p++) {
+        int dig = *p - '0';
+        if (v > (0x7fffffff - dig) / 10) return -1;
+        v = v * 10 + dig;
+    }
+    if (v < 1) return -1;
+    *out_idx = v;
+    return 0;
+}
+
 static pci_driver_t usermod_pci_drv;
 static char         usermod_path_store[256];
 static int          usermod_slot_active;
@@ -105,6 +127,42 @@ int sys_module_unload(const char *name) {
 
     if (!validate_user_str(name))
         return -2;
+
+    if (user_str_all_decimal(name)) {
+        int idx;
+        if (parse_pci_modinfo_index(name, &idx) != 0) {
+            kprint("[KMOD] invalid PCI modinfo index\n");
+            return -2;
+        }
+        pci_device_t *dev = pci_device_by_index(idx);
+        if (!dev) {
+            kprint("[KMOD] no PCI function at [pci ");
+            char ib[12];
+            itoa(idx, ib);
+            kprint(ib);
+            kprint("] (see /dev/modinfo)\n");
+            return -7;
+        }
+        pci_driver_t *rdrv = pci_driver_find_reloc_for_device(dev);
+        if (!rdrv) {
+            kprint("[KMOD] no single relocatable module matches that PCI function "
+                   "(built-in only, or ambiguous)\n");
+            return -8;
+        }
+        pci_unload_module(rdrv);
+        pci_unregister_driver(rdrv);
+        if (rdrv == &usermod_pci_drv) {
+            memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
+            usermod_path_store[0] = '\0';
+            usermod_slot_active   = 0;
+        }
+        kprint("[KMOD] unloaded module for [pci ");
+        char ib[12];
+        itoa(idx, ib);
+        kprint(ib);
+        kprint("]\n");
+        return 0;
+    }
 
     pci_driver_t *drv = pci_driver_find_by_name(name);
     if (!drv) {

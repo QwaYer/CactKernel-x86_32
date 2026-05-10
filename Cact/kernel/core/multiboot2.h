@@ -101,4 +101,22 @@ typedef struct {
     uint32_t        count;
 } mb2_mmap_table_t;
 
+// Multiboot2 module tag (type 3) — one per `module2` line in grub.cfg.
+struct mb2_tag_module {
+    uint32_t type;        // == MB2_TAG_MODULE
+    uint32_t size;
+    uint32_t mod_start;   // physical address of module start
+    uint32_t mod_end;     // physical address of module end (exclusive)
+    char     string[];    // NUL-terminated cmdline / identifier
+} __attribute__((packed));
+
+// Captured module info passed back from multiboot2_parse(); only the first
+// module whose cmdline starts with "cctkfs" is recorded for now.
+#define MB2_MODULE_NAME_MAX 32
+typedef struct {
+    uint32_t mod_start;     // 0 when no matching module was found
+    uint32_t mod_size;
+    char     name[MB2_MODULE_NAME_MAX];
+} mb2_module_info_t;
+
 #endif  

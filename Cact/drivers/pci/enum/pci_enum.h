@@ -60,6 +60,9 @@ void          pci_enumerate(void);
 pci_device_t *pci_find_by_class(uint8_t class_code, uint8_t subclass);
 pci_device_t *pci_find_by_id(uint16_t vendor_id, uint16_t device_id);
 
+// N-th PCI function in pci_device_list (same 1-based index as [pci N] in /dev/modinfo)
+pci_device_t *pci_device_by_index(int index_1based);
+
 // Debug: dump all enumerated devices
 void          pci_enum_dump(void);
 

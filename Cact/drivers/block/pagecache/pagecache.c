@@ -1,5 +1,4 @@
 #include "pagecache.h"
-#include "buf.h"
 #include "blkdev.h"
 #include "kernel.h"
 #include "memory.h"

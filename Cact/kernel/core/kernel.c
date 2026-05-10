@@ -194,6 +194,17 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
             klog(LOG_OK, "CMOS memory size valid");
     }
 
+    /* PIT before PCI scan: GDD prompts use timer_ticks + IRQ keyboard while interrupts stay globally masked until init(). */
+    kprint("[PIT] configuring 8253 timer  divisor=");
+    { char buf[8]; itoa(1193180 / 100, buf); kprint(buf); }
+    kprint("  freq=100 Hz\n");
+    init_timer(100);
+    klog(LOG_OK, "PIT timer @ 100 Hz — IRQ0 active");
+
+    // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
+    // kmods can blkdev_register(); otherwise mntfs sees no boot disk.
+    blkdev_init();
+
     // PCI enumeration and drivers
     kprint("[PCI] scanning bus for devices\n");
     if (search_pci())
@@ -218,9 +229,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     usb_init();
     klog(LOG_OK, "USB stack initialised");
 
-    // Block device layer
-    blkdev_init();
-
     // Process control block cache
     pc_init();
 
@@ -231,51 +239,81 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
             klog(LOG_WARN, "swap init failed — OOM killer is last resort");
     }
 
-    // Virtual filesystem
+    // Virtual filesystem (mntfs_init is deferred — needs the scheduler).
     vfs_init();
-
-    kprint("[MNT] mounting virtual filesystems\n");
-    extern void mntfs_init();  // Mount table filesystem
-    mntfs_init();
-
-    // Populate /proc/meminfo
-    if (mbi) {
-        extern void procfs_set_meminfo(uint32_t);
-        char buf[12];
-
-        if (mbi->flags & 0x1) {
-            itoa((int)mbi->mem_lower, buf);
-            kprint("[MNT] mem_lower="); kprint(buf); kprint(" KB");
-            itoa((int)mbi->mem_upper, buf);
-            kprint("  mem_upper="); kprint(buf); kprint(" KB\n");
-        }
-
-        // Prefer multiboot2 memory map total (no 4GB cap)
-        uint32_t total_kb;
-        if (mbi->flags & (1u << 6)) {
-            total_kb = (uint32_t)(mbi->mem_total_bytes / 1024ull);
-            itoa((int)total_kb, buf);
-            kprint("[MNT] mmap total="); kprint(buf); kprint(" KB\n");
-        } else {
-            total_kb = mbi->mem_lower + 1024 + mbi->mem_upper;
-        }
-        procfs_set_meminfo(total_kb);
-    }
-    klog(LOG_OK, "EXT4 / devfs / procfs / mntfs mounted");
 
     // Network stack
     net_init();
+    // Driver bootstrap is platform policy, not net stack policy.
+    // Stack itself accepts any NIC via net_register_driver().
+    kprint("[NET] no built-in NIC driver — as root run: "
+           "modload /proc/bin/mdls/virtio_net.cctk 0x1AF4 0x1041 (legacy virtio-net; DID 0x1000 also)\n");
+    kprint("[BLKDEV] no built-in SATA driver — as root run: "
+           "modload /proc/bin/mdls/ahci.cctk (manifest binds class 01:06)\n");
+    kprint("[BLKDEV] no built-in NVMe driver — as root run: "
+           "modload /proc/bin/mdls/nvme.cctk (manifest binds class 01:08)\n");
 
     // Multitasking
     task_init();
     init_scheduler();
+}
 
-    // Timer interrupt (100 Hz for scheduler time slices)
-    kprint("[PIT] configuring 8253 timer  divisor=");
-    { char buf[8]; itoa(1193180 / 100, buf); kprint(buf); }
-    kprint("  freq=100 Hz\n");
-    init_timer(100);
-    klog(LOG_OK, "PIT timer @ 100 Hz — IRQ0 active");
+extern mb2_module_info_t mb2_cctkfs_module;
+#include "pci_modblob.h"
+
+/* Bootstrap thread — runs AFTER scheduler is live, so it can legitimately
+ * sleep on semaphores when waiting for IRQ-driven NVMe/AHCI completions
+ * during ext4 mount. Must NOT be executed from the boot context (which
+ * has been claimed by the idle task and cannot be parked on a semaphore
+ * because there is no other task to switch to). */
+static multiboot_info_t* bootstrap_mbi = 0;
+static void kernel_bootstrap_main(void) {
+    extern void mntfs_init(void);
+    extern void procfs_set_meminfo(uint32_t);
+
+    kprint("[MNT] mounting virtual filesystems\n");
+    mntfs_init();
+
+    if (bootstrap_mbi) {
+        char buf[12];
+        if (bootstrap_mbi->flags & 0x1) {
+            itoa((int)bootstrap_mbi->mem_lower, buf);
+            kprint("[MNT] mem_lower="); kprint(buf); kprint(" KB");
+            itoa((int)bootstrap_mbi->mem_upper, buf);
+            kprint("  mem_upper="); kprint(buf); kprint(" KB\n");
+        }
+        uint32_t total_kb;
+        if (bootstrap_mbi->flags & (1u << 6)) {
+            total_kb = (uint32_t)(bootstrap_mbi->mem_total_bytes / 1024ull);
+            itoa((int)total_kb, buf);
+            kprint("[MNT] mmap total="); kprint(buf); kprint(" KB\n");
+        } else {
+            total_kb = bootstrap_mbi->mem_lower + 1024 + bootstrap_mbi->mem_upper;
+        }
+        procfs_set_meminfo(total_kb);
+    }
+    klog(LOG_OK, "mntfs bootstrap finished");
+
+    kprint("\n");
+    kprint_color("Cact Kernel ", COLOR_LIGHT_BROWN);
+    kprint_color((char*)kernel_version, COLOR_LIGHT_BROWN);
+    kprint_color("\n", COLOR_LIGHT_BROWN);
+    kprint_color("--------------------------\n", COLOR_DARK_GREY);
+    kprint("[VER] commit="); kprint((char*)kernel_commit_hash);
+    kprint("  built=");      kprint((char*)kernel_build_time);
+    kprint("\n");
+
+    kprint_color("Kernel is ready. Launching init...\n", COLOR_LIGHT_GREEN);
+
+    struct task_struct* init = create_elf_task("bin/init");
+    if (!init) {
+        kprint_color("[FAIL] create_elf_task: /bin/init not found\n", COLOR_LIGHT_RED);
+    }
+
+    /* Bootstrap thread is done. Yield forever so scheduler keeps running. */
+    while (1) {
+        __asm__ __volatile__("hlt");
+    }
 }
 
 // Kernel entry point (called from boot.S)
@@ -284,6 +322,12 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     static mb2_mmap_table_t  mmap_storage;
     multiboot2_parse(mb2_info_addr, &mbi_storage, &mmap_storage);
     multiboot_info_t* mbi = &mbi_storage;
+
+    /* Stage the cctkfs blob into kernel .bss BEFORE pmm_init / init_heap
+     * — at this point we are still in flat protected mode without paging,
+     * so a plain memcpy from the physical address GRUB chose is safe. */
+    pci_modblob_load(mb2_cctkfs_module.mod_start,
+                     mb2_cctkfs_module.mod_size);
 
     // Must initialise framebuffer before any output
     fb_init(mbi);
@@ -307,28 +351,19 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
 
     kernel_setup_hardware(mbi, &mmap_storage);
 
-    // Banner
-    kprint("\n");
-    kprint_color("Cact Kernel ", COLOR_LIGHT_BROWN);
-    kprint_color((char*)kernel_version, COLOR_LIGHT_BROWN);
-    kprint_color("\n", COLOR_LIGHT_BROWN);
-    kprint_color("--------------------------\n", COLOR_DARK_GREY);
-    kprint("[VER] commit="); kprint((char*)kernel_commit_hash);
-    kprint("  built=");      kprint((char*)kernel_build_time);
-    kprint("\n");
+    /* Spawn the bootstrap kernel thread. It will run mntfs_init, mount ext4
+     * (which sleeps on NVMe IRQ via sema_down — only legal from a real task,
+     * not from the boot context that was claimed by idle), then start
+     * /bin/init. The boot context becomes the idle task (HLT loop below),
+     * so the scheduler always has something to fall back to. */
+    bootstrap_mbi = mbi;
+    create_task((void(*)())kernel_bootstrap_main);
 
-    kprint_color("Kernel is ready. Launching init...\n", COLOR_LIGHT_GREEN);
-
-    // Create init process (userspace startup)
-    struct task_struct* init = create_elf_task("bin/init");
-    if (!init) {
-        kprint_color("[FAIL] create_elf_task: /bin/init not found\n", COLOR_LIGHT_RED);
-    }
-
-    // Enable interrupts (now that timer/IDT are ready)
+    /* Enable IRQs and surrender to the scheduler. The next timer tick will
+     * preempt this context (saved into idle's task_struct) and switch to
+     * the bootstrap thread. */
     __asm__ __volatile__("sti");
 
-    // Idle loop — scheduler will run tasks
     while (1) {
         __asm__ __volatile__("hlt");
     }

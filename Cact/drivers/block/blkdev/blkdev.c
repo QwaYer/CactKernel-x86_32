@@ -8,25 +8,77 @@ static blkdev_t devices[BLKDEV_MAX];
 static int      dev_count = 0;
 static blkdev_t *boot_dev = 0;
 
-// Storage HBA drivers are loaded as kmod modules post-boot.
+static void blkdev_pick_boot(void) {
+    boot_dev = dev_count > 0 ? &devices[0] : 0;
+}
+
+int blkdev_register(const char *name, uint32_t max_lba,
+                    void (*read_sector)(uint32_t lba, uint8_t *buf),
+                    void (*write_sector)(uint32_t lba, uint8_t *buf)) {
+    if (!name || !name[0] || !read_sector || !write_sector)
+        return -1;
+    if (dev_count >= BLKDEV_MAX)
+        return -2;
+    if (blkdev_find(name))
+        return -3;
+
+    blkdev_t *d = &devices[dev_count];
+    memset(d, 0, sizeof *d);
+    strncpy(d->name, (char *)name, BLKDEV_NAME_MAX - 1);
+    d->name[BLKDEV_NAME_MAX - 1] = '\0';
+    d->max_lba       = max_lba;
+    d->read_sector   = read_sector;
+    d->write_sector  = write_sector;
+    dev_count++;
+
+    if (!boot_dev)
+        boot_dev = d;
+
+    kprint("[BLKDEV] registered ");
+    kprint(d->name);
+    kprint(" max_lba=");
+    char buf[16];
+    hex_to_ascii(max_lba, buf);
+    kprint(buf);
+    if (boot_dev == d)
+        kprint(" *boot*\n");
+    else
+        kprint("\n");
+    return 0;
+}
+
+void blkdev_unregister(const char *name) {
+    if (!name)
+        return;
+    int idx = -1;
+    for (int i = 0; i < dev_count; i++) {
+        if (strcmp(devices[i].name, (char *)name) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0)
+        return;
+
+    for (int i = idx; i < dev_count - 1; i++)
+        devices[i] = devices[i + 1];
+    dev_count--;
+    memset(&devices[dev_count], 0, sizeof(blkdev_t));
+
+    blkdev_pick_boot();
+
+    kprint("[BLKDEV] unregistered ");
+    kprint((char *)name);
+    kprint("\n");
+}
+
+// Storage drivers call blkdev_register() during PCI probe (NVMe/AHCI kmods).
 void blkdev_init(void) {
     dev_count = 0;
     boot_dev  = 0;
     memset(devices, 0, sizeof(devices));
 
-    kprint("[BLKDEV] no built-in boot storage drivers\n");
-
-    if (boot_dev) {
-        kprint("[BLKDEV] boot device: "); kprint(boot_dev->name);
-        kprint("  max_lba="); char buf[16]; hex_to_ascii(boot_dev->max_lba, buf); kprint(buf);
-        kprint("  total="); itoa((int)((uint64_t)boot_dev->max_lba * 512 / 1024 / 1024), buf);
-        kprint(buf); kprint(" MB\n");
-        klog(LOG_OK,  "block device layer ready");
-    } else {
-        kprint_color("[BLKDEV] no boot device found — filesystem mounts will fail\n",
-                     COLOR_LIGHT_RED);
-        klog(LOG_WARN, "no boot disk — storage unavailable");
-    }
+    kprint("[BLKDEV] layer ready — NVMe/AHCI kmods may register\n");
 }
 
 // Return the boot device (first successfully probed drive)

@@ -59,6 +59,31 @@ pci_driver_t *pci_driver_find_by_name(const char *name) {
     return NULL;
 }
 
+pci_driver_t *pci_driver_find_class_module(uint8_t class_code, uint8_t subclass,
+                                           const char *module_path) {
+    if (!module_path || !module_path[0]) return NULL;
+    for (pci_driver_t *d = driver_list; d; d = d->next) {
+        if (!d->module_path) continue;
+        if (!streq(d->module_path, module_path)) continue;
+        if (d->class_code != class_code || d->subclass != subclass) continue;
+        return d;
+    }
+    return NULL;
+}
+
+pci_driver_t *pci_driver_find_reloc_for_device(const pci_device_t *dev) {
+    if (!dev) return NULL;
+    pci_driver_t *found = NULL;
+    for (pci_driver_t *d = driver_list; d; d = d->next) {
+        if (!(d->flags & PCI_DRV_F_RELOC_MODULE)) continue;
+        if (!d->probe) continue;
+        if (!driver_matches(d, dev)) continue;
+        if (found) return NULL;
+        found = d;
+    }
+    return found;
+}
+
 // Walk the driver list and invoke the first matching probe.
 // If the driver has a module_path but no probe yet, attempt lazy module load.
 void pci_driver_match(pci_device_t *dev) {

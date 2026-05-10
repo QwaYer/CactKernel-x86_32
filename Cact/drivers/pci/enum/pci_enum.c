@@ -1,4 +1,5 @@
 #include "pci_driver.h"
+#include "pci_gdd.h"
 #include "kernel.h"
 #include "klib.h"
 
@@ -114,6 +115,7 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     }
 
     // Match and probe registered drivers for this device
+    pci_user_prompt_module(d->class_code, d->subclass, d->prog_if, d);
     pci_driver_match(d);
 }
 
@@ -162,6 +164,16 @@ void pci_enumerate(void) {
 pci_device_t *pci_find_by_class(uint8_t cc, uint8_t sc) {
     for (pci_device_t *d = pci_device_list; d; d = d->next)
         if (d->class_code == cc && d->subclass == sc) return d;
+    return NULL;
+}
+
+pci_device_t *pci_device_by_index(int index_1based) {
+    if (index_1based < 1) return NULL;
+    int i = 0;
+    for (pci_device_t *d = pci_device_list; d; d = d->next) {
+        i++;
+        if (i == index_1based) return d;
+    }
     return NULL;
 }
 

@@ -9,11 +9,32 @@
 #define MB2_TAG_HDR_SIZE  8u
 #define MB2_ALIGN         8u
 
+// Module info captured from MB2_TAG_MODULE; written by multiboot2_parse(),
+// consumed by init() to stage the cctkfs image into kernel .bss.
+mb2_module_info_t mb2_cctkfs_module;
+
+static int starts_with(const char* s, const char* prefix) {
+    while (*prefix) {
+        if (*s++ != *prefix++) return 0;
+    }
+    return 1;
+}
+
+static void copy_module_name(char* dst, const char* src, uint32_t max) {
+    uint32_t i = 0;
+    while (i + 1 < max && src[i]) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+}
+
 // Parse multiboot2 tag list into simplified kernel structure
 void multiboot2_parse(uint32_t mb2_info_addr,
                       multiboot_info_t*  out,
                       mb2_mmap_table_t*  mmap_out)
 {
+    mb2_cctkfs_module.mod_start = 0;
+    mb2_cctkfs_module.mod_size  = 0;
+    mb2_cctkfs_module.name[0]   = '\0';
+
     // Zero output structures
     out->flags             = 0;
     out->mem_lower         = 0;
@@ -120,6 +141,24 @@ void multiboot2_parse(uint32_t mb2_info_addr,
 
             out->mem_total_bytes = total_avail;
             out->flags |= MB2_FLAG_MMAP;
+            break;
+        }
+
+        case MB2_TAG_MODULE: {
+            if (tag->size < sizeof(struct mb2_tag_module)) break;
+            struct mb2_tag_module* t =
+                (struct mb2_tag_module*)(uintptr_t)cursor;
+            if (t->mod_end <= t->mod_start) break;
+
+            // Only record the first cctkfs module; any later modules ignored.
+            if (mb2_cctkfs_module.mod_start == 0 &&
+                starts_with(t->string, "cctkfs"))
+            {
+                mb2_cctkfs_module.mod_start = t->mod_start;
+                mb2_cctkfs_module.mod_size  = t->mod_end - t->mod_start;
+                copy_module_name(mb2_cctkfs_module.name, t->string,
+                                 MB2_MODULE_NAME_MAX);
+            }
             break;
         }
 

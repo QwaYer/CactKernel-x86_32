@@ -45,6 +45,7 @@ DRIVER_PCI_DIR        = Cact/drivers/pci
 DRIVER_PCI_ENUM_DIR   = Cact/drivers/pci/enum
 DRIVER_PCI_DRV_DIR    = Cact/drivers/pci/driver
 DRIVER_PCI_LOADER_DIR = Cact/drivers/pci/loader
+DRIVER_PCI_GDD_DIR    = Cact/drivers/pci/gdd
 DRIVER_BLK_BLOCK_DIR  = Cact/drivers/block/blkdev
 DRIVER_USB_DIR       = Cact/drivers/usb
 DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xHCI
@@ -72,6 +73,8 @@ NET_SOCKET_DIR   = Cact/kernel/net/socket
 DRIVER_FB_DIR    = Cact/drivers/video/fb
 DRIVER_FONT_DIR  = Cact/drivers/video/font
 BUILD_DIR        = build
+# Для железа с акцентом на cctkfs: make GRUB_CFG=grub.cfg.ramroot
+GRUB_CFG        ?= grub.cfg
 
 # Version metadata from VERSION file
 CACT_VERSION    := $(shell cat VERSION 2>/dev/null || echo "unknown")
@@ -100,6 +103,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_PCI_ENUM_DIR) \
          -I$(DRIVER_PCI_DRV_DIR) \
          -I$(DRIVER_PCI_LOADER_DIR) \
+         -I$(DRIVER_PCI_GDD_DIR) \
 		 -I$(DRIVER_BLK_BLOCK_DIR) \
          -I$(DRIVER_USB_DIR) \
          -I$(DRIVER_USB_XHCI_DIR) \
@@ -174,6 +178,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pci_enum.o \
       $(BUILD_DIR)/pci_driver.o \
       $(BUILD_DIR)/pci_loader.o \
+      $(BUILD_DIR)/pci_gdd.o \
+      $(BUILD_DIR)/pci_modblob.o \
 	  $(BUILD_DIR)/blkdev.o \
       $(BUILD_DIR)/sc_mod.o \
       $(BUILD_DIR)/sc_validate.o \
@@ -220,10 +226,11 @@ all: $(BUILD_DIR)/cact.iso
 	@echo "--------------------------------------------------"
 
 
-$(BUILD_DIR)/cact.iso: $(BUILD_DIR)/kernel.bin grub.cfg
+$(BUILD_DIR)/cact.iso: $(BUILD_DIR)/kernel.bin $(GRUB_CFG) $(CCTKFS_IMG)
 	@mkdir -p $(BUILD_DIR)/isodir/boot/grub
 	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir/boot/kernel.bin
-	cp grub.cfg $(BUILD_DIR)/isodir/boot/grub/grub.cfg
+	cp $(CCTKFS_IMG)           $(BUILD_DIR)/isodir/boot/cctkfs.img
+	cp $(GRUB_CFG)             $(BUILD_DIR)/isodir/boot/grub/grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/cact.iso $(BUILD_DIR)/isodir
 
 
@@ -457,6 +464,31 @@ $(BUILD_DIR)/pci_loader.o: $(DRIVER_PCI_LOADER_DIR)/pci_loader.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/pci_gdd.o: $(DRIVER_PCI_GDD_DIR)/pci_gdd.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pci_modblob.o: $(DRIVER_PCI_LOADER_DIR)/pci_modblob.c $(DRIVER_PCI_LOADER_DIR)/pci_modblob.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+# ---- LocalRepoCactOS cctkfs image ------------------------------------------
+# Drivers live in their own sibling repos; each `make install` drops a .cctk
+# into LocalRepoCactOS/lib/.  LocalRepoCactOS/Makefile then packs all of
+# them into a single flat archive (cctkfs.img).  We just consume it: copy
+# it next to kernel.bin so GRUB can load it as a multiboot2 module
+# (`module2 /boot/cctkfs.img cctkfs`) — see grub.cfg.
+LOCAL_REPO  ?= ../LocalRepoCactOS
+CCTKFS_IMG  := $(LOCAL_REPO)/cctkfs.img
+
+$(CCTKFS_IMG):
+	@if [ ! -f $@ ]; then \
+		echo "ERROR: $@ is missing."; \
+		echo "       1) build each driver: make -C ../<repo>-for-Cact install"; \
+		echo "       2) pack the image:    make -C $(LOCAL_REPO)"; \
+		exit 1; \
+	fi
+
 $(BUILD_DIR)/blkdev.o: $(DRIVER_BLK_BLOCK_DIR)/blkdev.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -505,17 +537,9 @@ $(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-.PHONY: virtio-module
-virtio-module:
-	$(MAKE) -C ../Virtio-net-for-Cact KERN_ROOT="$(CURDIR)"
-
-.PHONY: ahci-module
-ahci-module:
-	$(MAKE) -C ../AHCI-for-Cact KERN_ROOT="$(CURDIR)"
-
-.PHONY: nvme-module
-nvme-module:
-	$(MAKE) -C ../NVMe-for-Cact KERN_ROOT="$(CURDIR)"
+# Driver modules are built and installed by their OWN repositories, not here.
+# See ../AHCI-for-Cact, ../NVMe-for-Cact, ../Virtio-net-for-Cact — each runs
+# `make install` to drop a .cctk into LocalRepoCactOS/lib/.
 
 $(BUILD_DIR)/net.o: $(NET_DIR)/net.c
 	@mkdir -p $(BUILD_DIR)

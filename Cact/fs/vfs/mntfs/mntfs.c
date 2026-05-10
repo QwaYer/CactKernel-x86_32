@@ -19,6 +19,28 @@ static vfs_node_t      mntfs_root;
 static int             mntfs_ready = 0;
 static char            boot_devname[32];   // name of the boot block device
 
+/* No blkdev or no ext4: still expose /bin from cctkfs (binfs overlay), RAM etc,
+ * dev/proc/tmp so init can start without loading AHCI/IDE kmod. */
+static void mntfs_setup_nodisk(void) {
+    kprint("[mntfs] no disk-backed root — RAM etc, cctkfs /bin, dev/proc/tmp\n");
+    devfs_init();
+    procfs_init();
+    tmpfs_init();
+    etcfs_init(0);
+    binfs_init(0);
+    libfs_init(0);
+
+    extern int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target);
+    vfs_mount(vfs_root, "bin",  binfs_get_root());
+    vfs_mount(vfs_root, "lib",  libfs_get_root());
+    vfs_mount(vfs_root, "dev",  devfs_get_root());
+    vfs_mount(vfs_root, "proc", procfs_get_root());
+    vfs_mount(vfs_root, "tmp",  tmpfs_get_root());
+    vfs_mount(vfs_root, "etc",  etcfs_get_root());
+    kprint("[mntfs] /bin /lib /dev /proc /tmp /etc at VFS root (nodisk)\n");
+    klog(LOG_OK, "mntfs ready — nodisk (cctkfs userland)");
+}
+
 // Find a mount point by full path
 static mntfs_entry_t *_find(const char *name) {
     for (mntfs_entry_t *e = mnt_list; e; e = e->next)
@@ -381,9 +403,9 @@ void mntfs_init(void) {
     kprint("[mntfs] querying boot block device\n");
     blkdev_t *boot = blkdev_get_boot();
     if (!boot) {
-        kprint("[mntfs] WARNING: no boot block device\n");
-        klog(LOG_WARN, "mntfs: no boot disk — devfs only");
-        devfs_init();
+        kprint("[mntfs] WARNING: no boot block device (load ahci/nvme kmod for disk)\n");
+        klog(LOG_WARN, "mntfs: no boot disk — nodisk mode");
+        mntfs_setup_nodisk();
         return;
     }
 
@@ -394,8 +416,8 @@ void mntfs_init(void) {
     vfs_node_t *ext4 = ext4_mount_disk(0);
     if (!ext4) {
         kprint("[mntfs] WARNING: no ext4 on "); kprint(boot_devname); kprint("\n");
-        klog(LOG_WARN, "mntfs: ext4 mount failed — devfs only");
-        devfs_init();
+        klog(LOG_WARN, "mntfs: ext4 mount failed — nodisk mode");
+        mntfs_setup_nodisk();
         return;
     }
     kprint("[mntfs] ext4 mounted — registering as disk '"); kprint(boot_devname); kprint("'\n");
