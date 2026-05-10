@@ -199,29 +199,36 @@ pub extern "C" fn ksock_tcp_accept(listen_node: *mut VfsNode, peer_out: *mut Soc
         if lks.is_null() || (*lks).kind != KS_TCP {
             return core::ptr::null_mut();
         }
-        let listen_proto = (*lks).proto_idx;
-        for i in 0..TCP_MAX_SOCKETS {
-            let s = &mut tcp::tcp_sockets[i];
-            if s.used == 0 || s.accept_ready == 0 || s.listen_parent != listen_proto as i8 {
-                continue;
-            }
-            s.accept_ready = 0;
-            if !peer_out.is_null() {
-                (*peer_out).sin_family = AF_INET;
-                (*peer_out).sin_port = s.remote_port.to_be();
-                (*peer_out).sin_addr = s.remote_ip;
-                (*peer_out).sin_zero = [0; 8];
-            }
-            let ks = ksock_alloc();
-            if ks.is_null() {
-                return core::ptr::null_mut();
-            }
-            (*ks).kind = KS_TCP;
-            (*ks).proto_idx = i as i32;
-            return make_socket_node(ks);
+        let listen_idx = (*lks).proto_idx as usize;
+        if listen_idx >= TCP_MAX_SOCKETS {
+            return core::ptr::null_mut();
         }
+        let ls = &mut tcp::tcp_sockets[listen_idx];
+        if ls.used == 0 || ls.accept_ready == 0 {
+            return core::ptr::null_mut();
+        }
+        let child_idx = (0..TCP_MAX_SOCKETS).find(|i| tcp::tcp_sockets[*i].used == 0);
+        let Some(ci) = child_idx else {
+            return core::ptr::null_mut();
+        };
+        if tcp::tcp_accept_transfer(listen_idx as i32, ci as i32) != 0 {
+            return core::ptr::null_mut();
+        }
+        let peer = &tcp::tcp_sockets[ci];
+        if !peer_out.is_null() {
+            (*peer_out).sin_family = AF_INET;
+            (*peer_out).sin_port = peer.remote_port.to_be();
+            (*peer_out).sin_addr = peer.remote_ip;
+            (*peer_out).sin_zero = [0; 8];
+        }
+        let ks = ksock_alloc();
+        if ks.is_null() {
+            return core::ptr::null_mut();
+        }
+        (*ks).kind = KS_TCP;
+        (*ks).proto_idx = ci as i32;
+        make_socket_node(ks)
     }
-    core::ptr::null_mut()
 }
 
 #[no_mangle]

@@ -37,6 +37,11 @@ pub extern "C" fn rust_net_set_ipv4_config(ip_h: u32, mask_h: u32, gw_h: u32, dn
         NET_GATEWAY_HOST = gw_h;
         NET_DNS_HOST = dns_h;
     }
+    if unsafe { crate::stack::STACK_READY } {
+        let _ = crate::stack::with_iface_sockets(|iface, _socks| {
+            crate::stack::sync_iface_ipv4_from_config(iface);
+        });
+    }
     ffi_kernel::c_kprint(b"[RUST-NET][CFG] ip=\0");
     ffi_kernel::c_kprint_hex(ip_h);
     ffi_kernel::c_kprint(b" mask=\0");

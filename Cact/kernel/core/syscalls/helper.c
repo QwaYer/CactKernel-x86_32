@@ -6,6 +6,9 @@
 #include "tcp.h"
 #include "udp.h"
 
+extern int tcp_sock_read_ready(int idx);
+extern int udp_sock_read_ready(int idx);
+
 // Find a free file descriptor slot (starting from 3) and install the node.
 // Increments the VFS refcount on success.
 int alloc_fd(vfs_node_t* node) {
@@ -40,12 +43,10 @@ int fd_read_ready(vfs_node_t* node) {
         ksock_t* ks = ksock_from_node(node);
         if (!ks) return 0;
         if (ks->kind == KS_TCP) {
-            tcp_socket_t* s = &tcp_sockets[ks->proto_idx];
-            return (s->rx_head != s->rx_tail) || s->accept_ready ||
-                   (s->state == TCP_CLOSE_WAIT) || (s->state == TCP_CLOSED);
+            return tcp_sock_read_ready(ks->proto_idx);
         }
         if (ks->kind == KS_UDP)
-            return udp_socks[ks->proto_idx].rx_ready;
+            return udp_sock_read_ready(ks->proto_idx);
         return 0;
     }
     default: return 0;

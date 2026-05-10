@@ -1,6 +1,10 @@
 [build]
 target = "i686-cact.json"
 
+[target.i686-cact]
+# heapless (via smoltcp) uses AtomicU64; enable 64-bit CAS on x86.
+rustflags = ["-C", "target-cpu=pentium4"]
+
 [unstable]
 build-std = ["core"]
 build-std-features = ["compiler-builtins-mem"]

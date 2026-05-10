@@ -1,6 +1,6 @@
-use crate::ethernet;
 use crate::ffi_kernel;
 use crate::dhcp;
+use crate::stack;
 use crate::types::{MacAddr, NetDriver, Semaphore, Skb};
 
 #[no_mangle]
@@ -36,6 +36,7 @@ pub extern "C" fn net_register_driver(drv: *mut NetDriver) {
             get_mac(core::ptr::addr_of_mut!(my_mac));
         }
         my_mac = (*drv).mac;
+        stack::stack_init();
         ffi_kernel::c_kprint(b"[RUST-NET] driver registered, mac=\0");
         ffi_kernel::c_kprint_hex((my_mac.b[0] as u32) << 8 | my_mac.b[1] as u32);
         ffi_kernel::c_kprint(b":\0");
@@ -56,6 +57,7 @@ pub extern "C" fn net_unregister_driver(drv: *mut NetDriver) {
         if active_nic == drv {
             active_nic = core::ptr::null_mut();
             my_mac = MacAddr { b: [0; 6] };
+            stack::stack_teardown();
             ffi_kernel::c_kprint(b"[RUST-NET] driver unregistered\n\0");
         }
     }
@@ -78,20 +80,10 @@ pub extern "C" fn net_init() {
 
 #[no_mangle]
 pub extern "C" fn net_receive(skb: *mut Skb) {
-    if skb.is_null() {
-        return;
-    }
-    ethernet::ethernet_input(skb);
+    stack::stack_enqueue_rx(skb);
 }
 
 #[no_mangle]
 pub extern "C" fn net_poll() {
-    // SAFETY: active_nic is optional global.
-    unsafe {
-        if !active_nic.is_null() {
-            if let Some(poll) = (*active_nic).poll {
-                poll();
-            }
-        }
-    }
+    stack::stack_poll();
 }

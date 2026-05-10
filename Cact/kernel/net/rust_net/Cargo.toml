@@ -6,6 +6,17 @@ edition = "2021"
 [lib]
 crate-type = ["staticlib"]
 
+[dependencies]
+smoltcp = { version = "0.12", default-features = false, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "proto-dhcpv4",
+    "socket-tcp",
+    "socket-udp",
+    "socket-icmp",
+    "socket-dhcpv4",
+] }
+
 [profile.dev]
 panic = "abort"
 
