@@ -27,10 +27,6 @@ int procfs_register_cmd (const char *name,
                           procfs_read_fn read_fn,
                           procfs_cmd_fn  cmd_fn);
 
-// Store/read binary module snapshots under /proc/mdls
-int procfs_register_blob  (const char *name, const void *data, uint32_t size);
-int procfs_unregister_blob(const char *name);
-
 // Unregister a virtual file or command node
 int procfs_unregister_file(const char *name);
 int procfs_unregister_cmd (const char *name);

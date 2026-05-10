@@ -5,11 +5,15 @@
 #include "kernel.h"
 #include "pipe.h"
 #include "blkdev.h"
+#include "pci_driver.h"
 
 // Global devfs state
 static vfs_node_t    devfs_root;
 static devfs_entry_t *dev_list   = 0;    // singly-linked list of registered devices
 static int            devfs_ready = 0;
+
+// /dev/modinfo — virtual file, PCI driver list (see pci_driver_modinfo_read)
+static vfs_node_t modinfo_node;
 
 // data node ops (read/write/ioctl)
 static int _data_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
@@ -122,6 +126,7 @@ static vfs_ops_t dev_dir_ops = {
 // devfs root directory ops
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
+    if (streq(name, "modinfo")) return &modinfo_node;
     for (devfs_entry_t *e = dev_list; e; e = e->next)
         if (streq(e->name, name))
             return &e->dir_node;
@@ -132,7 +137,12 @@ static vfs_dirent_t _root_de;
 
 static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     (void)dir;
-    uint32_t i = 0;
+    if (index == 0) {
+        strlcpy(_root_de.name, "modinfo", 128);
+        _root_de.inode = 0;
+        return &_root_de;
+    }
+    uint32_t i = 1;
     for (devfs_entry_t *e = dev_list; e; e = e->next) {
         if (i++ == index) {
             strlcpy(_root_de.name, e->name, 128);
@@ -145,6 +155,7 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
+    kprint("  modinfo\n");
     for (devfs_entry_t *e = dev_list; e; e = e->next) {
         kprint("  ");
         kprint(e->name);
@@ -158,6 +169,13 @@ static vfs_ops_t root_ops = {
     .readdir = _root_readdir,
     .listdir = _root_listdir,
 };
+
+static int _modinfo_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
+    (void)node;
+    return pci_driver_modinfo_read(off, size, buf);
+}
+
+static vfs_ops_t modinfo_ops = { .read = _modinfo_read };
 
 // populate a devfs_entry_t with its VFS nodes (simple or directory-based)
 static void _fill_entry(devfs_entry_t *e) {
@@ -360,6 +378,12 @@ void devfs_init(void) {
     devfs_root.type = VFS_DIRECTORY;
     devfs_root.ops  = &root_ops;
 
+    kprint("[devfs] setting up /dev/modinfo (PCI driver list)\n");
+    memset(&modinfo_node, 0, sizeof(vfs_node_t));
+    strlcpy(modinfo_node.name, "modinfo", 128);
+    modinfo_node.type = VFS_FILE;
+    modinfo_node.ops  = &modinfo_ops;
+
     kprint("[devfs] registering /dev/null  (char, discard)\n");
     devfs_register("null",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_null,   0);
     kprint("[devfs] registering /dev/zero  (char, zero source)\n");
@@ -381,5 +405,5 @@ void devfs_init(void) {
     devfs_register("tty", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_tty, 0);
 
     devfs_ready = 1;
-    klog(LOG_OK, "devfs ready — null/zero/random/urandom/tty registered");
+    klog(LOG_OK, "devfs ready — modinfo + null/zero/random/urandom/tty");
 }

@@ -23,22 +23,13 @@ typedef struct proc_cmd {
     struct proc_cmd *next;
 } proc_cmd_t;
 
-// A binary module snapshot under /proc/mdls/
-typedef struct proc_blob {
-    char            name[64];
-    uint8_t        *data;
-    uint32_t        size;
-    vfs_node_t      node;
-    struct proc_blob *next;
-} proc_blob_t;
-
 // Global lists
 static proc_file_t *file_list = 0;
 static proc_cmd_t  *cmd_list  = 0;
-static proc_blob_t *blob_list = 0;
 
 static vfs_node_t procfs_root;
 static vfs_node_t cmd_dir;
+static vfs_node_t bin_dir;
 static vfs_node_t mdls_dir;
 static int        procfs_ready = 0;
 
@@ -88,19 +79,6 @@ static int _cmd_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 
 static vfs_ops_t cmd_ops = { .read = _cmd_read, .write = _cmd_write };
 
-// Blob read: expose stored module bytes from /proc/mdls/<name>
-static int _blob_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
-    proc_blob_t *b = (proc_blob_t *)node->priv;
-    if (!b || !b->data) return 0;
-    if (off >= b->size) return 0;
-    uint32_t avail = b->size - off;
-    if (size > avail) size = avail;
-    memcpy(buf, b->data + off, size);
-    return (int)size;
-}
-
-static vfs_ops_t blob_ops = { .read = _blob_read };
-
 // cmd/ directory ops
 static vfs_node_t *_cmd_dir_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
@@ -137,35 +115,50 @@ static vfs_ops_t cmd_dir_ops = {
     .listdir = _cmd_dir_listdir,
 };
 
-// mdls/ directory ops
-static vfs_node_t *_mdls_dir_walk(vfs_node_t *dir, const char *name) {
+// bin/ — holds mdls/ (empty placeholder dir, same role as bin)
+static vfs_node_t *_bin_dir_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
-    for (proc_blob_t *b = blob_list; b; b = b->next)
-        if (streq(b->name, name)) return &b->node;
+    if (streq(name, "mdls")) return &mdls_dir;
     return 0;
 }
 
-static vfs_dirent_t _mdls_de;
+static vfs_dirent_t _bin_de;
+
+static vfs_dirent_t *_bin_dir_readdir(vfs_node_t *dir, uint32_t index) {
+    (void)dir;
+    if (index == 0) {
+        strlcpy(_bin_de.name, "mdls", 128);
+        _bin_de.inode = 0;
+        return &_bin_de;
+    }
+    return 0;
+}
+
+static void _bin_dir_listdir(vfs_node_t *dir) {
+    (void)dir;
+    kprint("  mdls/\n");
+}
+
+static vfs_ops_t bin_dir_ops = {
+    .walk    = _bin_dir_walk,
+    .readdir = _bin_dir_readdir,
+    .listdir = _bin_dir_listdir,
+};
+
+// mdls/ — empty directory under bin/ (for future use / user-visible layout only)
+static vfs_node_t *_mdls_dir_walk(vfs_node_t *dir, const char *name) {
+    (void)dir;
+    (void)name;
+    return 0;
+}
 
 static vfs_dirent_t *_mdls_dir_readdir(vfs_node_t *dir, uint32_t index) {
     (void)dir;
-    uint32_t i = 0;
-    for (proc_blob_t *b = blob_list; b; b = b->next) {
-        if (i++ == index) {
-            strlcpy(_mdls_de.name, b->name, 128);
-            _mdls_de.inode = i;
-            return &_mdls_de;
-        }
-    }
+    (void)index;
     return 0;
 }
 
-static void _mdls_dir_listdir(vfs_node_t *dir) {
-    (void)dir;
-    for (proc_blob_t *b = blob_list; b; b = b->next) {
-        kprint("  "); kprint(b->name); kprint("\n");
-    }
-}
+static void _mdls_dir_listdir(vfs_node_t *dir) { (void)dir; }
 
 static vfs_ops_t mdls_dir_ops = {
     .walk    = _mdls_dir_walk,
@@ -173,11 +166,11 @@ static vfs_ops_t mdls_dir_ops = {
     .listdir = _mdls_dir_listdir,
 };
 
-// procfs root directory ops (cmd/ + mdls/ + virtual files)
+// procfs root directory ops (cmd/ + bin/mdls/ + virtual files)
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     if (streq(name, "cmd")) return &cmd_dir;
-    if (streq(name, "mdls")) return &mdls_dir;
+    if (streq(name, "bin")) return &bin_dir;
 
     for (proc_file_t *f = file_list; f; f = f->next)
         if (streq(f->name, name)) return &f->node;
@@ -194,7 +187,7 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
         return &_root_de;
     }
     if (index == 1) {
-        strlcpy(_root_de.name, "mdls", 128);
+        strlcpy(_root_de.name, "bin", 128);
         _root_de.inode = 1;
         return &_root_de;
     }
@@ -212,7 +205,7 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     kprint("  cmd/\n");
-    kprint("  mdls/\n");
+    kprint("  bin/\n");
     for (proc_file_t *f = file_list; f; f = f->next) {
         kprint("  "); kprint(f->name); kprint("\n");
     }
@@ -551,62 +544,6 @@ int procfs_register_cmd(const char *name,
     return 0;
 }
 
-// Store or replace a binary module snapshot under /proc/mdls
-int procfs_register_blob(const char *name, const void *data, uint32_t size) {
-    if (!name || !data || size == 0) return -1;
-
-    uint8_t *copy = (uint8_t *)kmalloc(size);
-    if (!copy) return -1;
-    memcpy(copy, data, size);
-
-    for (proc_blob_t *b = blob_list; b; b = b->next) {
-        if (streq(b->name, name)) {
-            if (b->data) kfree_heap(b->data);
-            b->data = copy;
-            b->size = size;
-            b->node.size = size;
-            return 0;
-        }
-    }
-
-    proc_blob_t *b = (proc_blob_t *)kmalloc(sizeof(proc_blob_t));
-    if (!b) {
-        kfree_heap(copy);
-        return -1;
-    }
-    memset(b, 0, sizeof(proc_blob_t));
-
-    strlcpy(b->name, name, 64);
-    b->data = copy;
-    b->size = size;
-
-    memset(&b->node, 0, sizeof(vfs_node_t));
-    strlcpy(b->node.name, name, 128);
-    b->node.type = VFS_FILE;
-    b->node.size = size;
-    b->node.ops  = &blob_ops;
-    b->node.priv = b;
-
-    b->next   = blob_list;
-    blob_list = b;
-    return 0;
-}
-
-int procfs_unregister_blob(const char *name) {
-    proc_blob_t **pp = &blob_list;
-    while (*pp) {
-        if (streq((*pp)->name, name)) {
-            proc_blob_t *dead = *pp;
-            *pp = dead->next;
-            if (dead->data) kfree_heap(dead->data);
-            kfree_heap(dead);
-            return 0;
-        }
-        pp = &(*pp)->next;
-    }
-    return -1;
-}
-
 // Unregister a virtual file
 int procfs_unregister_file(const char *name) {
     proc_file_t **pp = &file_list;
@@ -646,7 +583,13 @@ void procfs_init(void) {
     cmd_dir.type = VFS_DIRECTORY;
     cmd_dir.ops  = &cmd_dir_ops;
 
-    kprint("[procfs] setting up mdls/ directory node\n");
+    kprint("[procfs] setting up bin/ directory node\n");
+    memset(&bin_dir, 0, sizeof(vfs_node_t));
+    strlcpy(bin_dir.name, "bin", 128);
+    bin_dir.type = VFS_DIRECTORY;
+    bin_dir.ops  = &bin_dir_ops;
+
+    kprint("[procfs] setting up bin/mdls/ directory node\n");
     memset(&mdls_dir, 0, sizeof(vfs_node_t));
     strlcpy(mdls_dir.name, "mdls", 128);
     mdls_dir.type = VFS_DIRECTORY;
@@ -666,5 +609,5 @@ void procfs_init(void) {
     procfs_register_file("tasks",   _tasks_read);
 
     procfs_ready = 1;
-    klog(LOG_OK, "procfs ready — cpuinfo/meminfo/uptime/version/tasks/cmd/mdls");
+    klog(LOG_OK, "procfs ready — cpuinfo/meminfo/uptime/version/tasks/cmd/bin/mdls");
 }

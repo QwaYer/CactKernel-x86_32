@@ -2,7 +2,6 @@
 #include "pci_driver.h"
 #include "pci_enum.h"
 #include "vfs.h"
-#include "procfs.h"
 #include "memory.h"
 #include "kernel.h"
 #include "klib.h"
@@ -445,11 +444,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     mm->image_size = total;
     module_proc_name(path, mm->proc_name, sizeof(mm->proc_name));
     drv->priv      = mm;
-
-    if (procfs_register_blob(mm->proc_name, elf_data, file_size) != 0) {
-        kprint("[LDR] WARNING: cannot publish module in /proc/mdls: ");
-        kprint(mm->proc_name); kprint("\n");
-    }
+    drv->flags    |= PCI_DRV_F_RELOC_MODULE;
 
     kfree_heap(elf_data);   // ELF header no longer needed
 
@@ -466,8 +461,9 @@ void pci_unload_module(struct pci_driver *drv) {
     if (drv->remove) drv->remove(NULL);
     kfree_heap(mm->image);
     kfree_heap(mm);
-    drv->priv  = NULL;
-    drv->probe = NULL;
+    drv->priv   = NULL;
+    drv->probe  = NULL;
+    drv->remove = NULL;
+    drv->flags &= ~PCI_DRV_F_RELOC_MODULE;
     kprint("[LDR] Module unloaded: "); kprint(drv->name); kprint("\n");
-    kprint("[LDR] Snapshot remains readable in /proc/mdls\n");
 }

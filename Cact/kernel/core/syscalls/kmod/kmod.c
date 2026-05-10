@@ -87,17 +87,45 @@ int sys_module_load(const char* path, uint32_t vendor_id, uint32_t device_id) {
     return 0;
 }
 
-int sys_module_unload(void) {
+int sys_module_unload(const char *name) {
     if (require_root() != 0)
         return -1;
-    if (!usermod_slot_active)
-        return 0;
 
-    pci_unload_module(&usermod_pci_drv);
-    pci_unregister_driver(&usermod_pci_drv);
-    memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
-    usermod_path_store[0] = '\0';
-    usermod_slot_active   = 0;
-    kprint("[KMOD] usermod unloaded\n");
+    if (!name) {
+        if (!usermod_slot_active)
+            return 0;
+        pci_unload_module(&usermod_pci_drv);
+        pci_unregister_driver(&usermod_pci_drv);
+        memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
+        usermod_path_store[0] = '\0';
+        usermod_slot_active   = 0;
+        kprint("[KMOD] usermod unloaded\n");
+        return 0;
+    }
+
+    if (!validate_user_str(name))
+        return -2;
+
+    pci_driver_t *drv = pci_driver_find_by_name(name);
+    if (!drv) {
+        kprint("[KMOD] no driver named: "); kprint((char *)name); kprint("\n");
+        return -5;
+    }
+    if (!(drv->flags & PCI_DRV_F_RELOC_MODULE)) {
+        kprint("[KMOD] not an ET_REL module (built-in): ");
+        kprint((char *)name); kprint("\n");
+        return -6;
+    }
+
+    pci_unload_module(drv);
+    pci_unregister_driver(drv);
+
+    if (drv == &usermod_pci_drv) {
+        memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
+        usermod_path_store[0] = '\0';
+        usermod_slot_active   = 0;
+    }
+
+    kprint("[KMOD] unloaded: "); kprint((char *)name); kprint("\n");
     return 0;
 }

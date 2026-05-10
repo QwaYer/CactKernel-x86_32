@@ -11,6 +11,9 @@
 // Wildcard for driver matching — matches any vendor/device/class/subclass
 #define PCI_ANY_ID  0xFFFF
 
+// pci_load_module() sets this; cleared in pci_unload_module()
+#define PCI_DRV_F_RELOC_MODULE  0x01u
+
 // PCI driver descriptor — one per supported device class
 typedef struct pci_driver {
     char     name[PCI_DRIVER_NAME_MAX];
@@ -26,6 +29,7 @@ typedef struct pci_driver {
     const char *module_path;            // for lazy-loading .cctk modules
 
     void *priv;                         // driver-private data (e.g. module memory)
+    uint32_t flags;                     // PCI_DRV_F_*
 
     struct pci_driver *next;            // linked list
 } pci_driver_t;
@@ -34,10 +38,16 @@ typedef struct pci_driver {
 int  pci_register_driver  (pci_driver_t *drv);
 int  pci_unregister_driver(pci_driver_t *drv);
 
+// Find a registered driver by name (exact match), or NULL.
+pci_driver_t *pci_driver_find_by_name(const char *name);
+
 // Walk driver list and probe the first matching driver for a device.
 void pci_driver_match(pci_device_t *dev);
 
 // Debug: print all registered drivers.
 void pci_driver_dump(void);
+
+// /dev/modinfo text: pci_register_driver() structs + pci_enumerate() devices
+int pci_driver_modinfo_read(uint32_t off, uint32_t size, char *buf);
 
 #endif
