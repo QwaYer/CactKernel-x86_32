@@ -18,8 +18,9 @@ static int driver_matches(const pci_driver_t *drv, const pci_device_t *dev) {
 }
 
 // Register a PCI driver. Duplicate names are rejected.
+// `probe` may be NULL if `module_path` is set — pci_driver_match() will lazy-load.
 int pci_register_driver(pci_driver_t *drv) {
-    if (!drv || !drv->probe) return -1;
+    if (!drv || (!drv->probe && !drv->module_path)) return -1;
     if (driver_count >= MAX_PCI_DRIVERS) {
         kprint("[DRV] Driver table full\n");
         return -1;
@@ -65,8 +66,22 @@ void pci_driver_match(pci_device_t *dev) {
             }
         }
 
+        if (!drv->probe) {
+            kprint("[DRV] driver "); kprint(drv->name);
+            kprint(" matched PCI but probe is NULL\n");
+            return;
+        }
+
+        kprint("[DRV] calling probe "); kprint(drv->name);
+        kprint(" for ");
+        kprint_hex(dev->vendor_id); kprint(":"); kprint_hex(dev->device_id);
+        kprint(" @"); kprint_hex(dev->bus); kprint(":"); kprint_hex(dev->dev);
+        kprint("."); kprint_hex(dev->fn); kprint("\n");
+
         if (drv->probe(dev) != 0)
-            kprint("[DRV] probe() failed\n");
+            kprint("[DRV] probe() returned error\n");
+        else
+            kprint("[DRV] probe() OK\n");
 
         return;  // first match wins
     }

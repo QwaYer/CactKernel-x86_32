@@ -211,6 +211,32 @@ pub extern "C" fn vmm_map(pd: *mut u32,
     }
 }
 
+/// Translate a virtual address to physical using `pd` (page directory).
+/// If `pd` is null, the kernel page directory is used.
+/// Returns 0 if the mapping is not present. Page offset bits are preserved.
+#[unsafe(no_mangle)]
+pub extern "C" fn vmm_get_phys(pd: *mut u32, virtual_addr: u32) -> u32 {
+    let pd = if pd.is_null() {
+        get_kernel_pd()
+    } else {
+        pd
+    };
+    unsafe {
+        let pdi = pd_index(virtual_addr) as usize;
+        let pti = pt_index(virtual_addr) as usize;
+        let pde = *pd.add(pdi);
+        if pde & PAGE_PRESENT == 0 {
+            return 0;
+        }
+        let pt = (pde & !0xFFF) as *const u32;
+        let pte = *pt.add(pti);
+        if pte & PAGE_PRESENT == 0 {
+            return 0;
+        }
+        (pte & !0xFFF) | (virtual_addr & 0xFFF)
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_create_address_space() -> *mut u32 {
     let pd = kalloc() as *mut u32;

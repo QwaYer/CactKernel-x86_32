@@ -1,7 +1,6 @@
 [bits 32]
 
 global keyboard_isr
-global virtio_net_isr
 global timer_isr
 global syscall_isr
 global isr_common_stub
@@ -45,7 +44,6 @@ global spurious_irq7
 global spurious_irq15
 
 extern ps2_keyboard_handler
-extern virtio_net_irq_handler
 extern exception_handler
 extern syscall_handler
 extern nvme_irq_handler
@@ -329,22 +327,6 @@ nvme_isr:
     popa
     iretd
 
-virtio_net_isr:
-    pusha
-    push ds
-    push es
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    call virtio_net_irq_handler
-    mov al, 0x20
-    out 0xA0, al
-    out 0x20, al
-    pop es
-    pop ds
-    popa
-    iretd
-
 usb_isr:
     pusha
     push ds
@@ -426,3 +408,55 @@ spurious_irq15:
     out 0x20, al
     pop eax
     iretd
+
+; ---------------------------------------------------------------------------
+; Generic PIC IRQ stubs (vector = 0x20 + irq) for irq_register_handler().
+; ---------------------------------------------------------------------------
+extern irq_dispatch
+
+%macro irq_entry 1
+global irq_stub_%1
+irq_stub_%1:
+    push dword %1
+    jmp irq_common_dispatch
+%endmacro
+
+%assign irq_i 0
+%rep 16
+irq_entry irq_i
+%assign irq_i irq_i+1
+%endrep
+
+global irq_common_dispatch
+irq_common_dispatch:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov esi, [esp + 40]
+    push esi
+    call irq_dispatch
+    add esp, 4
+    cmp esi, 8
+    jl .irq_master_eoi_only
+    mov al, 0x20
+    out 0xA0, al
+.irq_master_eoi_only:
+    mov al, 0x20
+    out 0x20, al
+    pop es
+    pop ds
+    popa
+    add esp, 4
+    iretd
+
+section .rodata
+global irq_stub_table
+irq_stub_table:
+%assign irq_j 0
+%rep 16
+    dd irq_stub_%+irq_j
+%assign irq_j irq_j+1
+%endrep

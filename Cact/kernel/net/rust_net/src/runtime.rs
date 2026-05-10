@@ -46,6 +46,21 @@ pub extern "C" fn net_register_driver(drv: *mut NetDriver) {
     }
 }
 
+/// Clear `active_nic` only if it still points at `drv` (symmetric to registration).
+#[no_mangle]
+pub extern "C" fn net_unregister_driver(drv: *mut NetDriver) {
+    if drv.is_null() {
+        return;
+    }
+    unsafe {
+        if active_nic == drv {
+            active_nic = core::ptr::null_mut();
+            my_mac = MacAddr { b: [0; 6] };
+            ffi_kernel::c_kprint(b"[RUST-NET] driver unregistered\n\0");
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn net_init() {
     ffi_kernel::c_kprint(b"[RUST-NET] init begin\n\0");

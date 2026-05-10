@@ -18,7 +18,7 @@
 #include "pagecache.h"
 #include "blkdev.h"
 #include "version.h"
-#include "virtio_net.h"
+#include "serial.h"
 
 // Kernel page directory (defined in paging.c)
 extern uint32_t page_directory[1024];
@@ -156,6 +156,8 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     init_pic();                     // Programmable Interrupt Controller
     init_idt();                     // Interrupt Descriptor Table
 
+    serial_init();                  // COM1 — kprint/klog also go here (QEMU: -serial stdio)
+
     // Display
     init_framebuffer();
 
@@ -265,8 +267,8 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     net_init();
     // Driver bootstrap is platform policy, not net stack policy.
     // Stack itself accepts any NIC via net_register_driver().
-    kprint("[NET] probing NIC drivers\n");
-    virtio_net_init();
+    kprint("[NET] no built-in NIC driver — as root run: "
+           "modload /lib/virtio_net.cctk 0x1AF4 0x1041 (legacy virtio-net; DID 0x1000 also)\n");
 
     // Multitasking
     task_init();

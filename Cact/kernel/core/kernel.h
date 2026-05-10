@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "pci.h"
+#include "irq.h"
 #include "multiboot2.h"
 
 // Forward declaration for exception frame
@@ -159,6 +160,7 @@ extern struct task_struct* volatile current_task;
 void      init_paging            (void);
 void      switch_paging          (uint32_t* pd);
 void      vmm_map                (uint32_t* pd, uint32_t virt, uint32_t phys, int flags);
+uint32_t  vmm_get_phys           (uint32_t* pd, uint32_t virt);
 uint32_t* vmm_create_address_space(void);
 uint32_t  get_free_heap_memory   (void);
 void      slab_init              (void);
@@ -185,7 +187,6 @@ uint32_t elf_get_brk_start(struct vfs_node* file);
 // Networking stack
 void net_init             (void);
 void net_poll             (void);
-void virtio_net_irq_handler(void);
 
 // Terminal window size for TIOCGWINSZ/TIOCSWINSZ ioctls
 #define TIOCGWINSZ 0x5413

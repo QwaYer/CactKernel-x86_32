@@ -12,6 +12,14 @@
 uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg);
 void     pci_write32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg, uint32_t val);
 
+/* Aliases expected by driver code / docs (DWORD config access). */
+uint32_t pci_read_config_long(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg);
+void     pci_write_config_long(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg,
+                               uint32_t val);
+
+/* Sets PCI command register bus-master bit (required for DMA). */
+void pci_enable_bus_master(uint8_t bus, uint8_t dev, uint8_t fn);
+
 // Return 0 if PCI Mechanism #1 is detected.
 int search_pci(void);
 

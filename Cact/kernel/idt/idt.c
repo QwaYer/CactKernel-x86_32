@@ -3,6 +3,8 @@
 #include "memory.h"
 #include "klib.h"
 
+extern uint32_t irq_stub_table[];
+
 // Exception handlers (ISRs 0-31)
 extern void isr0();  extern void isr1();  extern void isr2();
 extern void isr3();  extern void isr4();  extern void isr5();
@@ -21,7 +23,6 @@ extern void timer_isr();
 extern void keyboard_isr();
 extern void mouse_isr();
 extern void nvme_isr();
-extern void virtio_net_isr();
 extern void syscall_isr();
 extern void usb_isr();
 extern void uhci_isr();
@@ -112,7 +113,7 @@ int init_idt(void) {
 
     // Install IRQ handlers (hardware interrupts)
     kprint("[IDT] installing IRQ gates:"
-           " 0x20=timer  0x21=kbd  0x2C=mouse  0x2D=net  0x2E=nvme"
+           " 0x20=timer  0x21=kbd  0x2C=mouse  0x2D=IRQ13 stub  0x2E=nvme"
            "  0x29-0x2B=usb\n");
     set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - PIT timer
     set_idt_gate(0x21, (uint32_t)keyboard_isr);     // IRQ1  - PS/2 keyboard
@@ -121,7 +122,7 @@ int init_idt(void) {
     set_idt_gate(0x2A, (uint32_t)usb_isr);          // IRQ10 - USB (shared)
     set_idt_gate(0x2B, (uint32_t)usb_isr);          // IRQ11 - USB (shared)
     set_idt_gate(0x2C, (uint32_t)mouse_isr);        // IRQ12 - PS/2 mouse
-    set_idt_gate(0x2D, (uint32_t)virtio_net_isr);   // IRQ13 - VirtIO Net
+    set_idt_gate(0x2D, irq_stub_table[13]);        // IRQ13 — NIC modules use irq_register_handler()
     set_idt_gate(0x2E, (uint32_t)nvme_isr);         // IRQ14 - NVMe storage
     set_idt_gate(0x2F, (uint32_t)spurious_irq15);   // IRQ15 - slave spurious
 

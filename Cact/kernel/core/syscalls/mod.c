@@ -16,6 +16,7 @@
 #include "time/time.h"
 #include "user/user.h"
 #include "net/net.h"
+#include "kmod/kmod.h"
 
 // task.h/mm.h may define legacy SYS_MMAP/etc. numbers — override with enum values
 #ifdef SYS_MMAP
@@ -153,6 +154,9 @@ static syscall_fn syscall_table[SYSCALL_COUNT] = {
     [SYS_GETSOCKOPT]    = (syscall_fn)sys_getsockopt,
     [SYS_PING_ECHO]     = (syscall_fn)sys_ping_echo,
     [SYS_NETCFG_SET]    = (syscall_fn)sys_netcfg_set,
+
+    [SYS_MODULE_LOAD]   = (syscall_fn)sys_module_load,
+    [SYS_MODULE_UNLOAD] = (syscall_fn)sys_module_unload,
 };
 
 // Syscalls that take a struct syscall_frame* instead of three scalar arguments.

@@ -49,6 +49,7 @@ void      kfree_aligned(void* ptr);
 void      kfree_heap(void* ptr);
 uint32_t  get_free_heap_memory(void);
 void      vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int flags);
+uint32_t  vmm_get_phys(uint32_t* pd, uint32_t virtual_addr);
 void      vmm_sync_kernel_mmio_mappings(uint32_t* pd);
 uint32_t* vmm_create_address_space(void);
 void      vmm_free_address_space(uint32_t* pd);

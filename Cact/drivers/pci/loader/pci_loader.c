@@ -2,9 +2,12 @@
 #include "pci_driver.h"
 #include "pci_enum.h"
 #include "vfs.h"
+#include "procfs.h"
 #include "memory.h"
 #include "kernel.h"
 #include "klib.h"
+#include "ksym.h"
+#include "resolve.h"
 
 // ELF 32-bit types (i386)
 typedef uint32_t Elf32_Addr;
@@ -23,7 +26,11 @@ typedef  int32_t Elf32_Sword;
 #define SHT_REL        9
 #define SHF_ALLOC      0x2
 #define STB_GLOBAL     1
+#define STB_WEAK       2
+#define STT_NOTYPE     0
+#define STT_OBJECT     1
 #define STT_FUNC       2
+#define SHN_UNDEF      0
 #define R_386_32       1           // absolute relocation
 #define R_386_PC32     2           // PC-relative relocation
 
@@ -74,7 +81,21 @@ typedef struct {
 typedef struct {
     uint8_t  *image;
     uint32_t  image_size;
+    char      proc_name[64];
 } mod_mem_t;
+
+static void module_proc_name(const char *path, char *out, int out_sz) {
+    const char *base = path;
+    for (const char *p = path; p && *p; p++)
+        if (*p == '/') base = p + 1;
+
+    int i = 0;
+    while (base[i] && i < out_sz - 1) {
+        out[i] = (base[i] == ' ') ? '_' : base[i];
+        i++;
+    }
+    out[i] = '\0';
+}
 
 // Return pointer to section header 'idx'
 static Elf32_Shdr *get_shdr(Elf32_Ehdr *eh, uint16_t idx) {
@@ -87,64 +108,212 @@ static const char *get_str(Elf32_Ehdr *eh, uint16_t strtab_idx, uint32_t off) {
     return (const char *)((uint8_t *)eh + sh->sh_offset + off);
 }
 
-// Walk a VFS path string and return the terminal node.
-// Duplicated from syscall resolve logic to keep the loader self-contained.
-static struct vfs_node *vfs_open_path(const char *path) {
-    if (!vfs_root) return NULL;
-    struct vfs_node *node = vfs_root;
-    static char token[128];
-    int ti = 0;
-    const char *p = path;
-    if (*p == '/') p++;
-    while (*p) {
-        if (*p == '/') {
-            token[ti] = '\0';
-            if (ti > 0) {
-                node = finddir_vfs(node, token);
-                if (!node) return NULL;
-            }
-            ti = 0;
-        } else {
-            if (ti < 127) token[ti++] = *p;
-        }
-        p++;
+static uint16_t read_le16(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+// Read ET_REL file from VFS into kmalloc'd buffer; validate header.
+// Returns 0 on success; -1 open/read/alloc; -2 bad ELF.
+static int read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t *file_size) {
+    struct vfs_node *node = _resolve_path(path);
+    if (!node)
+        return -1;
+
+    uint32_t fsz = node->size;
+    if (!fsz)
+        return -1;
+
+    uint8_t *buf = (uint8_t *)kmalloc(fsz);
+    if (!buf)
+        return -1;
+
+    int br = read_vfs(node, 0, fsz, (char *)buf);
+    if (br <= 0) {
+        kfree_heap(buf);
+        return -1;
     }
-    token[ti] = '\0';
-    if (ti > 0) node = finddir_vfs(node, token);
-    return node;
+
+    Elf32_Ehdr *eh = (Elf32_Ehdr *)buf;
+    if (eh->e_magic != ELF_MAGIC || eh->e_type != ET_REL || eh->e_machine != EM_386) {
+        kfree_heap(buf);
+        return -2;
+    }
+
+    *elf_data   = buf;
+    *file_size  = fsz;
+    return 0;
+}
+
+static int sym_is_data_global(const Elf32_Sym *sym) {
+    if (ELF32_ST_BIND(sym->st_info) != STB_GLOBAL)
+        return 0;
+    uint8_t t = ELF32_ST_TYPE(sym->st_info);
+    return (t == STT_OBJECT || t == STT_NOTYPE);
+}
+
+static Elf32_Sym *elf_find_named_sym(Elf32_Ehdr *eh, Elf32_Sym *syms, uint32_t sym_cnt,
+                                     uint16_t strtab_idx, const char *want) {
+    for (uint32_t s = 0; s < sym_cnt; s++) {
+        if (!sym_is_data_global(&syms[s]))
+            continue;
+        const char *nm = get_str(eh, strtab_idx, syms[s].st_name);
+        if (strcmp((char *)nm, (char *)want) != 0)
+            continue;
+        return &syms[s];
+    }
+    return NULL;
+}
+
+static int read_sym_u16(Elf32_Ehdr *eh, const uint8_t *elf_data, const Elf32_Sym *sym,
+                        uint16_t *out) {
+    if (sym->st_shndx == SHN_UNDEF || sym->st_size < sizeof(uint16_t))
+        return -1;
+    Elf32_Shdr *sh = get_shdr(eh, sym->st_shndx);
+    if (sh->sh_type != SHT_PROGBITS)
+        return -1;
+    const uint8_t *p = elf_data + sh->sh_offset + sym->st_value;
+    *out             = read_le16(p);
+    return 0;
+}
+
+static int read_sym_u8(Elf32_Ehdr *eh, const uint8_t *elf_data, const Elf32_Sym *sym,
+                       uint8_t *out) {
+    if (sym->st_shndx == SHN_UNDEF || sym->st_size < 1)
+        return -1;
+    Elf32_Shdr *sh = get_shdr(eh, sym->st_shndx);
+    if (sh->sh_type != SHT_PROGBITS)
+        return -1;
+    *out = elf_data[sh->sh_offset + sym->st_value];
+    return 0;
+}
+
+// Zero-terminated list of uint16 in .rodata/.data
+static int read_device_id_list(Elf32_Ehdr *eh, const uint8_t *elf_data, Elf32_Sym *sym,
+                               uint16_t *ids_out, int max_ids) {
+    if (sym->st_shndx == SHN_UNDEF)
+        return 0;
+    Elf32_Shdr *sh = get_shdr(eh, sym->st_shndx);
+    if (sh->sh_type != SHT_PROGBITS || sym->st_size < 2)
+        return 0;
+    const uint8_t *base = elf_data + sh->sh_offset + sym->st_value;
+    uint32_t       nbytes = sym->st_size;
+    int            n      = 0;
+    for (uint32_t off = 0; off + 2 <= nbytes && n < max_ids; off += 2) {
+        uint16_t v = read_le16(base + off);
+        if (v == 0)
+            break;
+        ids_out[n++] = v;
+    }
+    return n;
+}
+
+static uint16_t choose_did_from_manifest(uint16_t vendor, const uint16_t *ids, int nids) {
+    if (nids <= 0)
+        return 0;
+    for (pci_device_t *d = pci_device_list; d; d = d->next) {
+        if (d->vendor_id != vendor)
+            continue;
+        for (int i = 0; i < nids; i++) {
+            if (d->device_id == ids[i])
+                return ids[i];
+        }
+    }
+    return ids[0];
+}
+
+int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *device_out,
+                             uint8_t *class_out, uint8_t *subclass_out) {
+    uint8_t *elf_data = NULL;
+    uint32_t file_size = 0;
+    int      rr        = read_rel_elf_from_path(path, &elf_data, &file_size);
+    if (rr == -1) {
+        kprint("[LDR] manifest: file not found\n");
+        return -1;
+    }
+    if (rr == -2) {
+        kprint("[LDR] manifest: not a valid ELF32 relocatable\n");
+        return -2;
+    }
+
+    Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
+
+    Elf32_Shdr *symtab_sh = NULL;
+    uint16_t    strtab_idx = 0;
+    for (uint16_t i = 0; i < eh->e_shnum; i++) {
+        Elf32_Shdr *sh = get_shdr(eh, i);
+        if (sh->sh_type == SHT_SYMTAB) {
+            symtab_sh  = sh;
+            strtab_idx = (uint16_t)sh->sh_link;
+            break;
+        }
+    }
+    if (!symtab_sh) {
+        kprint("[LDR] manifest: no .symtab\n");
+        kfree_heap(elf_data);
+        return -3;
+    }
+
+    Elf32_Sym *syms    = (Elf32_Sym *)(elf_data + symtab_sh->sh_offset);
+    uint32_t   sym_cnt = symtab_sh->sh_size / sizeof(Elf32_Sym);
+
+    Elf32_Sym *sv = elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_vendor_id");
+    uint16_t   vendor;
+    if (!sv || read_sym_u16(eh, elf_data, sv, &vendor) != 0) {
+        kprint("[LDR] manifest: missing cact_pci_vendor_id\n");
+        kfree_heap(elf_data);
+        return -4;
+    }
+
+    uint16_t ids[16];
+    int      nids = 0;
+    Elf32_Sym *slist = elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_device_ids");
+    if (slist)
+        nids = read_device_id_list(eh, elf_data, slist, ids, 16);
+
+    if (nids == 0) {
+        Elf32_Sym *sd =
+            elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_device_id");
+        if (!sd || read_sym_u16(eh, elf_data, sd, &ids[0]) != 0) {
+            kprint("[LDR] manifest: need cact_pci_device_ids[] or cact_pci_device_id\n");
+            kfree_heap(elf_data);
+            return -5;
+        }
+        nids = 1;
+    }
+
+    Elf32_Sym *sc = elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_class");
+    if (sc)
+        (void)read_sym_u8(eh, elf_data, sc, class_out);
+    Elf32_Sym *ss = elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_subclass");
+    if (ss)
+        (void)read_sym_u8(eh, elf_data, ss, subclass_out);
+
+    uint16_t did = choose_did_from_manifest(vendor, ids, nids);
+    *vendor_out  = vendor;
+    *device_out  = did;
+
+    kfree_heap(elf_data);
+    return 0;
 }
 
 // Load a relocatable ELF module, relocate it into a private image,
 // find the exported symbol "pci_driver_probe", and wire it into 'drv'.
 int pci_load_module(const char *path, struct pci_driver *drv) {
-    // Open file via VFS
-    struct vfs_node *node = vfs_open_path(path);
-    if (!node) {
+    kprint("[LDR] pci_load_module: "); kprint((char *)path); kprint("\n");
+
+    uint8_t *elf_data = NULL;
+    uint32_t file_size = 0;
+    int      rr        = read_rel_elf_from_path(path, &elf_data, &file_size);
+    if (rr == -1) {
         kprint("[LDR] File not found\n");
         return -1;
     }
-
-    uint32_t file_size = node->size;
-    if (!file_size) return -1;
-
-    // Read entire file into heap
-    uint8_t *elf_data = (uint8_t *)kmalloc(file_size);
-    if (!elf_data) return -1;
-
-    int bytes_read = read_vfs(node, 0, file_size, (char *)elf_data);
-    if (bytes_read <= 0) {
-        kprint("[LDR] read_vfs failed\n");
-        kfree_heap(elf_data);
-        return -1;
-    }
-
-    // Validate ELF header: magic, ET_REL, EM_386
-    Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
-    if (eh->e_magic != ELF_MAGIC || eh->e_type != ET_REL || eh->e_machine != EM_386) {
+    if (rr == -2) {
         kprint("[LDR] Invalid ELF32 relocatable\n");
-        kfree_heap(elf_data);
         return -2;
     }
+
+    Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
 
     // First pass: calculate total image size and assign section addresses
     uint32_t total = 0;
@@ -201,9 +370,24 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
             uint32_t   sym_idx = ELF32_R_SYM(rels[r].r_info);
             uint8_t    type    = ELF32_R_TYPE(rels[r].r_info);
             Elf32_Sym *sym     = &syms[sym_idx];
-            uint32_t   S       = (uint32_t)(image
-                                   + get_shdr(eh, sym->st_shndx)->sh_addr
-                                   + sym->st_value);
+            uint32_t   S;
+
+            if (sym->st_shndx == SHN_UNDEF) {
+                const char *sym_name = get_str(eh, strtab_idx, sym->st_name);
+                S = ksym_resolve(sym_name);
+                if (S == 0 && ELF32_ST_BIND(sym->st_info) != STB_WEAK) {
+                    kprint("[LDR] Unresolved symbol: ");
+                    kprint((char *)sym_name);
+                    kprint("\n");
+                    kfree_heap(image);
+                    kfree_heap(elf_data);
+                    return -7;
+                }
+            } else {
+                S = (uint32_t)(image
+                       + get_shdr(eh, sym->st_shndx)->sh_addr
+                       + sym->st_value);
+            }
             uint32_t *patch = (uint32_t *)(image
                                 + target_sh->sh_addr
                                 + rels[r].r_offset);
@@ -226,21 +410,51 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         break;
     }
 
-    kfree_heap(elf_data);   // ELF header no longer needed
-
     if (!found_probe) {
         kprint("[LDR] Symbol 'pci_driver_probe' not found\n");
         kfree_heap(image);
+        kfree_heap(elf_data);
         return -5;
     }
 
     drv->probe = found_probe;
 
+    typedef void (*remove_fn_t)(pci_device_t *);
+    remove_fn_t found_remove = NULL;
+    for (uint32_t s = 0; s < sym_cnt; s++) {
+        if (ELF32_ST_BIND(syms[s].st_info) != STB_GLOBAL) continue;
+        if (ELF32_ST_TYPE(syms[s].st_info) != STT_FUNC)   continue;
+        const char *sym_name = get_str(eh, strtab_idx, syms[s].st_name);
+        if (strcmp((char *)sym_name, "pci_driver_remove") != 0) continue;
+        if (syms[s].st_shndx == SHN_UNDEF) continue;
+        Elf32_Shdr *sym_sh = get_shdr(eh, syms[s].st_shndx);
+        found_remove = (remove_fn_t)(image + sym_sh->sh_addr + syms[s].st_value);
+        break;
+    }
+    drv->remove = found_remove;
+
     // Bookkeeping: store image pointer so it can be freed on unload
     mod_mem_t *mm  = (mod_mem_t *)kmalloc(sizeof(mod_mem_t));
+    if (!mm) {
+        kfree_heap(image);
+        kfree_heap(elf_data);
+        drv->probe = NULL;
+        return -6;
+    }
     mm->image      = image;
     mm->image_size = total;
+    module_proc_name(path, mm->proc_name, sizeof(mm->proc_name));
     drv->priv      = mm;
+
+    if (procfs_register_blob(mm->proc_name, elf_data, file_size) != 0) {
+        kprint("[LDR] WARNING: cannot publish module in /proc/mdls: ");
+        kprint(mm->proc_name); kprint("\n");
+    }
+
+    kfree_heap(elf_data);   // ELF header no longer needed
+
+    kprint("[LDR] module ready: "); kprint(mm->proc_name);
+    kprint(" (pci_driver_probe linked)\n");
 
     return 0;
 }
@@ -255,4 +469,5 @@ void pci_unload_module(struct pci_driver *drv) {
     drv->priv  = NULL;
     drv->probe = NULL;
     kprint("[LDR] Module unloaded: "); kprint(drv->name); kprint("\n");
+    kprint("[LDR] Snapshot remains readable in /proc/mdls\n");
 }

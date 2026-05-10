@@ -18,6 +18,7 @@ KERN_SC_IPC_DIR      = $(KERN_SYSCALLS_DIR)/ipc
 KERN_SC_TIME_DIR     = $(KERN_SYSCALLS_DIR)/time
 KERN_SC_USER_DIR     = $(KERN_SYSCALLS_DIR)/user
 KERN_SC_NET_DIR      = $(KERN_SYSCALLS_DIR)/net
+KERN_SC_KMOD_DIR     = $(KERN_SYSCALLS_DIR)/kmod
 KERN_GDT_DIR     = Cact/kernel/gdt
 KERN_ELF_DIR     = Cact/kernel/elf
 KERN_DYNLINK_DIR = Cact/kernel/elf/dynlink
@@ -71,7 +72,6 @@ NET_ICMP_DIR     = Cact/kernel/net/icmp
 NET_UDP_DIR      = Cact/kernel/net/protocols/udp
 NET_TCP_DIR      = Cact/kernel/net/protocols/tcp
 NET_SOCKET_DIR   = Cact/kernel/net/socket
-DRIVER_NET_DIR   = Cact/drivers/network/virtio_net
 DRIVER_FB_DIR    = Cact/drivers/video/fb
 DRIVER_FONT_DIR  = Cact/drivers/video/font
 BUILD_DIR        = build
@@ -130,10 +130,15 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(NET_UDP_DIR) \
          -I$(NET_TCP_DIR) \
          -I$(NET_SOCKET_DIR) \
-         -I$(DRIVER_NET_DIR) \
          -I$(DRIVER_FB_DIR) \
          -I$(DRIVER_FONT_DIR) \
          -Wall
+
+# Отладка под QEMU+GDB: make clean && KERN_DEBUG=1 make
+KERN_DEBUG ?=
+ifneq ($(strip $(KERN_DEBUG)),)
+CFLAGS += -g -Og
+endif
 
 LDFLAGS = -m elf_i386 -T linker.ld -z noexecstack
 
@@ -144,6 +149,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/mm.o \
       $(BUILD_DIR)/interrupt.o \
       $(BUILD_DIR)/io.o \
+      $(BUILD_DIR)/serial.o \
       $(BUILD_DIR)/gdt.o \
       $(BUILD_DIR)/version.o \
       $(BUILD_DIR)/kernel.o \
@@ -151,7 +157,9 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/dynlink.o \
       $(BUILD_DIR)/idt.o \
+      $(BUILD_DIR)/irq.o \
       $(BUILD_DIR)/klib.o \
+      $(BUILD_DIR)/ksym.o \
       $(BUILD_DIR)/vfs.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
@@ -192,6 +200,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/sc_time.o \
       $(BUILD_DIR)/sc_user.o \
       $(BUILD_DIR)/sc_net.o \
+      $(BUILD_DIR)/sc_kmod.o \
+      $(BUILD_DIR)/net_shim.o \
       $(BUILD_DIR)/keyboard.o \
       $(BUILD_DIR)/mouse.o \
       $(BUILD_DIR)/ps_2_keyboard.o \
@@ -200,7 +210,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/xhci.o \
       $(BUILD_DIR)/usb_hid.o \
       $(BUILD_DIR)/usb_hub.o \
-      $(BUILD_DIR)/virtio_net.o \
       $(BUILD_DIR)/fb.o \
       $(BUILD_DIR)/font.o \
       $(BUILD_DIR)/stack_guard.o
@@ -282,6 +291,10 @@ $(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/serial.o: $(KERN_CORE_DIR)/serial.c $(KERN_CORE_DIR)/serial.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/multiboot2.o: $(KERN_CORE_DIR)/multiboot2.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -350,7 +363,19 @@ $(BUILD_DIR)/sc_net.o: $(KERN_SC_NET_DIR)/net.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_NET_DIR) -c $< -o $@
 
+$(BUILD_DIR)/sc_kmod.o: $(KERN_SC_KMOD_DIR)/kmod.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_KMOD_DIR) -c $< -o $@
+
 $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/irq.o: $(KERN_IDT_DIR)/irq.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/net_shim.o: $(NET_DIR)/net_shim.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -372,6 +397,10 @@ $(BUILD_DIR)/dynlink.o: $(KERN_DYNLINK_DIR)/dynlink.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/klib.o: $(KERN_CORE_DIR)/klib.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ksym.o: $(KERN_ELF_DIR)/ksym.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -497,10 +526,9 @@ $(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/virtio_net.o: $(DRIVER_NET_DIR)/virtio_net.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
+.PHONY: virtio-module
+virtio-module:
+	$(MAKE) -C ../Virtio-net-for-Cact KERN_ROOT="$(CURDIR)"
 
 $(BUILD_DIR)/net.o: $(NET_DIR)/net.c
 	@mkdir -p $(BUILD_DIR)

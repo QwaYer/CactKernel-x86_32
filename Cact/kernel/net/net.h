@@ -77,9 +77,16 @@ typedef struct net_driver {
 extern net_driver_t* active_nic;
 
 void net_register_driver(net_driver_t* drv);
+void net_unregister_driver(net_driver_t* drv);
 void net_init(void);                  /* called from kernel_setup_hardware() */
 void net_poll(void);                  /* call periodically from scheduler    */
 extern semaphore_t net_sema;
 void net_receive(skb_t* skb);        /* drivers call this on RX             */
+
+/* Stable alias for loadable modules / external driver sources */
+void net_receive_packet(skb_t* skb);
+
+/* Wake knetd after NIC IRQ (semaphore lives in Rust net core). */
+void net_driver_irq_wake(void);
 
 #endif

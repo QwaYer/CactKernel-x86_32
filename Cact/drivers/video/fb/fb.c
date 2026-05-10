@@ -1,5 +1,6 @@
 #include "fb.h"
 #include "memory.h"
+#include "serial.h"
 #include <stddef.h>
 
 static int cursor_x = 0;
@@ -48,10 +49,13 @@ void kprint_color(char* message, uint32_t color) {
 
     uint32_t w = fb_get_width();
     uint32_t h = fb_get_height();
-    if (w == 0 || h == 0) return;
+    int have_fb = (w != 0 && h != 0);
 
     for (int i = 0; message[i] != '\0'; i++) {
         char c = message[i];
+        serial_putc(c);
+        if (!have_fb) continue;
+
         if (c == '\n') {
             cursor_x = 0;
             cursor_y += FB_CONSOLE_CHAR_HEIGHT;
