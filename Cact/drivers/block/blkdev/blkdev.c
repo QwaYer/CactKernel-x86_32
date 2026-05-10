@@ -2,91 +2,19 @@
 #include "kernel.h"
 #include "klib.h"
 #include "memory.h"
-#include "nvme.h"
-#include "ahci.h"
 
 // Static device table and boot device pointer
 static blkdev_t devices[BLKDEV_MAX];
 static int      dev_count = 0;
 static blkdev_t *boot_dev = 0;
 
-// Register a new block device in the static table
-static blkdev_t *_add(const char *name,
-                      void (*rd)(uint32_t, uint8_t*),
-                      void (*wr)(uint32_t, uint8_t*),
-                      uint32_t max_lba) {
-    if (dev_count >= BLKDEV_MAX) {
-        kprint("[blkdev] table full\n");
-        return 0;
-    }
-    blkdev_t *d = &devices[dev_count++];
-    memset(d, 0, sizeof(blkdev_t));
-    strlcpy(d->name, name, BLKDEV_NAME_MAX);
-    d->read_sector  = rd;
-    d->write_sector = wr;
-    d->max_lba      = max_lba;
-    return d;
-}
-
-// Probe NVMe controller and register nvme0 if ready
-static void _probe_nvme(void) {
-    extern int nvme_is_ready(void);
-    extern uint32_t nvme_get_max_lba(void);
-
-    nvme_init();
-    if (!nvme_is_ready()) {
-        kprint("[BLKDEV] NVMe controller not ready\n");
-        return;
-    }
-
-    blkdev_t *d = _add("nvme0", nvme_read_sector, nvme_write_sector,
-                        nvme_get_max_lba());
-    if (d) boot_dev = d;
-}
-
-// AHCI read wrapper — queries first active port on each call (safe for init)
-static void _ahci_rd(uint32_t lba, uint8_t *buf) {
-    ahci_read_sector((uint32_t)ahci_first_port(), lba, buf);
-}
-
-// AHCI write wrapper — see _ahci_rd
-static void _ahci_wr(uint32_t lba, uint8_t *buf) {
-    ahci_write_sector((uint32_t)ahci_first_port(), lba, buf);
-}
-
-// Probe AHCI controller and register sda if a port is active
-static void _probe_ahci(void) {
-    ahci_init();
-    if (ahci_first_port() < 0) {
-        kprint("[BLKDEV] AHCI: no active ports\n");
-        return;
-    }
-
-    extern uint32_t ahci_get_max_lba(int port);
-    int port = ahci_first_port();
-
-    blkdev_t *d = _add("sda", _ahci_rd, _ahci_wr,
-                        ahci_get_max_lba(port));
-    if (d && !boot_dev) boot_dev = d;
-}
-
-// Probe AHCI then NVMe; first registered device becomes boot_dev
+// Storage HBA drivers are loaded as kmod modules post-boot.
 void blkdev_init(void) {
-    kprint("[BLKDEV] probing AHCI (SATA)\n");
     dev_count = 0;
     boot_dev  = 0;
     memset(devices, 0, sizeof(devices));
 
-    _probe_ahci();
-    if (dev_count > 0)
-        kprint("[BLKDEV] AHCI: sda registered\n");
-    else
-        kprint("[BLKDEV] AHCI: no drives found\n");
-
-    kprint("[BLKDEV] probing NVMe\n");
-    _probe_nvme();
-    if (boot_dev && boot_dev->read_sector == nvme_read_sector)
-        kprint("[BLKDEV] NVMe: nvme0 registered\n");
+    kprint("[BLKDEV] no built-in boot storage drivers\n");
 
     if (boot_dev) {
         kprint("[BLKDEV] boot device: "); kprint(boot_dev->name);

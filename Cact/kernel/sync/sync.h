@@ -40,6 +40,7 @@ int  mutex_trylock(mutex_t* m);
 
 typedef struct {
     spinlock_t guard;
+    int        count;
     struct task_struct* waiters[MUTEX_WAIT_QUEUE_MAX];
     uint32_t waiter_count;
 } semaphore_t;

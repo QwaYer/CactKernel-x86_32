@@ -8,6 +8,9 @@
 #include "ksym.h"
 #include "resolve.h"
 
+// Wildcard ID — must match PCI_ANY_ID in pci_driver.h
+#define LDR_PCI_ANY_ID 0xFFFFu
+
 // ELF 32-bit types (i386)
 typedef uint32_t Elf32_Addr;
 typedef uint32_t Elf32_Off;
@@ -255,16 +258,16 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     Elf32_Sym *syms    = (Elf32_Sym *)(elf_data + symtab_sh->sh_offset);
     uint32_t   sym_cnt = symtab_sh->sh_size / sizeof(Elf32_Sym);
 
+    // vendor + device are optional when class is set (class-bound drivers
+    // such as AHCI/xHCI/NVMe do not need to enumerate VID/DID lists).
+    uint16_t   vendor      = LDR_PCI_ANY_ID;
+    int        have_vendor = 0;
     Elf32_Sym *sv = elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_vendor_id");
-    uint16_t   vendor;
-    if (!sv || read_sym_u16(eh, elf_data, sv, &vendor) != 0) {
-        kprint("[LDR] manifest: missing cact_pci_vendor_id\n");
-        kfree_heap(elf_data);
-        return -4;
-    }
+    if (sv && read_sym_u16(eh, elf_data, sv, &vendor) == 0)
+        have_vendor = 1;
 
-    uint16_t ids[16];
-    int      nids = 0;
+    uint16_t   ids[16];
+    int        nids = 0;
     Elf32_Sym *slist = elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_device_ids");
     if (slist)
         nids = read_device_id_list(eh, elf_data, slist, ids, 16);
@@ -272,24 +275,35 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     if (nids == 0) {
         Elf32_Sym *sd =
             elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_device_id");
-        if (!sd || read_sym_u16(eh, elf_data, sd, &ids[0]) != 0) {
-            kprint("[LDR] manifest: need cact_pci_device_ids[] or cact_pci_device_id\n");
-            kfree_heap(elf_data);
-            return -5;
-        }
-        nids = 1;
+        if (sd && read_sym_u16(eh, elf_data, sd, &ids[0]) == 0)
+            nids = 1;
     }
 
     Elf32_Sym *sc = elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_class");
-    if (sc)
-        (void)read_sym_u8(eh, elf_data, sc, class_out);
+    int have_class = 0;
+    if (sc && read_sym_u8(eh, elf_data, sc, class_out) == 0)
+        have_class = 1;
     Elf32_Sym *ss = elf_find_named_sym(eh, syms, sym_cnt, strtab_idx, "cact_pci_subclass");
     if (ss)
         (void)read_sym_u8(eh, elf_data, ss, subclass_out);
 
-    uint16_t did = choose_did_from_manifest(vendor, ids, nids);
-    *vendor_out  = vendor;
-    *device_out  = did;
+    if (!have_vendor && !have_class) {
+        kprint("[LDR] manifest: need cact_pci_vendor_id or cact_pci_class\n");
+        kfree_heap(elf_data);
+        return -4;
+    }
+
+    uint16_t did;
+    if (nids == 0) {
+        did = LDR_PCI_ANY_ID;
+    } else if (!have_vendor) {
+        did = ids[0];
+    } else {
+        did = choose_did_from_manifest(vendor, ids, nids);
+    }
+
+    *vendor_out = vendor;
+    *device_out = did;
 
     kfree_heap(elf_data);
     return 0;

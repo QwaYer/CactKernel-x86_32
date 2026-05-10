@@ -36,7 +36,6 @@ global isr28
 global isr29
 global isr30
 global isr31
-global nvme_isr
 global mouse_isr
 global xhci_isr
 global usb_isr
@@ -46,7 +45,6 @@ global spurious_irq15
 extern ps2_keyboard_handler
 extern exception_handler
 extern syscall_handler
-extern nvme_irq_handler
 extern ps2_mouse_handler
 extern current_task
 extern schedule
@@ -303,22 +301,6 @@ mouse_isr:
     mov ds, ax
     mov es, ax
     call ps2_mouse_handler
-    mov al, 0x20
-    out 0xA0, al
-    out 0x20, al
-    pop es
-    pop ds
-    popa
-    iretd
-
-nvme_isr:
-    pusha
-    push ds
-    push es
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    call nvme_irq_handler
     mov al, 0x20
     out 0xA0, al
     out 0x20, al

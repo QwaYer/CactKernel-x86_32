@@ -166,11 +166,6 @@ uint32_t  get_free_heap_memory   (void);
 void      slab_init              (void);
 void      page_fault_init        (void);
 
-// NVMe storage (temporary direct access)
-extern void nvme_init        (void);
-extern void nvme_read_sector (uint32_t lba, uint8_t* buf);
-extern void nvme_write_sector(uint32_t lba, uint8_t* buf);
-
 // Generic block device layer
 extern void blkdev_read_sector (uint32_t lba, uint8_t* buf);
 extern void blkdev_write_sector(uint32_t lba, uint8_t* buf);

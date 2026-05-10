@@ -22,7 +22,6 @@ extern void isr30(); extern void isr31();
 extern void timer_isr();
 extern void keyboard_isr();
 extern void mouse_isr();
-extern void nvme_isr();
 extern void syscall_isr();
 extern void usb_isr();
 extern void uhci_isr();
@@ -61,7 +60,7 @@ void init_pic(void) {
 
     // Set interrupt masks
     port_byte_out(0x21, 0xF8);  // Master: unmask IRQ0(timer), IRQ1(kbd), IRQ2(cascade)
-    port_byte_out(0xA1, 0x80);  // Slave: mask only IRQ15, rest open for USB/mouse/NVMe
+    port_byte_out(0xA1, 0x80);  // Slave: mask only IRQ15, rest open for USB/mouse/storage modules
     kprint("[PIC] mask: master=0xF8 (IRQ0/1/2 active)  slave=0x80 (IRQ15 masked)\n");
     klog(LOG_OK, "PIC remapped and configured");
 }
@@ -113,7 +112,7 @@ int init_idt(void) {
 
     // Install IRQ handlers (hardware interrupts)
     kprint("[IDT] installing IRQ gates:"
-           " 0x20=timer  0x21=kbd  0x2C=mouse  0x2D=IRQ13 stub  0x2E=nvme"
+           " 0x20=timer  0x21=kbd  0x2C=mouse  0x2D=IRQ13 stub  0x2E=IRQ14 stub"
            "  0x29-0x2B=usb\n");
     set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - PIT timer
     set_idt_gate(0x21, (uint32_t)keyboard_isr);     // IRQ1  - PS/2 keyboard
@@ -123,7 +122,7 @@ int init_idt(void) {
     set_idt_gate(0x2B, (uint32_t)usb_isr);          // IRQ11 - USB (shared)
     set_idt_gate(0x2C, (uint32_t)mouse_isr);        // IRQ12 - PS/2 mouse
     set_idt_gate(0x2D, irq_stub_table[13]);        // IRQ13 — NIC modules use irq_register_handler()
-    set_idt_gate(0x2E, (uint32_t)nvme_isr);         // IRQ14 - NVMe storage
+    set_idt_gate(0x2E, irq_stub_table[14]);         // IRQ14 - storage modules use irq_register_handler()
     set_idt_gate(0x2F, (uint32_t)spurious_irq15);   // IRQ15 - slave spurious
 
     // System call gate (int 0x80) - ring3 accessible

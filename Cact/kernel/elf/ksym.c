@@ -4,6 +4,8 @@
 #include "kernel.h"
 #include "net.h"
 #include "pci.h"
+#include "sync.h"
+#include "devfs.h"
 
 typedef struct {
     const char* name;
@@ -25,7 +27,18 @@ static const ksym_entry_t ksym_table[] = {
     { "kfree_page",     (uint32_t)kfree_page },
     { "kmalloc",        (uint32_t)kmalloc },
     { "kmalloc_aligned",(uint32_t)kmalloc_aligned },
-    { "irq_register_handler", (uint32_t)irq_register_handler },
+    { "irq_register_handler",  (uint32_t)irq_register_handler },
+    { "irq_spinlock_init",     (uint32_t)irq_spinlock_init },
+    { "irq_spinlock_acquire",  (uint32_t)irq_spinlock_acquire },
+    { "irq_spinlock_release",  (uint32_t)irq_spinlock_release },
+    { "sema_init",             (uint32_t)sema_init },
+    { "sema_down",             (uint32_t)sema_down },
+    { "sema_up",               (uint32_t)sema_up },
+    { "mutex_init",            (uint32_t)mutex_init },
+    { "mutex_lock",            (uint32_t)mutex_lock },
+    { "mutex_unlock",          (uint32_t)mutex_unlock },
+    { "devfs_register",        (uint32_t)devfs_register },
+    { "devfs_unregister",      (uint32_t)devfs_unregister },
     { "klog",           (uint32_t)klog },
     { "kprint",         (uint32_t)kprint },
     { "kprint_hex",     (uint32_t)kprint_hex },

@@ -46,9 +46,6 @@ DRIVER_PCI_ENUM_DIR   = Cact/drivers/pci/enum
 DRIVER_PCI_DRV_DIR    = Cact/drivers/pci/driver
 DRIVER_PCI_LOADER_DIR = Cact/drivers/pci/loader
 DRIVER_BLK_BLOCK_DIR  = Cact/drivers/block/blkdev
-DRIVER_AHCI_DIR  = Cact/drivers/block/AHCI
-DRIVER_NVME_DIR  = Cact/drivers/block/NVMe
-DRIVER_BUF_DIR   = Cact/drivers/block/buf
 DRIVER_USB_DIR       = Cact/drivers/usb
 DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xHCI
 DRIVER_USB_HID_DIR   = Cact/drivers/usb/hid
@@ -104,9 +101,6 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_PCI_DRV_DIR) \
          -I$(DRIVER_PCI_LOADER_DIR) \
 		 -I$(DRIVER_BLK_BLOCK_DIR) \
-		 -I$(DRIVER_AHCI_DIR) \
-         -I$(DRIVER_NVME_DIR) \
-         -I$(DRIVER_BUF_DIR) \
          -I$(DRIVER_USB_DIR) \
          -I$(DRIVER_USB_XHCI_DIR) \
          -I$(DRIVER_USB_HID_DIR) \
@@ -181,9 +175,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pci_driver.o \
       $(BUILD_DIR)/pci_loader.o \
 	  $(BUILD_DIR)/blkdev.o \
-	  $(BUILD_DIR)/ahci.o \
-      $(BUILD_DIR)/nvme.o \
-      $(BUILD_DIR)/buf.o \
       $(BUILD_DIR)/sc_mod.o \
       $(BUILD_DIR)/sc_validate.o \
       $(BUILD_DIR)/sc_resolve.o \
@@ -470,18 +461,6 @@ $(BUILD_DIR)/blkdev.o: $(DRIVER_BLK_BLOCK_DIR)/blkdev.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ahci.o: $(DRIVER_AHCI_DIR)/ahci.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/nvme.o: $(DRIVER_NVME_DIR)/nvme.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/buf.o: $(DRIVER_BUF_DIR)/buf.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/keyboard.o: $(DRIVER_INPUT_DIR)/keyboard.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -529,6 +508,14 @@ $(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
 .PHONY: virtio-module
 virtio-module:
 	$(MAKE) -C ../Virtio-net-for-Cact KERN_ROOT="$(CURDIR)"
+
+.PHONY: ahci-module
+ahci-module:
+	$(MAKE) -C ../AHCI-for-Cact KERN_ROOT="$(CURDIR)"
+
+.PHONY: nvme-module
+nvme-module:
+	$(MAKE) -C ../NVMe-for-Cact KERN_ROOT="$(CURDIR)"
 
 $(BUILD_DIR)/net.o: $(NET_DIR)/net.c
 	@mkdir -p $(BUILD_DIR)
