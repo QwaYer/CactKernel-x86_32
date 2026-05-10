@@ -265,14 +265,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     // Network stack
     net_init();
-    // Driver bootstrap is platform policy, not net stack policy.
-    // Stack itself accepts any NIC via net_register_driver().
-    kprint("[NET] no built-in NIC driver — as root run: "
-           "modload /lib/virtio_net.cctk 0x1AF4 0x1041 (legacy virtio-net; DID 0x1000 also)\n");
-    kprint("[BLKDEV] no built-in SATA driver — as root run: "
-           "modload /lib/ahci.cctk (manifest binds class 01:06)\n");
-    kprint("[BLKDEV] no built-in NVMe driver — as root run: "
-           "modload /lib/nvme.cctk (manifest binds class 01:08)\n");
 
     // Multitasking
     task_init();
