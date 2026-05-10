@@ -1416,13 +1416,18 @@ fn reap_task_free(t: *mut TaskStruct) {
         }
 
         if !(*t).mmap_table.is_null() {
-            ffi::kfree_heap((*t).mmap_table as *mut c_void);
+            let mt = (*t).mmap_table;
+            let pd = (*t).page_directory;
+            if !pd.is_null() {
+                ffi::mmap_table_free(mt, pd);
+            }
+            ffi::kfree_heap(mt as *mut c_void);
             (*t).mmap_table = ptr::null_mut();
         }
 
         if !(*t).dyn_ctx.is_null() {
-            ffi::dynlink_unload_all((*t).dyn_ctx);
-            ffi::kfree_heap((*t).dyn_ctx as *mut c_void);
+            ffi::dynlink_ctx_destroy((*t).dyn_ctx);
+            (*t).dyn_ctx = ptr::null_mut();
         }
 
         ffi::shm_detach_all((*t).pid, (*t).page_directory);

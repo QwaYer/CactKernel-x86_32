@@ -292,7 +292,9 @@ pub extern "C" fn do_munmap(
         // SAFETY: pt is a valid private page table.
         let pte = unsafe { *pt.add(pt_index(va) as usize) };
 
-        if pte & PAGE_PRESENT != 0 {
+        // Only release frames that were allocated for user mappings. Supervisor
+        // identity PTEs (present, no PAGE_USER) must not be passed to kfree_page.
+        if pte & PAGE_PRESENT != 0 && pte & PAGE_USER != 0 {
             kfree_page((pte & !0xFFF) as *mut u8);
         }
         unsafe { *pt.add(pt_index(va) as usize) = 0; }

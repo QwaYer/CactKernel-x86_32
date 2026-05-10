@@ -255,8 +255,15 @@ pub extern "C" fn kfree_page(ptr: *mut u8) {
     let page_idx = addr_to_page(addr);
     if page_idx >= TOTAL_PAGES { return; }
 
-    // Never allow freeing the hard-reserved low 32 MB.
+    // Never allow freeing the hard-reserved low 32 MB (below the heap window).
     if addr < RESERVED_END { return; }
+
+    // RESERVED_END == HEAP_START: pages in the dedicated kernel heap *window*
+    // must never be returned to the PMM — they are not tracked like kalloc pages.
+    let heap_end_addr = HEAP_START.saturating_add(HEAP_SIZE).min(PCI_HOLE_START);
+    if addr >= HEAP_START && addr < heap_end_addr {
+        return;
+    }
 
     lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
 
