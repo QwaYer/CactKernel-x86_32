@@ -256,6 +256,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Multitasking
     task_init();
     init_scheduler();
+    pci_driver_probe_deferred_all();
 }
 
 extern mb2_module_info_t mb2_cctkfs_module;

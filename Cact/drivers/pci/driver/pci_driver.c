@@ -7,6 +7,9 @@
 // Singly-linked list of registered drivers
 static pci_driver_t *driver_list  = NULL;
 static uint32_t      driver_count = 0;
+#define PCI_DEFER_MAX_DEVICES  MAX_PCI_DEVICES
+static pci_device_t *deferred_devs[PCI_DEFER_MAX_DEVICES];
+static uint32_t      deferred_count = 0;
 
 // Check whether a driver claims a given PCI device.
 // PCI_ANY_ID (0xFFFF) acts as a wildcard for vendor/device/class/subclass.
@@ -86,7 +89,7 @@ pci_driver_t *pci_driver_find_reloc_for_device(const pci_device_t *dev) {
 
 // Walk the driver list and invoke the first matching probe.
 // If the driver has a module_path but no probe yet, attempt lazy module load.
-void pci_driver_match(pci_device_t *dev) {
+static int pci_driver_match_internal(pci_device_t *dev) {
     for (pci_driver_t *drv = driver_list; drv; drv = drv->next) {
         if (!driver_matches(drv, dev)) continue;
 
@@ -102,7 +105,7 @@ void pci_driver_match(pci_device_t *dev) {
         if (!drv->probe) {
             kprint("[DRV] driver "); kprint(drv->name);
             kprint(" matched PCI but probe is NULL\n");
-            return;
+            return -1;
         }
 
         kprint("[DRV] calling probe "); kprint(drv->name);
@@ -113,11 +116,55 @@ void pci_driver_match(pci_device_t *dev) {
 
         if (drv->probe(dev) != 0)
             kprint("[DRV] probe() returned error\n");
-        else
+        else {
             kprint("[DRV] probe() OK\n");
+            return 1;
+        }
 
-        return;  // first match wins
+        return -1;  // first match wins
     }
+    return 0;
+}
+
+void pci_driver_match(pci_device_t *dev) {
+    (void)pci_driver_match_internal(dev);
+}
+
+void pci_driver_defer_device(pci_device_t *dev) {
+    if (!dev) return;
+    if (dev->drv_probe_state >= 2) return;
+    if (dev->drv_probe_state == 1) return;
+    if (deferred_count >= PCI_DEFER_MAX_DEVICES) {
+        kprint("[DRV] deferred queue full, probing inline\n");
+        int rc = pci_driver_match_internal(dev);
+        dev->drv_probe_state = (rc == 1) ? 2 : 3;
+        return;
+    }
+    deferred_devs[deferred_count++] = dev;
+    dev->drv_probe_state = 1;
+}
+
+void pci_driver_probe_deferred_all(void) {
+    if (deferred_count == 0) return;
+    kprint("[DRV] deferred probe start\n");
+    uint32_t unresolved = 0;
+    for (uint32_t i = 0; i < deferred_count; i++) {
+        pci_device_t *dev = deferred_devs[i];
+        if (!dev) continue;
+        int rc = pci_driver_match_internal(dev);
+        if (rc == 1) {
+            dev->drv_probe_state = 2;
+        } else {
+            dev->drv_probe_state = 3;
+            unresolved++;
+        }
+    }
+    deferred_count = 0;
+    char tmp[16];
+    itoa((int)unresolved, tmp);
+    kprint("[DRV] deferred probe done, unresolved=");
+    kprint(tmp);
+    kprint("\n");
 }
 
 // Dump all registered drivers to debug output.

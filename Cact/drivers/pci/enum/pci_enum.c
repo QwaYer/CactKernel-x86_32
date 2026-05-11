@@ -114,9 +114,10 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
         if (sec) scan_bus(sec);
     }
 
-    // Match and probe registered drivers for this device
+    // Allow GDD to register lazy module mappings while still in early stage.
     pci_user_prompt_module(d->class_code, d->subclass, d->prog_if, d);
-    pci_driver_match(d);
+    // Defer actual probe to a scheduler-ready phase.
+    pci_driver_defer_device(d);
 }
 
 // Scan all functions on a given bus

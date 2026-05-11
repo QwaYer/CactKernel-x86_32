@@ -15,6 +15,8 @@ typedef struct {
 } pci_class_name_t;
 
 typedef struct {
+    uint16_t    vendor_id;
+    uint16_t    device_id;
     uint8_t     class_code;
     uint8_t     subclass;
     uint8_t     prog_if;
@@ -29,18 +31,9 @@ static const pci_class_name_t pci_class_names[] = {
     { 0x00, NULL },
 };
 
-/* Modules live in the cctkfs image GRUB loads alongside the kernel; the
- * user-visible mountpoint is /proc/bin/mdls/.  pci_modblob_get() accepts
- * either the canonical "/lib/<name>.cctk" or the mdls path, so this table
- * uses the path the operator actually sees in the prompt and on disk. */
-static const pci_gdd_entry_t pci_gdd_table[] = {
-    { 0x01, 0x01, PCI_GDD_PI_ANY, "IDE Controller",        "/proc/bin/mdls/ide.cctk" },
-    { 0x01, 0x06, 0x01,           "AHCI SATA",             "/proc/bin/mdls/ahci.cctk" },
-    { 0x01, 0x08, PCI_GDD_PI_ANY, "NVMe Storage",          "/proc/bin/mdls/nvme.cctk" },
-    { 0x02, 0x00, PCI_GDD_PI_ANY, "Ethernet (virtio-net)", "/proc/bin/mdls/virtio_net.cctk" },
-    { 0x03, 0x00, PCI_GDD_PI_ANY, "VGA Compatible",        "/proc/bin/mdls/vga.cctk" },
-    { 0x00, 0x00, 0x00,           NULL,                    NULL },
-};
+/* Driver matching config lives in a dedicated header so operator can tune
+ * VID:DID/class bindings without touching GDD logic. */
+#include "pci_gdd_config.h"
 
 static const char *pci_gdd_category(uint8_t cl) {
     for (int i = 0; pci_class_names[i].category; i++) {
@@ -50,10 +43,26 @@ static const char *pci_gdd_category(uint8_t cl) {
     return "Unknown";
 }
 
-static const pci_gdd_entry_t *pci_gdd_lookup(uint8_t cl, uint8_t sc, uint8_t pi) {
+static const pci_gdd_entry_t *pci_gdd_lookup(const pci_device_t *dev) {
+    uint8_t cl, sc, pi;
     const pci_gdd_entry_t *fallback = NULL;
+    if (!dev) return NULL;
+    cl = dev->class_code;
+    sc = dev->subclass;
+    pi = dev->prog_if;
+
     for (int i = 0; pci_gdd_table[i].human_name; i++) {
         const pci_gdd_entry_t *e = &pci_gdd_table[i];
+        if (e->vendor_id == PCI_ANY_ID || e->device_id == PCI_ANY_ID)
+            continue;
+        if (e->vendor_id == dev->vendor_id && e->device_id == dev->device_id)
+            return e;
+    }
+
+    for (int i = 0; pci_gdd_table[i].human_name; i++) {
+        const pci_gdd_entry_t *e = &pci_gdd_table[i];
+        if (e->vendor_id != PCI_ANY_ID || e->device_id != PCI_ANY_ID)
+            continue;
         if (e->class_code != cl || e->subclass != sc)
             continue;
         if (e->prog_if == pi)
@@ -104,9 +113,17 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
     if (dev->class_code != cl || dev->subclass != sc || dev->prog_if != pi)
         return;
 
-    const pci_gdd_entry_t *ent = pci_gdd_lookup(cl, sc, pi);
+    const pci_gdd_entry_t *ent = pci_gdd_lookup(dev);
     if (!ent)
         return;
+
+    /* If module is absent, do not prompt user at all. */
+    {
+        uint16_t vtmp = 0, dtmp = 0;
+        uint8_t  ctmp = (uint8_t)PCI_ANY_ID, stmp = (uint8_t)PCI_ANY_ID;
+        if (pci_peek_module_manifest(ent->module_path, &vtmp, &dtmp, &ctmp, &stmp) != 0)
+            return;
+    }
 
     const char *cat = pci_gdd_category(cl);
 
@@ -125,7 +142,7 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
         return;
     }
 
-    pci_driver_t *exist = pci_driver_find_class_module(cl, sc, ent->module_path);
+    pci_driver_t *exist = pci_driver_find_class_module(ent->class_code, ent->subclass, ent->module_path);
     if (exist && exist->probe) {
         kprint("[GDD] driver already resident for ");
         kprint((char *)ent->human_name);
@@ -156,10 +173,10 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
     itoa((int)gdd_drv_seq++, seqbuf);
     strcat(drv->name, seqbuf);
 
-    drv->vendor_id   = PCI_ANY_ID;
-    drv->device_id   = PCI_ANY_ID;
-    drv->class_code  = cl;
-    drv->subclass    = sc;
+    drv->vendor_id   = ent->vendor_id;
+    drv->device_id   = ent->device_id;
+    drv->class_code  = ent->class_code;
+    drv->subclass    = ent->subclass;
     drv->module_path = path_copy;
     drv->probe       = NULL;
 

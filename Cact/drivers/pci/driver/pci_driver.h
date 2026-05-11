@@ -51,6 +51,8 @@ pci_driver_t *pci_driver_find_reloc_for_device(const pci_device_t *dev);
 
 // Walk driver list and probe the first matching driver for a device.
 void pci_driver_match(pci_device_t *dev);
+void pci_driver_defer_device(pci_device_t *dev);
+void pci_driver_probe_deferred_all(void);
 
 // Debug: print all registered drivers.
 void pci_driver_dump(void);
