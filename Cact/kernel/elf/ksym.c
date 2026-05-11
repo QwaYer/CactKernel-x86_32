@@ -53,6 +53,7 @@ static const ksym_entry_t ksym_table[] = {
     { "net_receive",         (uint32_t)net_receive },
     { "net_receive_packet",  (uint32_t)net_receive_packet },
     { "net_driver_irq_wake", (uint32_t)net_driver_irq_wake },
+    { "active_nic",          (uint32_t)&active_nic },
     { "net_register_driver",   (uint32_t)net_register_driver },
     { "net_unregister_driver", (uint32_t)net_unregister_driver },
     { "pci_enable_bus_master", (uint32_t)pci_enable_bus_master },
