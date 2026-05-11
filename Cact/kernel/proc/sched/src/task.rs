@@ -618,17 +618,6 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         child_pd,
     );
 
-    // Fork inherits the already-loaded dynamic objects. GOT[1] stores a
-    // user-space .dynsym address as the lazy resolver cookie, so a shallow
-    // dyn_ctx clone is enough until the child execs or exits.
-    if !(*parent).dyn_ctx.is_null() {
-        (*child).dyn_ctx = ffi::dynlink_ctx_clone(
-            (*parent).dyn_ctx,
-            child_pd,
-            &raw mut (*child).mm,
-        );
-    }
-
     // Map and copy user stack pages.
     for i in 0..USER_STACK_PAGES as usize {
         let vaddr = (*child).ustack_virt.wrapping_add((i as u32).wrapping_mul(PAGE_SIZE));

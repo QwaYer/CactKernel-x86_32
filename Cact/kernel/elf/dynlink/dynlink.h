@@ -104,11 +104,6 @@ typedef struct loaded_so {
     uint32_t   init_addr;     
     uint32_t   fini_addr;        
 
-    uint32_t*  pltgot;
-    Elf32_Rel* jmprel;
-    uint32_t   jmprel_sz;
-    uint32_t   pltrel;
-
     int        ref_count;         
 } loaded_so_t;
 
@@ -140,13 +135,9 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
                              Elf32_Dyn* dyn);
 
 uint32_t dynlink_resolve_symbol(dyn_ctx_t* ctx, const char* name);
-uint32_t dynlink_lazy_resolve(dyn_ctx_t* ctx, uint32_t object_cookie,
-                              uint32_t reloc_offset);
 
 void dynlink_unload_all(dyn_ctx_t* ctx);
 dyn_ctx_t* dynlink_ctx_create(uint32_t* pd, proc_page_tracker_t* tracker);
-dyn_ctx_t* dynlink_ctx_clone(dyn_ctx_t* src, uint32_t* pd,
-                             proc_page_tracker_t* tracker);
 void dynlink_ctx_destroy(dyn_ctx_t* ctx);
 
 /*

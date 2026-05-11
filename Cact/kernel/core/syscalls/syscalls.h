@@ -109,10 +109,7 @@ typedef enum {
 
     SYS_MODULE_LOAD   = 92,
     SYS_MODULE_UNLOAD = 93,
-
-    SYS_DYNRESOLVE    = 94,
-
-    SYSCALL_COUNT     = 95,
+    SYSCALL_COUNT     = 94,
 } syscall_num_t;
 
 #endif 
