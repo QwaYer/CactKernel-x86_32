@@ -39,4 +39,35 @@ uint32_t* fb_get_buffer(void);
 /* Post-paging verification / diagnostics (calls kprint/klog). */
 void init_framebuffer(void);
 
+/*
+ * Optional shadow (back) buffer in regular WB RAM.
+ *
+ * Once enabled, every drawing primitive (fb_put_pixel, fb_fill_rect, fb_clear,
+ * the console glyph rasteriser, scroll()) writes into a kernel-heap copy of
+ * the framebuffer instead of touching MMIO directly. Touched rows are tracked
+ * in a per-row dirty bitmap; fb_flush() copies only those rows out to the
+ * physical framebuffer in one bulk burst.
+ *
+ * Win vs. plain WC framebuffer:
+ *   - scroll() and any FB->FB blit no longer reads from WC memory (which is
+ *     uncached and slow); the read side now hits L1/L2 at WB speeds.
+ *   - Multiple writes to the same pixel coalesce in the shadow at cache speed
+ *     and only the final value is shipped out to the bus.
+ *
+ * Call AFTER init_heap() and AFTER mtrr_enable_wc_for_framebuffer() so the
+ * shadow can be seeded from the current FB contents under WC reads (UC reads
+ * during seeding would otherwise stall for tens of ms).
+ *
+ * If allocation fails, drawing silently stays in direct (non-shadow) mode.
+ */
+void fb_enable_shadow(void);
+
+/*
+ * Flush the dirty range of the shadow buffer to the real framebuffer.
+ * No-op when the shadow is not armed. Idempotent. Called automatically at
+ * the end of every kprint_color(); drivers that draw outside the console
+ * path (cursor overlays, splash screens, …) should call it themselves.
+ */
+void fb_flush(void);
+
 #endif

@@ -209,6 +209,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/usb_hub.o \
       $(BUILD_DIR)/fb.o \
       $(BUILD_DIR)/font.o \
+      $(BUILD_DIR)/mtrr.o \
       $(BUILD_DIR)/stack_guard.o
 
 
@@ -530,6 +531,10 @@ $(BUILD_DIR)/fb.o: $(DRIVER_FB_DIR)/fb.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/font.o: $(DRIVER_FONT_DIR)/font.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mtrr.o: $(KERN_MEM_DIR)/mtrr.c $(KERN_MEM_DIR)/mtrr.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
