@@ -275,7 +275,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Multitasking
     task_init();
     init_scheduler();
-    pci_driver_probe_deferred_all();
 }
 
 extern mb2_module_info_t mb2_cctkfs_module;
@@ -290,6 +289,9 @@ static multiboot_info_t* bootstrap_mbi = 0;
 static void kernel_bootstrap_main(void) {
     extern void mntfs_init(void);
     extern void procfs_set_meminfo(uint32_t);
+
+    kprint("[DRV] probing deferred PCI drivers (IRQ-safe phase)\n");
+    pci_driver_probe_deferred_all();
 
     kprint("[MNT] mounting virtual filesystems\n");
     mntfs_init();

@@ -147,23 +147,30 @@ void pci_driver_defer_device(pci_device_t *dev) {
 void pci_driver_probe_deferred_all(void) {
     if (deferred_count == 0) return;
     kprint("[DRV] deferred probe start\n");
-    uint32_t unresolved = 0;
+    uint32_t failed = 0;
+    uint32_t no_driver = 0;
     for (uint32_t i = 0; i < deferred_count; i++) {
         pci_device_t *dev = deferred_devs[i];
         if (!dev) continue;
         int rc = pci_driver_match_internal(dev);
         if (rc == 1) {
             dev->drv_probe_state = 2;
+        } else if (rc == 0) {
+            dev->drv_probe_state = 3;
+            no_driver++;
         } else {
             dev->drv_probe_state = 3;
-            unresolved++;
+            failed++;
         }
     }
     deferred_count = 0;
-    char tmp[16];
-    itoa((int)unresolved, tmp);
-    kprint("[DRV] deferred probe done, unresolved=");
-    kprint(tmp);
+    char a[16], b[16];
+    itoa((int)failed, a);
+    itoa((int)no_driver, b);
+    kprint("[DRV] deferred probe done, failed=");
+    kprint(a);
+    kprint(" no-driver=");
+    kprint(b);
     kprint("\n");
 }
 
