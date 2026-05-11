@@ -4,7 +4,7 @@
 #include "klib.h"
 
 #define TMPFS_NAME_LEN  128
-#define TMPFS_INIT_CAP  256    // initial data capacity for new files
+#define TMPFS_INIT_CAP  256    // initial file capacity
 
 typedef struct tmpfs_node tmpfs_node_t;
 struct tmpfs_node {
@@ -73,7 +73,7 @@ static void _init_vnode(tmpfs_node_t *n) {
     n->vnode.priv     = n;
 }
 
-// Free a tmpfs node and its data (never frees the static root)
+// Free tmpfs node storage (except static root).
 static void _free_tmpfs_node(tmpfs_node_t *n) {
     if (!n) return;
     if (n == &tmpfs_root_node) return;   // static root, never freed
@@ -81,7 +81,7 @@ static void _free_tmpfs_node(tmpfs_node_t *n) {
     kfree_heap(n);
 }
 
-// Grow node data capacity to at least 'needed' bytes (doubling strategy)
+// Ensure file capacity using doubling growth.
 static int _ensure_cap(tmpfs_node_t *n, uint32_t needed) {
     if (needed <= n->cap) return 0;
     uint32_t nc = n->cap ? n->cap * 2 : TMPFS_INIT_CAP;
@@ -118,13 +118,13 @@ static int _tmp_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
     return (int)size;
 }
 
-// Increment VFS refcount on open (prevents UAF on unlink-while-open)
+// Increment vnode refcount on open.
 static void _tmp_open(vfs_node_t *node) {
     if (!node) return;
     node->refcount++;
 }
 
-// Decrement VFS refcount; if it reaches zero and node is pending_free, release it
+// Decrement vnode refcount and free pending nodes.
 static void _tmp_close(vfs_node_t *node) {
     if (!node || node->refcount == 0) return;
     node->refcount--;
@@ -187,7 +187,7 @@ static int _tmp_create(vfs_node_t *dir, const char *name) {
     return 0;
 }
 
-// Delete a file by name (unlink); defers free if still open
+// Unlink file; defer free while open.
 static int _tmp_delete(vfs_node_t *dir, const char *name) {
     tmpfs_node_t *d = (tmpfs_node_t*)dir->priv;
     if (!d || d->type != VFS_DIRECTORY) return -1;
@@ -197,7 +197,7 @@ static int _tmp_delete(vfs_node_t *dir, const char *name) {
             tmpfs_node_t *dead = *pp;
             *pp = dead->next;                    // detach from directory
             dead->next = 0;
-            // Drop the directory-tree reference; if fds still hold it, defer free
+            // Drop tree reference; defer free if still referenced.
             if (dead->vnode.refcount > 0) dead->vnode.refcount--;
             if (dead->vnode.refcount == 0) {
                 _free_tmpfs_node(dead);
@@ -229,7 +229,7 @@ static int _tmp_mkdir(vfs_node_t *dir, const char *name) {
     return 0;
 }
 
-// Remove an empty subdirectory
+// Remove empty subdirectory.
 static int _tmp_rmdir(vfs_node_t *dir, const char *name) {
     tmpfs_node_t *d = (tmpfs_node_t*)dir->priv;
     if (!d || d->type != VFS_DIRECTORY) return -1;
@@ -264,7 +264,7 @@ static int _tmp_rename(vfs_node_t *dir, const char *oldname, const char *newname
     return 0;
 }
 
-// One-time initialisation: set up the root tmpfs node
+// Initialize tmpfs root node.
 void tmpfs_init(void) {
     if (tmpfs_ready) return;
     memset(&tmpfs_root_node, 0, sizeof(tmpfs_node_t));

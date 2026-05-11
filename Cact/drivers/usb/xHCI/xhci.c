@@ -149,7 +149,7 @@ static int xhci_wait_cmd(xhci_priv_t *priv, uint32_t timeout_ms) {
         }
         xhci_udelay(10);
     }
-    kprint("[XHCI] DBG: cmd timeout\n");
+    klog(LOG_WARN, "xHCI command timeout");
     priv->cmd_done = 0;
     return -1;
 }
@@ -168,7 +168,7 @@ static int xhci_enable_slot(xhci_priv_t *priv, uint8_t *slot_id) {
     memset(&trb, 0, sizeof(trb));
     trb.control = (XHCI_TRB_ENABLE_SLOT << XHCI_TRB_TYPE_SHIFT);
     if (xhci_send_cmd(priv, &trb) < 0) {
-        kprint("[XHCI] DBG: enable_slot failed\n");
+        klog(LOG_WARN, "xHCI enable_slot failed");
         return -1;
     }
     *slot_id = (uint8_t)((priv->cmd_result >> 24) & 0xFF);
@@ -187,9 +187,7 @@ static void xhci_setup_ep_ring(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
     xhci_ring_t *ring = &priv->ep_rings[slot][dci - 1];
     xhci_trb_t *mem = (xhci_trb_t *)kmalloc_aligned(XHCI_EP_RING_SIZE * sizeof(xhci_trb_t), 64);
     if (!mem) {
-        kprint("[XHCI] DBG: ep ring alloc failed slot=");
-        char b[16]; hex_to_ascii(slot, b); kprint(b);
-        kprint(" dci="); hex_to_ascii(dci, b); kprint(b); kprint("\n");
+        klog(LOG_WARN, "xHCI endpoint ring allocation failed");
         return;
     }
     xhci_ring_init(ring, mem, XHCI_EP_RING_SIZE);
@@ -519,7 +517,7 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     xhci_priv_t *priv = (xhci_priv_t *)hc->priv;
 
     if (priv->intr_ep_count >= XHCI_MAX_INTR_EP) {
-        kprint("[XHCI] DBG: intr ep slots full\n");
+        klog(LOG_WARN, "xHCI interrupt endpoint slots full");
         return -1;
     }
 
@@ -575,15 +573,13 @@ static uint8_t xhci_port_speed_to_usb(uint32_t portsc) {
 static int xhci_init_one(uint32_t phys_base) {
     extern uint32_t page_directory[1024];
     uint32_t map_size = 0x10000;
-    /* PAGE_PCD | PAGE_PWT: xHCI MMIO registers must bypass the CPU cache.
-     * Without these flags writes to capability/operational registers stay
-     * in the L1/L2 write buffer and never reach the host controller. */
+    /* Map xHCI MMIO as uncacheable (PCD|PWT). */
     for (uint32_t off = 0; off < map_size; off += 0x1000)
         vmm_map(page_directory, phys_base + off, phys_base + off,
                 PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
 
     xhci_priv_t *priv = (xhci_priv_t *)kmalloc(sizeof(xhci_priv_t));
-    if (!priv) { kprint("[XHCI] DBG: kmalloc priv failed\n"); return -1; }
+    if (!priv) { klog(LOG_WARN, "xHCI state allocation failed"); return -1; }
     memset(priv, 0, sizeof(xhci_priv_t));
 
     priv->cap_phys = phys_base;
@@ -621,7 +617,7 @@ static int xhci_init_one(uint32_t phys_base) {
                     xhci_udelay(10000);
                 }
                 if (ecap[0] & (1u << 16))
-                    kprint("[XHCI] DBG: BIOS did not release ownership\n");
+                    klog(LOG_WARN, "xHCI BIOS ownership handoff timed out");
                 ecap[1] = 0;
                 break;
             }
@@ -702,7 +698,7 @@ static int xhci_init_one(uint32_t phys_base) {
     }
 
     if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) {
-        kprint("[XHCI] DBG: HC did not start!\n");
+        klog(LOG_WARN, "xHCI host controller did not start");
         kfree_heap(priv);
         return -1;
     }
@@ -826,7 +822,7 @@ static int xhci_pci_probe(pci_device_t *pdev) {
     }
     if (!mmio)
         mmio = pci_read32(pdev->bus, pdev->dev, pdev->fn, 0x10) & ~0xFu;
-    if (!mmio) { kprint("[XHCI] DBG: No MMIO BAR\n"); return -1; }
+    if (!mmio) { klog(LOG_WARN, "xHCI MMIO BAR missing"); return -1; }
 
     uint32_t cmd = pci_read32(pdev->bus, pdev->dev, pdev->fn, 0x04);
     pci_write32(pdev->bus, pdev->dev, pdev->fn, 0x04, cmd | 0x06);
@@ -860,19 +856,14 @@ static pci_driver_t xhci_pci_driver = {
 };
 
 void xhci_pci_init(void) {
-    kprint("[xHCI] initializing event lock and registering PCI driver\n");
     irq_spinlock_init(&xhci_evt_lock);
     pci_register_driver(&xhci_pci_driver);
 
-    kprint("[xHCI] scanning PCI for class=0C/03 prog_if=30 (xHCI)\n");
     int found = 0;
     pci_device_t *d = pci_find_by_class(0x0C, 0x03);
     while (d) {
         if (d->prog_if == 0x30) {
             found++;
-            kprint("[xHCI] found controller at bus="); kprint_hex(d->bus);
-            kprint(" dev="); kprint_hex(d->dev); kprint(" fn="); kprint_hex(d->fn);
-            kprint("\n[xHCI] probing (MMIO map, reset, ring init, port scan)\n");
             xhci_pci_probe(d);
         }
         d = d->next;
@@ -881,9 +872,5 @@ void xhci_pci_init(void) {
     }
     if (found == 0) {
         klog(LOG_WARN, "xHCI: no USB3 controller found on PCI bus");
-    } else {
-        char tmp[16]; itoa(found, tmp);
-        kprint("[xHCI] probed "); kprint(tmp); kprint(" controller(s)\n");
-        klog(LOG_OK, "xHCI USB3 host controller(s) ready");
     }
 }

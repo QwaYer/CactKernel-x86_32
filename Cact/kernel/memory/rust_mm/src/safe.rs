@@ -70,7 +70,7 @@ pub fn zero_page(ptr: *mut u8) {
 // ---------------------------------------------------------------------------
 
 use crate::ffi::{
-    hex_to_ascii, irq_spinlock_acquire, irq_spinlock_release, itoa, kprint, klog,
+    irq_spinlock_acquire, irq_spinlock_release, itoa, kprint, klog,
     read_cr2, tlb_flush, tlb_flush_all, get_current_pd,
 };
 
@@ -99,15 +99,6 @@ pub fn kprint_str(s: *const u8) {
     if !s.is_null() {
         // SAFETY: caller guarantees `s` is a valid null-terminated string.
         unsafe { kprint(s) };
-    }
-}
-
-/// Print a 32-bit hex value with a prefix.
-pub fn kprint_hex(n: u32) {
-    let mut buf = [0u8; 16];
-    unsafe {
-        hex_to_ascii(n, buf.as_mut_ptr());
-        kprint(buf.as_ptr());
     }
 }
 

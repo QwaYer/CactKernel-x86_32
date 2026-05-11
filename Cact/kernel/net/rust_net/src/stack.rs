@@ -297,7 +297,6 @@ pub fn stack_init() {
         ICMP_HANDLE = Some(socks.add(icmp_sock));
 
         STACK_READY = true;
-        ffi_kernel::c_kprint(b"[RUST-NET] smoltcp stack ready\n\0");
     }
 }
 

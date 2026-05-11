@@ -4,26 +4,6 @@
 #include "klib.h"
 #include "kernel.h"
 
-static void dldbg_hex(const char* key, uint32_t v) {
-    char b[12];
-    kprint("[DLDBG] ");
-    kprint((char*)key);
-    kprint("=0x");
-    hex_to_ascii(v, b);
-    kprint(b);
-    kprint("\n");
-}
-
-static void dldbg_dec(const char* key, int v) {
-    char b[16];
-    kprint("[DLDBG] ");
-    kprint((char*)key);
-    kprint("=");
-    itoa(v, b);
-    kprint(b);
-    kprint("\n");
-}
-
 static int _so_path_join(char* dst, int dst_sz,
                           const char* dir, const char* name)
 {
@@ -136,21 +116,22 @@ static int _elf_map_file(struct vfs_node*     file,
                      hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                      sizeof(ph), (char*)&ph);
             if (ph.p_type == PT_DYNAMIC) {
-                uint32_t dyn_rt = (hdr.e_type == 3 /* ET_DYN */)
-                                    ? (load_base + ph.p_vaddr)
-                                    : ph.p_vaddr;
-                *out_dyn      = (Elf32_Dyn*)dyn_rt;
+                /* CactOS-policy: ET_DYN с фиксированной базой (см. libc.ld)
+                 * + ET_EXEC PIE одинаково маппятся ровно на свои p_vaddr.
+                 * Значит bias = 0, и адреса в .dynamic, .symtab, .rel/.rel.plt
+                 * уже абсолютные — никаких "load_base + ph.p_vaddr". */
+                *out_dyn      = (Elf32_Dyn*)ph.p_vaddr;
                 *out_dyn_size = ph.p_filesz;
                 break;
             }
         }
     }
 
-    if (out_load_base) *out_load_base = load_base;
+    /* Возвращаем bias (= 0 в нашей политике), а не "куда замаплено":
+     * вся последующая адресная арифметика идёт через bias, и так упрощается
+     * dynlink_resolve_symbol / _apply_rel — им не нужно знать e_type. */
+    if (out_load_base) *out_load_base = 0;
     if (out_entry) *out_entry = hdr.e_entry;
-    dldbg_hex("map.load_base", load_base);
-    dldbg_hex("map.entry", hdr.e_entry);
-    dldbg_hex("map.load_end", load_end);
     return 0;
 }
 
@@ -162,9 +143,6 @@ void dynlink_ctx_init(dyn_ctx_t* ctx, uint32_t* pd,
     ctx->tracker = tracker;
     ctx->count   = 0;
     strncpy(ctx->so_search_path, "/lib:/usr/lib", 256);
-    dldbg_hex("ctx.pd", (uint32_t)pd);
-    dldbg_hex("ctx.tracker", (uint32_t)tracker);
-    kprint("[DLDBG] ctx.search_path=/lib:/usr/lib\n");
     for (int i = 0; i < SO_TABLE_MAX; i++) {
         ctx->table[i].ref_count = 0;
         ctx->table[i].name[0]   = '\0';
@@ -180,9 +158,10 @@ static loaded_so_t* _find_loaded(dyn_ctx_t* ctx, const char* name) {
     return 0;
 }
 
-static loaded_so_t* _find_loaded_by_base(dyn_ctx_t* ctx, uint32_t base) {
+static loaded_so_t* _find_loaded_by_symtab(dyn_ctx_t* ctx, Elf32_Sym* sym) {
+    if (!sym) return 0;
     for (int i = 0; i < ctx->count; i++) {
-        if (ctx->table[i].ref_count > 0 && ctx->table[i].load_base == base)
+        if (ctx->table[i].ref_count > 0 && ctx->table[i].symtab == sym)
             return &ctx->table[i];
     }
     return 0;
@@ -202,7 +181,22 @@ static loaded_so_t* _alloc_so_slot(dyn_ctx_t* ctx) {
     e->strtab       = 0;
     e->init_addr    = 0;
     e->fini_addr    = 0;
+    e->pltgot       = 0;
+    e->jmprel       = 0;
+    e->jmprel_sz    = 0;
+    e->pltrel       = DT_REL;
     return e;
+}
+
+static loaded_so_t* _find_loaded_by_cookie(dyn_ctx_t* ctx, uint32_t cookie) {
+    Elf32_Sym* symtab = (Elf32_Sym*)cookie;
+    if (!symtab) return 0;
+    for (int i = 0; i < ctx->count; i++) {
+        loaded_so_t* so = &ctx->table[i];
+        if (so->symtab == symtab && so->ref_count > 0)
+            return so;
+    }
+    return 0;
 }
 
 static uint32_t _symcount_from_gnu_hash(uint32_t gnu_hash_addr) {
@@ -251,6 +245,10 @@ static void _fill_so_from_dynamic(loaded_so_t* so, Elf32_Dyn* dyn) {
         case DT_GNU_HASH: gnu_hash_addr = d->d_un.d_ptr;            break;
         case DT_INIT:   so->init_addr = d->d_un.d_ptr;              break;
         case DT_FINI:   so->fini_addr = d->d_un.d_ptr;              break;
+        case DT_PLTGOT: so->pltgot    = (uint32_t*)  d->d_un.d_ptr; break;
+        case DT_JMPREL: so->jmprel    = (Elf32_Rel*) d->d_un.d_ptr; break;
+        case DT_PLTRELSZ: so->jmprel_sz = d->d_un.d_val;            break;
+        case DT_PLTREL: so->pltrel    = d->d_un.d_val;              break;
         default: break;
         }
     }
@@ -267,23 +265,14 @@ static void _fill_so_from_dynamic(loaded_so_t* so, Elf32_Dyn* dyn) {
     if (so->symtab_count == 0 && so->symtab) {
         // Avoid resolving through an empty table when hash metadata is missing.
         so->symtab_count = 4096;
-        kprint("[DLDBG] symtab_count fallback=4096\n");
     }
-
-    dldbg_hex("so.symtab", (uint32_t)so->symtab);
-    dldbg_hex("so.strtab", (uint32_t)so->strtab);
-    dldbg_dec("so.symtab_count", (int)so->symtab_count);
 }
 
 
 loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
-    kprint("[DLDBG] load_so request: ");
-    kprint((char*)name);
-    kprint("\n");
     loaded_so_t* existing = _find_loaded(ctx, name);
     if (existing) {
         existing->ref_count++;
-        dldbg_dec("load_so.reuse_refcount", existing->ref_count);
         return existing;
     }
 
@@ -300,23 +289,14 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
         if (*sp == ':') sp++;
 
         if (_so_path_join(path, 256, dir, name) < 0) continue;
-        kprint("[DLDBG] probing ");
-        kprint(path);
-        kprint("\n");
         file = vfs_walk_path(vfs_root, path);
-        if (file) {
-            kprint("[DLDBG] found so node: ");
-            kprint(path);
-            kprint("\n");
-            break;
-        }
+        if (file) break;
     }
 
     if (!file) {
         kprint("[DL] shared object not found: ");
         kprint((char*)name);
         kprint("\n");
-        kprint("[DLDBG] so lookup failed in search path\n");
         return 0;
     }
 
@@ -329,8 +309,8 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
     uint32_t   dyn_size = 0;
     uint32_t   entry    = 0;
 
-    uint32_t base = 0;
-    if (_elf_map_file(file, ctx->pd, ctx->tracker, &base,
+    uint32_t bias = 0;
+    if (_elf_map_file(file, ctx->pd, ctx->tracker, &bias,
                       &entry, &dyn_seg, &dyn_size) != 0) {
         kprint("[DL] failed to map: ");
         kprint((char*)name);
@@ -339,22 +319,16 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
         return 0;
     }
 
-    so->load_base = base;
+    /* В нашей политике bias всегда 0 — мы маппим so точно на VA, заданные в
+     * линкер-скрипте. Поэтому symbol resolution `S = load_base + st_value`
+     * с load_base=0 даёт корректный абсолютный адрес функции в libc.so. */
+    so->load_base = bias;
     so->ref_count = 1;
-    dldbg_hex("load_so.base", base);
-    dldbg_hex("load_so.entry", entry);
-    dldbg_hex("load_so.dyn_seg", (uint32_t)dyn_seg);
-    dldbg_dec("load_so.dyn_size", (int)dyn_size);
-
     if (dyn_seg)
         _fill_so_from_dynamic(so, dyn_seg);
 
-    kprint("[DL] loaded ");
-    kprint((char*)name);
-    kprint("\n");
-
     if (dyn_seg)
-        dynlink_process_dynamic(ctx, base, base, dyn_seg);
+        dynlink_process_dynamic(ctx, bias, bias, dyn_seg);
 
     return so;
 }
@@ -379,6 +353,58 @@ uint32_t dynlink_resolve_symbol(dyn_ctx_t* ctx, const char* name) {
         }
     }
     return 0;
+}
+
+uint32_t dynlink_lazy_resolve(dyn_ctx_t* ctx, uint32_t object_cookie,
+                              uint32_t reloc_offset)
+{
+    if (!ctx) return 0;
+
+    loaded_so_t* so = _find_loaded_by_cookie(ctx, object_cookie);
+    if (!so || !so->symtab || !so->strtab || !so->jmprel) {
+        kprint("[DL] lazy resolve: bad object\n");
+        return 0;
+    }
+    if (so->pltrel != DT_REL) {
+        kprint("[DL] lazy resolve: RELA PLT is unsupported on i386\n");
+        return 0;
+    }
+    if (reloc_offset >= so->jmprel_sz || (reloc_offset % sizeof(Elf32_Rel)) != 0) {
+        kprint("[DL] lazy resolve: bad reloc offset\n");
+        return 0;
+    }
+
+    Elf32_Rel* rel = (Elf32_Rel*)((uint8_t*)so->jmprel + reloc_offset);
+    if (ELF32_R_TYPE(rel->r_info) != R_386_JMP_SLOT) {
+        kprint("[DL] lazy resolve: not JMP_SLOT\n");
+        return 0;
+    }
+
+    uint32_t sym_idx = ELF32_R_SYM(rel->r_info);
+    if (sym_idx >= so->symtab_count) {
+        kprint("[DL] lazy resolve: bad symbol index\n");
+        return 0;
+    }
+
+    Elf32_Sym* sym = &so->symtab[sym_idx];
+    uint32_t S = 0;
+    if (sym->st_shndx == SHN_UNDEF) {
+        const char* sname = so->strtab + sym->st_name;
+        S = dynlink_resolve_symbol(ctx, sname);
+        if (!S && ELF32_ST_BIND(sym->st_info) != STB_WEAK) {
+            kprint("[DL] lazy unresolved symbol: ");
+            kprint((char*)sname);
+            kprint("\n");
+        }
+    } else {
+        S = so->load_base + sym->st_value;
+    }
+
+    if (!S) return 0;
+
+    uint32_t* target = (uint32_t*)rel->r_offset;
+    *target = S;
+    return S;
 }
 
 
@@ -414,12 +440,6 @@ static void _apply_rel(dyn_ctx_t*  ctx,
         } else {
             S = sym_bias + sym->st_value;
         }
-    }
-
-    if (rel_type != R_386_NONE) {
-        dldbg_dec("rel.type", rel_type);
-        dldbg_hex("rel.target", (uint32_t)target);
-        dldbg_hex("rel.sym", S);
     }
 
     switch (rel_type) {
@@ -497,12 +517,6 @@ static void _apply_rela(dyn_ctx_t*  ctx,
         }
     }
 
-    if (rel_type != R_386_NONE) {
-        dldbg_dec("rela.type", rel_type);
-        dldbg_hex("rela.target", (uint32_t)target);
-        dldbg_hex("rela.sym", S);
-    }
-
     switch (rel_type) {
     case R_386_NONE:
         break;
@@ -535,18 +549,6 @@ static void _apply_rela(dyn_ctx_t*  ctx,
 int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_bias,
                              Elf32_Dyn* dyn)
 {
-    dldbg_hex("process.image_start", image_start);
-    dldbg_hex("process.sym_bias", sym_bias);
-    dldbg_hex("process.dyn", (uint32_t)dyn);
-    for (int i = 0; i < 16; i++) {
-        Elf32_Dyn* e = dyn + i;
-        dldbg_dec("process.raw.tag", e->d_tag);
-        dldbg_hex("process.raw.val", e->d_un.d_val);
-        if (e->d_tag == DT_NULL) {
-            dldbg_dec("process.raw.null_index", i);
-            break;
-        }
-    }
     Elf32_Sym* symtab       = 0;
     char*      strtab       = 0;
     uint32_t   symtab_count = 0;
@@ -564,6 +566,7 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
     Elf32_Rel*  jmprel   = 0;
     uint32_t    jmprel_sz = 0;
     uint32_t    pltrel   = DT_REL;
+    uint32_t*   pltgot   = 0;
 
     for (Elf32_Dyn* d = dyn; d->d_tag != DT_NULL; d++) {
         switch (d->d_tag) {
@@ -577,6 +580,7 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
         case DT_RELA:     rela      = (Elf32_Rela*)d->d_un.d_ptr; break;
         case DT_RELASZ:   rela_sz   = d->d_un.d_val;              break;
         case DT_RELAENT:  rela_ent  = d->d_un.d_val;              break;
+        case DT_PLTGOT:   pltgot    = (uint32_t*) d->d_un.d_ptr;  break;
         case DT_JMPREL:   jmprel    = (Elf32_Rel*) d->d_un.d_ptr; break;
         case DT_PLTRELSZ: jmprel_sz = d->d_un.d_val;              break;
         case DT_PLTREL:   pltrel    = d->d_un.d_val;              break;
@@ -594,21 +598,26 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
     if (symtab_count == 0 && symtab) {
         symtab_count = 4096;
     }
-    dldbg_dec("process.symtab_count", (int)symtab_count);
-
     /* Make current object visible for cross-object symbol resolution
-     * (e.g. shared libs resolving symbols exported by main binary). */
-    if (symtab && strtab && !_find_loaded_by_base(ctx, image_start)) {
-        loaded_so_t* cur = _alloc_so_slot(ctx);
-        if (cur) {
+     * (e.g. shared libs resolving symbols exported by main binary).
+     * Идентифицируем уже-зарегистрированные объекты по адресу .symtab —
+     * он уникален для каждого so и не зависит от bias-политики. */
+    loaded_so_t* cur = (symtab && strtab) ? _find_loaded_by_symtab(ctx, symtab) : 0;
+    if (symtab && strtab && !cur) {
+        cur = _alloc_so_slot(ctx);
+        if (cur)
             strncpy(cur->name, "<main>", SO_NAME_MAX);
-            cur->load_base = sym_bias;
-            cur->symtab = symtab;
-            cur->strtab = strtab;
-            cur->symtab_count = symtab_count;
-            cur->ref_count = 1;
-            kprint("[DLDBG] registered current object in resolver table\n");
-        }
+    }
+    if (cur) {
+        cur->load_base = sym_bias;
+        cur->symtab = symtab;
+        cur->strtab = strtab;
+        cur->symtab_count = symtab_count;
+        cur->pltgot = pltgot;
+        cur->jmprel = jmprel;
+        cur->jmprel_sz = jmprel_sz;
+        cur->pltrel = pltrel;
+        cur->ref_count = 1;
     }
 
     for (Elf32_Dyn* d = dyn; d->d_tag != DT_NULL; d++) {
@@ -618,9 +627,6 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
                 continue;
             }
             const char* soname = strtab + d->d_un.d_val;
-            kprint("[DLDBG] DT_NEEDED: ");
-            kprint((char*)soname);
-            kprint("\n");
             if (!_find_loaded(ctx, soname))
                 dynlink_load_so(ctx, soname);
         }
@@ -628,7 +634,6 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
 
     if (rel && rel_sz > 0) {
         uint32_t n = rel_sz / rel_ent;
-        dldbg_dec("process.rel_count", (int)n);
         for (uint32_t i = 0; i < n; i++) {
             Elf32_Rel* r = (Elf32_Rel*)((uint8_t*)rel + i * rel_ent);
             _apply_rel(ctx, image_start, sym_bias, symtab, strtab, r);
@@ -637,35 +642,36 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
 
     if (rela && rela_sz > 0) {
         uint32_t n = rela_sz / rela_ent;
-        dldbg_dec("process.rela_count", (int)n);
         for (uint32_t i = 0; i < n; i++) {
             Elf32_Rela* r = (Elf32_Rela*)((uint8_t*)rela + i * rela_ent);
             _apply_rela(ctx, image_start, sym_bias, symtab, strtab, r);
         }
     }
 
-    if (jmprel && jmprel_sz > 0) {
-        dldbg_dec("process.jmprel_size", (int)jmprel_sz);
-        if (pltrel == DT_RELA) {
-            uint32_t n = jmprel_sz / sizeof(Elf32_Rela);
-            dldbg_dec("process.jmprel_rela_count", (int)n);
-            for (uint32_t i = 0; i < n; i++) {
-                Elf32_Rela* r = (Elf32_Rela*)((uint8_t*)jmprel
-                                               + i * sizeof(Elf32_Rela));
-                _apply_rela(ctx, image_start, sym_bias, symtab, strtab, r);
-            }
+    if (pltgot && jmprel && jmprel_sz > 0 && cur) {
+        uint32_t resolver = dynlink_resolve_symbol(ctx, "__cact_lazy_resolve");
+        if (resolver) {
+            pltgot[1] = (uint32_t)cur->symtab;
+            pltgot[2] = resolver;
         } else {
-            uint32_t n = jmprel_sz / sizeof(Elf32_Rel);
-            dldbg_dec("process.jmprel_rel_count", (int)n);
-            for (uint32_t i = 0; i < n; i++) {
-                Elf32_Rel* r = (Elf32_Rel*)((uint8_t*)jmprel
-                                             + i * sizeof(Elf32_Rel));
-                _apply_rel(ctx, image_start, sym_bias, symtab, strtab, r);
+            kprint("[DL] lazy resolver not found, falling back to eager PLT\n");
+            if (pltrel == DT_RELA) {
+                uint32_t n = jmprel_sz / sizeof(Elf32_Rela);
+                for (uint32_t i = 0; i < n; i++) {
+                    Elf32_Rela* r = (Elf32_Rela*)((uint8_t*)jmprel
+                                                   + i * sizeof(Elf32_Rela));
+                    _apply_rela(ctx, image_start, sym_bias, symtab, strtab, r);
+                }
+            } else {
+                uint32_t n = jmprel_sz / sizeof(Elf32_Rel);
+                for (uint32_t i = 0; i < n; i++) {
+                    Elf32_Rel* r = (Elf32_Rel*)((uint8_t*)jmprel
+                                                 + i * sizeof(Elf32_Rel));
+                    _apply_rel(ctx, image_start, sym_bias, symtab, strtab, r);
+                }
             }
         }
     }
-    kprint("[DLDBG] process done\n");
-
     return 0;
 }
 
@@ -675,11 +681,6 @@ void dynlink_unload_all(dyn_ctx_t* ctx) {
         loaded_so_t* so = &ctx->table[i];
         if (so->ref_count <= 0) continue;
         so->ref_count--;
-        if (so->ref_count == 0) {
-            kprint("[DL] unloaded ");
-            kprint(so->name);
-            kprint("\n");
-        }
     }
     ctx->count = 0;
 }
@@ -688,6 +689,18 @@ dyn_ctx_t* dynlink_ctx_create(uint32_t* pd, proc_page_tracker_t* tracker) {
     dyn_ctx_t* ctx = (dyn_ctx_t*)kmalloc(sizeof(dyn_ctx_t));
     if (!ctx) return 0;
     dynlink_ctx_init(ctx, pd, tracker);
+    return ctx;
+}
+
+dyn_ctx_t* dynlink_ctx_clone(dyn_ctx_t* src, uint32_t* pd,
+                             proc_page_tracker_t* tracker)
+{
+    if (!src) return 0;
+    dyn_ctx_t* ctx = (dyn_ctx_t*)kmalloc(sizeof(dyn_ctx_t));
+    if (!ctx) return 0;
+    memcpy(ctx, src, sizeof(dyn_ctx_t));
+    ctx->pd = pd;
+    ctx->tracker = tracker;
     return ctx;
 }
 

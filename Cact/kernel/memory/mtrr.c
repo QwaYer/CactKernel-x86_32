@@ -261,31 +261,7 @@ void mtrr_init(void) {
             g_maxphysaddr_bits = bits;
     }
 
-    {
-        char buf[16];
-        kprint("[MTRR] variable_ranges=");
-        itoa(g_variable_count, buf); kprint(buf);
-        kprint("  WC=");
-        kprint(g_wc_supported ? "yes" : "no");
-        kprint("  fixed=");
-        kprint((cap & MTRRCAP_FIX_BIT) ? "yes" : "no");
-        kprint("  MAXPHYSADDR=");
-        itoa((int)g_maxphysaddr_bits, buf); kprint(buf);
-        kprint("\n");
-
-        uint64_t def = rdmsr(IA32_MTRR_DEF_TYPE);
-        kprint("[MTRR] def_type=0x");
-        hex_to_ascii((uint32_t)(def & MTRR_DEF_TYPE_TYPE_MASK), buf); kprint(buf);
-        kprint("  master_enable=");
-        kprint((def & MTRR_DEF_TYPE_E)  ? "1" : "0");
-        kprint("  fixed_enable=");
-        kprint((def & MTRR_DEF_TYPE_FE) ? "1" : "0");
-        kprint("\n");
-    }
-
-    if (g_wc_supported)
-        klog(LOG_OK, "MTRR write-combining available");
-    else
+    if (!g_wc_supported)
         klog(LOG_WARN, "MTRR present but WC type not advertised");
 }
 
@@ -391,18 +367,5 @@ int mtrr_enable_wc_for_framebuffer(uint32_t fb_phys,
      * type stays UC regardless of what the MTRR says. */
     mtrr_clear_pcd_pwt_range(fb_phys, fb_size);
 
-    {
-        char buf[16];
-        kprint("[MTRR] framebuffer WC: 0x");
-        hex_to_ascii(fb_phys, buf); kprint(buf);
-        kprint(" .. 0x");
-        hex_to_ascii(fb_phys + fb_size - 1u, buf); kprint(buf);
-        kprint("  size=");
-        itoa((int)(fb_size >> 10), buf); kprint(buf); kprint(" KB");
-        kprint("  slots=");
-        itoa(slots_used, buf); kprint(buf);
-        kprint("\n");
-    }
-    klog(LOG_OK, "framebuffer write-combining enabled");
     return 0;
 }

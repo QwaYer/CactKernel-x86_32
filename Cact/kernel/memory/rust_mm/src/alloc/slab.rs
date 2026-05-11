@@ -125,7 +125,6 @@ fn slab_destroy_slab(cache: *mut SlabCache, s: *mut Slab) {
     }
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_cache_create(
     name: *const u8,
@@ -179,7 +178,6 @@ pub extern "C" fn slab_cache_create(
     cache
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_alloc(cache: *mut SlabCache) -> *mut u8 {
     if cache.is_null() {
@@ -229,7 +227,6 @@ pub extern "C" fn slab_alloc(cache: *mut SlabCache) -> *mut u8 {
     obj
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_free(cache: *mut SlabCache, obj: *mut u8) {
     if cache.is_null() || obj.is_null() {
@@ -268,7 +265,6 @@ pub extern "C" fn slab_free(cache: *mut SlabCache, obj: *mut u8) {
     lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_cache_shrink(cache: *mut SlabCache) {
     if cache.is_null() {
@@ -288,7 +284,6 @@ pub extern "C" fn slab_cache_shrink(cache: *mut SlabCache) {
     lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_cache_destroy(cache: *mut SlabCache) {
     if cache.is_null() {
@@ -334,7 +329,6 @@ pub extern "C" fn slab_cache_destroy(cache: *mut SlabCache) {
     kfree_heap(cache as *mut u8);
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_print_stats(cache: *const SlabCache) {
     if cache.is_null() {
@@ -385,11 +379,8 @@ pub extern "C" fn slab_print_stats(cache: *const SlabCache) {
     kprint_str(b"\n\0".as_ptr());
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_init() {
-    kprint_str(b"[SLAB] initializing  generic caches: 8 16 32 64 128 256 512 1024 2048 B\n\0".as_ptr());
-
     // SAFETY: boot-time init, single-threaded.
     unsafe { irq_spinlock_init(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock) };
     *G_CACHE_LIST.get_mut() = core::ptr::null_mut();
@@ -433,13 +424,8 @@ pub extern "C" fn slab_init() {
         }
     }
 
-    kprint_str(b"[SLAB] \0".as_ptr());
-    kprint_int(GENERIC_CACHE_COUNT as i32);
-    kprint_str(b" generic caches ready\n\0".as_ptr());
-    klog_msg(LOG_OK, b"slab allocator ready\0".as_ptr());
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_kmalloc(size: u32) -> *mut u8 {
     if size == 0 {
@@ -454,7 +440,6 @@ pub extern "C" fn slab_kmalloc(size: u32) -> *mut u8 {
     kmalloc(size)
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn slab_kfree(ptr: *mut u8) {
     if ptr.is_null() {

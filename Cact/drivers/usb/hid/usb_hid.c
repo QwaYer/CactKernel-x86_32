@@ -173,8 +173,6 @@ static int hid_set_idle(usb_device_t *dev, uint8_t iface) {
 }
 
 static int hid_probe(usb_device_t *dev) {
-    char buf[32];
-
     hid_type_t type = HID_TYPE_UNKNOWN;
 
     if (dev->subclass == USB_HID_SUBCLASS_BOOT) {
@@ -184,11 +182,6 @@ static int hid_probe(usb_device_t *dev) {
 
     if (type == HID_TYPE_UNKNOWN && dev->class_code == USB_CLASS_HID) {
         for (int i = 0; i < dev->ep_count; i++) {
-            kprint("[HID] ep["); hex_to_ascii(i, buf); kprint(buf);
-            kprint("] dir="); hex_to_ascii(dev->ep[i].direction, buf); kprint(buf);
-            kprint(" type="); hex_to_ascii(dev->ep[i].transfer_type, buf); kprint(buf);
-            kprint(" mps="); hex_to_ascii(dev->ep[i].max_packet, buf); kprint(buf);
-            kprint("\n");
             if (dev->ep[i].direction     == USB_DIR_IN &&
                 dev->ep[i].transfer_type == USB_TRANSFER_INTERRUPT &&
                 dev->ep[i].max_packet    >= 6) {
@@ -199,14 +192,7 @@ static int hid_probe(usb_device_t *dev) {
     }
 
     if (type == HID_TYPE_UNKNOWN) {
-        kprint("[HID] Unknown protocol\n");
-        for (int i = 0; i < dev->ep_count; i++) {
-            kprint("[HID] ep["); hex_to_ascii(i, buf); kprint(buf);
-            kprint("] dir="); hex_to_ascii(dev->ep[i].direction, buf); kprint(buf);
-            kprint(" type="); hex_to_ascii(dev->ep[i].transfer_type, buf); kprint(buf);
-            kprint(" mps="); hex_to_ascii(dev->ep[i].max_packet, buf); kprint(buf);
-            kprint("\n");
-        }
+        klog(LOG_WARN, "USB HID: unsupported protocol");
         return -1;
     }
 
@@ -224,7 +210,7 @@ static int hid_probe(usb_device_t *dev) {
         }
     }
     if (!priv->intr_ep) {
-        kprint("[HID] No Interrupt IN EP\n");
+        klog(LOG_WARN, "USB HID: interrupt IN endpoint not found");
         kfree_heap(priv);
         return -1;
     }
@@ -269,7 +255,7 @@ static int hid_probe(usb_device_t *dev) {
                                          hid_irq_notify, priv);
 
     if (rc != 0) {
-        kprint("[HID] Failed to register interrupt TD/ED\n");
+        klog(LOG_WARN, "USB HID: interrupt transfer registration failed");
         kfree_heap(priv);
         dev->driver_priv = NULL;
         return -1;
@@ -297,7 +283,5 @@ static usb_driver_t hid_driver = {
 };
 
 void usb_hid_init(void) {
-    kprint("[USB-HID] registering HID driver with USB core\n");
     usb_driver_register(&hid_driver);
-    klog(LOG_OK, "USB HID driver registered");
 }

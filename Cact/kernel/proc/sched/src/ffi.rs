@@ -75,6 +75,11 @@ extern "C" {
 
     pub fn dynlink_unload_all(ctx: *mut DynCtx);
     pub fn dynlink_ctx_create(pd: *mut u32, tracker: *mut ProcPageTracker) -> *mut DynCtx;
+    pub fn dynlink_ctx_clone(
+        src: *mut DynCtx,
+        pd: *mut u32,
+        tracker: *mut ProcPageTracker,
+    ) -> *mut DynCtx;
     pub fn dynlink_ctx_destroy(ctx: *mut DynCtx);
 
     pub fn switch_to(old_esp: *mut u32, new_esp: u32);

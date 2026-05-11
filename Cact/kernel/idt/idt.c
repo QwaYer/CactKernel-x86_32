@@ -44,11 +44,9 @@ void set_idt_gate(int n, uint32_t handler) {
 
 // Initialize Programmable Interrupt Controller (8259)
 void init_pic(void) {
-    kprint("[PIC] sending ICW1 — cascade mode, ICW4 needed\n");
     port_byte_out(0x20, 0x11);  // Master ICW1
     port_byte_out(0xA0, 0x11);  // Slave ICW1
 
-    kprint("[PIC] remapping: master IRQ0-7 → 0x20-0x27  slave IRQ8-15 → 0x28-0x2F\n");
     port_byte_out(0x21, 0x20);  // Master ICW2: offset 0x20
     port_byte_out(0xA1, 0x28);  // Slave ICW2: offset 0x28
 
@@ -61,8 +59,6 @@ void init_pic(void) {
     // Set interrupt masks
     port_byte_out(0x21, 0xF8);  // Master: unmask IRQ0(timer), IRQ1(kbd), IRQ2(cascade)
     port_byte_out(0xA1, 0x80);  // Slave: mask only IRQ15, rest open for USB/mouse/storage modules
-    kprint("[PIC] mask: master=0xF8 (IRQ0/1/2 active)  slave=0x80 (IRQ15 masked)\n");
-    klog(LOG_OK, "PIC remapped and configured");
 }
 
 // Initialize IDT and load it
@@ -71,12 +67,7 @@ int init_idt(void) {
     idtp.base  = (uint32_t)&idt;
     memory_set(&idt, 0, sizeof(struct idt_entry) * 256);
 
-    kprint("[IDT] zeroed 256 entries  base=0x");
-    char buf[16]; hex_to_ascii(idtp.base, buf); kprint(buf);
-    kprint("  limit="); itoa(idtp.limit, buf); kprint(buf); kprint("\n");
-
     // Install CPU exception gates (0-31)
-    kprint("[IDT] installing exception gates ISR0-ISR31 (CPU exceptions)\n");
     set_idt_gate(0,  (uint32_t)isr0);
     set_idt_gate(1,  (uint32_t)isr1);
     set_idt_gate(2,  (uint32_t)isr2);
@@ -111,9 +102,6 @@ int init_idt(void) {
     set_idt_gate(31, (uint32_t)isr31);
 
     // Install IRQ handlers (hardware interrupts)
-    kprint("[IDT] installing IRQ gates:"
-           " 0x20=timer  0x21=kbd  0x2C=mouse  0x2D=IRQ13 stub  0x2E=IRQ14 stub"
-           "  0x29-0x2B=usb\n");
     set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - PIT timer
     set_idt_gate(0x21, (uint32_t)keyboard_isr);     // IRQ1  - PS/2 keyboard
     set_idt_gate(0x27, (uint32_t)spurious_irq7);    // IRQ7  - master spurious
@@ -126,13 +114,10 @@ int init_idt(void) {
     set_idt_gate(0x2F, (uint32_t)spurious_irq15);   // IRQ15 - slave spurious
 
     // System call gate (int 0x80) - ring3 accessible
-    kprint("[IDT] installing syscall gate 0x80 (DPL=3, ring-3 accessible)\n");
     set_idt_gate(0x80, (uint32_t)syscall_isr);
     idt[0x80].flags = 0xEE;  // Present, ring3, 32-bit interrupt gate
 
     // Load IDT into IDTR
-    kprint("[IDT] loading IDTR\n");
     __asm__ __volatile__("lidt (%0)" : : "r"(&idtp));
-    klog(LOG_OK, "IDT loaded — exceptions and IRQs armed");
     return 0;
 }

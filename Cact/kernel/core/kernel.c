@@ -196,57 +196,37 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     // Diagnostics
     {
-        kprint("[IO] probing PS/2 controller (port 0x64)\n");
         int io_status = probe_io_ports();
         if (io_status)
             klog(LOG_WARN, "port 0x64 = 0xFF — PS/2 controller absent or unresponsive");
-        else
-            klog(LOG_OK, "PS/2 controller present");
     }
 
     {
-        kprint("[CMOS] reading extended memory from CMOS (regs 0x17/0x18)\n");
         int mem_status = detect_memory();
         if (mem_status)
             klog(LOG_WARN, "CMOS returned 0 KB — memory size unreliable");
-        else
-            klog(LOG_OK, "CMOS memory size valid");
     }
 
     /* PIT before PCI scan: GDD prompts use timer_ticks + IRQ keyboard while interrupts stay globally masked until init(). */
-    kprint("[PIT] configuring 8253 timer  divisor=");
-    { char buf[8]; itoa(1193180 / 100, buf); kprint(buf); }
-    kprint("  freq=100 Hz\n");
     init_timer(100);
-    klog(LOG_OK, "PIT timer @ 100 Hz — IRQ0 active");
 
     // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
     // kmods can blkdev_register(); otherwise mntfs sees no boot disk.
     blkdev_init();
 
     // PCI enumeration and drivers
-    kprint("[PCI] scanning bus for devices\n");
     if (search_pci())
         klog(LOG_WARN, "PCI scan reported error");
-    else
-        klog(LOG_OK, "PCI bus scan complete");
 
-    kprint("[PCI] enumerating and binding drivers\n");
     pci_enumerate();
     {
-        char buf[8]; itoa(pci_device_count, buf);
-        kprint("[PCI] "); kprint(buf); kprint(" device(s) found\n");
-        if (pci_device_count > 0)
-            klog(LOG_OK,  "PCI enumeration done");
-        else
+        if (pci_device_count <= 0)
             klog(LOG_WARN, "no PCI devices — storage/net/USB unavailable");
     }
 
     // USB xHCI stack
-    kprint("[USB] initializing xHCI host controller stack\n");
     extern void usb_init(void);
     usb_init();
-    klog(LOG_OK, "USB stack initialised");
 
     // Process control block cache
     pc_init();
@@ -263,14 +243,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     // Network stack
     net_init();
-    // Driver bootstrap is platform policy, not net stack policy.
-    // Stack itself accepts any NIC via net_register_driver().
-    kprint("[NET] no built-in NIC driver — as root run: "
-           "modload /proc/bin/mdls/virtio_net.cctk 0x1AF4 0x1041 (legacy virtio-net; DID 0x1000 also)\n");
-    kprint("[BLKDEV] no built-in SATA driver — as root run: "
-           "modload /proc/bin/mdls/ahci.cctk (manifest binds class 01:06)\n");
-    kprint("[BLKDEV] no built-in NVMe driver — as root run: "
-           "modload /proc/bin/mdls/nvme.cctk (manifest binds class 01:08)\n");
 
     // Multitasking
     task_init();
@@ -290,31 +262,19 @@ static void kernel_bootstrap_main(void) {
     extern void mntfs_init(void);
     extern void procfs_set_meminfo(uint32_t);
 
-    kprint("[DRV] probing deferred PCI drivers (IRQ-safe phase)\n");
     pci_driver_probe_deferred_all();
 
-    kprint("[MNT] mounting virtual filesystems\n");
     mntfs_init();
 
     if (bootstrap_mbi) {
-        char buf[12];
-        if (bootstrap_mbi->flags & 0x1) {
-            itoa((int)bootstrap_mbi->mem_lower, buf);
-            kprint("[MNT] mem_lower="); kprint(buf); kprint(" KB");
-            itoa((int)bootstrap_mbi->mem_upper, buf);
-            kprint("  mem_upper="); kprint(buf); kprint(" KB\n");
-        }
         uint32_t total_kb;
         if (bootstrap_mbi->flags & (1u << 6)) {
             total_kb = (uint32_t)(bootstrap_mbi->mem_total_bytes / 1024ull);
-            itoa((int)total_kb, buf);
-            kprint("[MNT] mmap total="); kprint(buf); kprint(" KB\n");
         } else {
             total_kb = bootstrap_mbi->mem_lower + 1024 + bootstrap_mbi->mem_upper;
         }
         procfs_set_meminfo(total_kb);
     }
-    klog(LOG_OK, "mntfs bootstrap finished");
 
     kprint("\n");
     kprint_color("Cact Kernel ", COLOR_LIGHT_BROWN);

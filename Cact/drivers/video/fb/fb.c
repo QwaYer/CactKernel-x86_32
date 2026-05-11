@@ -219,7 +219,6 @@ void kprint_at(char* message, int x, int y) {
 }
 
 void init_framebuffer(void) {
-    kprint("[FB] checking multiboot framebuffer parameters\n");
     fb_init_result_t status = fb_get_init_status();
 
     if (status != FB_INIT_OK) {
@@ -235,28 +234,6 @@ void init_framebuffer(void) {
         return;
     }
 
-    char buf[16];
-    kprint("[FB] addr=0x");
-    hex_to_ascii((uint32_t)fb_get_buffer(), buf);
-    kprint(buf);
-    kprint("  res=");
-    itoa((int)fb_get_width(), buf);
-    kprint(buf);
-    kprint("x");
-    itoa((int)fb_get_height(), buf);
-    kprint(buf);
-    kprint("  32bpp  pitch=");
-    itoa((int)fb_get_pitch(), buf);
-    kprint(buf);
-    kprint("\n");
-    kprint("[FB] cols=");
-    itoa((int)(fb_get_width() / (8 * FB_CONSOLE_FONT_SCALE)), buf);
-    kprint(buf);
-    kprint("  rows=");
-    itoa((int)(fb_get_height() / (8 * FB_CONSOLE_FONT_SCALE)), buf);
-    kprint(buf);
-    kprint("\n");
-    klog(LOG_OK, "Framebuffer ready");
 }
 
 int get_cursor_x(void) {
@@ -397,14 +374,6 @@ void fb_enable_shadow(void) {
     fb_dirty_y_max  = 0;
     fb_shadow_armed = 1;
 
-    char buf[16];
-    kprint("[FB] shadow buffer: ");
-    itoa((int)(shadow_bytes >> 10), buf); kprint(buf); kprint(" KB at 0x");
-    hex_to_ascii((uint32_t)(uintptr_t)shadow, buf); kprint(buf);
-    kprint("  dirty_map at 0x");
-    hex_to_ascii((uint32_t)(uintptr_t)dirty, buf); kprint(buf);
-    kprint("\n");
-    klog(LOG_OK, "framebuffer shadow active — drawing batched");
 }
 
 void fb_flush(void) {

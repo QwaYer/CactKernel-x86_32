@@ -4,7 +4,7 @@
 #include "kernel.h"
 
 #define KERNEL_BASE      0xC0000000U
-#define USER_SPACE_START 0x08000000U  /* первые 128 МБ — identity-mapped kernel */
+#define USER_SPACE_START 0x08000000U  /* low 128 MiB is identity-mapped kernel space */
 #define USER_STR_MAX     4096
 
 int validate_user_ptr(const void* ptr, uint32_t size);

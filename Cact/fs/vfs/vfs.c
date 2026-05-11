@@ -4,13 +4,13 @@
 #include "kernel.h"
 #include "task.h"
 
-// Global VFS root — set by the first filesystem mount
+// Global VFS root.
 vfs_node_t *vfs_root = 0;
 
 // Mount table limits
 #define VFS_MOUNT_MAX 32
 
-// Symlink pool — fixed-size static allocation, no heap usage
+// Fixed-size symlink pool.
 #define VFS_SYMLINK_POOL_SIZE  256
 #define VFS_SYMLINK_TARGET_MAX 512
 
@@ -23,11 +23,11 @@ typedef struct {
 static vfs_symlink_entry_t symlink_pool[VFS_SYMLINK_POOL_SIZE];
 static mutex_t             symlink_mutex;      // protects symlink_pool
 
-// A mount point: host directory + overlaid target
+// Mount table entry.
 typedef struct {
-    vfs_node_t *host;       // directory being shadowed
-    vfs_node_t *target;     // root of the mounted filesystem
-    char        name[128];  // directory name in the host
+    vfs_node_t *host;       // mount parent directory
+    vfs_node_t *target;     // mounted root node
+    char        name[128];  // mount name in parent
 } vfs_mount_t;
 
 static vfs_mount_t mount_table[VFS_MOUNT_MAX];
@@ -43,29 +43,25 @@ static vfs_node_t *_lookup_mount(vfs_node_t *host, const char *name) {
     return 0;
 }
 
-// Single path component walk: check mount table first, then delegate to ops->walk
+// Resolve one path segment.
 static vfs_node_t *_walk_one(vfs_node_t *dir, const char *name) {
     if (!dir || dir->type != VFS_DIRECTORY) return 0;
 
     mutex_lock(&vfs_mutex);
     vfs_node_t *m = _lookup_mount(dir, name);
     mutex_unlock(&vfs_mutex);
-    if (m) return m;              // mount point overrides the underlying FS
+    if (m) return m;              // mount shadowing
 
     if (dir->ops && dir->ops->walk)
         return dir->ops->walk(dir, name);
     return 0;
 }
 
-// One-time initialisation: clear mount table, init mutexes
+// Initialize VFS global state.
 void vfs_init(void) {
-    kprint("[VFS] mount table: capacity="); char buf[8]; itoa(VFS_MOUNT_MAX, buf); kprint(buf);
-    kprint(" slots  initializing mutex\n");
     mutex_init(&vfs_mutex);
     mutex_init(&symlink_mutex);
     mount_count = 0;
-    kprint("[VFS] root=NULL (will be set on first mount)\n");
-    klog(LOG_OK, "VFS ready");
 }
 
 // Mount a filesystem on a host directory
@@ -100,14 +96,14 @@ int vfs_umount(vfs_node_t *host, const char *name) {
     return -1;
 }
 
-// Walk a path WITHOUT following symlinks
+// Walk path without symlink resolution.
 vfs_node_t *vfs_walk_path(vfs_node_t *start, const char *path) {
     if (!path) return start ? start : vfs_root;
     vfs_node_t *cur = start ? start : vfs_root;
     if (!cur) return 0;
 
     const char *p = path;
-    while (*p == '/') p++;           // skip leading slashes
+    while (*p == '/') p++;           // skip leading '/'
 
     while (*p && cur) {
         char seg[128];
@@ -115,13 +111,13 @@ vfs_node_t *vfs_walk_path(vfs_node_t *start, const char *path) {
         while (*p && *p != '/' && si < 127) seg[si++] = *p++;
         seg[si] = '\0';
         if (*p == '/') p++;
-        if (si == 0) continue;       // skip empty components (//)
+        if (si == 0) continue;       // skip repeated '/'
         cur = _walk_one(cur, seg);
     }
     return cur;
 }
 
-// Generic I/O wrappers — delegate to per-node ops
+// Generic VFS I/O wrappers.
 int read_vfs(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     if (!node || !node->ops || !node->ops->read) return -1;
     return node->ops->read(node, off, size, buf);
@@ -162,7 +158,7 @@ void listdir_vfs(vfs_node_t *dir) {
     if (!dir || dir->type != VFS_DIRECTORY) return;
     if (dir->ops && dir->ops->listdir)
         dir->ops->listdir(dir);
-    // Also list mount points under this directory
+    // Append mount points attached to this directory.
     mutex_lock(&vfs_mutex);
     for (int i = 0; i < mount_count; i++) {
         if (mount_table[i].host == dir) {
@@ -243,11 +239,11 @@ int vfs_readlink_node(vfs_node_t *node, char *buf, uint32_t bufsz) {
     return (int)len;
 }
 
-// Internal: walk a path following symlinks, with depth tracking
+// Internal symlink-aware path walk.
 static vfs_node_t *_walk_path_follow(vfs_node_t *start, const char *path,
                                       int *depth, int *err);
 
-// Walk one component; if the result is a symlink, resolve it recursively
+// Resolve one segment and follow symlinks.
 static vfs_node_t *_walk_one_follow(vfs_node_t *dir, const char *seg,
                                      int *depth, int *err) {
     vfs_node_t *node = _walk_one(dir, seg);
@@ -270,7 +266,7 @@ static vfs_node_t *_walk_one_follow(vfs_node_t *dir, const char *seg,
     return node;
 }
 
-// Walk a full path following symlinks
+// Walk full path with symlink resolution.
 static vfs_node_t *_walk_path_follow(vfs_node_t *start, const char *path,
                                       int *depth, int *err) {
     if (!path) return start ? start : vfs_root;
@@ -293,7 +289,7 @@ static vfs_node_t *_walk_path_follow(vfs_node_t *start, const char *path,
     return cur;
 }
 
-// Public symlink-aware walk entry point
+// Public symlink-aware walk API.
 vfs_node_t *vfs_walk_path_follow(vfs_node_t *start, const char *path, int *err_out) {
     int depth = 0;
     int err   = 0;
@@ -302,7 +298,7 @@ vfs_node_t *vfs_walk_path_follow(vfs_node_t *start, const char *path, int *err_o
     return result;
 }
 
-// Reference counting for VFS nodes
+// VFS node refcount helpers.
 void vfs_node_ref(vfs_node_t *node) {
     if (node) node->refcount++;
 }
@@ -310,7 +306,7 @@ void vfs_node_ref(vfs_node_t *node) {
 void vfs_node_unref(vfs_node_t *node) {
     if (!node || node->refcount == 0) return;
     node->refcount--;
-    // Return symlink pool entries when refcount reaches zero
+    // Free symlink pool slot when refcount reaches zero.
     if (node->refcount == 0 && node->type == VFS_SYMLINK) {
         mutex_lock(&symlink_mutex);
         vfs_symlink_entry_t *entry = (vfs_symlink_entry_t *)node;
@@ -322,11 +318,11 @@ void vfs_node_unref(vfs_node_t *node) {
     }
 }
 
-// Create a symlink: allocates pool entry, mounts it on the parent directory
+// Create symlink node and mount it under parent.
 int vfs_symlink(vfs_node_t *dir, const char *name, const char *target) {
     if (!dir || dir->type != VFS_DIRECTORY || !name || !target) return -1;
 
-    // Let the underlying FS handle it if it has a symlink op
+    // Delegate when filesystem provides native symlink support.
     if (dir->ops && dir->ops->symlink)
         return dir->ops->symlink(dir, name, target);
 
@@ -385,7 +381,7 @@ int vfs_unlink(vfs_node_t *dir, const char *name) {
     return -1;
 }
 
-// POSIX-style permission check (owner/group/other)
+// POSIX rwx permission check.
 int vfs_check_perm(vfs_node_t *node, uint32_t perm) {
     if (!node) return -1;
 

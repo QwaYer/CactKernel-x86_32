@@ -35,6 +35,15 @@ const uint32_t sys_sigreturn_num = SYS_SIGRETURN;
 // Syscall function pointer type — cast to/from specific signatures
 typedef int (*syscall_fn)(void*, void*, void*);
 
+static int sys_dynresolve(void* object_cookie, void* reloc_offset, void* unused) {
+    (void)unused;
+    if (!current_task || !current_task->dyn_ctx)
+        return -1;
+    return (int)dynlink_lazy_resolve(current_task->dyn_ctx,
+                                     (uint32_t)object_cookie,
+                                     (uint32_t)reloc_offset);
+}
+
 // The syscall table — indexed by syscall_num_t enum values
 static syscall_fn syscall_table[SYSCALL_COUNT] = {
     // 0 — debug
@@ -157,6 +166,8 @@ static syscall_fn syscall_table[SYSCALL_COUNT] = {
 
     [SYS_MODULE_LOAD]   = (syscall_fn)sys_module_load,
     [SYS_MODULE_UNLOAD] = (syscall_fn)sys_module_unload,
+
+    [SYS_DYNRESOLVE]    = (syscall_fn)sys_dynresolve,
 };
 
 // Syscalls that take a struct syscall_frame* instead of three scalar arguments.

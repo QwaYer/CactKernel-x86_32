@@ -36,8 +36,6 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 {
     tracker->page_dir = pd;
 
-    kprint("[ELF] loading: "); kprint(path); kprint("\n");
-
     vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
     struct vfs_node* file = vfs_walk_path(base, path);
     if (!file) {
@@ -137,14 +135,6 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
         }
     }
 
-    kprint("[ELF] e_entry=0x");
-    {
-        char ebuf[12];
-        hex_to_ascii(hdr.e_entry, ebuf);
-        kprint(ebuf);
-    }
-    kprint("\n");
-
     return (void*)hdr.e_entry;
 }
 
@@ -177,7 +167,6 @@ void* load_elf_dynamic(char*                path,
     }
 
     Elf32_Dyn* dyn_vaddr = 0;
-    uint32_t   dyn_size  = 0;
     uint32_t   min_load_vaddr = 0xFFFFFFFFu;
     uint32_t   max_load_vaddr = 0;
     uint32_t   load_bias = 0;
@@ -277,51 +266,20 @@ void* load_elf_dynamic(char*                path,
         }
 
         if (ph.p_type == PT_DYNAMIC) {
-            uint32_t dyn_rt = (hdr.e_type == 3 /* ET_DYN */)
-                                ? (runtime_base + ph.p_vaddr)
-                                : (ph.p_vaddr + load_bias);
-            dyn_vaddr = (Elf32_Dyn*)dyn_rt;
-            dyn_size  = ph.p_filesz;
-            kprint("[ELF-DYN] PT_DYNAMIC p_vaddr=0x");
-            {
-                char b[12];
-                hex_to_ascii(ph.p_vaddr, b);
-                kprint(b);
-                kprint(" real=0x");
-                hex_to_ascii(dyn_rt, b);
-                kprint(b);
-                kprint(" size=0x");
-                hex_to_ascii(dyn_size, b);
-                kprint(b);
-                kprint("\n");
-            }
+            /* В CactOS-policy все исполняемые ELF (и ET_EXEC PIE, и ET_DYN с
+             * фиксированной базой) маппятся ровно на свои p_vaddr — bias = 0,
+             * адреса в .dynamic уже абсолютные. */
+            dyn_vaddr = (Elf32_Dyn*)ph.p_vaddr;
         }
     }
 
     if (dyn_vaddr) {
         dynlink_ctx_init(ctx, pd, tracker);
-        uint32_t image_start = runtime_base;
-        uint32_t sym_bias    = (hdr.e_type == 3 /* ET_DYN */) ? image_start : 0;
-        kprint("[ELF-DYN] image_start=0x");
-        {
-            char b[12];
-            hex_to_ascii(image_start, b);
-            kprint(b);
-        }
-        kprint(" sym_bias=0x");
-        {
-            char b[12];
-            hex_to_ascii(sym_bias, b);
-            kprint(b);
-        }
-        kprint(" dyn=0x");
-        {
-            char b[12];
-            hex_to_ascii((uint32_t)dyn_vaddr, b);
-            kprint(b);
-        }
-        kprint("\n");
-
+        /* image_start используется только как идентификатор «который это so»
+         * в _find_loaded_*. У главного бинаря его роль играет адрес .symtab,
+         * поэтому достаточно нулей. sym_bias = 0 — st_value уже абсолютные. */
+        uint32_t image_start = 0;
+        uint32_t sym_bias    = 0;
         /* Image is mapped only in pd; task_exec switches CR3 later. Dereferencing
          * dyn_vaddr must run while CR3 == pd or we read the wrong address space. */
         uint32_t* saved_pd = get_current_pd();
@@ -336,28 +294,12 @@ void* load_elf_dynamic(char*                path,
         }
         {
             Elf32_Dyn* test = dyn_vaddr;
-            kprint("[ELF-DYN] first d_tag=0x");
-            char b[12];
-            hex_to_ascii((uint32_t)test->d_tag, b);
-            kprint(b);
-            kprint("\n");
             if (test->d_tag == 0 || test->d_tag > 100) {
                 kprint("[ELF-DYN] ERR: bad dynamic section!\n");
             }
         }
 
         switch_paging(saved_pd);
-    }
-
-    kprint("[ELF-DYN] mapped PT_LOAD range: 0x");
-    {
-        char b[12];
-        hex_to_ascii(min_load_vaddr + load_bias, b);
-        kprint(b);
-        kprint("..0x");
-        hex_to_ascii(max_load_vaddr + load_bias, b);
-        kprint(b);
-        kprint("\n");
     }
 
     return (void*)(hdr.e_entry + load_bias);

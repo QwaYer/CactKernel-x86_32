@@ -5,8 +5,7 @@
 #include "klib.h"
 #include "pci_modblob.h"
 
-// binfs root node — forwards to ext4's /bin, with optional overlay files
-// stored in the cctkfs multiboot module (paths like /bin/cactsole).
+// binfs forwards ext4 /bin with optional cctkfs overlay files.
 static vfs_node_t  binfs_root;
 static vfs_node_t *ext4_root   = 0;
 static int         binfs_ready = 0;
@@ -37,7 +36,7 @@ static int basename_only(const char *base) {
     return 1;
 }
 
-// Helper: resolve ext4's /bin directory (lazy, on first use)
+// Resolve ext4 /bin lazily.
 static vfs_node_t *_bin_dir(void) {
     if (!ext4_root || !ext4_root->ops || !ext4_root->ops->walk) return 0;
     return ext4_root->ops->walk(ext4_root, "bin");
@@ -107,7 +106,7 @@ static void binfs_register_init_bin_blobs(void) {
     }
 }
 
-// Forward walk to ext4 /bin/<name>, then cctkfs /bin/<name>
+// Resolve entry from ext4 first, then overlay.
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     vfs_node_t *bin = _bin_dir();
@@ -233,5 +232,4 @@ void binfs_init(vfs_node_t *ext4_node) {
     binfs_count_disk_bin();
 
     binfs_ready = 1;
-    klog(LOG_OK, "binfs ready — /bin available (+ cctkfs overlay)");
 }

@@ -33,16 +33,8 @@ void write_tss(int num, uint16_t ss0, uint32_t esp0) {
 
 // Initialize GDT: null, kernel code/data, user code/data, TSS
 void init_gdt() {
-    kprint("[GDT] base=0x");
-    char buf[16]; hex_to_ascii((uint32_t)&gdt, buf); kprint(buf);
-    kprint("  entries=6  limit=");
-    itoa((int)(sizeof(struct gdt_entry) * 6 - 1), buf); kprint(buf); kprint("\n");
-
     gp.limit = (sizeof(struct gdt_entry) * 6) - 1;
     gp.base  = (uint32_t)&gdt;
-
-    kprint("[GDT] 0x00 null  0x08 kernel-code  0x10 kernel-data"
-           "  0x18 user-code  0x20 user-data\n");
     
     // Null segment (required by x86)
     set_gdt_gate(0, 0, 0, 0, 0);
@@ -56,16 +48,12 @@ void init_gdt() {
     // User Data segment: base=0, 4GB limit, present, ring3, data, writable
     set_gdt_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF);
 
-    kprint("[GDT] 0x28 TSS  esp0=0x00000000  ss0=0x10\n");
     write_tss(5, 0x10, 0);  // TSS entry at index 5 → selector 0x28
 
     // Load GDT into GDTR and reload segment registers
     gdt_flush((uint32_t)&gp);
-    kprint("[GDT] GDTR loaded  segment registers reloaded\n");
     
     // Load Task Register with TSS selector
     tss_flush();
     
-    kprint("[GDT] TR loaded  kernel ring0 CS=0x08 DS=0x10  user ring3 CS=0x1B DS=0x23\n");
-    klog(LOG_OK, "GDT ready");
 }

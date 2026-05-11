@@ -372,38 +372,26 @@ int devfs_unregister(const char *name) {
 void devfs_init(void) {
     if (devfs_ready) return;
 
-    kprint("[devfs] setting up root node\n");
     memset(&devfs_root, 0, sizeof(vfs_node_t));
     strlcpy(devfs_root.name, "dev", 128);
     devfs_root.type = VFS_DIRECTORY;
     devfs_root.ops  = &root_ops;
 
-    kprint("[devfs] setting up /dev/modinfo (PCI driver list)\n");
     memset(&modinfo_node, 0, sizeof(vfs_node_t));
     strlcpy(modinfo_node.name, "modinfo", 128);
     modinfo_node.type = VFS_FILE;
     modinfo_node.ops  = &modinfo_ops;
 
-    kprint("[devfs] registering /dev/null  (char, discard)\n");
     devfs_register("null",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_null,   0);
-    kprint("[devfs] registering /dev/zero  (char, zero source)\n");
     devfs_register("zero",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_zero,   0);
-    kprint("[devfs] registering /dev/random  (char, LCG PRNG)\n");
     devfs_register("random",  DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
-    kprint("[devfs] registering /dev/urandom (char, LCG PRNG alias)\n");
     devfs_register("urandom", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
 
     blkdev_t *boot = blkdev_get_boot();
     if (boot) {
-        kprint("[devfs] registering /dev/"); kprint((char*)boot->name);
-        kprint("  (block, boot disk)\n");
         devfs_register(boot->name, DEVFS_F_BLOCK, &drv_disk, 0);
-    } else {
-        kprint("[devfs] no boot disk — skipping block device node\n");
     }
-    kprint("[devfs] registering /dev/tty  (char, keyboard/framebuffer)\n");
     devfs_register("tty", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_tty, 0);
 
     devfs_ready = 1;
-    klog(LOG_OK, "devfs ready — modinfo + null/zero/random/urandom/tty");
 }

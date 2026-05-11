@@ -122,7 +122,6 @@ fn shm_unmap_from(pd: *mut u32, va: u32, num_pages: u32) {
     }
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
     shm_ensure_init();
@@ -207,7 +206,6 @@ pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
     slot + 1
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn shm_at(shmid: i32, shmaddr: u32, flags: i32) -> u32 {
     shm_ensure_init();
@@ -285,7 +283,6 @@ pub extern "C" fn shm_at(shmid: i32, shmaddr: u32, flags: i32) -> u32 {
     va
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
     shm_ensure_init();
@@ -343,7 +340,6 @@ pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn shm_ctl(shmid: i32, cmd: i32, buf: *mut u8) -> i32 {
     shm_ensure_init();
@@ -386,7 +382,6 @@ pub extern "C" fn shm_ctl(shmid: i32, cmd: i32, buf: *mut u8) -> i32 {
     -1
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn shm_detach_all(pid: u32, page_directory: *mut u32) {
     shm_ensure_init();

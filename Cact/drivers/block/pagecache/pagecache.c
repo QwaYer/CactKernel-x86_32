@@ -140,10 +140,6 @@ static struct page *_alloc_page(void) {
 
 // Initialise page cache: zero pool, clear stats, reset LRU
 void pc_init(void) {
-    kprint("[PCACHE] pool="); char buf[8]; itoa(PC_MAX_PAGES, buf); kprint(buf);
-    kprint(" pages  hash="); itoa(PC_HASH_SIZE, buf); kprint(buf);
-    kprint(" buckets  block_max="); itoa(PC_MAX_BLOCK_SIZE, buf); kprint(buf); kprint(" B\n");
-
     memory_set(pool,       0, sizeof(pool));
     memory_set(hash_table, 0, sizeof(hash_table));
     lru_head        = 0;
@@ -152,8 +148,6 @@ void pc_init(void) {
     stat_misses     = 0;
     stat_evictions  = 0;
     stat_writebacks = 0;
-    kprint("[PCACHE] LRU list cleared  stats zeroed\n");
-    klog(LOG_OK, "page cache ready");
 }
 
 // Get a page from cache; on miss, read from disk into a new or evicted slot

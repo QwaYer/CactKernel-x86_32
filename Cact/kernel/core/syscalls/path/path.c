@@ -10,16 +10,11 @@ int sys_create(char* name) {
     char basename[128];
     vfs_node_t* parent = _resolve_parent(name, basename, 128);
     if (!parent) {
-        kprint("[DBG] sys_create: parent not found for: "); kprint(name); kprint("\n");
         return -1;
     }
     if (!basename[0]) {
-        kprint("[DBG] sys_create: empty basename\n");
         return -1;
     }
-
-    kprint("[DBG] sys_create: parent="); kprint(parent->name);
-    kprint(" basename="); kprint(basename); kprint("\n");
 
     return create_vfs(parent, basename);
 }
@@ -32,19 +27,14 @@ int sys_mkdir(char* pathname) {
     char basename[128];
     vfs_node_t* parent = _resolve_parent(pathname, basename, 128);
     if (!parent) {
-        kprint("[DBG] sys_mkdir: parent not found for: "); kprint(pathname); kprint("\n");
         return -1;
     }
     if (!basename[0]) {
-        kprint("[DBG] sys_mkdir: empty basename\n");
         return -1;
     }
 
     // Need write + exec on parent to create entries
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
-
-    kprint("[DBG] sys_mkdir: parent="); kprint(parent->name);
-    kprint(" basename="); kprint(basename); kprint("\n");
 
     return mkdir_vfs(parent, basename);
 }
@@ -57,17 +47,12 @@ int sys_rmdir(char* pathname) {
     char basename[128];
     vfs_node_t* parent = _resolve_parent(pathname, basename, 128);
     if (!parent) {
-        kprint("[DBG] sys_rmdir: parent not found for: "); kprint(pathname); kprint("\n");
         return -1;
     }
     if (!basename[0]) {
-        kprint("[DBG] sys_rmdir: empty basename\n");
         return -1;
     }
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
-
-    kprint("[DBG] sys_rmdir: parent="); kprint(parent->name);
-    kprint(" basename="); kprint(basename); kprint("\n");
 
     return rmdir_vfs(parent, basename);
 }
@@ -80,13 +65,9 @@ int sys_delete(char* name) {
     char basename[128];
     vfs_node_t* parent = _resolve_parent(name, basename, 128);
     if (!parent) {
-        kprint("[DBG] sys_delete: parent not found for: "); kprint(name); kprint("\n");
         return -1;
     }
     if (!basename[0]) return -1;
-
-    kprint("[DBG] sys_delete: parent="); kprint(parent->name);
-    kprint(" basename="); kprint(basename); kprint("\n");
 
     return delete_vfs(parent, basename);
 }
@@ -278,21 +259,15 @@ int sys_chdir(struct syscall_frame* regs) {
     // Verify the resolved path exists and is a directory
     vfs_node_t* node = vfs_walk_path(vfs_root, norm);
     if (!node) {
-        kprint("[DBG] sys_chdir: not found: "); kprint(norm); kprint("\n");
         return -1;
     }
     if (node->type != VFS_DIRECTORY) {
-        kprint("[DBG] sys_chdir: not a dir: "); kprint(norm); kprint("\n");
         return -1;
     }
 
     int i = 0;
     while (norm[i] && i < 255) { current_task->cwd[i] = norm[i]; i++; }
     current_task->cwd[i] = '\0';
-
-    kprint("[DBG] sys_chdir: pid=");
-    char tmp[16]; itoa(current_task->pid, tmp); kprint(tmp);
-    kprint(" -> "); kprint(current_task->cwd); kprint("\n");
 
     return 0;
 }
@@ -314,10 +289,6 @@ int sys_getcwd(struct syscall_frame* regs) {
 
     for (uint32_t i = 0; i < len; i++)
         buf[i] = current_task->cwd[i];
-
-    kprint("[DBG] sys_getcwd: pid=");
-    char tmp[16]; itoa(current_task->pid, tmp); kprint(tmp);
-    kprint(" cwd="); kprint(current_task->cwd); kprint("\n");
 
     return (int)buf;
 }

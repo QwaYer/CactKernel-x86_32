@@ -71,7 +71,6 @@ pub fn swap_is_enabled() -> bool {
     *G_ENABLED.get_mut() != 0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_init(
     read_fn: unsafe extern "C" fn(u32, *mut u8, u32) -> i32,
@@ -86,14 +85,6 @@ pub extern "C" fn swap_init(
         slots
     };
     *G_TOTAL_SLOTS.get_mut() = total;
-
-    kprint_str(b"[SWAP] slots=\0".as_ptr());
-    kprint_int(total as i32);
-    kprint_str(b"  space=\0".as_ptr());
-    kprint_int((total * PAGE_SIZE / 1024 / 1024) as i32);
-    kprint_str(b" MB  bitmap=\0".as_ptr());
-    kprint_int(SWAP_BITMAP_SIZE as i32);
-    kprint_str(b" B\n\0".as_ptr());
 
     {
         let bm = G_BITMAP.get_mut();
@@ -110,20 +101,14 @@ pub extern "C" fn swap_init(
     // SAFETY: boot-time init.
     unsafe { irq_spinlock_init(G_SWAP_LOCK.as_ptr() as *mut IrqSpinlock) };
     *G_ENABLED.get_mut() = 1;
-    kprint_str(b"[SWAP] clock-hand eviction  start_lba=\0".as_ptr());
-    kprint_int(SWAP_DATA_START_LBA as i32);
-    kprint_str(b"\n\0".as_ptr());
-    klog_msg(LOG_OK, b"swap ready\0".as_ptr());
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_is_enabled_ffi() -> i32 {
     *G_ENABLED.get_mut()
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_out_page(phys_addr: u32, out_slot: *mut SwapSlot) -> i32 {
     if *G_ENABLED.get_mut() == 0 {
@@ -139,7 +124,7 @@ pub extern "C" fn swap_out_page(phys_addr: u32, out_slot: *mut SwapSlot) -> i32 
 
     if slot == u32::MAX {
         G_STATS.get_mut().swap_failures += 1;
-        kprint_str(b"[SWAP] swap_out_page: no free slots!\n\0".as_ptr());
+        klog_msg(LOG_WARN, b"swap out failed: no free slots\0".as_ptr());
         return -1;
     }
 
@@ -165,7 +150,6 @@ pub extern "C" fn swap_out_page(phys_addr: u32, out_slot: *mut SwapSlot) -> i32 
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_in_page(slot: SwapSlot, phys_addr: u32) -> i32 {
     if *G_ENABLED.get_mut() == 0 {
@@ -199,7 +183,6 @@ pub extern "C" fn swap_in_page(slot: SwapSlot, phys_addr: u32) -> i32 {
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_free_slot(slot: SwapSlot) {
     if *G_ENABLED.get_mut() == 0 {
@@ -210,7 +193,6 @@ pub extern "C" fn swap_free_slot(slot: SwapSlot) {
     lock_release(G_SWAP_LOCK.as_ptr() as *mut IrqSpinlock);
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_evict_page(pd: *mut u32) -> i32 {
     if *G_ENABLED.get_mut() == 0 || pd.is_null() {
@@ -304,11 +286,10 @@ pub extern "C" fn swap_evict_page(pd: *mut u32) -> i32 {
         return 0;
     }
 
-    kprint_str(b"[SWAP] evict: no evictable page found\n\0".as_ptr());
+    klog_msg(LOG_WARN, b"swap evict failed: no candidate page\0".as_ptr());
     -1
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_handle_fault(pd: *mut u32, fault_addr: u32) -> i32 {
     if pd.is_null() {
@@ -358,13 +339,11 @@ pub extern "C" fn swap_handle_fault(pd: *mut u32, fault_addr: u32) -> i32 {
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_get_stats() -> SwapStats {
     *G_STATS.get_mut()
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_print_stats() {
     let stats = *G_STATS.get_mut();

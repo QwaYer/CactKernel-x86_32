@@ -368,7 +368,6 @@ int sys_ping_echo(struct syscall_frame* regs) {
 int sys_netcfg_set(struct syscall_frame* regs) {
     netcfg_args_t* args = (netcfg_args_t*)regs->ebx;
     if (!validate_user_ptr(args, sizeof(netcfg_args_t))) return -1;
-    klog(LOG_OK, "[NET-SYSCALL] SYS_NETCFG_SET received");
     rust_net_dhcp_lease_cfg_t lease = {
         .ip_host = args->ip_host,
         .netmask_host = args->netmask_host,
@@ -379,15 +378,9 @@ int sys_netcfg_set(struct syscall_frame* regs) {
         .t1_s = args->t1_s,
         .t2_s = args->t2_s,
     };
-    char hx[11];
-    kprint("[NET-SYSCALL] ip=");
-    hex_to_ascii(lease.ip_host, hx); kprint(hx);
-    kprint(" mask=");
-    hex_to_ascii(lease.netmask_host, hx); kprint(hx);
-    kprint(" gw=");
-    hex_to_ascii(lease.gateway_host, hx); kprint(hx);
-    kprint(" dns=");
-    hex_to_ascii(lease.dns_host, hx); kprint(hx);
-    kprint("\n");
-    return rust_net_dhcp_set_lease(&lease);
+    int rc = rust_net_dhcp_set_lease(&lease);
+    if (rc != 0) {
+        klog(LOG_WARN, "netcfg_set failed");
+    }
+    return rc;
 }

@@ -210,7 +210,6 @@ typedef struct usb_driver {
 } usb_driver_t;
 
 
-//public api
 void usb_init(void);
 
 int  usb_hc_register    (usb_hc_t    *hc);

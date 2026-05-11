@@ -26,7 +26,6 @@ fn oom_score(t: *mut TaskStruct) -> u32 {
     }
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn oom_kill() -> i32 {
     lock_acquire(&raw mut scheduler_lock as *mut IrqSpinlock);
@@ -95,13 +94,11 @@ pub extern "C" fn oom_kill() -> i32 {
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn oom_get_stats() -> OomStats {
     *G_STATS.get_mut()
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn oom_print_stats() {
     let stats = *G_STATS.get_mut();

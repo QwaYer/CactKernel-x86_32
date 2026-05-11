@@ -44,13 +44,9 @@ void pci_enable_bus_master(uint8_t bus, uint8_t dev, uint8_t fn) {
 // Probe for PCI Mechanism #1 by writing the enable bit and reading back.
 // Returns 0 if mechanism is present, 1 otherwise.
 int search_pci(void) {
-    kprint("[PCI] probing config space (addr=0xCF8 data=0xCFC)\n");
     port_dword_out(PCI_CONFIG_ADDRESS, 0x80000000);
     uint32_t readback = port_dword_in(PCI_CONFIG_ADDRESS);
-    if (readback == 0x80000000) {
-        klog(LOG_OK, "PCI config mechanism #1 present");
-        return 0;
-    }
+    if (readback == 0x80000000) return 0;
     klog(LOG_WARN, "PCI config space not responding — no PCI bus?");
     return 1;
 }

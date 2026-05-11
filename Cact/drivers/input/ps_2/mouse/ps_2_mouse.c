@@ -30,21 +30,16 @@ static uint8_t ps2_read(void) {
 
 // Initialise PS/2 auxiliary device, enable IRQ12, put mouse in 3-byte packet mode
 void ps2_mouse_init(void) {
-    kprint("[MOUSE] enabling auxiliary PS/2 device (cmd 0xA8)\n");
     ps2_wait(1); port_byte_out(0x64, 0xA8);
 
-    kprint("[MOUSE] enabling IRQ12 in controller config\n");
     ps2_wait(1); port_byte_out(0x64, 0x20);
     ps2_wait(0);
     uint8_t status = port_byte_in(0x60) | 2;   // set IRQ12 enable bit
     ps2_wait(1); port_byte_out(0x64, 0x60);
     ps2_wait(1); port_byte_out(0x60, status);
 
-    kprint("[MOUSE] sending 0xF6 (set defaults)  0xF4 (enable data reporting)\n");
     ps2_write(0xF6); ps2_read();    // Set Defaults + ACK
     ps2_write(0xF4); ps2_read();    // Enable Data Reporting + ACK
-    kprint("[MOUSE] 3-byte packet mode: btn(1B) dx(1B) dy(1B)\n");
-    klog(LOG_OK, "PS/2 mouse ready — IRQ12 active");
 }
 
 // IRQ12 handler: rebuild 3-byte packet, apply sign extension, post mouse event.

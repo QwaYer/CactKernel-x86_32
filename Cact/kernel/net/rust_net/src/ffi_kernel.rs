@@ -38,16 +38,6 @@ pub const LOG_WARN: c_int = 1;
 pub const LOG_ERROR: c_int = 2;
 pub const LOG_FAIL: c_int = 3;
 
-pub fn c_kprint(msg: &'static [u8]) {
-    // SAFETY: caller passes NUL-terminated static bytes.
-    unsafe { kprint(msg.as_ptr().cast_mut().cast()) }
-}
-
-pub fn c_kprint_hex(v: u32) {
-    // SAFETY: C kernel logger accepts plain u32 value.
-    unsafe { kprint_hex(v) }
-}
-
 pub fn mac_equal(a: &MacAddr, b: &MacAddr) -> bool {
     a.b == b.b
 }

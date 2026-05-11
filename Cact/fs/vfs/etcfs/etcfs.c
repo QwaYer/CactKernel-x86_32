@@ -4,7 +4,7 @@
 #include "memory.h"
 #include "klib.h"
 
-// Internal entry descriptor — one per file in /etc
+// In-memory /etc file entry.
 typedef struct etc_entry etc_entry_t;
 
 struct etc_entry {
@@ -30,7 +30,7 @@ static etc_entry_t *_find(const char *name) {
     return 0;
 }
 
-// Resolve ext4 /etc directory (lazy, on first use)
+// Resolve ext4 /etc directory lazily.
 static vfs_node_t *_ext4_etc_dir(void) {
     if (!ext4_root || !ext4_root->ops || !ext4_root->ops->walk) return 0;
     return ext4_root->ops->walk(ext4_root, "etc");
@@ -51,7 +51,7 @@ static int _disk_read(const char *name, char *buf, uint32_t maxsize) {
     return file->ops->read(file, 0, sz, buf);
 }
 
-// Write a file to ext4 /etc/<name> (create/mkdir /etc if needed)
+// Write ext4 /etc/<name>; create /etc if needed.
 static int _disk_write(const char *name, const char *buf, uint32_t size) {
     if (!ext4_root) return -1;
 
@@ -63,7 +63,7 @@ static int _disk_write(const char *name, const char *buf, uint32_t size) {
         if (!etc_dir) return -1;
     }
 
-    // Remove existing file before creating a new one
+    // Replace existing file atomically via delete+create.
     if (etc_dir->ops && etc_dir->ops->walk) {
         vfs_node_t *old = etc_dir->ops->walk(etc_dir, name);
         if (old && etc_dir->ops->delete)
@@ -80,7 +80,7 @@ static int _disk_write(const char *name, const char *buf, uint32_t size) {
     return file->ops->write(file, 0, size, (char*)buf);
 }
 
-// Grow entry capacity to at least 'needed' bytes (doubling strategy)
+// Ensure entry capacity using doubling growth.
 static int _ensure_cap(etc_entry_t *e, uint32_t needed) {
     if (needed <= e->cap) return 0;
     uint32_t newcap = e->cap ? e->cap * 2 : ETCFS_INIT_SIZE;
@@ -97,7 +97,7 @@ static int _ensure_cap(etc_entry_t *e, uint32_t needed) {
     return 0;
 }
 
-// VFS file ops: read/write from in-memory entry with disk writeback
+// VFS file ops backed by in-memory cache + writeback.
 static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
     etc_entry_t *e = (etc_entry_t *)node->priv;
     if (!e || !e->data) return 0;
@@ -177,7 +177,7 @@ static vfs_ops_t root_ops = {
     .delete  = _root_delete,
 };
 
-// Load all files from ext4 /etc into memory on first init
+// Load ext4 /etc files into memory cache.
 static void _load_all(void) {
     vfs_node_t *etc_dir = _ext4_etc_dir();
     if (!etc_dir) {
@@ -225,7 +225,7 @@ static void _load_all(void) {
 // Return the etcfs root VFS node (to be registered in mount table)
 vfs_node_t *etcfs_get_root(void) { return &etc_root; }
 
-// Initialise etcfs, bind to ext4 root, load files, seed users
+// Initialize etcfs and seed default entries.
 void etcfs_init(vfs_node_t *ext4_node) {
     if (etcfs_ready) return;
 

@@ -142,18 +142,14 @@ fn kill_current(fault_addr: u32, err: u32, eip: u32, cr3: &mut Cr3Guard) {
     }
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn page_fault_init() {
-    kprint_str(b"[PF] clearing stats  handlers: COW demand-paging stack-grow swap-in SEGFAULT\n\0".as_ptr());
     // SAFETY: zeroing the stats struct at boot time, no concurrency.
     unsafe {
         core::ptr::write_bytes(G_STATS.as_ptr() as *mut u8, 0, core::mem::size_of::<PfStats>());
     }
-    crate::safe::klog_msg(LOG_OK, b"page fault handler ready\0".as_ptr());
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
     let fault_addr = read_cr2_val();
@@ -350,27 +346,6 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
             }
         }
 
-        if fault_addr < 0xC0000000 && (err & PF_USER_BIT != 0) {
-            // SAFETY: pd is valid.
-            let pdi = pd_index(fault_addr) as usize;
-            let pde = unsafe { *pd.add(pdi) };
-            if pde & PAGE_PRESENT == 0 {
-                kprint_str(b"[PF] DBG: no PDE for addr=0x\0".as_ptr());
-                unsafe { kprint_hex(fault_addr); }
-                kprint_str(b"\n\0".as_ptr());
-            } else if pte.is_null() {
-                kprint_str(b"[PF] DBG: pte_get returned null for addr=0x\0".as_ptr());
-                unsafe { kprint_hex(fault_addr); }
-                kprint_str(b"\n\0".as_ptr());
-            } else {
-                kprint_str(b"[PF] DBG: PTE=0x\0".as_ptr());
-                unsafe { kprint_hex(*pte); }
-                kprint_str(b" addr=0x\0".as_ptr());
-                unsafe { kprint_hex(fault_addr); }
-                kprint_str(b"\n\0".as_ptr());
-            }
-        }
-
         G_STATS.get_mut().invalid_access += 1;
         kill_current(fault_addr, err, eip, &mut cr3_guard);
         return;
@@ -378,7 +353,6 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
     kill_current(fault_addr, err, eip, &mut cr3_guard);
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_map_demand(
     pd: *mut u32,
@@ -412,7 +386,6 @@ pub extern "C" fn vmm_map_demand(
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_map_zero(
     pd: *mut u32,
@@ -449,7 +422,6 @@ pub extern "C" fn vmm_map_zero(
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_map_cow(pd: *mut u32, virtual_addr: u32) -> i32 {
     let pte = pte_get(pd, virtual_addr);
@@ -462,7 +434,6 @@ pub extern "C" fn vmm_map_cow(pd: *mut u32, virtual_addr: u32) -> i32 {
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_is_cow_page(pd: *mut u32, virtual_addr: u32) -> i32 {
     let pte = pte_get(pd, virtual_addr);
@@ -473,7 +444,6 @@ pub extern "C" fn vmm_is_cow_page(pd: *mut u32, virtual_addr: u32) -> i32 {
     }
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_handle_cow(pd: *mut u32, virtual_addr: u32) -> i32 {
     let pte = pte_get(pd, virtual_addr);
@@ -519,7 +489,6 @@ pub extern "C" fn vmm_handle_cow(pd: *mut u32, virtual_addr: u32) -> i32 {
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_setup_user_stack(pd: *mut u32, initial_size: u32) -> u32 {
     if pd.is_null() {
@@ -552,13 +521,11 @@ pub extern "C" fn vmm_setup_user_stack(pd: *mut u32, initial_size: u32) -> u32 {
     USER_STACK_TOP
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_get_stats() -> PfStats {
     *G_STATS.get_mut()
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn pf_print_stats() {
     let mut buf = [0u8; 16];

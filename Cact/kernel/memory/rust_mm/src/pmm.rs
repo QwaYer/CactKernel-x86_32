@@ -1,6 +1,5 @@
 use crate::ffi::*;
-use crate::safe::{KStatic, lock_acquire, lock_release,
-                  kprint_str, kprint_int, kprint_hex, klog_msg};
+use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, klog_msg};
 
 static MEMORY_BITMAP: KStatic<[u8; BITMAP_SIZE as usize]> =
     KStatic::new([0u8; BITMAP_SIZE as usize]);
@@ -52,7 +51,7 @@ fn page_to_addr(idx: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
     if mmap.is_null() {
-        kprint_str(b"[PMM] pmm_init_from_mmap: NULL pointer - assuming no MMAP\n\0".as_ptr());
+        klog_msg(LOG_WARN, b"pmm mmap pointer is null; using fallback\0".as_ptr());
         return;
     }
     // SAFETY: pointer is valid C-side static storage.
@@ -72,23 +71,10 @@ pub extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
         }
         dst.entries[i] = e;
     }
-    kprint_str(b"[PMM] mmap_table copied: \0".as_ptr());
-    kprint_int(count as i32);
-    kprint_str(b" entries\n\0".as_ptr());
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn init_memory_manager() {
-    kprint_str(b"[PMM] bitmap at 0x\0".as_ptr());
-    kprint_hex(MEMORY_BITMAP.as_ptr() as u32);
-    kprint_str(b"  size=\0".as_ptr());
-    kprint_int(BITMAP_SIZE as i32);
-    kprint_str(b" B  total_pages=\0".as_ptr());
-    kprint_int(TOTAL_PAGES as i32);
-    kprint_str(b"  managed_range=0..0x\0".as_ptr());
-    kprint_hex(PCI_HOLE_START);
-    kprint_str(b"\n\0".as_ptr());
-
     unsafe { irq_spinlock_init(PAGE_LOCK.as_ptr() as *mut IrqSpinlock) };
     {
         let bm = MEMORY_BITMAP.get_mut();
@@ -101,20 +87,8 @@ pub extern "C" fn init_memory_manager() {
     let have_mmap = mmap.count > 0;
 
     if have_mmap {
-        kprint_str(b"[PMM] applying hardware MMAP (\0".as_ptr());
-        kprint_int(mmap.count as i32);
-        kprint_str(b" entries):\n\0".as_ptr());
-
         for i in 0..mmap.count as usize {
             let e = mmap.entries[i];
-
-            kprint_str(b"  [MMAP] base=0x\0".as_ptr());
-            kprint_hex(e.base);
-            kprint_str(b" len=0x\0".as_ptr());
-            kprint_hex(e.len);
-            kprint_str(b" type=\0".as_ptr());
-            kprint_int(e.ty as i32);
-            kprint_str(b"\n\0".as_ptr());
 
             if e.ty != MB2_MMAP_TYPE_AVAILABLE { continue; }
             if e.len == 0 { continue; }
@@ -134,7 +108,7 @@ pub extern "C" fn init_memory_manager() {
             }
         }
     } else {
-        kprint_str(b"[PMM] no MMAP - assuming all RAM above 16 MB is available\n\0".as_ptr());
+        klog_msg(LOG_WARN, b"pmm has no mmap; assuming RAM above reserved area\0".as_ptr());
         let first_free = addr_to_page(RESERVED_END);
         for pg in first_free..TOTAL_PAGES {
             bitmap_clear(pg);
@@ -142,12 +116,6 @@ pub extern "C" fn init_memory_manager() {
     }
 
     let reserved_pages = addr_to_page(RESERVED_END); // = 32 MB / 4096 = 8192
-    kprint_str(b"[PMM] hard-reserving pages 0..\0".as_ptr());
-    kprint_int(reserved_pages as i32);
-    kprint_str(b" (0x00000000..0x\0".as_ptr());
-    kprint_hex(RESERVED_END);
-    kprint_str(b") - BIOS + kernel + tables + heap\n\0".as_ptr());
-
     for pg in 0..reserved_pages {
         bitmap_set(pg);
     }
@@ -158,15 +126,6 @@ pub extern "C" fn init_memory_manager() {
     let heap_end_addr = HEAP_START.saturating_add(HEAP_SIZE).min(PCI_HOLE_START);
     let heap_end_page = addr_to_page(heap_end_addr);
     if heap_start_page < heap_end_page {
-        kprint_str(b"[PMM] reserving heap pages \0".as_ptr());
-        kprint_int(heap_start_page as i32);
-        kprint_str(b"..\0".as_ptr());
-        kprint_int((heap_end_page - 1) as i32);
-        kprint_str(b" (0x\0".as_ptr());
-        kprint_hex(HEAP_START);
-        kprint_str(b"..0x\0".as_ptr());
-        kprint_hex(heap_end_addr);
-        kprint_str(b")\n\0".as_ptr());
         for pg in heap_start_page..heap_end_page {
             bitmap_set(pg);
         }
@@ -180,22 +139,6 @@ pub extern "C" fn init_memory_manager() {
     };
     *FIRST_AVAILABLE_PAGE.get_mut() = initial_hint;
 
-    let mut free_count: u32 = 0;
-    {
-        let bm = MEMORY_BITMAP.get_mut();
-        for pg in 0..TOTAL_PAGES as usize {
-            if bm[pg / 8] & (1 << (pg % 8)) == 0 {
-                free_count += 1;
-            }
-        }
-    }
-
-    kprint_str(b"[PMM] free pages: \0".as_ptr());
-    kprint_int(free_count as i32);
-    kprint_str(b"  (\0".as_ptr());
-    kprint_int((free_count / 256) as i32); // free_count * 4096 / 1024 / 1024
-    kprint_str(b" MB)\n\0".as_ptr());
-    klog_msg(LOG_OK, b"PMM ready\0".as_ptr());
 }
 
 #[unsafe(no_mangle)]

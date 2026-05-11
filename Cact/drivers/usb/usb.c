@@ -238,7 +238,6 @@ void usb_init(void) {
 }
 
 
-//public api
 int usb_register_device(usb_device_t *dev) {
     if (!dev) return -1;
     dev->next   = device_list;
@@ -249,18 +248,6 @@ int usb_register_device(usb_device_t *dev) {
     return 0;
 }
 
-//debug
 void usb_dump_devices(void) {
-    kprint("[USB] Devices (");
-    kprint_hex(device_count);
-    kprint("):\n");
-    for (usb_device_t *d = device_list; d; d = d->next) {
-        kprint("  addr="); kprint_hex(d->address);
-        kprint(" VID=");   kprint_hex(d->dev_desc.idVendor);
-        kprint(" PID=");   kprint_hex(d->dev_desc.idProduct);
-        kprint(" CC=");    kprint_hex(d->class_code);
-        kprint("/");       kprint_hex(d->subclass);
-        kprint("/");       kprint_hex(d->protocol);
-        kprint("\n");
-    }
+    (void)device_count;
 }

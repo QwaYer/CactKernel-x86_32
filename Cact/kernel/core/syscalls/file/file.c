@@ -14,17 +14,10 @@ int sys_stat(struct syscall_frame* regs) {
 
     struct vfs_node* node = _resolve_path(path);
     if (!node) {
-        kprint("[DBG] sys_stat: not found: "); kprint(path); kprint("\n");
         return -1;
     }
 
     _fill_stat(node, ubuf);
-
-    kprint("[DBG] sys_stat: "); kprint(path);
-    kprint(" type=");
-    char tmp[16]; itoa((int)node->type, tmp); kprint(tmp);
-    kprint(" size="); itoa((int)node->size, tmp); kprint(tmp);
-    kprint("\n");
 
     return 0;
 }
@@ -40,18 +33,10 @@ int sys_fstat(struct syscall_frame* regs) {
 
     struct vfs_node* node = current_task->fds->fd_table[fd];
     if (!node) {
-        kprint("[DBG] sys_fstat: bad fd=");
-        char tmp[16]; itoa(fd, tmp); kprint(tmp); kprint("\n");
         return -1;
     }
 
     _fill_stat(node, ubuf);
-
-    kprint("[DBG] sys_fstat: fd=");
-    char tmp[16]; itoa(fd, tmp); kprint(tmp);
-    kprint(" type="); itoa((int)node->type, tmp); kprint(tmp);
-    kprint(" size="); itoa((int)node->size, tmp); kprint(tmp);
-    kprint("\n");
 
     return 0;
 }

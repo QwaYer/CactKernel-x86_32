@@ -1,5 +1,5 @@
 use crate::ffi::*;
-use crate::safe::{kprint_str, kprint_hex, kprint_int, klog_msg};
+use crate::safe::kprint_str;
 use crate::pmm::{kalloc, kfree_page};
 
 pub(crate) const PD_KERNEL_ENTRIES: usize = (PCI_HOLE_START / (PAGE_SIZE * 1024)) as usize;
@@ -36,15 +36,6 @@ pub extern "C" fn vmm_sync_kernel_mmio_mappings(pd: *mut u32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn init_paging() {
-    kprint_str(b"[PAGING] page_directory at 0x\0".as_ptr());
-    let pd_addr = unsafe { page_directory.0.as_ptr() as u32 };
-    kprint_hex(pd_addr);
-    kprint_str(b"\n[PAGING] PAGE_TABLES  at 0x\0".as_ptr());
-    let pt_addr = unsafe { PAGE_TABLES.0.as_ptr() as u32 };
-    kprint_hex(pt_addr);
-    kprint_str(b"  (4 MB BSS)\n\0".as_ptr());
-    kprint_str(b"[PAGING] identity-mapping full 4 GB (1024 page tables x 1024 pages)\n\0".as_ptr());
-
     unsafe {
         for pt_idx in 0..PD_TOTAL {
             let pt = &mut PAGE_TABLES.0[pt_idx];
@@ -70,27 +61,10 @@ pub extern "C" fn init_paging() {
         }
     }
 
-    kprint_str(b"[PAGING] loading CR3=0x\0".as_ptr());
-    kprint_hex(unsafe { page_directory.0.as_ptr() as u32 });
-    kprint_str(b"  setting CR0.PG\n\0".as_ptr());
-
     unsafe {
         load_page_directory(page_directory.0.as_mut_ptr());
         enable_paging();
     }
-
-    kprint_str(b"[PAGING] paging enabled - 4 GB identity map active\n\0".as_ptr());
-    kprint_str(b"[PAGING] RAM  (P|RW)        entries: \0".as_ptr());
-    kprint_int(PD_KERNEL_ENTRIES as i32);
-    kprint_str(b" (0x00000000 .. 0x\0".as_ptr());
-    kprint_hex(PCI_HOLE_START);
-    kprint_str(b")\n\0".as_ptr());
-    kprint_str(b"[PAGING] MMIO (P|RW|PCD|PWT) entries: \0".as_ptr());
-    kprint_int((PD_TOTAL - PD_KERNEL_ENTRIES) as i32);
-    kprint_str(b" (0x\0".as_ptr());
-    kprint_hex(PCI_HOLE_START);
-    kprint_str(b" .. 0xFFFFFFFF)\n\0".as_ptr());
-    klog_msg(LOG_OK, b"paging enabled\0".as_ptr());
 }
 
 

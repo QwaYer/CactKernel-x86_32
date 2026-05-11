@@ -52,7 +52,7 @@ DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xHCI
 DRIVER_USB_HID_DIR   = Cact/drivers/usb/hid
 DRIVER_USB_HUB_DIR   = Cact/drivers/usb/hub
 FS_VFS_DIR       = Cact/fs/vfs
-FS_PIPE_DIR      = Cact/pipe
+FS_PIPE_DIR      = Cact/kernel/pipe
 FS_DEVFS_DIR     = Cact/fs/vfs/devfs
 FS_PG_DIR        = Cact/drivers/block/pagecache
 FS_EXT4_DIR      = Cact/fs/ext4
@@ -62,6 +62,7 @@ FS_ETCFS_DIR     = Cact/fs/vfs/etcfs
 FS_TMPFS_DIR     = Cact/fs/vfs/tmpfs
 FS_BINFS_DIR     = Cact/fs/vfs/binfs
 FS_LIBFS_DIR     = Cact/fs/vfs/libfs
+FS_VARFS_DIR     = Cact/fs/vfs/varfs
 NET_DIR          = Cact/kernel/net
 NET_ARP_DIR      = Cact/kernel/net/arp
 NET_ETH_DIR      = Cact/kernel/net/ethernet
@@ -120,6 +121,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_TMPFS_DIR) \
          -I$(FS_BINFS_DIR) \
          -I$(FS_LIBFS_DIR) \
+         -I$(FS_VARFS_DIR) \
          -I$(NET_DIR) \
          -I$(NET_ARP_DIR) \
          -I$(NET_ETH_DIR) \
@@ -174,6 +176,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/tmpfs.o \
       $(BUILD_DIR)/binfs.o \
       $(BUILD_DIR)/libfs.o \
+      $(BUILD_DIR)/varfs.o \
       $(BUILD_DIR)/pci.o \
       $(BUILD_DIR)/pci_enum.o \
       $(BUILD_DIR)/pci_driver.o \
@@ -445,6 +448,10 @@ $(BUILD_DIR)/binfs.o: $(FS_BINFS_DIR)/binfs.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/libfs.o: $(FS_LIBFS_DIR)/libfs.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/varfs.o: $(FS_VARFS_DIR)/varfs.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

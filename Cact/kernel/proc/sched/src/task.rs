@@ -1,6 +1,6 @@
 use core::ptr;
 use core::ffi::c_void;
-use crate::ffi::{self, ContextFrame, ProcPageTracker, DynCtx, MmapTable, PAGE_PRESENT, PAGE_RW, PAGE_USER, PAGE_SIZE, LOG_OK, LOG_FAIL};
+use crate::ffi::{self, ContextFrame, ProcPageTracker, DynCtx, MmapTable, PAGE_PRESENT, PAGE_RW, PAGE_USER, PAGE_SIZE, LOG_FAIL};
 use crate::sync::irq_spinlock_t;
 use crate::mlfq;
 use crate::timer_wheel;
@@ -37,6 +37,7 @@ pub const KERNEL_BASE: u32 = 0xC000_0000;
 pub const EXEC_MAX_ARGS:   usize = 256;
 pub const EXEC_MAX_ENVS:   usize = 256;
 pub const EXEC_MAX_STRLEN: usize = 4096;
+const TRACE_PROC_LOGS: bool = false;
 
 /// User-mode stack: `USER_STACK_TOP` is the first byte *above* the mapping (4 KiB pages).
 pub const USER_STACK_PAGES: u32 = 4;
@@ -206,7 +207,6 @@ fn task_zero_init(t: *mut TaskStruct) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn task_init() {
-    ffi::kprint(b"[SCHED] initializing MLFQ queues (4 levels)\n\0".as_ptr());
     current_task    = ptr::null_mut();
     task_list_head  = ptr::null_mut();
     task_list_tail  = ptr::null_mut();
@@ -216,13 +216,10 @@ pub unsafe extern "C" fn task_init() {
     mlfq::mlfq_init();
     timer_wheel::timer_wheel_global_init();
 
-    ffi::klog(LOG_OK, b"scheduler queues ready\0".as_ptr());
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn init_scheduler() -> i32 {
-    ffi::kprint(b"[SCHED] allocating idle task (pid=0)\n\0".as_ptr());
-
     let idle = ffi::kmalloc(core::mem::size_of::<TaskStruct>()) as *mut TaskStruct;
     if idle.is_null() {
         ffi::klog(LOG_FAIL, b"cannot allocate idle task\0".as_ptr());
@@ -242,7 +239,6 @@ pub unsafe extern "C" fn init_scheduler() -> i32 {
     task_list_head  = idle;
     task_list_tail  = idle;
 
-    ffi::klog(LOG_OK, b"scheduler ready: idle(0)\0".as_ptr());
     0
 }
 
@@ -388,23 +384,23 @@ pub unsafe extern "C" fn create_task_with_entry(
                      core::mem::size_of::<ProcPageTracker>());
     (*t).page_directory = pd;
 
-    // Исправить EIP на стеке (offset 5 от esp: ebx,esi,edi,ebp,trampoline,eip)
+    // Patch EIP slot in switch frame (offset 5 from esp).
     let stk = (*t).esp as *mut u32;
     *stk.add(5) = entry as u32;
 
-    // Маппинг user-стека в page directory
+    // Map user stack pages into the new page directory.
     map_user_stack_in_pd(pd, &*t);
 
-    // Вычислить brk
+    // Compute initial brk from highest mapped VA.
     let highest = calc_highest_mapped_va(pd);
     (*t).brk_start   = highest;
     (*t).brk_current = highest;
 
-    // Пустые args на user stack
+    // Build an empty argv/envp frame on user stack.
     let ustack_top = (*t).ustack_virt + USER_STACK_BYTES;
     let mut sp = ustack_top - 4;
     push_empty_args(&*t, &mut sp);
-    // Исправить useresp на стеке (offset 8)
+    // Patch useresp in switch frame (offset 8).
     *stk.add(8) = sp;
 
     task_setup_sigreturn(t);
@@ -443,8 +439,31 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     if t.is_null() { ffi::vmm_free_address_space(pd); return ptr::null_mut(); }
 
     ffi::proc_tracker_init(&raw mut (*t).mm);
-    let entry = ffi::load_elf(path, pd, &raw mut (*t).mm);
+
+    /* init может быть динамическим — например cgoct, слинкованный против libc.so.
+     * Используем ту же логику, что и task_exec: проверяем PT_DYNAMIC / ET_DYN и
+     * подключаем dynlink-контекст. Без этого PLT/GOT останутся неинициализированными
+     * и первый же вызов libc-функции улетит на 0x0. */
+    let mut new_dyn_ctx: *mut DynCtx = ptr::null_mut();
+    let is_dynamic = ffi::elf_is_dynamic(path) != 0;
+    let entry = if is_dynamic {
+        new_dyn_ctx = ffi::dynlink_ctx_create(pd, &raw mut (*t).mm);
+        if new_dyn_ctx.is_null() {
+            ffi::kprint(b"[INIT] dynlink_ctx_create failed\n\0".as_ptr());
+            ffi::kfree_page((*t).stack_base);
+            free_user_stack_pages(&mut *t);
+            ffi::kfree_heap(t as *mut c_void);
+            ffi::vmm_free_address_space(pd);
+            return ptr::null_mut();
+        }
+        ffi::load_elf_dynamic(path, pd, &raw mut (*t).mm, new_dyn_ctx)
+    } else {
+        ffi::load_elf(path, pd, &raw mut (*t).mm)
+    };
     if entry.is_null() {
+        if !new_dyn_ctx.is_null() {
+            ffi::dynlink_ctx_destroy(new_dyn_ctx);
+        }
         ffi::kfree_page((*t).stack_base);
         free_user_stack_pages(&mut *t);
         ffi::kfree_heap(t as *mut c_void);
@@ -453,6 +472,7 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     }
 
     (*t).page_directory = pd;
+    (*t).dyn_ctx        = new_dyn_ctx;
 
     let stk = (*t).esp as *mut u32;
     *stk.add(5) = entry as u32;
@@ -526,7 +546,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         ustack_pages[i] = p;
     }
 
-    // Скопировать всю структуру parent → child
+    // Clone parent task struct as fork baseline.
     ffi::memory_copy(child as *mut c_void, parent as *const c_void,
                      core::mem::size_of::<TaskStruct>());
 
@@ -585,12 +605,12 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     ffi::mmap_table_init(child_mmap);
     (*child).mmap_table = child_mmap;
 
-    // Клонировать адресное пространство (COW)
+    // Clone address space with COW mappings.
     if !(*parent).page_directory.is_null() {
         ffi::vmm_fork_address_space((*parent).page_directory, child_pd);
     }
 
-    // Клонировать mmap-таблицу (COW для private, share для shared)
+    // Clone mmap table (private COW, shared passthrough).
     ffi::mmap_table_clone(
         (*parent).mmap_table,
         (*child).mmap_table,
@@ -598,7 +618,18 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         child_pd,
     );
 
-    // Маппинг и копирование user stack (несколько физстраниц)
+    // Fork inherits the already-loaded dynamic objects. GOT[1] stores a
+    // user-space .dynsym address as the lazy resolver cookie, so a shallow
+    // dyn_ctx clone is enough until the child execs or exits.
+    if !(*parent).dyn_ctx.is_null() {
+        (*child).dyn_ctx = ffi::dynlink_ctx_clone(
+            (*parent).dyn_ctx,
+            child_pd,
+            &raw mut (*child).mm,
+        );
+    }
+
+    // Map and copy user stack pages.
     for i in 0..USER_STACK_PAGES as usize {
         let vaddr = (*child).ustack_virt.wrapping_add((i as u32).wrapping_mul(PAGE_SIZE));
         let cphys = ustack_phys_page(&*child, i) as u32;
@@ -610,20 +641,20 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         );
     }
 
-    // Инкрементировать refcount файловых дескрипторов
+    // Bump VFS refs for inherited file descriptors.
     for i in 0..MAX_FD {
         if !(*(*child).fds).fd_table[i].is_null() {
             ffi::open_vfs((*(*child).fds).fd_table[i]);
         }
     }
 
-    // Сбросить SHM-вложения (дочерний процесс не наследует)
+    // Child does not inherit SHM attachments.
     for i in 0..TASK_SHM_MAX {
         (*child).shm_attachments[i].shm_id    = 0;
         (*child).shm_attachments[i].shm_vaddr = 0;
     }
 
-    // Настроить kernel stack child для возврата из fork
+    // Build child kernel stack for fork return path.
     let stack_top_ptr = (kstack as usize + KERNEL_STACK_SIZE) as *mut u32;
     let mut esp_ptr = stack_top_ptr;
 
@@ -661,7 +692,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     task_list_add(child);
     mlfq::mlfq_enqueue_locked(child, (*child).priority);
 
-    {
+    if TRACE_PROC_LOGS {
         let mut buf = [0u8; 12];
         ffi::kprint(b"[FORK] parent=\0".as_ptr());
         ffi::itoa((*parent).pid as i32, buf.as_mut_ptr());
@@ -702,7 +733,7 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
     let t = current_task;
     if t.is_null() { return; }
 
-    {
+    if TRACE_PROC_LOGS {
         let mut buf = [0u8; 12];
         ffi::kprint(b"[EXIT] pid=\0".as_ptr());
         ffi::itoa((*t).pid as i32, buf.as_mut_ptr());
@@ -752,7 +783,7 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
     let cur = current_task;
     if cur.is_null() { return -1; }
 
-    {
+    if TRACE_PROC_LOGS {
         let mut buf = [0u8; 12];
         ffi::kprint(b"[WAIT] pid=\0".as_ptr());
         ffi::itoa((*cur).pid as i32, buf.as_mut_ptr());
@@ -782,7 +813,7 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
                     let to_free = t;
                     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-                    {
+                    if TRACE_PROC_LOGS {
                         let mut buf = [0u8; 12];
                         ffi::kprint(b"[WAIT] reaped pid=\0".as_ptr());
                         ffi::itoa(child_pid as i32, buf.as_mut_ptr());
@@ -806,12 +837,16 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
         }
 
         if !found_child {
-            ffi::kprint(b"[WAIT] no children found!\n\0".as_ptr());
+            if TRACE_PROC_LOGS {
+                ffi::kprint(b"[WAIT] no children found!\n\0".as_ptr());
+            }
             crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
         }
 
-        ffi::kprint(b"[WAIT] blocking, child alive\n\0".as_ptr());
+        if TRACE_PROC_LOGS {
+            ffi::kprint(b"[WAIT] blocking, child alive\n\0".as_ptr());
+        }
         (*cur).state = TaskState::Waiting;
         crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
         crate::mlfq::schedule();
@@ -854,7 +889,7 @@ pub unsafe extern "C" fn task_exec(
 
     crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
-    // Выгрузить динамический линкер
+    // Drop previous dynamic linker context.
     if !(*t).dyn_ctx.is_null() {
         ffi::dynlink_ctx_destroy((*t).dyn_ctx);
         (*t).dyn_ctx = ptr::null_mut();
@@ -889,7 +924,6 @@ pub unsafe extern "C" fn task_exec(
         ffi::load_elf(path, new_pd, &raw mut (*t).mm)
     };
     if entry.is_null() {
-        ffi::kprint(b"[EXEC] load_elf failed (null entry), aborting exec\n\0".as_ptr());
         if !new_dyn_ctx.is_null() {
             ffi::dynlink_ctx_destroy(new_dyn_ctx);
         }
@@ -900,7 +934,7 @@ pub unsafe extern "C" fn task_exec(
         return -1;
     }
 
-    {
+    if TRACE_PROC_LOGS {
         let mut hbuf = [0u8; 12];
         ffi::kprint(b"[EXEC] load_elf entry=0x\0".as_ptr());
         ffi::hex_to_ascii(entry as u32, hbuf.as_mut_ptr());
@@ -944,7 +978,7 @@ pub unsafe extern "C" fn task_exec(
 
     crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
-    /* Пересоздаём user stack на новых физстраницах для exec (чистый процессный стек). */
+    /* Recreate user stack on fresh pages for exec. */
     (*t).ustack_phys = new_ustack_pages[0];
     (*t).ustack_phys_extra = [new_ustack_pages[1], new_ustack_pages[2], new_ustack_pages[3]];
     map_user_stack_in_pd(new_pd, &*t);
@@ -1057,7 +1091,7 @@ pub unsafe extern "C" fn task_exec(
         }
     }
 
-    /* После shm/mmap и cloexec снова фиксируем стек с RW (USER|P без W даёт #PF err=0x07). */
+    /* Reapply RW stack mapping after shm/mmap/cloexec updates. */
     map_user_stack_in_pd(new_pd, &*t);
 
     let old_pd = (*t).page_directory;
@@ -1082,7 +1116,7 @@ pub unsafe extern "C" fn task_exec(
         );
     }
 
-    {
+    if TRACE_PROC_LOGS {
         let mut hbuf = [0u8; 12];
         let ent = entry as u32;
         let pdi = (ent as usize) >> 22;
@@ -1109,18 +1143,20 @@ pub unsafe extern "C" fn task_exec(
         }
     }
 
-    ffi::kprint(b"[EXEC] committed: new AS; iretd next\n\0".as_ptr());
+    if TRACE_PROC_LOGS {
+        ffi::kprint(b"[EXEC] committed: new AS; iretd next\n\0".as_ptr());
+    }
 
     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-    /* CR3 = new_pd. Перед iretd снова загружаем тот же PD в asm. */
+    /* CR3=new_pd; reload explicitly before iretd. */
     ffi::terminal_fg_pid = (*t).pid;
 
     let pd_val = new_pd as u32;
     let entry_u = entry as u32;
     let sp_u = sp;
 
-    {
+    if TRACE_PROC_LOGS {
         let mut hbuf = [0u8; 12];
         let ustack_hi = (*t).ustack_virt.wrapping_add(USER_STACK_BYTES);
         ffi::kprint(b"[EXEC] iretd esp=0x\0".as_ptr());
@@ -1154,9 +1190,8 @@ pub unsafe extern "C" fn task_exec(
     }
 
     unsafe {
-        // (NT/IOPL и др.) — иначе iretd может вести себя как nested-task return (#GP).
-        // entry_u и sp_u — только в ecx/edx: иначе LLVM кладёт entry в eax, а mov eax,0x23
-        // затирает его и на стек вместо EIP попадает 0x23 (селектор данных → #PF с eip=0x23).
+        // Force clean segment state before iretd.
+        // Keep entry/sp out of eax because eax is overwritten with selector 0x23.
         core::arch::asm!(
             "mov cr3, ebx",
             "mov eax, 0x23",

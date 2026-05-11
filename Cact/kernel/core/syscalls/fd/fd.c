@@ -22,18 +22,15 @@ int sys_open(char* name, int flags) {
     vfs_node_t* node = _resolve_path(name);
     if (!node) {
         if ((flags & OPEN_CREAT) == 0) {
-            kprint("[DBG] sys_open: not found: "); kprint(name); kprint("\n");
             return -1;
         }
 
         if (sys_create(name) != 0) {
-            kprint("[DBG] sys_open: create failed: "); kprint(name); kprint("\n");
             return -1;
         }
 
         node = _resolve_path(name);
         if (!node) {
-            kprint("[DBG] sys_open: created but unresolved: "); kprint(name); kprint("\n");
             return -1;
         }
     }
@@ -70,9 +67,6 @@ int sys_open(char* name, int flags) {
                 }
             }
 
-            kprint("[DBG] sys_open: fd=");
-            char tmp[16]; itoa(i, tmp); kprint(tmp);
-            kprint(" path="); kprint(name); kprint("\n");
             return i;
         }
     }

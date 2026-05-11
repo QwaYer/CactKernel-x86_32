@@ -27,9 +27,9 @@ void irq_spinlock_release(irq_spinlock_t* lock);
 
 typedef struct {
     volatile int        locked;
-    spinlock_t          guard;                          /* защищает поля самого мьютекса */
-    struct task_struct* owner;                          /* задача, держащая мьютекс      */
-    struct task_struct* waiters[MUTEX_WAIT_QUEUE_MAX];  /* очередь ожидающих (FIFO)      */
+    spinlock_t          guard;                          /* protects mutex metadata */
+    struct task_struct* owner;                          /* current lock owner */
+    struct task_struct* waiters[MUTEX_WAIT_QUEUE_MAX];  /* FIFO waiter queue */
     uint32_t            waiter_count;
 } mutex_t;
 

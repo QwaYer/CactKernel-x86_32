@@ -19,19 +19,6 @@ int sys_getppid(void) {
 
 // fork() — create a child process that is a copy of the caller
 int sys_fork(struct syscall_frame* regs) {
-    char hbuf[12];
-    kprint("[SYSFORK] eip=0x");
-    hex_to_ascii(regs->eip, hbuf); kprint(hbuf);
-    kprint(" uesp=0x");
-    hex_to_ascii(regs->useresp, hbuf); kprint(hbuf);
-    kprint(" cs=0x");
-    hex_to_ascii(regs->cs, hbuf); kprint(hbuf);
-    kprint(" ss=0x");
-    hex_to_ascii(regs->ss, hbuf); kprint(hbuf);
-    kprint(" eflags=0x");
-    hex_to_ascii(regs->eflags, hbuf); kprint(hbuf);
-    kprint("\n");
-
     // Copy the syscall frame into a context_frame for task_fork
     struct context_frame cf;
     cf.es        = regs->es;        cf.ds       = regs->ds;
@@ -44,12 +31,8 @@ int sys_fork(struct syscall_frame* regs) {
     cf.useresp   = regs->useresp;   cf.ss       = regs->ss;
     struct task_struct* child = task_fork(&cf);
     if (!child) {
-        kprint("[SYSFORK] task_fork returned NULL!\n");
         return -1;
     }
-    kprint("[SYSFORK] ok pid=");
-    itoa((int)child->pid, hbuf); kprint(hbuf);
-    kprint("\n");
     return (int)child->pid;   // child sees 0, parent sees child PID
 }
 

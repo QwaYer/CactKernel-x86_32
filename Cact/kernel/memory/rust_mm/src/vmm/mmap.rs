@@ -109,7 +109,6 @@ fn alloc_region_slot(tbl: *mut MmapTable) -> *mut MmapRegion {
     core::ptr::null_mut()
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn mmap_table_init(tbl: *mut MmapTable) {
     if tbl.is_null() {
@@ -125,7 +124,6 @@ pub extern "C" fn mmap_table_init(tbl: *mut MmapTable) {
     }
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn mmap_find_region(tbl: *mut MmapTable, addr: u32) -> *mut MmapRegion {
     if tbl.is_null() {
@@ -144,7 +142,6 @@ pub extern "C" fn mmap_find_region(tbl: *mut MmapTable, addr: u32) -> *mut MmapR
     core::ptr::null_mut()
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn do_mmap(
     pd: *mut u32,
@@ -238,7 +235,6 @@ pub extern "C" fn do_mmap(
     va as *mut u8
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn do_munmap(
     pd: *mut u32,
@@ -318,7 +314,6 @@ pub extern "C" fn do_munmap(
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn do_mprotect(
     pd: *mut u32,
@@ -370,7 +365,6 @@ pub extern "C" fn do_mprotect(
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn mmap_handle_fault(
     pd: *mut u32,
@@ -431,7 +425,6 @@ pub extern "C" fn mmap_handle_fault(
     0
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn mmap_table_clone(
     src: *mut MmapTable,
@@ -553,7 +546,6 @@ pub extern "C" fn mmap_table_clone(
     }
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn mmap_table_free(tbl: *mut MmapTable, pd: *mut u32) {
     if tbl.is_null() || pd.is_null() {
@@ -569,7 +561,6 @@ pub extern "C" fn mmap_table_free(tbl: *mut MmapTable, pd: *mut u32) {
     }
 }
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn mmap_print_regions(tbl: *const MmapTable) {
     if tbl.is_null() {

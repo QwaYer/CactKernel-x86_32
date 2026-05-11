@@ -5,6 +5,7 @@
 #include "tmpfs.h"
 #include "binfs.h"
 #include "libfs.h"
+#include "varfs.h"
 #include "vfs.h"
 #include "ext4.h"
 #include "memory.h"
@@ -19,16 +20,15 @@ static vfs_node_t      mntfs_root;
 static int             mntfs_ready = 0;
 static char            boot_devname[32];   // name of the boot block device
 
-/* No blkdev or no ext4: still expose /bin from cctkfs (binfs overlay), RAM etc,
- * dev/proc/tmp so init can start without loading AHCI/IDE kmod. */
+/* Fallback layout when no boot disk/ext4 is available. */
 static void mntfs_setup_nodisk(void) {
-    kprint("[mntfs] no disk-backed root — RAM etc, cctkfs /bin, dev/proc/tmp\n");
     devfs_init();
     procfs_init();
     tmpfs_init();
     etcfs_init(0);
     binfs_init(0);
     libfs_init(0);
+    varfs_init(0);
 
     extern int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target);
     vfs_mount(vfs_root, "bin",  binfs_get_root());
@@ -37,8 +37,7 @@ static void mntfs_setup_nodisk(void) {
     vfs_mount(vfs_root, "proc", procfs_get_root());
     vfs_mount(vfs_root, "tmp",  tmpfs_get_root());
     vfs_mount(vfs_root, "etc",  etcfs_get_root());
-    kprint("[mntfs] /bin /lib /dev /proc /tmp /etc at VFS root (nodisk)\n");
-    klog(LOG_OK, "mntfs ready — nodisk (cctkfs userland)");
+    vfs_mount(vfs_root, "var",  varfs_get_root());
 }
 
 // Find a mount point by full path
@@ -55,7 +54,7 @@ static disk_entry_t *_find_disk(const char *devname) {
     return 0;
 }
 
-// Build the sys/ prefix for a disk: "nvme0/sys/"
+// Build per-disk sys prefix ("<disk>/sys/").
 static int _sys_pfx(disk_entry_t *d, char *pfx) {
     strlcpy(pfx, d->devname, MNTFS_NAME_LEN);
     int l = 0; while (pfx[l]) l++;
@@ -64,7 +63,7 @@ static int _sys_pfx(disk_entry_t *d, char *pfx) {
     return l;
 }
 
-// Append a device name to /etc/mounts (persistent mount list)
+// Append device name to /etc/mounts.
 static void _mounts_add(const char *devname) {
     char cur[1024]; memset(cur, 0, sizeof(cur));
     int len = etcfs_read("mounts", cur, sizeof(cur) - 64);
@@ -81,7 +80,7 @@ static void _mounts_add(const char *devname) {
     etcfs_write("mounts", cur, (uint32_t)p);
 }
 
-// Remove a device name from /etc/mounts
+// Remove device name from /etc/mounts.
 static void _mounts_remove(const char *devname) {
     char cur[1024]; memset(cur, 0, sizeof(cur));
     int len = etcfs_read("mounts", cur, sizeof(cur) - 1);
@@ -105,7 +104,7 @@ static void _mounts_remove(const char *devname) {
     etcfs_write("mounts", out, (uint32_t)oi);
 }
 
-// Mount all devices listed in /etc/mounts
+// Mount devices listed in /etc/mounts.
 static void _mounts_mount_all(void) {
     char buf[1024]; memset(buf, 0, sizeof(buf));
     int len = etcfs_read("mounts", buf, sizeof(buf) - 1);
@@ -388,11 +387,10 @@ void mntfs_list(void) {
     if (!any) kprint("  (none)\n");
 }
 
-// One-time initialisation: mount boot disk, set up VFS root, mount all subsystems
+// Initialize mntfs, boot disk, and subsystem mounts.
 void mntfs_init(void) {
     if (mntfs_ready) return;
 
-    kprint("[mntfs] setting up VFS root node '/'\n");
     memset(&mntfs_root,0,sizeof(vfs_node_t));
     strlcpy(mntfs_root.name,"/",128);
     mntfs_root.type=VFS_DIRECTORY;
@@ -400,7 +398,6 @@ void mntfs_init(void) {
     vfs_root=&mntfs_root;
     mntfs_ready=1;
 
-    kprint("[mntfs] querying boot block device\n");
     blkdev_t *boot = blkdev_get_boot();
     if (!boot) {
         kprint("[mntfs] WARNING: no boot block device (load ahci/nvme kmod for disk)\n");
@@ -410,9 +407,6 @@ void mntfs_init(void) {
     }
 
     strlcpy(boot_devname, boot->name, 32);
-    kprint("[mntfs] boot device: "); kprint(boot_devname); kprint("\n");
-
-    kprint("[mntfs] mounting ext4 on boot device (disk index 0)\n");
     vfs_node_t *ext4 = ext4_mount_disk(0);
     if (!ext4) {
         kprint("[mntfs] WARNING: no ext4 on "); kprint(boot_devname); kprint("\n");
@@ -420,59 +414,56 @@ void mntfs_init(void) {
         mntfs_setup_nodisk();
         return;
     }
-    kprint("[mntfs] ext4 mounted — registering as disk '"); kprint(boot_devname); kprint("'\n");
-
     mntfs_mount_disk(boot_devname, ext4, 0);
     disk_entry_t *boot_disk = _find_disk(boot_devname);
     boot_disk->has_sys = 1;   // master disk gets sys/ virtual directory
 
-    // Mount all subsystems on the master disk's sys/ prefix
-    kprint("[mntfs] initializing etcfs from ext4 root\n");
+    // Mount subsystem roots under <boot>/sys.
     etcfs_init(ext4);
     char sys_etc[64];
     strlcpy(sys_etc, boot_devname, 64);
     strlcpy(sys_etc + strlen(boot_devname), "/sys/etc", 64 - strlen(boot_devname));
     mntfs_mount(sys_etc, "etcfs", etcfs_get_root(), 0);
 
-    kprint("[mntfs] processing persistent mounts from etc/mounts\n");
     _mounts_mount_all();
 
-    kprint("[mntfs] initializing devfs\n");
     devfs_init();
     char sys_dev[64];
     strlcpy(sys_dev, boot_devname, 64);
     strlcpy(sys_dev + strlen(boot_devname), "/sys/dev", 64 - strlen(boot_devname));
     mntfs_mount(sys_dev, "devfs", devfs_get_root(), 0);
 
-    kprint("[mntfs] initializing procfs\n");
     procfs_init();
     char sys_proc[64];
     strlcpy(sys_proc, boot_devname, 64);
     strlcpy(sys_proc + strlen(boot_devname), "/sys/proc", 64 - strlen(boot_devname));
     mntfs_mount(sys_proc, "procfs", procfs_get_root(), 0);
 
-    kprint("[mntfs] initializing tmpfs\n");
     tmpfs_init();
     char sys_tmp[64];
     strlcpy(sys_tmp, boot_devname, 64);
     strlcpy(sys_tmp + strlen(boot_devname), "/sys/tmp", 64 - strlen(boot_devname));
     mntfs_mount(sys_tmp, "tmpfs", tmpfs_get_root(), 0);
 
-    kprint("[mntfs] initializing binfs\n");
     binfs_init(ext4);
     char sys_bin[64];
     strlcpy(sys_bin, boot_devname, 64);
     strlcpy(sys_bin + strlen(boot_devname), "/sys/bin", 64 - strlen(boot_devname));
     mntfs_mount(sys_bin, "binfs", binfs_get_root(), 0);
 
-    kprint("[mntfs] initializing libfs\n");
     libfs_init(ext4);
     char sys_lib[64];
     strlcpy(sys_lib, boot_devname, 64);
     strlcpy(sys_lib + strlen(boot_devname), "/sys/lib", 64 - strlen(boot_devname));
     mntfs_mount(sys_lib, "libfs", libfs_get_root(), 0);
 
-    // Standard VFS root aliases for execve and dynamic linker
+    varfs_init(ext4);
+    char sys_var[64];
+    strlcpy(sys_var, boot_devname, 64);
+    strlcpy(sys_var + strlen(boot_devname), "/sys/var", 64 - strlen(boot_devname));
+    mntfs_mount(sys_var, "varfs", varfs_get_root(), 0);
+
+    // Add standard VFS root aliases.
     extern int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target);
     vfs_mount(vfs_root, "bin",  binfs_get_root());
     vfs_mount(vfs_root, "lib",  libfs_get_root());
@@ -480,7 +471,5 @@ void mntfs_init(void) {
     vfs_mount(vfs_root, "proc", procfs_get_root());
     vfs_mount(vfs_root, "tmp",  tmpfs_get_root());
     vfs_mount(vfs_root, "etc",  etcfs_get_root());
-    kprint("[mntfs] /bin /lib /dev /proc /tmp /etc at VFS root\n");
-
-    klog(LOG_OK, "mntfs ready — ext4/etcfs/devfs/procfs/tmpfs/binfs/libfs mounted");
+    vfs_mount(vfs_root, "var",  varfs_get_root());
 }

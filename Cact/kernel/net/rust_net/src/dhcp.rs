@@ -30,11 +30,9 @@ pub fn record_smoltcp_lease(cfg: DhcpLeaseCfg) {
     unsafe {
         LEASE = cfg;
     }
-    ffi_kernel::c_kprint(b"[RUST-NET][DHCP] lease recorded (smoltcp)\n\0");
 }
 
 pub fn clear_smoltcp_lease() {
-    ffi_kernel::c_kprint(b"[RUST-NET][DHCP] lease cleared (smoltcp)\n\0");
 }
 
 extern "C" fn dhcp_wakeup_daemon() {

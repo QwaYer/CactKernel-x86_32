@@ -7,10 +7,7 @@
 #include "version.h"
 #include "pci_modblob.h"
 
-/* /proc/bin/mdls/ exposes every kernel module shipped in the cctkfs image
- * that GRUB hands the kernel.  Each cctkfs entry has a canonical path like
- * "/lib/ahci.cctk"; we present them under their basename ("ahci.cctk") so the
- * directory looks like a flat module repository to userspace. */
+/* /proc/bin/mdls exposes cctkfs modules by basename. */
 #define MDLS_MAX_FILES  32
 
 // A read-only virtual file (e.g. cpuinfo, meminfo)
@@ -122,7 +119,7 @@ static vfs_ops_t cmd_dir_ops = {
     .listdir = _cmd_dir_listdir,
 };
 
-// bin/ — holds mdls/ (empty placeholder dir, same role as bin)
+// bin/ contains mdls/.
 static vfs_node_t *_bin_dir_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     if (streq(name, "mdls")) return &mdls_dir;
@@ -152,7 +149,7 @@ static vfs_ops_t bin_dir_ops = {
     .listdir = _bin_dir_listdir,
 };
 
-// mdls/ — view of the cctkfs module repository (read-only).
+// mdls/ is a read-only view of bundled modules.
 static vfs_node_t   mdls_files[MDLS_MAX_FILES];
 static int          mdls_initialised = 0;
 static vfs_dirent_t _mdls_de;
@@ -301,16 +298,7 @@ static void _cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
         : "a"(leaf) : );
 }
 
-// cpuid wrapper with subleaf
-static void _cpuid_ext(uint32_t leaf, uint32_t subleaf,
-                        uint32_t *eax, uint32_t *ebx,
-                        uint32_t *ecx, uint32_t *edx) {
-    __asm__ volatile("cpuid"
-        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
-        : "a"(leaf), "c"(subleaf) : );
-}
-
-// Crude TSC-based frequency estimate (~10 ms busy-wait)
+// Approximate CPU MHz via short TSC busy-wait.
 static uint32_t _tsc_mhz(void) {
     uint32_t lo1, hi1, lo2, hi2;
     __asm__ volatile("rdtsc" : "=a"(lo1), "=d"(hi1));
@@ -351,7 +339,10 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
             uint32_t model  = (eax >> 4) & 0xF;
             const char *s = "x86 family ";
             int i = 0;
-            while (s[i]) brand[i] = s[i++];
+            while (s[i]) {
+                brand[i] = s[i];
+                i++;
+            }
             char nb[8]; itoa((int)family, nb);
             int j = 0; while (nb[j]) brand[i++] = nb[j++];
             brand[i++] = ' '; brand[i++] = 'm';
@@ -362,7 +353,11 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
             while (nb[j]) brand[i++] = nb[j++];
         } else {
             const char *fb = "x86 compatible";
-            int i=0; while(fb[i]) brand[i]=fb[i++];
+            int i = 0;
+            while (fb[i]) {
+                brand[i] = fb[i];
+                i++;
+            }
         }
     }
 
@@ -650,34 +645,29 @@ int procfs_unregister_cmd(const char *name) {
     return -1;
 }
 
-// One-time initialisation: set up root + cmd/ directories and default files
+// Initialize procfs root, subdirs, and default files.
 void procfs_init(void) {
     if (procfs_ready) return;
-    kprint("[procfs] setting up cmd/ directory node\n");
     memset(&cmd_dir, 0, sizeof(vfs_node_t));
     strlcpy(cmd_dir.name, "cmd", 128);
     cmd_dir.type = VFS_DIRECTORY;
     cmd_dir.ops  = &cmd_dir_ops;
 
-    kprint("[procfs] setting up bin/ directory node\n");
     memset(&bin_dir, 0, sizeof(vfs_node_t));
     strlcpy(bin_dir.name, "bin", 128);
     bin_dir.type = VFS_DIRECTORY;
     bin_dir.ops  = &bin_dir_ops;
 
-    kprint("[procfs] setting up bin/mdls/ directory node\n");
     memset(&mdls_dir, 0, sizeof(vfs_node_t));
     strlcpy(mdls_dir.name, "mdls", 128);
     mdls_dir.type = VFS_DIRECTORY;
     mdls_dir.ops  = &mdls_dir_ops;
 
-    kprint("[procfs] setting up root 'proc' directory node\n");
     memset(&procfs_root, 0, sizeof(vfs_node_t));
     strlcpy(procfs_root.name, "proc", 128);
     procfs_root.type = VFS_DIRECTORY;
     procfs_root.ops  = &root_ops;
 
-    kprint("[procfs] registering virtual files: cpuinfo meminfo uptime version tasks\n");
     procfs_register_file("cpuinfo", _cpuinfo_read);
     procfs_register_file("meminfo", _meminfo_read);
     procfs_register_file("uptime",  _uptime_read);
@@ -685,5 +675,4 @@ void procfs_init(void) {
     procfs_register_file("tasks",   _tasks_read);
 
     procfs_ready = 1;
-    klog(LOG_OK, "procfs ready — cpuinfo/meminfo/uptime/version/tasks/cmd/bin/mdls");
 }

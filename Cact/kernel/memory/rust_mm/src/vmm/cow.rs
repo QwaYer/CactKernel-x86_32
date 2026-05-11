@@ -3,7 +3,6 @@ use crate::pmm::{kalloc, page_ref_inc};
 use crate::safe::{zero_page, flush_tlb_all};
 use crate::vmm::paging::PD_KERNEL_ENTRIES;
 
-//public api
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u32) {
     if src_pd.is_null() || dst_pd.is_null() {

@@ -71,7 +71,7 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     if (id == 0xFFFFFFFF || id == 0x00000000) return;  // absent function
 
     pci_device_t *d = alloc_dev();
-    if (!d) { kprint("[PCI] Device pool full!\n"); return; }
+    if (!d) { klog(LOG_WARN, "PCI device pool exhausted"); return; }
 
     d->bus = bus; d->dev = dev; d->fn = fn;
     d->vendor_id = (uint16_t)(id & 0xFFFF);
@@ -93,14 +93,6 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     // Only decode BARs for normal (non-bridge) headers
     if ((d->header_type & 0x7F) == PCI_HEADER_TYPE_NORMAL)
         decode_bars(d);
-
-    kprint("[PCI]   found ");
-    kprint_hex(d->vendor_id); kprint(":"); kprint_hex(d->device_id);
-    kprint(" class="); kprint_hex(d->class_code); kprint("/"); kprint_hex(d->subclass);
-    kprint(" bus="); kprint_hex(bus); kprint(" dev="); kprint_hex(dev);
-    kprint(" fn="); kprint_hex(fn);
-    kprint(" irq="); kprint_hex(d->irq_line);
-    kprint("\n");
 
     list_push(d);
 
@@ -145,20 +137,14 @@ static void scan_bus(uint8_t bus) {
 void pci_enumerate(void) {
     uint32_t hdr0 = pci_read32(0, 0, 0, 0x0C);
     if (!((uint8_t)(hdr0 >> 16) & PCI_HEADER_MULTIFUNCTION)) {
-        kprint("[PCI] single-function host bridge — scanning bus 0\n");
         scan_bus(0);
     } else {
-        kprint("[PCI] multi-function host bridge — scanning one bus per function\n");
         for (uint8_t fn = 0; fn < PCI_MAX_FN; fn++) {
             uint32_t id = pci_read32(0, 0, fn, 0x00);
             if (id == 0xFFFFFFFF || id == 0x00000000) break;
-            kprint("[PCI] scanning bus fn="); kprint_hex(fn); kprint("\n");
             scan_bus(fn);
         }
     }
-    char tmp[16]; itoa((int)pci_device_count, tmp);
-    kprint("[PCI] enumeration done — "); kprint(tmp); kprint(" device(s) found\n");
-    klog(LOG_OK, "PCI enumeration complete");
 }
 
 // Find first device matching class_code + subclass; returns NULL if none
@@ -185,19 +171,6 @@ pci_device_t *pci_find_by_id(uint16_t vid, uint16_t did) {
     return NULL;
 }
 
-// Debug: print all enumerated PCI devices
 void pci_enum_dump(void) {
-    kprint("[PCI] Device list:\n");
-    for (pci_device_t *d = pci_device_list; d; d = d->next) {
-        kprint("  [");
-        kprint_hex(d->bus); kprint(":");
-        kprint_hex(d->dev); kprint(".");
-        kprint_hex(d->fn);  kprint("] ");
-        kprint("VID="); kprint_hex(d->vendor_id);
-        kprint(" DID="); kprint_hex(d->device_id);
-        kprint(" CC=");  kprint_hex(d->class_code);
-        kprint("/");     kprint_hex(d->subclass);
-        kprint(" IRQ="); kprint_hex(d->irq_line);
-        kprint("\n");
-    }
+    for (pci_device_t *d = pci_device_list; d; d = d->next) { (void)d; }
 }

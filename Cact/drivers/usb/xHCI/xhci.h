@@ -185,7 +185,6 @@ typedef struct {
     uint32_t              context_size;
 } xhci_priv_t;
 
-//public api
 void xhci_pci_init(void);
 void xhci_irq_handler(void);
 

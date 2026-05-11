@@ -51,7 +51,7 @@ int sys_module_load(const char* path, uint32_t vendor_id, uint32_t device_id) {
         return -2;
 
     if (usermod_slot_active) {
-        kprint("[KMOD] usermod slot busy — call module_unload first\n");
+        klog(LOG_WARN, "kmod slot busy");
         return -3;
     }
 
@@ -67,11 +67,6 @@ int sys_module_load(const char* path, uint32_t vendor_id, uint32_t device_id) {
     if (auto_ids) {
         if (pci_peek_module_manifest(usermod_path_store, &v, &d, &cc, &ss) != 0)
             return -2;
-        kprint("[KMOD] usermod manifest: ");
-        kprint_hex(v);
-        kprint(":");
-        kprint_hex(d);
-        kprint(" (from module)\n");
     } else {
         if (vendor_id > 0xFFFFu || device_id > 0xFFFFu)
             return -2;
@@ -98,14 +93,12 @@ int sys_module_load(const char* path, uint32_t vendor_id, uint32_t device_id) {
         pci_driver_match(d);
 
     if (!usermod_pci_drv.probe) {
-        kprint("[KMOD] usermod: probe not linked — no PCI dev for this VID/DID, or "
-               "[LDR]/[DRV] load error (check messages above)\n");
+        klog(LOG_WARN, "kmod probe not linked");
         pci_unregister_driver(&usermod_pci_drv);
         return -4;
     }
 
     usermod_slot_active = 1;
-    kprint("[KMOD] usermod slot active\n");
     return 0;
 }
 
@@ -121,7 +114,6 @@ int sys_module_unload(const char *name) {
         memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
         usermod_path_store[0] = '\0';
         usermod_slot_active   = 0;
-        kprint("[KMOD] usermod unloaded\n");
         return 0;
     }
 
@@ -131,22 +123,17 @@ int sys_module_unload(const char *name) {
     if (user_str_all_decimal(name)) {
         int idx;
         if (parse_pci_modinfo_index(name, &idx) != 0) {
-            kprint("[KMOD] invalid PCI modinfo index\n");
+            klog(LOG_WARN, "kmod invalid pci index");
             return -2;
         }
         pci_device_t *dev = pci_device_by_index(idx);
         if (!dev) {
-            kprint("[KMOD] no PCI function at [pci ");
-            char ib[12];
-            itoa(idx, ib);
-            kprint(ib);
-            kprint("] (see /dev/modinfo)\n");
+            klog(LOG_WARN, "kmod pci function index not found");
             return -7;
         }
         pci_driver_t *rdrv = pci_driver_find_reloc_for_device(dev);
         if (!rdrv) {
-            kprint("[KMOD] no single relocatable module matches that PCI function "
-                   "(built-in only, or ambiguous)\n");
+            klog(LOG_WARN, "kmod no relocatable module for pci function");
             return -8;
         }
         pci_unload_module(rdrv);
@@ -156,22 +143,16 @@ int sys_module_unload(const char *name) {
             usermod_path_store[0] = '\0';
             usermod_slot_active   = 0;
         }
-        kprint("[KMOD] unloaded module for [pci ");
-        char ib[12];
-        itoa(idx, ib);
-        kprint(ib);
-        kprint("]\n");
         return 0;
     }
 
     pci_driver_t *drv = pci_driver_find_by_name(name);
     if (!drv) {
-        kprint("[KMOD] no driver named: "); kprint((char *)name); kprint("\n");
+        klog(LOG_WARN, "kmod driver not found");
         return -5;
     }
     if (!(drv->flags & PCI_DRV_F_RELOC_MODULE)) {
-        kprint("[KMOD] not an ET_REL module (built-in): ");
-        kprint((char *)name); kprint("\n");
+        klog(LOG_WARN, "kmod driver is built-in");
         return -6;
     }
 
@@ -184,6 +165,5 @@ int sys_module_unload(const char *name) {
         usermod_slot_active   = 0;
     }
 
-    kprint("[KMOD] unloaded: "); kprint((char *)name); kprint("\n");
     return 0;
 }
