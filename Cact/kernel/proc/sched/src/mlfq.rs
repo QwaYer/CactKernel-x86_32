@@ -1,3 +1,9 @@
+//! Multi-level feedback queue: per-priority ready queues, voluntary sleep queue,
+//! periodic priority boost, and the main `schedule` / `on_timer_tick` entry points.
+//!
+//! All `TaskStruct` list mutation for MLFQ state is performed while holding
+//! [`crate::task::SCHEDULER_LOCK`] (or during init before concurrency).
+
 use core::cell::SyncUnsafeCell;
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -94,7 +100,8 @@ struct MlfqState {
     boost_counter: u32,
 }
 
-/// Queue nodes are kernel `TaskStruct` pointers; all accesses go through `SCHEDULER_LOCK` or init.
+/// Global MLFQ queues; `TaskStruct` pointers form intrusive lists. Access is serialized
+/// with the scheduler IRQ lock except during `mlfq_init`.
 unsafe impl Sync for MlfqState {}
 
 impl MlfqState {

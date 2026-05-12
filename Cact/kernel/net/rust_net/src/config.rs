@@ -1,3 +1,8 @@
+//! Runtime IPv4 settings in **host** byte order (mutable globals updated from C).
+//!
+//! Defaults are compile-time placeholders; `rust_net_set_ipv4_config` overwrites them
+//! and, when the stack is up, pushes the new addresses into smoltcp.
+
 static mut NET_IP_HOST: u32 = (10u32 << 24) | (0 << 16) | (2 << 8) | 15;
 static mut NET_MASK_HOST: u32 = (255u32 << 24) | (255 << 16) | (255 << 8) | 0;
 static mut NET_GATEWAY_HOST: u32 = (10u32 << 24) | (0 << 16) | (2 << 8) | 2;

@@ -2,6 +2,9 @@
 #![allow(internal_features)]
 #![allow(static_mut_refs)]
 
+//! Rust-side memory management: physical allocator, kernel heap, page tables, COW,
+//! page faults, mmap, and per-process helpers. Calls into C for low-level VMM/PMM.
+
 mod ffi;
 mod safe;
 pub mod pmm;

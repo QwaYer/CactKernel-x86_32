@@ -1,6 +1,9 @@
 #![no_std]
 #![allow(static_mut_refs)]
 
+//! In-kernel TCP/IP stack (smoltcp): Ethernet shim, sockets, DHCP/DNS helpers, and
+//! integration hooks for the C networking layer.
+
 pub mod checksum;
 pub mod config;
 pub mod dns_resolve;

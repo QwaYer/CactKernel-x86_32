@@ -1,3 +1,5 @@
+//! Physical memory manager: bitmap of free frames, per-page refcounts, and `kalloc`/`kfree_page`.
+
 use crate::ffi::*;
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, klog_msg};
 
@@ -47,7 +49,7 @@ fn page_to_addr(idx: u32) -> u32 {
 }
 
 
-//Public api
+// Public API: C-exported PMM / page refcount helpers.
 #[unsafe(no_mangle)]
 pub extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
     if mmap.is_null() {

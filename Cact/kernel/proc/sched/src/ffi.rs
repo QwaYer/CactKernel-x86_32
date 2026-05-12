@@ -1,3 +1,7 @@
+//! Foreign-function declarations for the C kernel: memory, VMM, ELF, VFS, context switch.
+//!
+//! `ContextFrame` matches the interrupt stack frame layout on iret/syscall boundaries.
+
 use core::ffi::c_void;
 
 pub use cact_sync::kernel_types::{

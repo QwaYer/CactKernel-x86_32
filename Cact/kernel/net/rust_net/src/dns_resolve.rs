@@ -1,4 +1,4 @@
-//! Blocking DNS A lookup over UDP/53 using the dedicated smoltcp UDP socket.
+//! Blocking DNS A-record resolution over UDP port 53 using a dedicated smoltcp UDP socket.
 
 use core::ffi::{c_char, c_int};
 use core::net::Ipv4Addr;

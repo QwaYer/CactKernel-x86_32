@@ -1,3 +1,7 @@
+//! Small C-callable helpers: dotted IPv4 parsing and ping dispatch.
+//!
+//! String inputs are expected to be NUL-terminated C strings owned by the caller.
+
 use core::ffi::{c_char, c_int};
 
 use crate::ping;

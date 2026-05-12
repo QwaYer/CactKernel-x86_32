@@ -1,3 +1,7 @@
+//! Intrusive free-list heap in the fixed `[HEAP_START, HEAP_START+HEAP_SIZE)` window.
+//!
+//! `kmalloc` / `kfree_heap` are IRQ-spinlocked and back much of the kernel and Rust MM code.
+
 use crate::ffi::*;
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, klog_msg};
 

@@ -1,3 +1,7 @@
+//! `ksock_table` and VFS vtable glue for TCP/UDP sockets exposed to the rest of the kernel.
+//!
+//! Each open socket ties a `VfsNode` to a row in the fixed-size socket table.
+
 use core::ffi::{c_char, c_int, c_void};
 
 use crate::ffi_kernel;

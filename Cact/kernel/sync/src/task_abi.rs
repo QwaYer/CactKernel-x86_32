@@ -1,3 +1,8 @@
+//! `TaskStruct` and related types: binary-compatible with the C task control block.
+//!
+//! Field order and padding are enforced by `sched` (`_ABI_CHECK`); change this layout
+//! only together with the C header and those assertions.
+
 use core::ffi::c_void;
 
 use crate::kernel_types::{DynCtx, MmapTable, ProcPageTracker, TaskFdTable, VfsNode};
@@ -5,6 +10,7 @@ use crate::kernel_types::{DynCtx, MmapTable, ProcPageTracker, TaskFdTable, VfsNo
 pub const NSIG: usize = 13;
 pub const TASK_SHM_MAX: usize = 16;
 
+/// Runnable lifecycle state stored in `TaskStruct.state` (u32 on the wire).
 #[repr(u32)]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum TaskState {

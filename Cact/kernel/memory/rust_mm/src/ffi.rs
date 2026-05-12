@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+//! Physical layout constants, PTE/PDE flags, `extern "C"` kernel entry points, and boot MMAP types.
+//!
+//! This is the single source of truth for sizes and symbols shared between `rust_mm` and C.
+
 pub const PAGE_SIZE: u32 = 4096;
 
 /// Physical address where the kernel is loaded (1 MB mark).

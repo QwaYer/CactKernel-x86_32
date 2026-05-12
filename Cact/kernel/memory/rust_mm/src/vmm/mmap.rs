@@ -1,3 +1,5 @@
+//! `mmap` / `munmap` implementation: private PDEs, file-backed mappings, and COW with the VMM.
+
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page, page_ref_inc};
 use crate::vmm::paging::{vmm_map, PD_KERNEL_ENTRIES};

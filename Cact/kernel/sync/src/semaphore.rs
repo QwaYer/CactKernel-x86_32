@@ -1,3 +1,6 @@
+//! Counting semaphore with a bounded FIFO waiter list; uses the scheduler when `down`
+//! must block on a zero count.
+
 use core::ptr;
 use core::sync::atomic::{AtomicI32, Ordering};
 

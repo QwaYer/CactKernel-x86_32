@@ -1,4 +1,4 @@
-//! Lease metadata for C ABI. DHCP is implemented by smoltcp (`dhcpv4::Socket`).
+//! DHCP lease metadata exposed to C. Address configuration is applied by smoltcp (`dhcpv4::Socket`).
 
 use crate::ffi_kernel;
 

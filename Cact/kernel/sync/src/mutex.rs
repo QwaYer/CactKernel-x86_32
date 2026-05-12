@@ -1,3 +1,6 @@
+//! Sleeping mutex: FIFO wait queue, [`crate::spinlock::spinlock_t`] for the wait list,
+//! and scheduler integration when the lock is held (block current task, yield).
+
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
 

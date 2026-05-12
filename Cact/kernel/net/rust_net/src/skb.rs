@@ -1,3 +1,5 @@
+//! Socket buffer (`Skb`) helpers: allocate/free and push/put data for the C networking path.
+
 use core::ffi::c_void;
 
 use crate::checksum;

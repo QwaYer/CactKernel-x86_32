@@ -1,3 +1,7 @@
+//! `fork` support: duplicate a page directory with copy-on-write for user-writable mappings.
+//!
+//! Skips the mmap PDE range (handled separately) and shares kernel identity-map PTEs read-only.
+
 use crate::ffi::*;
 use crate::pmm::{kalloc, page_ref_inc};
 use crate::safe::{zero_page, flush_tlb_all};

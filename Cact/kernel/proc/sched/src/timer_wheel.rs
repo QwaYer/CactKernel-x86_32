@@ -1,3 +1,8 @@
+//! Hierarchical timer wheel (`WHEEL_SIZE` slots) for `sleep_until` timeouts.
+//!
+//! Tasks chain through `wait_next`. `timer_wheel_tick` runs from the timer path;
+//! wakeups enqueue under [`crate::task::SCHEDULER_LOCK`].
+
 use core::cell::SyncUnsafeCell;
 use core::ptr;
 use crate::task::{TaskStruct, TaskState, SCHEDULER_LOCK};
@@ -38,7 +43,8 @@ struct TimerWheel {
     current_tick: u32,
 }
 
-/// Intrusive list of kernel tasks; guarded by `SCHEDULER_LOCK` on wake / `sched_sleep_ticks`.
+/// Wheel slots hold intrusive lists of sleeping tasks; only accessed with the scheduler
+/// lock during tick processing and `sched_sleep_ticks` registration.
 unsafe impl Sync for TimerWheel {}
 
 impl TimerWheel {

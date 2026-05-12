@@ -1,4 +1,4 @@
-//! TCP sockets backed by smoltcp; keeps `tcp_sockets[]` in sync for C (states, accept, select).
+//! TCP sockets on smoltcp; keeps `tcp_sockets[]` aligned with the C ABI (state, accept, select).
 
 use core::net::Ipv4Addr;
 

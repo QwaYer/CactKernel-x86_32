@@ -1,4 +1,4 @@
-//! smoltcp integration: Ethernet PHY shim, interface, DHCP, ICMP, central poll.
+//! smoltcp integration: Ethernet PHY shim, interface setup, DHCP, ICMP, and the central poll loop.
 
 use core::net::Ipv4Addr;
 

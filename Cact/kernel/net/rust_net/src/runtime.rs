@@ -1,3 +1,7 @@
+//! Driver registration, background `knetd` poll thread, and RX entry from the NIC driver.
+//!
+//! `net_sema` serializes access between the interrupt/RX path and `knetd`.
+
 use crate::ffi_kernel;
 use crate::dhcp;
 use crate::stack;

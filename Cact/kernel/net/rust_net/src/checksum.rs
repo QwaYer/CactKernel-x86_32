@@ -1,3 +1,5 @@
+//! IPv4 one's-complement checksum over an arbitrary byte buffer (16-bit accumulation).
+
 pub fn inet_checksum(mut data: *const u8, mut len: u16) -> u16 {
     let mut sum: u32 = 0;
     // SAFETY: caller guarantees valid memory region.

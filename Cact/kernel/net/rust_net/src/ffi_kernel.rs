@@ -1,3 +1,7 @@
+//! Kernel services used by the Rust network stack: heap, logging, scheduler hooks, VFS, I/O ports.
+//!
+//! All symbols are implemented in C and linked into the final kernel image.
+
 use core::ffi::{c_char, c_int, c_void};
 
 use crate::types::{MacAddr, Semaphore, Skb, VfsNode};

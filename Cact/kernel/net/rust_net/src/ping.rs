@@ -1,3 +1,5 @@
+//! ICMP echo (ping) helper: validates the destination and forwards to the stack layer.
+
 use core::ffi::c_int;
 
 pub fn send_echo_request_host(dst_ip_host: u32, id: u16, seq: u16) -> c_int {

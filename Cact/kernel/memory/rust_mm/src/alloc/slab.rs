@@ -1,3 +1,5 @@
+//! Slab allocator: per-cache freelists, optional ctor/dtor, and a set of generic size caches.
+
 use crate::ffi::*;
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg};
 use crate::pmm::{kalloc, kfree_page};

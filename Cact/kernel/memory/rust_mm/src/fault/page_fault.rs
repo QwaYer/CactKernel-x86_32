@@ -1,3 +1,5 @@
+//! x86 `#PF` handler logic: COW, demand zero, swap-in, guard `CR3` during PTE walks.
+
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page, page_ref_get_locked, PAGE_LOCK};
 use crate::vmm::paging::{get_kernel_pd, vmm_map, PD_KERNEL_ENTRIES};

@@ -1,3 +1,5 @@
+//! Fixed-size shared-memory segment table: attach/detach, refcount, and page mapping into a PD.
+
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page};
 use crate::vmm::paging::vmm_map;

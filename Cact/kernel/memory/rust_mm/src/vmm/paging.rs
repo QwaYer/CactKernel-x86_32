@@ -1,3 +1,5 @@
+//! Kernel page directory bootstrap, linear map of RAM, per-process maps, and C-exported VMM helpers.
+
 use crate::ffi::*;
 use crate::safe::kprint_str;
 use crate::pmm::{kalloc, kfree_page};
@@ -76,7 +78,8 @@ unsafe fn cow_page_table(shared_pt: *const u32) -> *mut u32 {
     priv_pt
 }
 
-//Public api
+// Public API: C-exported VMM mapping helpers.
+
 #[unsafe(no_mangle)]
 pub extern "C" fn vmm_map(pd: *mut u32,
                            virtual_addr: u32,

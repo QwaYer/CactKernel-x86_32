@@ -1,3 +1,7 @@
+//! Out-of-memory killer: scores user tasks by resident page count and signals a victim.
+//!
+//! Runs with the scheduler lock held while walking the global task list.
+
 use crate::ffi::*;
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int};
 

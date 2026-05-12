@@ -1,3 +1,10 @@
+//! Kernel synchronization primitives for Cact (`cact_sync`).
+//!
+//! Provides spinlocks, IRQ-aware spinlocks, mutexes, and counting semaphores that
+//! cooperate with the scheduler (`schedule`, MLFQ enqueue) when a contended lock
+//! must sleep. Types such as [`task_abi::TaskStruct`] mirror the C ABI and are
+//! validated from the `sched` crate via compile-time offset checks.
+
 #![no_std]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]

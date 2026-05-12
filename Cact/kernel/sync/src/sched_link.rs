@@ -1,4 +1,9 @@
-//! Symbols resolved when linking with `sched` / kernel (`scheduler_lock`, `current_task`, …).
+//! Weak link boundary into the scheduler and console.
+//!
+//! Declares `extern "C"` items (`schedule`, `sched_mlfq_enqueue_locked`, `kprint`,
+//! `current_task`, `scheduler_lock`) that `cact_sync` references; the final kernel or
+//! `sched` staticlib supplies the definitions. `improper_ctypes` is allowed because
+//! `irq_spinlock_t` is a Rust type passed through the C ABI edge.
 #![allow(improper_ctypes)]
 
 use core::ptr;
@@ -35,7 +40,12 @@ pub(crate) fn current_task_ptr() -> *mut TaskStruct {
     unsafe { current_task }
 }
 
-/// SAFETY: `scheduler_lock` is a singleton defined in `sched`; only one `&mut` may exist at a time (caller enforced).
+/// Returns `&'static mut` to the global scheduler IRQ spinlock.
+///
+/// # Safety
+///
+/// `SCHEDULER_LOCK` is a single kernel object; callers must ensure at most one live
+/// `&mut` by always pairing with the real lock acquire/release protocol from `sched`.
 #[inline]
 pub(crate) fn scheduler_lock_mut() -> &'static mut irq_spinlock_t {
     unsafe { &mut *ptr::addr_of_mut!(SCHEDULER_LOCK) }

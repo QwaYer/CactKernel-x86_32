@@ -447,10 +447,9 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
 
     ffi::proc_tracker_init(&raw mut (*t).mm);
 
-    /* init может быть динамическим — например cgoct, слинкованный против libc.so.
-     * Используем ту же логику, что и task_exec: проверяем PT_DYNAMIC / ET_DYN и
-     * подключаем dynlink-контекст. Без этого PLT/GOT останутся неинициализированными
-     * и первый же вызов libc-функции улетит на 0x0. */
+    /* Dynamic executables (e.g. ET_DYN + PT_DYNAMIC) need the same path as `task_exec`:
+     * detect PT_DYNAMIC, build a dynlink context, and resolve PLT/GOT. Without this,
+     * libc calls jump through an uninitialized GOT and fault at 0x0. */
     let mut new_dyn_ctx: *mut DynCtx = ptr::null_mut();
     let is_dynamic = ffi::elf_is_dynamic(path) != 0;
     let entry = if is_dynamic {
@@ -680,9 +679,9 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 
     (*child).esp = esp_ptr as u32;
 
-    // COW maps the parent's trampoline page read-only into child's PD.
-    // Allocate a fresh writable page so child has its own trampoline
-    // and proc_free_pages won't double-free the parent's physical page.
+    // Child COW-maps the parent's sigreturn trampoline read-only; allocate a fresh
+    // writable page so the child has its own trampoline and `proc_free_pages` does not
+    // double-free the parent's physical page.
     task_setup_sigreturn(child);
 
     task_list_add(child);
@@ -719,11 +718,12 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     child
 }
 
-// ── sched_task_exit ─────────────────────────────────────────────────────
-// Called from C sys_exit.  Sets zombie state and yields immediately.
-// schedule() sees Zombie, sends SIGCHLD, wakes the parent (if Waiting),
-// and never re-enqueues this task.  sys_exit's hlt-loop is a safety net
-// in case schedule() returns (e.g. no other runnable task yet).
+// `sched_task_exit` — invoked from C `sys_exit`.
+//
+// Marks the task zombie and yields. `schedule()` notifies the parent (`SIGCHLD`),
+// wakes a parent blocked in `waitpid`, and does not re-enqueue the zombie. The
+// `hlt` loop in `sys_exit` is a fallback if `schedule()` returns while nothing
+// else is runnable yet.
 #[no_mangle]
 pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
     let t = current_task;
@@ -768,12 +768,12 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
     crate::mlfq::schedule();
 }
 
-// ── sched_waitpid ───────────────────────────────────────────────────────
-// Blocking: scan children for a zombie that matches target_pid.
-//   • Found  → collect exit code, mark reaped, return child pid.
-//   • Not found but live children exist → Waiting + schedule(); retry.
-//   • No matching children at all → return -1.
-// Same pattern as sched_sleep_ticks: set state, release lock, schedule().
+// `sched_waitpid` — blocking wait for a child.
+//
+// Scans children: on a matching zombie, reaps it and returns the PID; if children
+// exist but none are dead yet, sets `Waiting` and `schedule()` until `SIGCHLD`;
+// returns -1 when no eligible children exist. Same lock/sleep pattern as
+// `sched_sleep_ticks`: take the scheduler lock, update state, release, then yield.
 #[no_mangle]
 pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32 {
     let cur = current_task;
@@ -803,8 +803,7 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
                 if matches!((*t).state, TaskState::Zombie) {
                     let child_pid  = (*t).pid;
                     let child_exit = (*t).exit_code;
-                    // Remove from task list under the lock before releasing it,
-                    // so no other code (task_reap, another waitpid) touches this node.
+                    // Remove under the lock so no concurrent `waitpid`/`task_reap` sees this node.
                     task_list_remove(t);
                     let to_free = t;
                     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
@@ -846,7 +845,7 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
         (*cur).state = TaskState::Waiting;
         crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
         crate::mlfq::schedule();
-        // Woken by SIGCHLD — loop back and collect the zombie.
+        // Woken by SIGCHLD; loop until we collect a zombie.
     }
 }
 
@@ -1096,14 +1095,13 @@ pub unsafe extern "C" fn task_exec(
     if !old_pd.is_null() {
         ffi::vmm_free_address_space(old_pd);
     }
-    /* Refresh MMIO / PCI-hole PDEs after tearing down the old AS. Console output
-     * (framebuffer) runs with CR3=new_pd; a stale upper PDE would fault in fb_put_pixel. */
+    /* Refresh MMIO / PCI-hole PDEs after tearing down the old address space. The
+     * framebuffer path runs with the new CR3; a stale high PDE would fault in `fb_put_pixel`. */
     ffi::vmm_sync_kernel_mmio_mappings(new_pd);
     (*t).dyn_ctx = new_dyn_ctx;
 
-    /* Entire TLB was flushed by CR3 reload, but invalidate the image page
-     * explicitly in case a hypervisor/CPU quirk leaves a stale mapping for
-     * this linear address across AS switches. */
+    /* Full TLB flush happens on CR3 reload; `invlpg` hedges against stale mappings
+     * for the image entry VA after an address-space switch. */
     unsafe {
         core::arch::asm!(
             "invlpg [{}]",
@@ -1145,7 +1143,7 @@ pub unsafe extern "C" fn task_exec(
 
     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-    /* CR3=new_pd; reload explicitly before iretd. */
+    /* `CR3` already points at `new_pd`; reload before `iretd` for a predictable MMU state. */
     ffi::terminal_fg_pid = (*t).pid;
 
     let pd_val = new_pd as u32;
@@ -1490,8 +1488,8 @@ pub unsafe extern "C" fn task_reap() {
     while !cur.is_null() && count < 64 {
         let next = (*cur).next;
         if matches!((*cur).state, TaskState::Zombie) {
-            // Only reap if exit code already collected (parent_pid==0 set by waitpid)
-            // or parent no longer exists (orphan whose parent exited without waitpid).
+            // Orphan zombie: `parent_pid == 0` after exit-time reparenting, or parent
+            // task is no longer on the global task list.
             let reapable = (*cur).parent_pid == 0
                 || find_task_by_pid((*cur).parent_pid).is_null();
             if reapable {

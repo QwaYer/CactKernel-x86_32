@@ -1,3 +1,5 @@
+//! Wire-format headers, socket limits, and C-layout structs shared with the NIC/VFS layers.
+
 use core::ffi::{c_char, c_int, c_void};
 
 pub const SKB_MAX_SIZE: usize = 2048;

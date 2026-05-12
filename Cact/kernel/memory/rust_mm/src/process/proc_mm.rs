@@ -1,3 +1,5 @@
+//! Growable array of per-process physical pages (`ProcPageTracker`) and teardown helpers.
+
 use crate::ffi::*;
 use crate::alloc::heap::{kmalloc, kfree_heap};
 use crate::vmm::paging::vmm_free_address_space;

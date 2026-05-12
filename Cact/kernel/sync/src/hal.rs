@@ -1,4 +1,6 @@
-//! Low-level instructions; unsafe confined to this module.
+//! x86 helpers used by locks: `pause` for spin-wait backoff, `cli`/`sti` and EFLAGS
+//! snapshot/restore for [`crate::spinlock::irq_spinlock_t`]. All `unsafe` assembly is
+//! isolated here.
 
 #[inline(always)]
 pub fn pause_cpu() {

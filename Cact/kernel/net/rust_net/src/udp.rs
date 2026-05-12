@@ -1,4 +1,4 @@
-//! UDP sockets backed by smoltcp.
+//! UDP sockets implemented on top of smoltcp.
 
 use smoltcp::iface::{SocketHandle, SocketSet};
 use smoltcp::socket::udp;

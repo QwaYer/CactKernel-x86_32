@@ -1,3 +1,7 @@
+//! Swap backing store: slot bitmap, clock hand, and C callbacks for block read/write.
+//!
+//! Encodes swapped-out PTEs with `PAGE_SWAPPED`; cooperates with the page-fault path.
+
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page};
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg, flush_tlb};
