@@ -145,7 +145,10 @@ void pci_driver_defer_device(pci_device_t *dev) {
 }
 
 void pci_driver_probe_deferred_all(void) {
-    if (deferred_count == 0) return;
+    if (deferred_count == 0) {
+        klog(LOG_OK, "PCI deferred driver probe: queue empty");
+        return;
+    }
     kprint("[DRV] deferred probe start\n");
     uint32_t failed = 0;
     uint32_t no_driver = 0;
@@ -172,6 +175,7 @@ void pci_driver_probe_deferred_all(void) {
     kprint(" no-driver=");
     kprint(b);
     kprint("\n");
+    klog(LOG_OK, "PCI deferred driver probe finished");
 }
 
 // Dump all registered drivers to debug output.

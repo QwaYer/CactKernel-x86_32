@@ -78,7 +78,7 @@ void blkdev_init(void) {
     boot_dev  = 0;
     memset(devices, 0, sizeof(devices));
 
-    kprint("[BLKDEV] layer ready — NVMe/AHCI kmods may register\n");
+    klog(LOG_OK, "Block device layer ready (drivers register at PCI probe)");
 }
 
 // Return the boot device (first successfully probed drive)

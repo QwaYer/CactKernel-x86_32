@@ -233,7 +233,7 @@ void init_framebuffer(void) {
         klog(LOG_FAIL,  "Framebuffer — cannot continue without display");
         return;
     }
-
+    klog(LOG_OK, "Framebuffer verified for kernel console (post-paging)");
 }
 
 int get_cursor_x(void) {
@@ -373,7 +373,7 @@ void fb_enable_shadow(void) {
     fb_dirty_y_min  = fb_height;   /* sentinel meaning "clean"               */
     fb_dirty_y_max  = 0;
     fb_shadow_armed = 1;
-
+    klog(LOG_OK, "Framebuffer shadow buffer armed (WB RAM back-buffer)");
 }
 
 void fb_flush(void) {

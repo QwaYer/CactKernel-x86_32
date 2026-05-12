@@ -297,6 +297,10 @@ pub fn stack_init() {
         ICMP_HANDLE = Some(socks.add(icmp_sock));
 
         STACK_READY = true;
+        ffi_kernel::klog_static(
+            ffi_kernel::LOG_OK,
+            b"smoltcp interface and sockets ready (poll from knetd)\0",
+        );
     }
 }
 

@@ -295,6 +295,8 @@ static int _tty_read(void *p, uint32_t off, uint32_t size, char *buf) {
         int c;
         while((c=keyboard_read_char())<0) schedule();
         buf[i++]=(char)c;
+        /* One syscall = one key for size==1 (readline); larger reads stay line-oriented. */
+        if (size <= 1) break;
         if((char)c=='\n') break;
     }
     return (int)i;

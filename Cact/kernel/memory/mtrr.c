@@ -263,6 +263,8 @@ void mtrr_init(void) {
 
     if (!g_wc_supported)
         klog(LOG_WARN, "MTRR present but WC type not advertised");
+
+    klog(LOG_OK, "MTRR subsystem probed (variable ranges ready)");
 }
 
 int mtrr_wc_available(void) {

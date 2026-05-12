@@ -46,7 +46,10 @@ void pci_enable_bus_master(uint8_t bus, uint8_t dev, uint8_t fn) {
 int search_pci(void) {
     port_dword_out(PCI_CONFIG_ADDRESS, 0x80000000);
     uint32_t readback = port_dword_in(PCI_CONFIG_ADDRESS);
-    if (readback == 0x80000000) return 0;
+    if (readback == 0x80000000) {
+        klog(LOG_OK, "PCI configuration mechanism #1 (IO ports 0xCF8/0xCFC) available");
+        return 0;
+    }
     klog(LOG_WARN, "PCI config space not responding — no PCI bus?");
     return 1;
 }

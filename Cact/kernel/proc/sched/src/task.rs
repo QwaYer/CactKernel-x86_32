@@ -1,6 +1,6 @@
 use core::ptr;
 use core::ffi::c_void;
-use crate::ffi::{self, ContextFrame, ProcPageTracker, DynCtx, MmapTable, PAGE_PRESENT, PAGE_RW, PAGE_USER, PAGE_SIZE, LOG_FAIL};
+use crate::ffi::{self, ContextFrame, ProcPageTracker, DynCtx, MmapTable, PAGE_PRESENT, PAGE_RW, PAGE_USER, PAGE_SIZE, LOG_FAIL, LOG_OK};
 use crate::sync::irq_spinlock_t;
 use crate::mlfq;
 use crate::timer_wheel;
@@ -215,7 +215,10 @@ pub unsafe extern "C" fn task_init() {
     crate::sync::irq_spinlock_init(&raw mut SCHEDULER_LOCK);
     mlfq::mlfq_init();
     timer_wheel::timer_wheel_global_init();
-
+    ffi::klog(
+        LOG_OK,
+        b"Task subsystem initialized (MLFQ, timer wheel, scheduler lock)\0".as_ptr(),
+    );
 }
 
 #[no_mangle]
@@ -239,6 +242,10 @@ pub unsafe extern "C" fn init_scheduler() -> i32 {
     task_list_head  = idle;
     task_list_tail  = idle;
 
+    ffi::klog(
+        LOG_OK,
+        b"Scheduler initialized (idle task pid 0, circular run queue)\0".as_ptr(),
+    );
     0
 }
 
@@ -1181,8 +1188,12 @@ pub unsafe extern "C" fn task_exec(
     unsafe {
         // Force clean segment state before iretd.
         // Keep entry/sp out of eax because eax is overwritten with selector 0x23.
+        // Load CR3 from eax — do not leave ebx=pd_val in user mode: i386 PLT uses
+        // ebx as GOT pointer; wrong ebx caused user faults at pd_phys+N.
         core::arch::asm!(
-            "mov cr3, ebx",
+            "mov eax, {pd:e}",
+            "mov cr3, eax",
+            "xor ebx, ebx",
             "mov eax, 0x23",
             "mov ds, ax",
             "mov es, ax",
@@ -1194,7 +1205,7 @@ pub unsafe extern "C" fn task_exec(
             "push 0x1B",
             "push edx",
             "iretd",
-            in("ebx") pd_val,
+            pd = in(reg) pd_val,
             in("ecx") sp_u,
             in("edx") entry_u,
             options(noreturn),

@@ -148,6 +148,7 @@ void pc_init(void) {
     stat_misses     = 0;
     stat_evictions  = 0;
     stat_writebacks = 0;
+    klog(LOG_OK, "Page cache initialized");
 }
 
 // Get a page from cache; on miss, read from disk into a new or evicted slot

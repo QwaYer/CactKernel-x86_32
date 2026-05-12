@@ -38,6 +38,18 @@ pub const LOG_WARN: c_int = 1;
 pub const LOG_ERROR: c_int = 2;
 pub const LOG_FAIL: c_int = 3;
 
+/// `msg` must be a static `b"...\0"` slice (NUL-terminated for C `klog`).
+#[inline]
+pub fn klog_static(level: c_int, msg: &'static [u8]) {
+    debug_assert!(
+        msg.last().copied() == Some(0),
+        "klog_static requires NUL-terminated message"
+    );
+    unsafe {
+        klog(level, msg.as_ptr().cast());
+    }
+}
+
 pub fn mac_equal(a: &MacAddr, b: &MacAddr) -> bool {
     a.b == b.b
 }

@@ -4,8 +4,8 @@
 #include <stdint.h>
 
 /* Maximum supported size of the cctkfs image staged in .bss.
- * Plenty of headroom for the current 3 modules (~33 KB total). */
-#define PCI_MODBLOB_MAX_IMAGE  (256u * 1024u)
+ * Packed userland (bin/sbin/lib + drivers) can exceed 256 KiB. */
+#define PCI_MODBLOB_MAX_IMAGE  (1024u * 1024u)
 
 /* Initialise the in-memory module table from a cctkfs image previously
  * loaded by GRUB as a multiboot2 module.  Must be called BEFORE the

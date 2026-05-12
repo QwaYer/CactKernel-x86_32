@@ -872,5 +872,7 @@ void xhci_pci_init(void) {
     }
     if (found == 0) {
         klog(LOG_WARN, "xHCI: no USB3 controller found on PCI bus");
+    } else {
+        klog(LOG_OK, "xHCI host controller(s) brought up");
     }
 }

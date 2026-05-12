@@ -4,6 +4,7 @@
 #include "procfs.h"
 #include "tmpfs.h"
 #include "binfs.h"
+#include "sbinfs.h"
 #include "libfs.h"
 #include "varfs.h"
 #include "vfs.h"
@@ -27,11 +28,13 @@ static void mntfs_setup_nodisk(void) {
     tmpfs_init();
     etcfs_init(0);
     binfs_init(0);
+    sbinfs_init(0);
     libfs_init(0);
     varfs_init(0);
 
     extern int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target);
     vfs_mount(vfs_root, "bin",  binfs_get_root());
+    vfs_mount(vfs_root, "sbin", sbinfs_get_root());
     vfs_mount(vfs_root, "lib",  libfs_get_root());
     vfs_mount(vfs_root, "dev",  devfs_get_root());
     vfs_mount(vfs_root, "proc", procfs_get_root());
@@ -403,6 +406,7 @@ void mntfs_init(void) {
         kprint("[mntfs] WARNING: no boot block device (load ahci/nvme kmod for disk)\n");
         klog(LOG_WARN, "mntfs: no boot disk — nodisk mode");
         mntfs_setup_nodisk();
+        klog(LOG_OK, "mntfs: virtual root ready (no boot disk)");
         return;
     }
 
@@ -412,6 +416,7 @@ void mntfs_init(void) {
         kprint("[mntfs] WARNING: no ext4 on "); kprint(boot_devname); kprint("\n");
         klog(LOG_WARN, "mntfs: ext4 mount failed — nodisk mode");
         mntfs_setup_nodisk();
+        klog(LOG_OK, "mntfs: virtual root ready (ext4 unavailable)");
         return;
     }
     mntfs_mount_disk(boot_devname, ext4, 0);
@@ -451,6 +456,12 @@ void mntfs_init(void) {
     strlcpy(sys_bin + strlen(boot_devname), "/sys/bin", 64 - strlen(boot_devname));
     mntfs_mount(sys_bin, "binfs", binfs_get_root(), 0);
 
+    sbinfs_init(ext4);
+    char sys_sbin[64];
+    strlcpy(sys_sbin, boot_devname, 64);
+    strlcpy(sys_sbin + strlen(boot_devname), "/sys/sbin", 64 - strlen(boot_devname));
+    mntfs_mount(sys_sbin, "sbinfs", sbinfs_get_root(), 0);
+
     libfs_init(ext4);
     char sys_lib[64];
     strlcpy(sys_lib, boot_devname, 64);
@@ -472,4 +483,6 @@ void mntfs_init(void) {
     vfs_mount(vfs_root, "tmp",  tmpfs_get_root());
     vfs_mount(vfs_root, "etc",  etcfs_get_root());
     vfs_mount(vfs_root, "var",  varfs_get_root());
+    vfs_mount(vfs_root, "sbin", sbinfs_get_root());
+    klog(LOG_OK, "mntfs: root filesystem and /bin /dev /proc mounts ready");
 }

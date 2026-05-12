@@ -145,6 +145,7 @@ void pci_enumerate(void) {
             scan_bus(fn);
         }
     }
+    klog(LOG_OK, "PCI bus enumeration finished");
 }
 
 // Find first device matching class_code + subclass; returns NULL if none

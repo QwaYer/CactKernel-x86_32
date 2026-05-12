@@ -37,6 +37,10 @@ pub extern "C" fn net_register_driver(drv: *mut NetDriver) {
         }
         my_mac = (*drv).mac;
         stack::stack_init();
+        ffi_kernel::klog_static(
+            ffi_kernel::LOG_OK,
+            b"NIC driver registered; L3 stack initialized\0",
+        );
     }
 }
 
@@ -62,6 +66,10 @@ pub extern "C" fn net_init() {
         ffi_kernel::sema_init(core::ptr::addr_of_mut!(net_sema), 0);
         let _ = ffi_kernel::create_task(knetd);
         dhcp::rust_net_dhcp_start_daemon();
+        ffi_kernel::klog_static(
+            ffi_kernel::LOG_OK,
+            b"Network subsystem ready (knetd, RX semaphore, DHCP)\0",
+        );
     }
 }
 

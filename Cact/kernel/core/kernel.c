@@ -146,18 +146,28 @@ static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
 void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Memory management (order matters!)
     init_gdt();                     // Global Descriptor Table
+    klog(LOG_OK, "GDT initialized");
     pmm_init_from_mmap(mmap);       // Physical Memory Manager
+    klog(LOG_OK, "Physical memory manager ready");
     init_memory_manager();          // Virtual memory manager
+    klog(LOG_OK, "Virtual memory manager ready");
     init_heap();                    // Kernel heap (kmalloc)
+    klog(LOG_OK, "Kernel heap ready");
     init_paging();                  // Enable paging, load page directory
+    klog(LOG_OK, "Paging enabled");
     slab_init();                    // Slab allocator for kernel objects
+    klog(LOG_OK, "Slab allocator ready");
     page_fault_init();              // Page fault handler
+    klog(LOG_OK, "Page fault handler installed");
 
     // Interrupts
     init_pic();                     // Programmable Interrupt Controller
+    klog(LOG_OK, "PIC programmed");
     init_idt();                     // Interrupt Descriptor Table
+    klog(LOG_OK, "IDT loaded");
 
     serial_init();                  // COM1 — kprint/klog also go here (QEMU: -serial stdio)
+    klog(LOG_OK, "Serial console (COM1) ready");
 
     // Display
     init_framebuffer();
@@ -178,6 +188,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         // kprint(). Must run AFTER MTRR enables WC (the seeding memcpy reads
         // the FB once; under UC this would stall, under WC it's bearable).
         fb_enable_shadow();
+        klog(LOG_OK, "Framebuffer WC + shadow buffer configured");
     }
 
     // Terminal window size from framebuffer geometry
@@ -193,6 +204,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Input devices
     ps2_keyboard_init();
     ps2_mouse_init();
+    klog(LOG_OK, "PS/2 keyboard and mouse initialized");
 
     // Diagnostics
     {
@@ -209,6 +221,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     /* PIT before PCI scan: GDD prompts use timer_ticks + IRQ keyboard while interrupts stay globally masked until init(). */
     init_timer(100);
+    klog(LOG_OK, "PIT timer running (100 Hz)");
 
     // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
     // kmods can blkdev_register(); otherwise mntfs sees no boot disk.
@@ -236,6 +249,8 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
         if (swap_status)
             klog(LOG_WARN, "swap init failed — OOM killer is last resort");
+        else
+            klog(LOG_OK, "Swap subsystem ready");
     }
 
     // Virtual filesystem (mntfs_init is deferred — needs the scheduler).
@@ -247,6 +262,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Multitasking
     task_init();
     init_scheduler();
+    klog(LOG_OK, "Hardware setup complete — enabling IRQs / scheduler next");
 }
 
 extern mb2_module_info_t mb2_cctkfs_module;

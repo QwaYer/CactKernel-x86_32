@@ -109,8 +109,10 @@ pub const PAGE_RW:      u32 = 1 << 1;
 pub const PAGE_USER:    u32 = 1 << 2;
 pub const PAGE_SIZE:    u32 = 4096;
 
-pub const LOG_OK:   i32 = 0;
-pub const LOG_FAIL: i32 = 1;
+pub const LOG_OK:    i32 = 0;
+pub const LOG_WARN:  i32 = 1;
+pub const LOG_ERROR: i32 = 2;
+pub const LOG_FAIL:  i32 = 3;
 
 pub const KERNEL_BASE: u32 = 0xC000_0000;
 
