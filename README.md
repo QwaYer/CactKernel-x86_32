@@ -1,13 +1,23 @@
-# CactKernel / x86_32
+# 🌵 CactKernel/x86_32
 
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.0.0-green.svg?style=for-the-badge" alt="Version: 1.0.0">
+  <img src="https://img.shields.io/badge/license-GPLv3-blue.svg?style=for-the-badge" alt="License: GPLv3">
+  <img src="https://img.shields.io/badge/arch-i686-red.svg?style=for-the-badge" alt="Arch: i686">
+  <img src="https://img.shields.io/badge/language-C%2FRust%2FASM-orange.svg?style=for-the-badge" alt="Language: C/Rust/ASM">
+  <img src="https://img.shields.io/badge/boot-Multiboot2-purple.svg?style=for-the-badge" alt="Multiboot2">
+  <img src="https://img.shields.io/badge/output-cact.iso-0369a1.svg?style=for-the-badge" alt="cact.iso">
+  <img src="https://img.shields.io/badge/status-pre--1.0-yellow.svg?style=for-the-badge" alt="pre-1.0">
+</p>
 
-
-Гибридное монолитное ядро для i686.  
-Низкоуровневые интерфейсы на **C** и **NASM**; менеджер памяти, планировщик, часть синхронизации и **сетевой стек (smoltcp)** — на **Rust** (`cact_mm`, `sched`, `cact_net`).
+<p align="center">
+  Гибридное монолитное ядро для архитектуры <strong>i686</strong>.<br>
+  Низкоуровневые интерфейсы на <strong>C</strong> и <strong>NASM</strong>; менеджер памяти, планировщик, часть синхронизации и <strong>сетевой стек (smoltcp)</strong> — на <strong>Rust</strong> (<code>cact_mm</code>, <code>sched</code>, <code>cact_net</code>).
+</p>
 
 ---
 
-## Stats
+## 📊 Stats
 
 
 |                  |                                                               |
@@ -23,14 +33,13 @@
 
 ---
 
-## Связанные репозитории и полная сборка
+## 🔗 Связанные репозитории и полная сборка
 
-
-| Компонент                                                      | Роль                                                                                            |
-| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| **[CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32)** | `libc.a` / `libc.so` — номера `SYS_*` должны совпадать с `syscalls.h`                           |
-| **LocalRepoCactOS** (`../LocalRepoCactOS`)                     | Драйверы `*.cctk`, ELF в `lib/bin/`, упаковка `**cctkfs.img`** (модуль GRUB `module2 … cctkfs`) |
-| `**../build-cact-qemu.sh**`                                    | Драйверы → `cctkfs.img` → `./build_disk.sh` (пустой ext4 `nvme.img`) → `make` ядра и ISO        |
+| Компонент | Роль |
+|-----------|------|
+| **[CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32)** | **`libc.a`** / **`libc.so`** — номера `SYS_*` должны совпадать с [`syscalls.h`](Cact/kernel/core/syscalls/syscalls.h) ядра |
+| **[LocalRepoCactOS](../LocalRepoCactOS)** | Драйверы **`*.cctk`**, ELF в **`lib/bin/`**, упаковка **`cctkfs.img`** (модуль GRUB `module2 … cctkfs`) |
+| **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | Драйверы → **`cctkfs.img`** → **`./build_disk.sh`** (пустой ext4 **`nvme.img`**) → **`make`** ядра и ISO |
 
 
 Типовой QEMU-цикл из корня воркспейса:
@@ -43,7 +52,7 @@ cd CactKernel-x86_32 && make
 
 ---
 
-## Building
+## 🔨 Building
 
 **Requirements:**
 
@@ -94,11 +103,11 @@ VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
                -DCACT_BUILD_TIME="$(CACT_BUILD_TIME)"
 ```
 
-**Линковка:** C-объекты + `libcact_mm.a` (PMM/VMM) + `libsched.a` (MLFQ) + `**libcact_net.a`** (smoltcp, DHCP, DNS, TCP/UDP сокеты).
+**Линковка:** C-объекты + **`libcact_mm.a`** (PMM/VMM) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, DHCP, DNS, TCP/UDP сокеты).
 
 ---
 
-## Structure
+## 📂 Structure
 
 ```
 CactKernel-x86_32/
@@ -134,7 +143,7 @@ CactKernel-x86_32/
 
 ---
 
-## Boot sequence
+## 🚀 Boot sequence
 
 ### Ранний `init()` (ещё без планировщика)
 
@@ -187,7 +196,7 @@ Kernel is ready. Launching init…
 
 ---
 
-## Memory map (rust_mm)
+## 🧠 Memory map (rust_mm)
 
 ### Физическая память и куча
 
@@ -239,7 +248,7 @@ Kernel is ready. Launching init…
 
 ---
 
-## Scheduler (Rust MLFQ)
+## ⏱️ Scheduler — MLFQ (Rust)
 
 
 | Level | Name        | Quantum | Notes            |
@@ -258,7 +267,7 @@ Kernel is ready. Launching init…
 
 ---
 
-## Drivers
+## 💾 Drivers
 
 
 | Категория | Компонент                                                                | Примечание                                    |
@@ -272,11 +281,11 @@ Kernel is ready. Launching init…
 | Network   | **virtio-net**                                                           | В типовой QEMU-сборке                         |
 
 
-Дополнительные PCI-драйверы (Marvell Yukon и др.) собираются в sibling-репозиториях `*-for-Cact` и попадают в `**cctkfs.img`** через `LocalRepoCactOS/build.sh`.
+Дополнительные PCI-драйверы (Marvell Yukon и др.) собираются в sibling-репозиториях **`*-for-Cact`** и попадают в **`cctkfs.img`** через **[`LocalRepoCactOS/build.sh`](../LocalRepoCactOS/build.sh)**.
 
 ---
 
-## Filesystems
+## 📁 Filesystems
 
 
 | FS                        | Status | Notes                               |
@@ -298,7 +307,15 @@ Kernel is ready. Launching init…
 
 ---
 
-## Network stack
+## 🌐 Network Stack
+
+```
+TCP state machine (логическая модель / VFS metadata):
+CLOSED → LISTEN → SYN_SENT → SYN_RECEIVED
+       → ESTABLISHED
+       → FIN_WAIT_1 → FIN_WAIT_2 → TIME_WAIT
+       → CLOSE_WAIT → LAST_ACK → CLOSED
+```
 
 Классический C-путь (Ethernet/IP/ARP) дополняется **Rust `cact_net` (smoltcp)**: DHCPv4, ICMP ping, TCP/UDP для сисколлов, внутренний DNS-клиент.
 
@@ -317,14 +334,29 @@ Kernel is ready. Launching init…
 
 ---
 
-## Kernel panic / ring 3 faults
+## 💥 Kernel Panic
 
-Ring 0: полный дамп регистров и `hlt`.  
-Ring 3: часть исключений мапится на сигналы (`SIGFPE`, `SIGSEGV`, остальное → `SIGKILL`) — см. код обработчика.
+При исключении в **ring 0** — полный дамп регистров и halt:
+
+```
+=== KERNEL PANIC ===
+Exception: 14 (#PF)   Error code: 0x00000003
+EIP: 0xC010A3F2   CS: 0x00000008
+System halted.
+```
+
+При исключении в **ring 3** — маппинг на POSIX-сигналы — см. код обработчика:
+
+| Exception | Signal | Condition |
+|-----------|--------|-----------|
+| #DE (int 0) | `SIGFPE` | Divide by zero |
+| #MF (int 16) | `SIGFPE` | x87 FPU error |
+| #GP (int 13) | `SIGSEGV` | General protection fault |
+| all others | `SIGKILL` | Unrecoverable crash |
 
 ---
 
-## System calls (95 total)
+## 📞 System Calls (95 total)
 
 Источник правды: `Cact/kernel/core/syscalls/syscalls.h` (должен совпадать с `CactLib-x86_32/include/syscall.h`).
 
@@ -349,10 +381,14 @@ Ring 3: часть исключений мапится на сигналы (`SIG
 
 ---
 
-## License
+## ⚖️ License
 
-**GNU GPL v3.0** — см. `[LICENSE](LICENSE)`.
+**GNU General Public License v3.0** — см. [`LICENSE`](LICENSE).
 
 ---
 
-**Developer:** [QwaYer](https://github.com/QwaYer) · **libc:** [CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32) · **OS / userland:** [CactOS-x86_32](https://github.com/QwaYer/CactOS-x86_32)
+<p align="center">
+  <strong>Developer:</strong> <a href="https://github.com/QwaYer">QwaYer</a>
+  &nbsp;·&nbsp; <strong>libc:</strong> <a href="https://github.com/QwaYer/CactLib-x86_32">CactLib-x86_32</a>
+  &nbsp;·&nbsp; <strong>OS:</strong> <a href="https://github.com/QwaYer/CactOS-x86_32">CactOS-x86_32</a>
+</p>
