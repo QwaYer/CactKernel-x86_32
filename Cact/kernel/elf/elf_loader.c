@@ -168,7 +168,6 @@ void* load_elf_dynamic(char*                path,
 
     Elf32_Dyn* dyn_vaddr = 0;
     uint32_t   min_load_vaddr = 0xFFFFFFFFu;
-    uint32_t   max_load_vaddr = 0;
     uint32_t   load_bias = 0;
 
     for (int i = 0; i < hdr.e_phnum; i++) {
@@ -182,19 +181,13 @@ void* load_elf_dynamic(char*                path,
         }
         if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
         uint32_t seg_start = ph.p_vaddr & ~0xFFFu;
-        uint32_t seg_end   = (ph.p_vaddr + ph.p_memsz + 0xFFFu) & ~0xFFFu;
         if (seg_start < min_load_vaddr) min_load_vaddr = seg_start;
-        if (seg_end > max_load_vaddr) max_load_vaddr = seg_end;
     }
 
     if (min_load_vaddr == 0xFFFFFFFFu) {
         kprint("[ELF-DYN] ERR: no PT_LOAD segments\n");
         return 0;
     }
-
-    // Current policy maps to requested virtual addresses; keep explicit bias for correctness.
-    load_bias = min_load_vaddr - min_load_vaddr;
-    uint32_t runtime_base = min_load_vaddr + load_bias;
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;

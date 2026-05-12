@@ -1,0 +1,13 @@
+set timeout=0
+set default=0
+
+menuentry "Cact Kernel" {
+    insmod all_video
+    insmod vbe
+    insmod vga
+    insmod gfxterm
+    set gfxmode=auto
+    set gfxpayload=auto
+    multiboot2 /boot/kernel.bin
+    boot
+}

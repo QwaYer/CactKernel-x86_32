@@ -75,8 +75,10 @@ NET_SOCKET_DIR   = Cact/kernel/net/socket
 DRIVER_FB_DIR    = Cact/drivers/video/fb
 DRIVER_FONT_DIR  = Cact/drivers/video/font
 BUILD_DIR        = build
-# Для железа с акцентом на cctkfs: make GRUB_CFG=grub.cfg.ramroot
-GRUB_CFG        ?= grub.cfg
+# По умолчанию: только ядро + GRUB (без cctkfs). Полный образ с модулем cctkfs: make iso-full
+GRUB_CFG         ?= grub.cfg.kernelonly
+# Конфиг и образ для сборки с userland-модулем (см. $(BUILD_DIR)/cact-full.iso)
+GRUB_CFG_FULL    ?= grub.cfg
 
 # Version metadata from VERSION file
 CACT_VERSION    := $(shell cat VERSION 2>/dev/null || echo "unknown")
@@ -233,10 +235,9 @@ all: $(BUILD_DIR)/cact.iso
 	@echo "--------------------------------------------------"
 
 
-$(BUILD_DIR)/cact.iso: $(BUILD_DIR)/kernel.bin $(GRUB_CFG) $(CCTKFS_IMG)
+$(BUILD_DIR)/cact.iso: $(BUILD_DIR)/kernel.bin $(GRUB_CFG)
 	@mkdir -p $(BUILD_DIR)/isodir/boot/grub
 	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir/boot/kernel.bin
-	cp $(CCTKFS_IMG)           $(BUILD_DIR)/isodir/boot/cctkfs.img
 	cp $(GRUB_CFG)             $(BUILD_DIR)/isodir/boot/grub/grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/cact.iso $(BUILD_DIR)/isodir
 
@@ -501,8 +502,17 @@ $(CCTKFS_IMG):
 		echo "ERROR: $@ is missing."; \
 		echo "       1) build each driver: make -C ../<repo>-for-Cact install"; \
 		echo "       2) pack the image:    make -C $(LOCAL_REPO)"; \
+		echo "       (only needed for:     make iso-full)"; \
 		exit 1; \
 	fi
+
+# Ядро + cctkfs + GRUB (нужен собранный $(CCTKFS_IMG))
+$(BUILD_DIR)/cact-full.iso: $(BUILD_DIR)/kernel.bin $(GRUB_CFG_FULL) $(CCTKFS_IMG)
+	@mkdir -p $(BUILD_DIR)/isodir-full/boot/grub
+	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir-full/boot/kernel.bin
+	cp $(CCTKFS_IMG)           $(BUILD_DIR)/isodir-full/boot/cctkfs.img
+	cp $(GRUB_CFG_FULL)        $(BUILD_DIR)/isodir-full/boot/grub/grub.cfg
+	grub-mkrescue -o $(BUILD_DIR)/cact-full.iso $(BUILD_DIR)/isodir-full
 
 $(BUILD_DIR)/blkdev.o: $(DRIVER_BLK_BLOCK_DIR)/blkdev.c
 	@mkdir -p $(BUILD_DIR)
@@ -600,6 +610,8 @@ clean:
 	cd $(RUST_MM_DIR) && cargo clean
 	cd $(RUST_NET_DIR) && cargo +nightly clean
 
-.PHONY: all clean sched FORCE
+.PHONY: all clean sched FORCE iso-full
 .PHONY: sched
 sched: $(SCHED_TARGET)
+
+iso-full: $(BUILD_DIR)/cact-full.iso

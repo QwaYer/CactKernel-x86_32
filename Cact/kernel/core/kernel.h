@@ -120,8 +120,8 @@ int  get_cursor_y(void);
 // Kernel-space string/number utilities
 void itoa          (int n, char str[]);
 int  atoi          (char* str);
-int  strcmp        (char* s1, char* s2);
-int  compare_string(char* s1, char* s2);
+int  strcmp        (const char* s1, const char* s2);
+int  compare_string(const char* s1, const char* s2);
 void hex_to_ascii  (uint32_t n, char str[]);
 
 // CPU exception dispatcher

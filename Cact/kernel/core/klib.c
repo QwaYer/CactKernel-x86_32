@@ -1,7 +1,7 @@
 #include "klib.h"
 
 // Compare strings until mismatch or '\0'
-int compare_string(char* s1, char* s2) {
+int compare_string(const char* s1, const char* s2) {
     int i;
     for (i = 0; s1[i] == s2[i]; i++) {
         if (s1[i] == '\0') return 0;   // both strings ended
@@ -10,7 +10,7 @@ int compare_string(char* s1, char* s2) {
 }
 
 // POSIX-compatible wrapper
-int strcmp(char* s1, char* s2) {
+int strcmp(const char* s1, const char* s2) {
     return compare_string(s1, s2);
 }
 
