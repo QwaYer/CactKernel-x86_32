@@ -154,6 +154,7 @@ static syscall_fn syscall_table[SYSCALL_COUNT] = {
     [SYS_GETSOCKOPT]    = (syscall_fn)sys_getsockopt,
     [SYS_PING_ECHO]     = (syscall_fn)sys_ping_echo,
     [SYS_NETCFG_SET]    = (syscall_fn)sys_netcfg_set,
+    [SYS_DNS_RESOLVE]   = (syscall_fn)sys_dns_resolve,
 
     [SYS_MODULE_LOAD]   = (syscall_fn)sys_module_load,
     [SYS_MODULE_UNLOAD] = (syscall_fn)sys_module_unload,
@@ -223,6 +224,7 @@ static int _needs_frame(uint32_t n) {
     case SYS_GETSOCKOPT:
     case SYS_PING_ECHO:
     case SYS_NETCFG_SET:
+    case SYS_DNS_RESOLVE:
         return 1;
     default:
         return 0;

@@ -23,5 +23,6 @@ typedef struct {
     uint32_t t2_s;
 } rust_net_dhcp_lease_cfg_t;
 int rust_net_dhcp_set_lease(const rust_net_dhcp_lease_cfg_t* cfg);
+int rust_net_dns_resolve_a(const char* name, uint32_t* out_ip_host);
 
 #endif /* RUST_NET_FFI_H */

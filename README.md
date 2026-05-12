@@ -1,337 +1,358 @@
-# 🌵 CactKernel/x86_32
+# CactKernel / x86_32
 
-<p align="center">
-  <img src="https://img.shields.io/badge/version-0.9.0-green.svg?style=for-the-badge" alt="Version: 0.9.0">
-  <img src="https://img.shields.io/badge/license-GPLv3-blue.svg?style=for-the-badge" alt="License: GPLv3">
-  <img src="https://img.shields.io/badge/arch-i686-red.svg?style=for-the-badge" alt="Arch: i686">
-  <img src="https://img.shields.io/badge/language-C%2FRust%2FASM-orange.svg?style=for-the-badge" alt="Language: C/Rust/ASM">
-  <img src="https://img.shields.io/badge/boot-Multiboot2-purple.svg?style=for-the-badge" alt="Multiboot2">
-  <img src="https://img.shields.io/badge/output-cact.iso-0369a1.svg?style=for-the-badge" alt="cact.iso">
-  <img src="https://img.shields.io/badge/status-pre--1.0-yellow.svg?style=for-the-badge" alt="pre-1.0">
-</p>
 
-<p align="center">
-  Гибридное монолитное ядро для архитектуры i686.<br>
-  Низкоуровневые интерфейсы на <strong>C</strong> и <strong>NASM ASM</strong>, менеджер памяти и планировщик — на <strong>Rust</strong>.
-</p>
+
+Гибридное монолитное ядро для i686.  
+Низкоуровневые интерфейсы на **C** и **NASM**; менеджер памяти, планировщик, часть синхронизации и **сетевой стек (smoltcp)** — на **Rust** (`cact_mm`, `sched`, `cact_net`).
 
 ---
 
-## 📊 Stats
+## Stats
 
-| | |
-|---|---|
-| **Syscalls** | 73 |
-| **CPU ISRs** | 32 |
-| **Physical mem range** | 128 MB |
-| **xHCI driver** | ~32 KiB |
-| **MLFQ levels** | 4 |
-| **ext4 driver** | ~40 KiB |
+
+|                  |                                                               |
+| ---------------- | ------------------------------------------------------------- |
+| **Syscalls**     | 95 (`SYSCALL_COUNT` в `syscalls.h`)                           |
+| **CPU ISRs**     | 32                                                            |
+| **PMM диапазон** | 0 … `0xE000_0000` (до PCI/MMIO hole, до ~3.5 GiB RAM по mmap) |
+| **MAX_FD**       | 256 на задачу                                                 |
+| **xHCI driver**  | ~32 KiB                                                       |
+| **MLFQ levels**  | 4                                                             |
+| **ext4 (ядро)**  | ~40 KiB (read/write, inode ops)                               |
+
 
 ---
 
-## 🔨 Building
+## Связанные репозитории и полная сборка
+
+
+| Компонент                                                      | Роль                                                                                            |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **[CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32)** | `libc.a` / `libc.so` — номера `SYS_*` должны совпадать с `syscalls.h`                           |
+| **LocalRepoCactOS** (`../LocalRepoCactOS`)                     | Драйверы `*.cctk`, ELF в `lib/bin/`, упаковка `**cctkfs.img`** (модуль GRUB `module2 … cctkfs`) |
+| `**../build-cact-qemu.sh**`                                    | Драйверы → `cctkfs.img` → `./build_disk.sh` (пустой ext4 `nvme.img`) → `make` ядра и ISO        |
+
+
+Типовой QEMU-цикл из корня воркспейса:
+
+```sh
+./build-cact-qemu.sh          # полный цикл
+# или только ядро (ожидается уже собранный ../LocalRepoCactOS/cctkfs.img):
+cd CactKernel-x86_32 && make
+```
+
+---
+
+## Building
 
 **Requirements:**
 
-| Tool | Notes |
-|------|-------|
-| `gcc -m32` | With multilib — `gcc-multilib` on Ubuntu/Debian |
-| `nasm` | For `.asm` entry/interrupt stubs |
-| `ld (elf_i386)` | GNU binutils linker |
-| `cargo nightly` | For `cact_mm` and `sched` Rust crates |
-| `grub2-mkrescue` | Builds bootable `cact.iso` |
-| `xorriso` | Required by grub2-mkrescue |
+
+| Tool                              | Notes                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| `gcc -m32`                        | Multilib — `gcc-multilib` (Debian/Ubuntu)                                    |
+| `nasm`                            | Точка входа и обработчики прерываний                                         |
+| `ld -m elf_i386`                  | GNU ld                                                                       |
+| `cargo +nightly`                  | `rust_mm`, `sched`, `cact_net` (сборка с `-Z build-std`, target `i686-cact`) |
+| `python3`                         | Упаковка `cctkfs.img` в LocalRepoCactOS                                      |
+| `grub-mkrescue` / `xorriso`       | Сборка `build/cact.iso`                                                      |
+| `qemu-img`, `mkfs.ext4`, `e2fsck` | Только для `./build_disk.sh` (образ диска для QEMU)                          |
+
 
 ```sh
-# Full build → build/cact.iso + build/kernel.bin
-make
+# Ядро + ISO (подставляет cctkfs из ../LocalRepoCactOS при наличии)
+make -j$(nproc)
 
-# Build Rust scheduler only
+# Только планировщик (Rust)
 make sched
 
-# Clean everything (incl. Rust targets)
+# Полная зачистка артефактов (включая Rust target)
 make clean
+
+# Пустой ext4-диск для ./run_qemu.sh (512 MiB по умолчанию)
+./build_disk.sh
 ```
 
-**Build output:**
+**Вывод в конце успешной сборки** (версия и хэш берутся из `VERSION` и `git`):
+
 ```
 --------------------------------------------------
-CactKernel build complete!
-  Version:  0.9.0
-  Commit:   abc1234
-  Built:    2026-04-25 12:00:00
-  Kernel:   build/kernel.bin
-  Image:    build/cact.iso
+Cact kernel build complete!
+  Version: 1.0.0
+  Commit:  <short>
+  Built:   <timestamp>
+  Kernel:  build/kernel.bin
+  Image:   build/cact.iso
 --------------------------------------------------
 ```
 
-**Compiler flags:**
+**Версия в C** (из `Makefile`):
+
 ```makefile
-CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -Wall
-# Version metadata embedded at build time:
-VERSION_DEFS = -DCACT_VERSION=0.9.0 -DCACT_COMMIT_HASH=$(git rev-parse --short HEAD)
+VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
+               -DCACT_COMMIT_HASH=$(CACT_COMMIT) \
+               -DCACT_BUILD_TIME="$(CACT_BUILD_TIME)"
 ```
 
-**Linking:**
-```makefile
-LDFLAGS = -m elf_i386 -T linker.ld -z noexecstack
-# Final link: C objects + libcact_mm.a (Rust PMM/VMM) + libsched.a (Rust MLFQ)
-```
+**Линковка:** C-объекты + `libcact_mm.a` (PMM/VMM) + `libsched.a` (MLFQ) + `**libcact_net.a`** (smoltcp, DHCP, DNS, TCP/UDP сокеты).
 
 ---
 
-## 📂 Structure
+## Structure
 
 ```
 CactKernel-x86_32/
 ├── Cact/
 │   ├── kernel/
-│   │   ├── core/           kernel.c, kernel.h, klib.c, syscall.c, multiboot2.c
-│   │   ├── memory/         rust_mm/ (PMM, VMM, mmap, swap, slab, shm — Rust)
-│   │   ├── proc/           task.c, task.asm, sched/ (MLFQ — Rust)
-│   │   ├── sync/           spinlock, IRQ spinlock, mutex, semaphore (Rust)
-│   │   ├── elf/            elf_loader.c, dynlink/dynlink.c
-│   │   └── gdt/ idt/ shell/
+│   │   ├── core/           kernel.c, multiboot2, syscalls/, interrupt, klib
+│   │   ├── memory/         rust_mm/ (PMM, VMM, mmap, swap, slab, shm)
+│   │   ├── proc/           task.c, task.asm, sched/ (Rust MLFQ)
+│   │   ├── sync/           spinlock, semaphore, … (Rust + C glue)
+│   │   ├── elf/            elf_loader, dynlink/
+│   │   ├── gdt/ idt/
+│   │   └── net/            arp, ethernet, ip, icmp, protocols/, socket/, rust_net/ (cact_net)
 │   ├── drivers/
-│   │   ├── block/          AHCI, NVMe, blkdev, buf, pagecache
-│   │   ├── input/          ps_2/ keyboard + mouse, io.asm
-│   │   ├── network/        virtio_net/
-│   │   ├── pci/            pci, enum, driver, loader
-│   │   ├── usb/            xHCI (~32KiB), hid, hub
-│   │   └── video/          fb/ (32bpp framebuffer), font/ (8×8 bitmap)
+│   │   ├── block/          blkdev, pagecache
+│   │   ├── input/          ps_2 keyboard + mouse
+│   │   ├── network/        virtio_net (встроенный драйвер)
+│   │   ├── pci/            enum, driver, loader, gdd, modblob (cctkfs staging)
+│   │   ├── usb/            xHCI, HID, hub
+│   │   └── video/          framebuffer, font, mtrr
 │   ├── fs/
-│   │   ├── vfs/            vfs.c, devfs, procfs, mntfs, etcfs, tmpfs, binfs
-│   │   ├── ext4/           ~40KiB, read/write
-│   │   └── btrfs/ exFAT/ ramfs/  ← stubs (7 bytes each)
-│   ├── net/                arp, ethernet, ip, icmp, protocols/udp+tcp, socket
-│   └── pipe/               pipe.c
-├── Makefile                → build/cact.iso
-├── VERSION                 0.9.0
-├── linker.ld               kernel link script (elf_i386)
-└── grub.cfg                multiboot2 boot entry
+│   │   ├── vfs/            vfs, devfs, procfs, mntfs, etcfs, tmpfs, binfs, sbinfs, libfs, varfs
+│   │   ├── ext4/
+│   │   └── btrfs/ exFAT/ ramfs/   ← заглушки
+│   └── pipe/
+├── Makefile
+├── VERSION                 # сейчас 1.0.0
+├── linker.ld
+├── grub.cfg                # multiboot2 + module2 cctkfs
+├── grub.cfg.ramroot        # вариант с акцентом на cctkfs / без ext4
+├── build_disk.sh           # build/nvme.img (пустой ext4)
+└── run_qemu.sh             # QEMU; при отсутствии диска вызывает build_disk.sh
 ```
 
 ---
 
-## 🚀 Boot Sequence
+## Boot sequence
 
-Full initialization order in `kernel_setup_hardware()` + `init()`:
+### Ранний `init()` (ещё без планировщика)
 
-| # | Component | Notes |
-|---|-----------|-------|
-| 01 | **Multiboot2 parse** | magic check (0x36D76289), framebuffer tag, memory map |
-| 02 | **GDT + Memory Manager** | init_gdt(), init_memory_manager(), init_heap() |
-| 03 | **Framebuffer identity-map** | vmm_map() for each 4K FB page, then init_paging() |
-| 04 | **Slab + Page Fault** | slab_init(); page_fault_init() — 7-scenario handler |
-| 05 | **PIC + IDT** | init_pic() — 8259A; init_idt() — 32 CPU ISRs |
-| 06 | **Framebuffer ready** | 32bpp, 8×8 font ×2 scale, 16-color palette |
-| 07 | **PS/2 + I/O probe** | ps2_keyboard_init(), ps2_mouse_init(), port 0x64 probe |
-| 08 | **PCI scan + enumerate** | search_pci(), pci_enumerate() — binds AHCI/NVMe/virtio-net |
-| 09 | **USB xHCI stack** | usb_init() — xHCI host controller, HID, Hub |
-| 10 | **Block layer + Swap** | blkdev_init(), pc_init() (page cache), swap_init() |
-| 11 | **VFS + Filesystems** | vfs_init(), mntfs_init() — ext4/devfs/procfs/mntfs/etcfs |
-| 12 | **Network** | net_init() — ethernet, ARP, IPv4, ICMP, UDP, TCP |
-| 13 | **Tasks + Scheduler** | task_init(), init_scheduler() — MLFQ 4-level Rust |
-| 14 | **PIT Timer 100 Hz** | init_timer(100) — divisor=11931 → IRQ0 active |
-| 15 | **Shell ready → STI** | system_ready=1; sti; terminal spawned; kernel idles on HLT |
 
-**Boot prompt:**
+| #   | Шаг                        | Примечание                                                    |
+| --- | -------------------------- | ------------------------------------------------------------- |
+| 1   | **Multiboot2**             | mmap, framebuffer tag                                         |
+| 2   | **cctkfs в .bss**          | `pci_modblob_load` — копия модуля GRUB до включения пейджинга |
+| 3   | **fb_init**                | без FB — halt                                                 |
+| 4   | **kernel_setup_hardware**  | см. ниже                                                      |
+| 5   | **create_task(bootstrap)** | поток монтирования и `init`                                   |
+| 6   | **sti**                    | boot-контекст становится idle (HLT)                           |
+
+
+### `kernel_setup_hardware()` (до IRQ глобально у пользователя)
+
+
+| #   | Компонент                                                    |
+| --- | ------------------------------------------------------------ |
+| 1   | GDT → PMM (mmap) → VMM → kmalloc heap → **paging on**        |
+| 2   | slab, page fault handler                                     |
+| 3   | PIC, IDT, **serial COM1**                                    |
+| 4   | framebuffer, **MTRR WC**, shadow buffer                      |
+| 5   | PS/2 kbd + mouse, опциональные предупреждения I/O / CMOS     |
+| 6   | **PIT 100 Hz** (до PCI — GDD/таймер)                         |
+| 7   | **blkdev_init** → PCI scan/enumerate → **usb_init (xHCI)**   |
+| 8   | page cache, **swap_init**                                    |
+| 9   | **vfs_init**, **net_init** (в т.ч. Rust `stack_init`, knetd) |
+| 10  | **task_init**, **init_scheduler** (Rust MLFQ)                |
+
+
+### Поток `kernel_bootstrap_main` (после первого тика планировщика)
+
+
+| #   | Действие                                                                       |
+| --- | ------------------------------------------------------------------------------ |
+| 1   | `pci_driver_probe_deferred_all()`                                              |
+| 2   | **mntfs_init** — монтирование ext4 (AHCI/NVMe, sema на IRQ)                    |
+| 3   | **create_elf_task("bin/init")** — userland из **cctkfs** (overlay binfs/libfs) |
+
+
+**Пример вывода (сокращённо):**
+
 ```
-        [  OK  ] EXT4 / devfs / procfs / mntfs mounted
-        [  OK  ] PIT timer @ 100 Hz — IRQ0 active
-        [  OK  ] shell commands registered
-
-CactKernel 0.9.0
+Cact Kernel 1.0.0
 --------------------------
-Kernel is ready. Starting terminal...
-
-Cact Shell ready!
-kernel@cact:~$
+[VER] commit=…  built=…
+Kernel is ready. Launching init…
 ```
 
 ---
 
-## 🧠 Memory Map
+## Memory map (rust_mm)
 
-### Physical (rust_mm constants)
+### Физическая память и куча
 
-| Constant | Value | Notes |
-|----------|-------|-------|
-| `MEM_START` | `0x00100000` | Physical base (1 MB) |
-| `MEM_SIZE` | 128 MB | Managed physical range |
-| `TOTAL_PAGES` | 32 768 | MEM_SIZE / PAGE_SIZE |
-| `HEAP_START` | MEM_START + bitmap | Kernel heap base |
-| `HEAP_SIZE` | 16 MB | Kernel heap ceiling |
-| `HEAP_MAGIC` | `0xDEADBEEF` | Block integrity check |
-| `SWAP_MAX_SLOTS` | 65 536 | Swap bitmap slots |
-| `SLAB_MIN/MAX` | 8–2048 B | Slab object sizes |
 
-### User Address Space
+| Symbol           | Value                 | Notes                                                |
+| ---------------- | --------------------- | ---------------------------------------------------- |
+| `MEM_START`      | `0x00100000`          | Нижняя граница для PMM                               |
+| `PCI_HOLE_START` | `0xE0000000`          | Верхняя граница RAM для PMM (начало PCI/MMIO hole)   |
+| `MEM_SIZE`       | = `PCI_HOLE_START`    | Управляемый диапазон ~3584 MiB (страницы 0 … hole−1) |
+| `TOTAL_PAGES`    | `MEM_SIZE / 4096`     |                                                      |
+| `RESERVED_END`   | `0x02000000` (32 MiB) | Нижняя зона зарезервирована под ядро/таблицы         |
+| `HEAP_START`     | `0x02000000`          |                                                      |
+| `HEAP_SIZE`      | 16 MiB                | Окно kmalloc                                         |
+| `HEAP_MAGIC`     | `0xDEADBEEF`          |                                                      |
+| `SWAP_MAX_SLOTS` | 65536                 |                                                      |
+| `SLAB_MIN/MAX`   | 8 … 2048 B            |                                                      |
+
+
+### Виртуальное адресное пространство пользователя (ориентиры)
 
 ```
-0xC0000000  ┌──────────────────────────┐  Kernel space (ring 0 only)
-0xBFFFE000  ├──────────────────────────┤  sigreturn trampoline (int 0x80)
-0xBF000000  ├──────────────────────────┤  User stack top (grows ↓)
-            │         USER STACK        │  LIMIT=0xBF000000 → TOP=0xC0000000
-0xA0000000  ├──────────────────────────┤  Shared memory (SHM)
-            │      SHM_VA_BASE → 0xB0000000  (32 segs × 64 pages)
-0x40000000  ├──────────────────────────┤  mmap region (256 slots max)
-            │    MMAP_BASE → 0xBF000000  │
-0x40000000  ├──────────────────────────┤  User heap (brk)
-            │  USER_HEAP_START → 0x80000000
-0x08048000  ├──────────────────────────┤  ELF text + data (PT_LOAD)
-0x00000000  └──────────────────────────┘  NULL guard (unmapped)
+0xC0000000  ┌──────────────────────────┐  Ядро (ring 0)
+0xBF000000  ├──────────────────────────┤  Нижняя граница пользовательского стека
+            │       user stack ↓        │
+0xBEFFF000  ├──────────────────────────┤  Страница с trampoline sigreturn (`int 0x80`)
+0xB0000000  ├──────────────────────────┤  SHM верх (см. SHM_VA_LIMIT)
+0xA0000000  ├──────────────────────────┤  SHM база (SHM_VA_BASE)
+0x80000000  ├──────────────────────────┤  Верх user heap (USER_HEAP_LIMIT)
+0x40000000  ├──────────────────────────┤  mmap / brk регион (MMAP_BASE … MMAP_LIMIT)
+0x08048000  ├──────────────────────────┤  Типичный load ELF (PT_LOAD)
+0x00000000  └──────────────────────────┘  NULL / guard
 ```
 
-### PTE flags (Rust ffi.rs)
+### Флаги страниц (выдержка из `rust_mm` FFI)
 
-```rust
-PAGE_PRESENT  = 0x001   // mapped
-PAGE_RW       = 0x002   // writable
-PAGE_USER     = 0x004   // ring 3 accessible
-PAGE_COW      = 0x200   // copy-on-write
-PAGE_DEMAND   = 0x400   // demand paging
-PAGE_ZERO     = 0x800   // zero page
-PAGE_SWAPPED  = 0x008   // swapped out (PRESENT=0)
-```
+
+| Flag                        | Значение      | Назначение                             |
+| --------------------------- | ------------- | -------------------------------------- |
+| `PAGE_PRESENT`              | 0x001         | Страница отображена                    |
+| `PAGE_RW`                   | 0x002         | Запись                                 |
+| `PAGE_USER`                 | 0x004         | Доступ из ring 3                       |
+| `PAGE_PWT` / `PAGE_SWAPPED` | 0x008         | PWT в PTE; при PRESENT=0 — маркер swap |
+| `PAGE_PCD`                  | 0x010         | MMIO                                   |
+| `PAGE_COW`                  | 0x200         | Copy-on-write                          |
+| `PAGE_DEMAND`               | 0x400         | Demand fill                            |
+| `PAGE_ZERO`                 | 0x800         | Zero-on-demand                         |
+| `PDE_PRIVATE`               | 0x200 (в PDE) | Приватная таблица страниц процесса     |
+
 
 ---
 
-## ⏱️ Scheduler — MLFQ (Rust)
+## Scheduler (Rust MLFQ)
 
-| Level | Name | Quantum | Notes |
-|-------|------|---------|-------|
-| 0 | Real-Time | 5 ticks | Highest priority |
-| 1 | Interactive | 1 tick | Destination of priority boost |
-| 2 | Normal | 2 ticks | Default for new tasks |
-| 3 | Background | 4 ticks | Long-running, CPU-bound |
 
-- **Priority boost** каждые 50 тиков: все задачи ≥ Normal → Interactive (anti-starvation)
-- **Voluntary block bonus**: блокировка до половины кванта → повышение на уровень
-- **Sleep queue**: `wake_expired_sleepers()` на каждом тике
-- **Timer wheel**: `timer_wheel_tick()` + `check_alarm_timers()` на каждом тике
-- **Reentrance guard**: `SCHEDULE_IN_PROGRESS` атомарный флаг
+| Level | Name        | Quantum | Notes            |
+| ----- | ----------- | ------- | ---------------- |
+| 0     | Real-Time   | 5 ticks | Высший приоритет |
+| 1     | Interactive | 1 tick  | Цель boost       |
+| 2     | Normal      | 2 ticks | По умолчанию     |
+| 3     | Background  | 4 ticks | CPU-bound        |
 
-**Task states:**
-```c
-TASK_READY    = 0   // in run queue
-TASK_RUNNING  = 1   // on CPU
-TASK_SLEEPING = 2   // waiting for sleep_until tick
-TASK_ZOMBIE   = 3   // exit() called, awaiting waitpid()
-TASK_WAITING  = 4   // blocked on I/O or mutex
-```
+
+- **Boost** каждые 50 тиков: anti-starvation для уровней ≥ Normal  
+- **Sleep / alarm**: очередь сна и таймеры на тике  
+- **Reentrancy**: защита от вложенного `schedule`
+
+**Состояния задачи:** `TASK_READY`, `TASK_RUNNING`, `TASK_SLEEPING`, `TASK_ZOMBIE`, `TASK_WAITING`
 
 ---
 
-## 💾 Drivers
+## Drivers
 
-| Category | Driver | Status |
-|----------|--------|--------|
-| **Block** | AHCI (SATA) | ✅ Active |
-| **Block** | NVMe | ✅ Active |
-| **Block** | blkdev abstraction | ✅ Active |
-| **Block** | buffer cache (buf) | ✅ Active |
-| **Block** | page cache | ✅ Active |
-| **USB** | xHCI 3.0 (~32 KiB) | ✅ Active |
-| **USB** | USB HID (kbd/mouse) | ✅ Active |
-| **USB** | USB Hub (cascading) | ✅ Active |
-| **Input** | PS/2 Keyboard | ✅ Active |
-| **Input** | PS/2 Mouse | ✅ Active |
-| **Video** | Framebuffer 32bpp | ✅ Active |
-| **Video** | 8×8 bitmap font ×2 | ✅ Active |
-| **PCI** | Bus scan + enum + driver binding | ✅ Active |
-| **Network** | virtio-net (QEMU/KVM) | ✅ Active |
+
+| Категория | Компонент                                                                | Примечание                                    |
+| --------- | ------------------------------------------------------------------------ | --------------------------------------------- |
+| Block     | AHCI, NVMe                                                               | В дереве ядра + опционально `.cctk` из cctkfs |
+| Block     | blkdev, page cache                                                       |                                               |
+| USB       | xHCI, HID, Hub                                                           |                                               |
+| Input     | PS/2 keyboard / mouse                                                    |                                               |
+| Video     | FB 32bpp, bitmap font, MTRR WC + shadow                                  |                                               |
+| PCI       | Scan, enum, **GDD**, **modblob** (cctkfs), динамическая загрузка `.cctk` |                                               |
+| Network   | **virtio-net**                                                           | В типовой QEMU-сборке                         |
+
+
+Дополнительные PCI-драйверы (Marvell Yukon и др.) собираются в sibling-репозиториях `*-for-Cact` и попадают в `**cctkfs.img`** через `LocalRepoCactOS/build.sh`.
 
 ---
 
-## 📁 Filesystems
+## Filesystems
 
-| FS | Status | Notes |
-|----|--------|-------|
-| **ext4** | ✅ Active | ~40 KiB, read/write, inode ops |
-| **VFS** | ✅ Active | 32-slot mount table, symlinks, ELOOP, rwx permissions |
-| **devfs** | ✅ Active | Devices as VFS nodes |
-| **procfs** | ✅ Active | /proc/cmd, register_cmd, meminfo |
-| **mntfs** | ✅ Active | mount/umount/list, auto-mount at boot |
-| **etcfs** | ✅ Active | /etc/passwd-like, uid↔name mapping |
-| **tmpfs** | ✅ Active | In-memory FS |
-| **binfs** | ✅ Active | Binary/exec namespace |
-| **pipes** | ✅ Active | pipe_create, fd table integration |
-| **btrfs** | ⬜ Stub | 7 bytes placeholder |
-| **exFAT** | ⬜ Stub | 7 bytes placeholder |
-| **ramfs** | ⬜ Stub | 7 bytes placeholder |
 
----
+| FS                        | Status | Notes                               |
+| ------------------------- | ------ | ----------------------------------- |
+| **ext4**                  | Active | R/W, inodes                         |
+| **VFS**                   | Active | mount table, symlinks, ELOOP, права |
+| **devfs**                 | Active |                                     |
+| **procfs**                | Active | `/proc/cmd`, meminfo, …             |
+| **mntfs**                 | Active | mount/umount, автомонт при загрузке |
+| **etcfs**                 | Active | uid / passwd-подобные данные        |
+| **tmpfs**                 | Active | RAM                                 |
+| **binfs**                 | Active | `/bin` + overlay из **cctkfs**      |
+| **sbinfs**                | Active | `/sbin` + cctkfs                    |
+| **libfs**                 | Active | `/lib` + **libc.so** из cctkfs      |
+| **varfs**                 | Active | `/var` layout                       |
+| **pipes**                 | Active | `pipe`, fd table                    |
+| **btrfs / exFAT / ramfs** | Stub   | Заглушки                            |
 
-## 🌐 Network Stack
-
-```
-TCP state machine:
-CLOSED → LISTEN → SYN_SENT → SYN_RECEIVED
-       → ESTABLISHED
-       → FIN_WAIT_1 → FIN_WAIT_2 → TIME_WAIT
-       → CLOSE_WAIT → LAST_ACK → CLOSED
-```
-
-| Layer | Features |
-|-------|----------|
-| **skb** | alloc/free/push/put — kernel packet buffer |
-| **Ethernet** | ethernet_input demux by EtherType |
-| **ARP** | cache, request/reply |
-| **IPv4** | ip_output, pseudo-checksum, inet_checksum |
-| **ICMP** | echo request (ping) |
-| **UDP** | udp_output, sock alloc/recv/free |
-| **TCP** | Full state machine, RST, accept(), RX ring buffer, callbacks |
-| **Sockets** | 16-slot kernel table, VFS integration (read/write/close) |
-| **knetd** | Kernel-space daemon on semaphore, net_poll() |
-
-> ⚠️ Статический IP (`MY_IP`). DHCP и DNS не реализованы в pre-1.0.
 
 ---
 
-## 💥 Kernel Panic
+## Network stack
 
-При исключении в **ring 0** — полный дамп регистров и halt:
-```
-=== KERNEL PANIC ===
-Exception: 14 (#PF)   Error code: 0x00000003
-EIP: 0xC010A3F2   CS: 0x00000008
-EAX: 0x00000000   EBX: 0xDEADBEEF   ECX: 0x00000001   EDX: 0x00000000
-ESP: 0xC01FF9E0   EBP: 0xC01FFA10
-System halted.
-```
+Классический C-путь (Ethernet/IP/ARP) дополняется **Rust `cact_net` (smoltcp)**: DHCPv4, ICMP ping, TCP/UDP для сисколлов, внутренний DNS-клиент.
 
-При исключении в **ring 3** — маппинг на POSIX-сигнал:
 
-| Exception | Signal | Condition |
-|-----------|--------|-----------|
-| #DE (int 0) | `SIGFPE` | Divide by zero |
-| #MF (int 16) | `SIGFPE` | x87 FPU error |
-| #GP (int 13) | `SIGSEGV` | General protection fault |
-| all others | `SIGKILL` | Unrecoverable crash |
+| Слой                             | Содержание                                                                              |
+| -------------------------------- | --------------------------------------------------------------------------------------- |
+| **skb**                          | Буферы пакетов                                                                          |
+| **Ethernet / ARP / IPv4 / ICMP** | C + вызовы в Rust где нужно                                                             |
+| **TCP / UDP / сокеты**           | smoltcp + метаданные `tcp_socket_t` / VFS                                               |
+| **knetd**                        | Опрос по семафору → `stack_poll()`                                                      |
+| **DHCP**                         | smoltcp `dhcpv4::Socket`                                                                |
+| **DNS**                          | `SYS_DNS_RESOLVE` / `dns_resolve()` — A-запись, UDP/53, сервер из DHCP или `netcfg_set` |
+
+
+Ограничения: нет IPv6/TLS в ядре; в QEMU обычно **virtio-net**; число сокетов ограничено константами (`TCP_MAX_SOCKETS`, `KSOCK_MAX`, и т.д.).
 
 ---
 
-## 📞 System Calls (73 total)
+## Kernel panic / ring 3 faults
 
-| Group | Syscalls |
-|-------|----------|
-| **Files** | `open` `read` `write` `close` `create` `delete` `lseek` `stat` `fstat` `getdents` `rename` `mkdir` `rmdir` `fcntl` `ioctl` `symlink` `readlink` `link` `unlink` |
-| **Processes** | `fork` `exec` `exit` `kill` `signal` `sigaction` `sigreturn` `sigprocmask` `sigpending` `sigsuspend` `getpid` `getppid` `waitpid` `sleep` `brk` `alarm` `setitimer` |
-| **Memory** | `mmap` `munmap` `mprotect` `shmget` `shmat` `shmdt` `shmctl` |
-| **Network** | `socket` `bind` `connect` `listen` `accept` `send` `recv` `sendto` `recvfrom` `shutdown` `setsockopt` `getsockopt` `select` `poll` |
-| **I/O** | `pipe` `dup2` `getcwd` `chdir` |
-| **Users** | `getuid` `getgid` `setuid` `setgid` `geteuid` `getegid` `chmod` `chown` |
-| **Time** | `gettimeofday` `clock_gettime` `nanosleep` |
-| **Misc** | `print` |
+Ring 0: полный дамп регистров и `hlt`.  
+Ring 3: часть исключений мапится на сигналы (`SIGFPE`, `SIGSEGV`, остальное → `SIGKILL`) — см. код обработчика.
 
 ---
 
-## ⚖️ License
+## System calls (95 total)
 
-**GNU General Public License v3.0** — see [`LICENSE`](LICENSE)
+Источник правды: `Cact/kernel/core/syscalls/syscalls.h` (должен совпадать с `CactLib-x86_32/include/syscall.h`).
+
+
+| Группа            | Сисколлы                                                                                                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Debug**         | `print`                                                                                                                                                                                                                                                      |
+| **Process**       | `getpid` `getppid` `fork` `exec` `exit` `waitpid` `sleep`                                                                                                                                                                                                    |
+| **Session**       | `setsid` `setpgid` `getpgid` `getpgrp`                                                                                                                                                                                                                       |
+| **Signals**       | `kill` `signal` `sigaction` `sigprocmask` `sigreturn` `sigpending` `sigsuspend` `alarm` `setitimer`                                                                                                                                                          |
+| **FD / files**    | `open` `read` `write` `close` `lseek` `ioctl` `fcntl` `dup` `dup2` `pipe` `select` `poll`                                                                                                                                                                    |
+| **File metadata** | `stat` `fstat` `access` `chmod` `chown` `umask` `truncate` `ftruncate` `sync` `fsync` `mknod`                                                                                                                                                                |
+| **Paths**         | `create` `mkdir` `rmdir` `delete` `unlink` `rename` `link` `symlink` `readlink` `getdents` `chdir` `getcwd` `chroot`                                                                                                                                         |
+| **System**        | `mount` `umount` `reboot` `uname`                                                                                                                                                                                                                            |
+| **Memory**        | `brk` `mmap` `munmap` `mprotect`                                                                                                                                                                                                                             |
+| **SHM**           | `shmget` `shmat` `shmdt` `shmctl`                                                                                                                                                                                                                            |
+| **Time**          | `gettimeofday` `clock_gettime` `nanosleep`                                                                                                                                                                                                                   |
+| **Users**         | `getuid` `getgid` `geteuid` `getegid` `setuid` `setgid`                                                                                                                                                                                                      |
+| **Network**       | `socket` `bind` `connect` `listen` `accept` `send` `recv` `sendto` `recvfrom` `shutdown` `setsockopt` `getsockopt` `select` `poll` и номера `SYS_PING_ECHO` (ICMP echo), `SYS_NETCFG_SET` (IPv4/DHCP lease в стек), `SYS_DNS_RESOLVE` (`dns_resolve` в libc) |
+| **Kmod**          | `module_load` `module_unload`                                                                                                                                                                                                                                |
+
 
 ---
 
-**Developer:** [QwaYer](https://github.com/QwaYer) · **libc:** [CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32) · **OS:** [CactOS-x86_32](https://github.com/QwaYer/CactOS-x86_32)
+## License
+
+**GNU GPL v3.0** — см. `[LICENSE](LICENSE)`.
+
+---
+
+**Developer:** [QwaYer](https://github.com/QwaYer) · **libc:** [CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32) · **OS / userland:** [CactOS-x86_32](https://github.com/QwaYer/CactOS-x86_32)

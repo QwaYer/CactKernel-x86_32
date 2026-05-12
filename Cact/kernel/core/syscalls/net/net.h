@@ -54,5 +54,6 @@ int sys_setsockopt(struct syscall_frame* regs);
 int sys_getsockopt(struct syscall_frame* regs);
 int sys_ping_echo(struct syscall_frame* regs);
 int sys_netcfg_set(struct syscall_frame* regs);
+int sys_dns_resolve(struct syscall_frame* regs);
 
 #endif 

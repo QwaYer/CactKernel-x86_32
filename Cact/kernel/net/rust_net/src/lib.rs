@@ -3,6 +3,7 @@
 
 pub mod checksum;
 pub mod config;
+pub mod dns_resolve;
 pub mod dhcp;
 pub mod ffi;
 pub mod ffi_kernel;

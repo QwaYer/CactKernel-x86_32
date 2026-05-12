@@ -86,7 +86,7 @@ typedef struct tcp_socket {
 } tcp_socket_t;
 
 /* ───────────────────────────────────────────────
-   Public API — skeleton stubs
+   Public API — TCP/UDP via smoltcp; C structs mirror PCB state for syscalls/VFS
    ─────────────────────────────────────────────── */
 
 extern tcp_socket_t tcp_sockets[TCP_MAX_SOCKETS];

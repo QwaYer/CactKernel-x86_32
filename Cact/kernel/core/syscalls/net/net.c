@@ -384,3 +384,13 @@ int sys_netcfg_set(struct syscall_frame* regs) {
     }
     return rc;
 }
+
+// dns_resolve() — resolve hostname or dotted IPv4 to host-order IPv4 (blocking DNS A)
+// ebx: NUL-terminated hostname in userspace, ecx: pointer to uint32_t out (userspace)
+int sys_dns_resolve(struct syscall_frame* regs) {
+    const char* name       = (const char*)regs->ebx;
+    uint32_t*   out_ip_host = (uint32_t*)regs->ecx;
+    if (!validate_user_str(name)) return -1;
+    if (!validate_user_ptr(out_ip_host, sizeof(uint32_t))) return -1;
+    return rust_net_dns_resolve_a(name, out_ip_host);
+}

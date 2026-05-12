@@ -256,6 +256,9 @@ pub fn stack_enqueue_rx(skb: *mut Skb) {
 }
 
 pub unsafe fn stack_teardown() {
+    if let Some(ref mut socks) = SOCKET_SET {
+        crate::dns_resolve::remove_socket(socks);
+    }
     IFACE = None;
     SOCKET_SET = None;
     DHCP_HANDLE = None;
@@ -295,6 +298,8 @@ pub fn stack_init() {
         let icmp_tx = icmp::PacketBuffer::new(&mut ICMP_TX_META[..], &mut ICMP_TX_PAYLOAD[..]);
         let icmp_sock = icmp::Socket::new(icmp_rx, icmp_tx);
         ICMP_HANDLE = Some(socks.add(icmp_sock));
+
+        crate::dns_resolve::init_socket(socks);
 
         STACK_READY = true;
         ffi_kernel::klog_static(
