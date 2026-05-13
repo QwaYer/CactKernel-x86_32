@@ -58,6 +58,12 @@ Hardware-focused ISO without relying on a root disk layout: `make GRUB_CFG=grub.
 
 ## 🔨 Building
 
+**Recommended — full workspace**
+
+Use sibling **[CactOS-x86_32](https://github.com/QwaYer/CactOS-x86_32)**: from the common parent directory run **`make`** or **`make -C CactOS-x86_32 iso`** — **CactOS** drives **CactLib**, user programs, **LocalRepo**, this kernel, and **CactBridge**.
+
+**Standalone — this repository**
+
 **Toolchain**
 
 | Tool | Notes |
@@ -66,18 +72,29 @@ Hardware-focused ISO without relying on a root disk layout: `make GRUB_CFG=grub.
 | `nasm` | Multiboot2 entry + interrupt stubs |
 | `ld -m elf_i386` | GNU binutils |
 | `cargo +nightly` | Builds `rust_mm`, `sched`, `cact_net` with **`-Z build-std=core,compiler_builtins`** and the **`i686-cact`** JSON target |
-| `python3` | Used by LocalRepoCactOS to pack **`cctkfs.img`** |
-| `grub-mkrescue` + `xorriso` | Produce **`build/cact.iso`** |
-| `qemu-img`, `mkfs.ext4`, `e2fsck` | Only for [`build_disk.sh`](build_disk.sh) |
+| `grub-mkrescue` + `xorriso` | Kernel **`Makefile`** can produce **`build/cact.iso`** |
+| `qemu-img`, `mkfs.ext4`, `e2fsck` | For [`build_disk.sh`](build_disk.sh) |
 
 **Common targets**
 
 ```sh
-make -j"$(nproc)"     # kernel + ISO (copies cctkfs from ../LocalRepoCactOS when present)
+make -j"$(nproc)"     # kernel + default ISO (kernel-only multiboot layout)
 make sched            # Rust scheduler crate only
 make clean            # wipe build/ and Rust artifacts used by the Makefile
 ./build_disk.sh       # create empty ext4 nvme.img for ./run_qemu.sh
 ```
+
+**ISO with bundled `cctkfs.img` (`iso-full`)**
+
+```sh
+make iso-full   # auto-detects ../LocalRepoCactOS
+```
+
+Override if needed: `make iso-full LOCAL_REPO=/path/to/LocalRepoCactOS`.
+
+**QEMU:** set **`CACT_ISO`** to your **`cact.iso`**, or drop **`cact.iso`** into **`build/`**, then [`./run_qemu.sh`](./run_qemu.sh).
+
+> 🧩 **`python3`** is only needed in **LocalRepoCactOS** to pack **`cctkfs.img`** — not for the default kernel **`make`**.
 
 **Successful build footer** (version from [`VERSION`](VERSION), commit from `git`):
 
@@ -272,7 +289,7 @@ The PMM treats **all 4 GiB of physical address space** below the **PCI hole** as
 | **PCI** | Config scan, driver table, **GDD** (generic device declarations), **modblob** loader | Loads ET_REL modules from **cctkfs** or path |
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
 
-Extra PCI drivers live in **`*-for-Cact`** repositories and are installed into **`LocalRepoCactOS/lib/`** by [`LocalRepoCactOS/build.sh`](../LocalRepoCactOS/build.sh), then packed into **`cctkfs.img`**.
+Extra PCI drivers live in **`*-for-Cact`** repositories; **`make -C CactOS-x86_32`** (workspace integrator) installs them into **`LocalRepoCactOS/lib/`** and packs **`cctkfs.img`**.
 
 ---
 

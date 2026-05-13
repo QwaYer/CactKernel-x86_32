@@ -6,12 +6,10 @@
 *.elf
 
 build/
+**/target/
 
 .vscode/
 *.swp
 *~
 
 *.log
-*.sh
-
-**/target/

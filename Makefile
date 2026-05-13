@@ -5,6 +5,9 @@
 
 
 
+# Optional: path to LocalRepoCactOS for iso-full target
+LOCAL_REPO ?= $(abspath ../LocalRepoCactOS)
+
 KERN_CORE_DIR    = Cact/kernel/core
 KERN_VER_DIR     = Cact/kernel/core/kern_ver
 KERN_SYSCALLS_DIR    = Cact/kernel/core/syscalls
@@ -488,31 +491,27 @@ $(BUILD_DIR)/pci_modblob.o: $(DRIVER_PCI_LOADER_DIR)/pci_modblob.c $(DRIVER_PCI_
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-# ---- LocalRepoCactOS cctkfs image ------------------------------------------
-# Drivers live in their own sibling repos; each `make install` drops a .cctk
-# into LocalRepoCactOS/lib/.  LocalRepoCactOS/Makefile then packs all of
-# them into a single flat archive (cctkfs.img).  We just consume it: copy
-# it next to kernel.bin so GRUB can load it as a multiboot2 module
-# (`module2 /boot/cctkfs.img cctkfs`) — see grub.cfg.
-LOCAL_REPO  ?= ../LocalRepoCactOS
-CCTKFS_IMG  := $(LOCAL_REPO)/cctkfs.img
+ifdef LOCAL_REPO
+CCTKFS_IMG := $(LOCAL_REPO)/cctkfs.img
 
 $(CCTKFS_IMG):
 	@if [ ! -f $@ ]; then \
-		echo "ERROR: $@ is missing."; \
-		echo "       1) build each driver: make -C ../<repo>-for-Cact install"; \
-		echo "       2) pack the image:    make -C $(LOCAL_REPO)"; \
-		echo "       (only needed for:     make iso-full)"; \
+		echo "ERROR: $@ is missing — build cctkfs.img first"; \
 		exit 1; \
 	fi
 
-# Ядро + cctkfs + GRUB (нужен собранный $(CCTKFS_IMG))
 $(BUILD_DIR)/cact-full.iso: $(BUILD_DIR)/kernel.bin $(GRUB_CFG_FULL) $(CCTKFS_IMG)
 	@mkdir -p $(BUILD_DIR)/isodir-full/boot/grub
 	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir-full/boot/kernel.bin
 	cp $(CCTKFS_IMG)           $(BUILD_DIR)/isodir-full/boot/cctkfs.img
 	cp $(GRUB_CFG_FULL)        $(BUILD_DIR)/isodir-full/boot/grub/grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/cact-full.iso $(BUILD_DIR)/isodir-full
+
+iso-full: $(BUILD_DIR)/cact-full.iso
+else
+iso-full:
+	$(error iso-full requires LOCAL_REPO pointing at the directory that contains cctkfs.img)
+endif
 
 $(BUILD_DIR)/blkdev.o: $(DRIVER_BLK_BLOCK_DIR)/blkdev.c
 	@mkdir -p $(BUILD_DIR)
@@ -566,10 +565,6 @@ $(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-# Driver modules are built and installed by their OWN repositories, not here.
-# See ../AHCI-for-Cact, ../NVMe-for-Cact, ../Virtio-net-for-Cact — each runs
-# `make install` to drop a .cctk into LocalRepoCactOS/lib/.
-
 $(BUILD_DIR)/net.o: $(NET_DIR)/net.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -613,5 +608,3 @@ clean:
 .PHONY: all clean sched FORCE iso-full
 .PHONY: sched
 sched: $(SCHED_TARGET)
-
-iso-full: $(BUILD_DIR)/cact-full.iso
