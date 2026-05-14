@@ -14,14 +14,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Пустой ext4 для AHCI (run_qemu.sh). Полный цикл: ../build-cact-qemu.sh
 if [[ ! -f build/nvme.img ]]; then
     echo "[run_qemu] build/nvme.img отсутствует — создаю через ./build_disk.sh" >&2
     ./build_disk.sh
 fi
 
-# 1. Настройка логирования
-# Добавляем 'mmu' — это позволит увидеть в qemu.log детальные причины Page Fault
 if [[ ! -v QEMU_DEBUG ]]; then
     QEMU_DEBUG="int,cpu_reset,guest_errors,mmu"
 fi
@@ -36,7 +33,6 @@ if [[ -n "${QEMU_GDB:-}" ]]; then
     QEMU_EXTRA+=(-gdb tcp::1234 -S)
 fi
 
-# ISO: задайте CACT_ISO=/path/to/cact.iso (артефакт сборки CactOS / CactBridge)
 ISO="${CACT_ISO:-}"
 if [[ -z "$ISO" && -f "$SCRIPT_DIR/build/cact.iso" ]]; then
   ISO="$SCRIPT_DIR/build/cact.iso"
@@ -46,7 +42,6 @@ if [[ -z "$ISO" || ! -f "$ISO" ]]; then
   exit 1
 fi
 
-# q35 уже содержит ICH9 AHCI (00:1f.2) — второй -device ahci давал два контроллера.
 exec qemu-system-i386 \
     -accel kvm \
     -cpu host \
