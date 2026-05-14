@@ -7,6 +7,7 @@
 #include "sbinfs.h"
 #include "libfs.h"
 #include "varfs.h"
+#include "usrfs.h"
 #include "vfs.h"
 #include "ext4.h"
 #include "memory.h"
@@ -31,11 +32,13 @@ static void mntfs_setup_nodisk(void) {
     sbinfs_init(0);
     libfs_init(0);
     varfs_init(0);
+    usrfs_init(0);
 
     extern int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target);
     vfs_mount(vfs_root, "bin",  binfs_get_root());
     vfs_mount(vfs_root, "sbin", sbinfs_get_root());
     vfs_mount(vfs_root, "lib",  libfs_get_root());
+    vfs_mount(vfs_root, "usr",  usrfs_get_root());
     vfs_mount(vfs_root, "dev",  devfs_get_root());
     vfs_mount(vfs_root, "proc", procfs_get_root());
     vfs_mount(vfs_root, "tmp",  tmpfs_get_root());
@@ -474,10 +477,17 @@ void mntfs_init(void) {
     strlcpy(sys_var + strlen(boot_devname), "/sys/var", 64 - strlen(boot_devname));
     mntfs_mount(sys_var, "varfs", varfs_get_root(), 0);
 
+    usrfs_init(ext4);
+    char sys_usr[64];
+    strlcpy(sys_usr, boot_devname, 64);
+    strlcpy(sys_usr + strlen(boot_devname), "/sys/usr", 64 - strlen(boot_devname));
+    mntfs_mount(sys_usr, "usrfs", usrfs_get_root(), 0);
+
     // Add standard VFS root aliases.
     extern int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target);
     vfs_mount(vfs_root, "bin",  binfs_get_root());
     vfs_mount(vfs_root, "lib",  libfs_get_root());
+    vfs_mount(vfs_root, "usr",  usrfs_get_root());
     vfs_mount(vfs_root, "dev",  devfs_get_root());
     vfs_mount(vfs_root, "proc", procfs_get_root());
     vfs_mount(vfs_root, "tmp",  tmpfs_get_root());
