@@ -24,6 +24,26 @@ typedef struct lib_blob {
 static lib_blob_t *lib_blobs;
 static uint32_t    libfs_disk_count;
 
+// Subdirectory file entry (for include/, tcc/, sys/)
+typedef struct sub_file {
+    vfs_node_t        node;
+    const uint8_t    *data;
+    uint32_t          size;
+    struct sub_file  *next;
+} sub_file_t;
+
+// Subdirectory descriptor
+typedef struct {
+    vfs_node_t   node;
+    const char  *prefix;
+    int          prefix_len;
+    sub_file_t  *files;
+} lib_subdir_t;
+
+static lib_subdir_t lib_inc_dir;
+static lib_subdir_t lib_tcc_dir;
+static lib_subdir_t lib_sys_dir;
+
 static int path_has_prefix(const char *s, const char *pre) {
     while (*pre) {
         if (*s++ != *pre++) return 0;
@@ -66,6 +86,21 @@ static vfs_ops_t lib_blob_file_ops = {
     .read = lib_blob_read,
 };
 
+static int sub_file_read(vfs_node_t *node, uint32_t off, uint32_t size,
+                         char *buf) {
+    sub_file_t *f = (sub_file_t *)node->priv;
+    if (!f || !buf) return 0;
+    if (off >= f->size) return 0;
+    uint32_t avail = f->size - off;
+    uint32_t n = size < avail ? size : avail;
+    memcpy(buf, (const char *)f->data + off, n);
+    return (int)n;
+}
+
+static vfs_ops_t sub_file_ops = {
+    .read = sub_file_read,
+};
+
 static void libfs_count_disk(void) {
     vfs_node_t *lib = _lib_dir();
     libfs_disk_count = 0;
@@ -74,9 +109,16 @@ static void libfs_count_disk(void) {
         libfs_disk_count++;
 }
 
+// Register cctkfs blobs under /lib/
+// Flat files (libc.so, hello.c, ...) → lib_blobs
+// Subdirectory files (include/*, tcc/*, sys/*) → subdir file lists
 static void libfs_register_blobs(void) {
     lib_blob_t *head = 0;
     lib_blob_t **tail = &head;
+
+    sub_file_t *ih = 0, **it = &ih;
+    sub_file_t *th = 0, **tt = &th;
+    sub_file_t *sh = 0, **st = &sh;
 
     int n = pci_modblob_count();
     for (int i = 0; i < n; i++) {
@@ -85,29 +127,111 @@ static void libfs_register_blobs(void) {
         uint32_t sz;
         if (pci_modblob_at(i, &path, &data, &sz) != 0) continue;
         if (!path_has_prefix(path, "/lib/")) continue;
-        /* .cctk PCI modules are dispatched through pci_modblob, not VFS. */
         if (has_suffix(path, ".cctk")) continue;
         const char *base = path + 5;
-        if (!basename_only(base)) continue;
 
-        lib_blob_t *slot = (lib_blob_t *)kmalloc(sizeof(lib_blob_t));
-        if (!slot) continue;
-        memset(slot, 0, sizeof(lib_blob_t));
-        strlcpy(slot->node.name, base, 128);
-        slot->node.type = VFS_FILE;
-        slot->node.size = sz;
-        slot->node.mode = 0755;
-        slot->node.ops  = &lib_blob_file_ops;
-        slot->node.priv = slot;
-        slot->data      = data;
-        slot->size      = sz;
-        slot->next      = 0;
-
-        *tail = slot;
-        tail = &slot->next;
+        // Check for known subdirectories
+        if (path_has_prefix(base, "include/")) {
+            const char *name = base + 8;
+            if (!*name) continue;
+            if (!basename_only(name)) continue;
+            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
+            if (!slot) continue;
+            memset(slot, 0, sizeof(sub_file_t));
+            strlcpy(slot->node.name, name, 128);
+            slot->node.type = VFS_FILE;
+            slot->node.size = sz;
+            slot->node.mode = 0644;
+            slot->node.ops  = &sub_file_ops;
+            slot->node.priv = slot;
+            slot->data      = data;
+            slot->size      = sz;
+            *it = slot;
+            it = &slot->next;
+        } else if (path_has_prefix(base, "tcc/")) {
+            const char *name = base + 4;
+            if (!*name) continue;
+            if (!basename_only(name)) continue;
+            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
+            if (!slot) continue;
+            memset(slot, 0, sizeof(sub_file_t));
+            strlcpy(slot->node.name, name, 128);
+            slot->node.type = VFS_FILE;
+            slot->node.size = sz;
+            slot->node.mode = 0644;
+            slot->node.ops  = &sub_file_ops;
+            slot->node.priv = slot;
+            slot->data      = data;
+            slot->size      = sz;
+            *tt = slot;
+            tt = &slot->next;
+        } else if (path_has_prefix(base, "sys/")) {
+            const char *name = base + 4;
+            if (!*name) continue;
+            if (!basename_only(name)) continue;
+            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
+            if (!slot) continue;
+            memset(slot, 0, sizeof(sub_file_t));
+            strlcpy(slot->node.name, name, 128);
+            slot->node.type = VFS_FILE;
+            slot->node.size = sz;
+            slot->node.mode = 0644;
+            slot->node.ops  = &sub_file_ops;
+            slot->node.priv = slot;
+            slot->data      = data;
+            slot->size      = sz;
+            *st = slot;
+            st = &slot->next;
+        } else {
+            if (!basename_only(base)) continue;
+            lib_blob_t *slot = (lib_blob_t *)kmalloc(sizeof(lib_blob_t));
+            if (!slot) continue;
+            memset(slot, 0, sizeof(lib_blob_t));
+            strlcpy(slot->node.name, base, 128);
+            slot->node.type = VFS_FILE;
+            slot->node.size = sz;
+            slot->node.mode = 0755;
+            slot->node.ops  = &lib_blob_file_ops;
+            slot->node.priv = slot;
+            slot->data      = data;
+            slot->size      = sz;
+            slot->next      = 0;
+            *tail = slot;
+            tail = &slot->next;
+        }
     }
 
     lib_blobs = head;
+
+    // Init include subdirectory node
+    lib_inc_dir.files = ih;
+    memset(&lib_inc_dir.node, 0, sizeof(lib_inc_dir.node));
+    strlcpy(lib_inc_dir.node.name, "include", 128);
+    lib_inc_dir.node.type = VFS_DIRECTORY;
+    lib_inc_dir.node.mode = 0755;
+    lib_inc_dir.node.priv = &lib_inc_dir;
+    lib_inc_dir.prefix    = "include/";
+    lib_inc_dir.prefix_len = 8;
+
+    // Init tcc subdirectory node
+    lib_tcc_dir.files = th;
+    memset(&lib_tcc_dir.node, 0, sizeof(lib_tcc_dir.node));
+    strlcpy(lib_tcc_dir.node.name, "tcc", 128);
+    lib_tcc_dir.node.type = VFS_DIRECTORY;
+    lib_tcc_dir.node.mode = 0755;
+    lib_tcc_dir.node.priv = &lib_tcc_dir;
+    lib_tcc_dir.prefix    = "tcc/";
+    lib_tcc_dir.prefix_len = 4;
+
+    // Init sys subdirectory node
+    lib_sys_dir.files = sh;
+    memset(&lib_sys_dir.node, 0, sizeof(lib_sys_dir.node));
+    strlcpy(lib_sys_dir.node.name, "sys", 128);
+    lib_sys_dir.node.type = VFS_DIRECTORY;
+    lib_sys_dir.node.mode = 0755;
+    lib_sys_dir.node.priv = &lib_sys_dir;
+    lib_sys_dir.prefix    = "sys/";
+    lib_sys_dir.prefix_len = 4;
 
     for (lib_blob_t *b = lib_blobs; b; b = b->next) {
         vfs_node_t *lib = _lib_dir();
@@ -117,9 +241,60 @@ static void libfs_register_blobs(void) {
     }
 }
 
+// Subdirectory walk handler
+static vfs_node_t *_sub_walk(vfs_node_t *dir, const char *name) {
+    lib_subdir_t *sd = (lib_subdir_t *)dir->priv;
+    if (!sd) return 0;
+    for (sub_file_t *f = sd->files; f; f = f->next) {
+        if (streq(f->node.name, name)) return &f->node;
+    }
+    return 0;
+}
+
+static vfs_dirent_t sub_de;
+static vfs_dirent_t *_sub_readdir(vfs_node_t *dir, uint32_t index) {
+    lib_subdir_t *sd = (lib_subdir_t *)dir->priv;
+    if (!sd) return 0;
+    uint32_t i = 0;
+    for (sub_file_t *f = sd->files; f; f = f->next) {
+        if (i++ == index) {
+            strlcpy(sub_de.name, f->node.name, 128);
+            sub_de.inode = i;
+            return &sub_de;
+        }
+    }
+    return 0;
+}
+
+static void _sub_listdir(vfs_node_t *dir) {
+    lib_subdir_t *sd = (lib_subdir_t *)dir->priv;
+    if (!sd || !sd->files) { kprint("  (empty)\n"); return; }
+    for (sub_file_t *f = sd->files; f; f = f->next) {
+        kprint("  "); kprint(f->node.name); kprint("\n");
+    }
+}
+
+static vfs_ops_t sub_dir_ops = {
+    .walk    = _sub_walk,
+    .readdir = _sub_readdir,
+    .listdir = _sub_listdir,
+};
+
 // Resolve entry from ext4 first, then overlay.
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
+    if (streq(name, "include")) {
+        lib_inc_dir.node.ops = &sub_dir_ops;
+        return &lib_inc_dir.node;
+    }
+    if (streq(name, "tcc")) {
+        lib_tcc_dir.node.ops = &sub_dir_ops;
+        return &lib_tcc_dir.node;
+    }
+    if (streq(name, "sys")) {
+        lib_sys_dir.node.ops = &sub_dir_ops;
+        return &lib_sys_dir.node;
+    }
     vfs_node_t *lib = _lib_dir();
     if (lib && lib->ops && lib->ops->walk) {
         vfs_node_t *disk = lib->ops->walk(lib, name);
@@ -141,6 +316,16 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
         if (e) return e;
     }
     uint32_t j = index - libfs_disk_count;
+    // Emit subdirectories first
+    for (int s = 0; s < 3; s++) {
+        const char *dname = s == 0 ? "include" : (s == 1 ? "tcc" : "sys");
+        if (j == 0) {
+            strlcpy(sup_de.name, dname, 128);
+            sup_de.inode = 0;
+            return &sup_de;
+        }
+        j--;
+    }
     for (lib_blob_t *b = lib_blobs; b; b = b->next) {
         if (b->shadowed) continue;
         if (j == 0) {
@@ -159,6 +344,12 @@ static void _root_listdir(vfs_node_t *dir) {
     vfs_node_t *lib = _lib_dir();
     vfs_dirent_t *de;
     int any = 0;
+
+    // List subdirectories
+    if (lib_inc_dir.files) { kprint("  include\n"); any = 1; }
+    if (lib_tcc_dir.files) { kprint("  tcc\n"); any = 1; }
+    if (lib_sys_dir.files) { kprint("  sys\n"); any = 1; }
+
     if (lib && lib->ops && lib->ops->readdir) {
         for (uint32_t i = 0; (de = lib->ops->readdir(lib, i)); i++) {
             if (de->name[0] == '.') continue;
