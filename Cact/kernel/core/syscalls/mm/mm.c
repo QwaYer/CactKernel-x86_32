@@ -74,9 +74,11 @@ int sys_mprotect(struct syscall_frame* regs) {
     uint32_t length = regs->ecx;
     int      prot   = (int)regs->edx;
     if (!current_task) return -1;
+    uint32_t brk_end = (current_task->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     return do_mprotect(
         current_task->page_directory,
         current_task->mmap_table,
-        addr, length, prot
+        addr, length, prot,
+        current_task->brk_start, brk_end
     );
 }

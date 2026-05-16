@@ -323,6 +323,8 @@ pub extern "C" fn do_mprotect(
     addr: u32,
     mut length: u32,
     prot: i32,
+    brk_start: u32,
+    brk_end: u32,
 ) -> i32 {
     if pd.is_null() || tbl.is_null() || length == 0 {
         return -1;
@@ -332,9 +334,10 @@ pub extern "C" fn do_mprotect(
     }
 
     length = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let in_brk = addr >= brk_start && addr < brk_end;
 
     let region = mmap_find_region(tbl, addr);
-    if region.is_null() {
+    if region.is_null() && !in_brk {
         return -1;
     }
 
@@ -362,8 +365,10 @@ pub extern "C" fn do_mprotect(
         flush_tlb(va);
     }
 
-    // SAFETY: region is valid.
-    unsafe { (*region).prot = prot as u32; }
+    if !in_brk {
+        // SAFETY: region is valid (non-brk path).
+        unsafe { (*region).prot = prot as u32; }
+    }
     0
 }
 
