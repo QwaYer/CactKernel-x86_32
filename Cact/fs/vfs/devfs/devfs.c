@@ -6,6 +6,8 @@
 #include "pipe.h"
 #include "blkdev.h"
 #include "pci_driver.h"
+#include "mouse.h"
+#include "fb.h"
 
 // Global devfs state
 static vfs_node_t    devfs_root;
@@ -321,6 +323,84 @@ static devfs_driver_t drv_tty = {
     .read=_tty_read, .write=_tty_write, .status=_tty_status
 };
 
+// /dev/keyboard — raw character stream from keyboard circular buffer
+static int _kbd_read(void *p, uint32_t off, uint32_t size, char *buf) {
+    (void)p;(void)off;
+    uint32_t i=0;
+    while(i<size){
+        int c;
+        while((c=keyboard_read_char())<0) schedule();
+        buf[i++]=(char)c;
+        if(size<=1) break;
+    }
+    return (int)i;
+}
+static devfs_driver_t drv_keyboard = { .read=_kbd_read };
+
+// /dev/mouse — raw mouse event packets (mouse_packet_t structs)
+static int _mouse_read_dev(void *p, uint32_t off, uint32_t size, char *buf) {
+    (void)p;(void)off;
+    if(size<sizeof(mouse_packet_t)) return -1;
+    mouse_packet_t pkt;
+    while(mouse_read_event(&pkt)<0) schedule();
+    memcpy(buf,&pkt,sizeof(mouse_packet_t));
+    return (int)sizeof(mouse_packet_t);
+}
+static devfs_driver_t drv_mouse = { .read=_mouse_read_dev };
+
+// /dev/fb0 — framebuffer device (read/write at byte offset, ioctl for screen info)
+#define FBIOGET_VSCREENINFO 0x4600
+struct fb_var_screeninfo {
+    uint32_t xres;
+    uint32_t yres;
+    uint32_t xres_virtual;
+    uint32_t yres_virtual;
+    uint32_t xoffset;
+    uint32_t yoffset;
+    uint32_t bits_per_pixel;
+    uint32_t grayscale;
+};
+
+static int _fb_read(void *p, uint32_t off, uint32_t size, char *buf) {
+    (void)p;
+    uint32_t fb_sz = fb_get_pitch() * fb_get_height();
+    if(off>=fb_sz) return 0;
+    if(off+size>fb_sz) size=fb_sz-off;
+    memcpy(buf, (char*)fb_get_buffer()+off, size);
+    return (int)size;
+}
+
+static int _fb_write(void *p, uint32_t off, uint32_t size, char *buf) {
+    (void)p;
+    uint32_t fb_sz = fb_get_pitch() * fb_get_height();
+    if(off>=fb_sz) return 0;
+    if(off+size>fb_sz) size=fb_sz-off;
+    memcpy((char*)fb_get_buffer()+off, buf, size);
+    fb_flush();
+    return (int)size;
+}
+
+static int _fb_ioctl(void *p, uint32_t cmd, void *arg) {
+    (void)p;
+    if(cmd==FBIOGET_VSCREENINFO) {
+        struct fb_var_screeninfo *info = (struct fb_var_screeninfo*)arg;
+        if(!info) return -1;
+        info->xres          = fb_get_width();
+        info->yres          = fb_get_height();
+        info->xres_virtual  = fb_get_width();
+        info->yres_virtual  = fb_get_height();
+        info->xoffset       = 0;
+        info->yoffset       = 0;
+        info->bits_per_pixel = 32;
+        info->grayscale     = 0;
+        return 0;
+    }
+    return -1;
+}
+static devfs_driver_t drv_fb = {
+    .read=_fb_read, .write=_fb_write, .ioctl=_fb_ioctl
+};
+
 // return the devfs root node (registered in VFS mount table)
 vfs_node_t *devfs_get_root(void) { return &devfs_root; }
 
@@ -394,6 +474,13 @@ void devfs_init(void) {
         devfs_register(boot->name, DEVFS_F_BLOCK, &drv_disk, 0);
     }
     devfs_register("tty", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_tty, 0);
+
+    devfs_register("keyboard", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_keyboard, 0);
+    devfs_register("mouse",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_mouse,    0);
+
+    if (fb_get_width() != 0) {
+        devfs_register("fb0", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_fb, 0);
+    }
 
     devfs_ready = 1;
 }
