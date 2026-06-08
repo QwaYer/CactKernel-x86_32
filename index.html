@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CactKernel/x86_32 - Hybrid Monolithic Kernel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #e0e0e0;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Navigation */
+        nav {
+            background: rgba(15, 20, 35, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 2px solid #22c55e;
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 4px 20px rgba(34, 197, 94, 0.1);
+        }
+
+        .nav-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #22c55e;
+            font-family: 'Space Mono', monospace;
+            letter-spacing: 2px;
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            list-style: none;
+            gap: 2rem;
+        }
+
+        .nav-links a {
+            color: #e0e0e0;
+            text-decoration: none;
+            transition: color 0.3s;
+            font-size: 0.95rem;
+        }
+
+        .nav-links a:hover {
+            color: #22c55e;
+        }
+
+        /* Hero Section */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            padding: 2rem;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(34, 197, 94, 0.1) 0%, transparent 70%);
+            border-radius: 50%;
+            animation: float 20s ease-in-out infinite;
+        }
+
+        .hero::after {
+            content: '';
+            position: absolute;
+            bottom: -50%;
+            left: -10%;
+            width: 800px;
+            height: 800px;
+            background: radial-gradient(circle, rgba(34, 197, 94, 0.05) 0%, transparent 70%);
+            border-radius: 50%;
+            animation: float 25s ease-in-out infinite reverse;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(40px); }
+        }
+
+        .hero-content {
+            text-align: center;
+            z-index: 10;
+            max-width: 900px;
+        }
+
+        .cactus-emoji {
+            font-size: 6rem;
+            margin-bottom: 1rem;
+            animation: bounce 3s ease-in-out infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-20px); }
+        }
+
+        h1 {
+            font-size: 4rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, #22c55e 0%, #86efac 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-family: 'Space Mono', monospace;
+            letter-spacing: 1px;
+        }
+
+        .subtitle {
+            font-size: 1.5rem;
+            color: #a0aec0;
+            margin-bottom: 2rem;
+            font-weight: 300;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 2rem;
+        }
+
+        .btn {
+            padding: 0.8rem 2rem;
+            font-size: 1rem;
+            border: 2px solid #22c55e;
+            background: transparent;
+            color: #22c55e;
+            cursor: pointer;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: 600;
+            transition: all 0.3s;
+            font-family: 'Space Mono', monospace;
+        }
+
+        .btn:hover {
+            background: #22c55e;
+            color: #0a0e27;
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.5);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: #22c55e;
+            color: #0a0e27;
+        }
+
+        .btn-secondary:hover {
+            background: #86efac;
+            box-shadow: 0 0 30px rgba(134, 239, 172, 0.5);
+        }
+
+        /* Stats Section */
+        .stats {
+            background: rgba(34, 197, 94, 0.05);
+            border-top: 2px solid #22c55e;
+            border-bottom: 2px solid #22c55e;
+            padding: 4rem 2rem;
+            margin: 3rem 0;
+        }
+
+        .stats-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+        }
+
+        .stat-card {
+            text-align: center;
+            padding: 2rem;
+            background: rgba(15, 20, 35, 0.5);
+            border: 1px solid #22c55e;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .stat-card:hover {
+            background: rgba(34, 197, 94, 0.1);
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(34, 197, 94, 0.2);
+        }
+
+        .stat-number {
+            font-size: 2.5rem;
+            color: #22c55e;
+            font-weight: 700;
+            font-family: 'Space Mono', monospace;
+        }
+
+        .stat-label {
+            color: #a0aec0;
+            margin-top: 0.5rem;
+            font-size: 0.95rem;
+        }
+
+        /* Features Section */
+        .features {
+            max-width: 1400px;
+            margin: 4rem auto;
+            padding: 0 2rem;
+        }
+
+        .section-title {
+            font-size: 2.5rem;
+            color: #22c55e;
+            margin-bottom: 3rem;
+            text-align: center;
+            font-family: 'Space Mono', monospace;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+
+        .feature-card {
+            background: rgba(34, 197, 94, 0.05);
+            border: 1px solid #22c55e;
+            border-radius: 8px;
+            padding: 2rem;
+            transition: all 0.3s;
+        }
+
+        .feature-card:hover {
+            background: rgba(34, 197, 94, 0.1);
+            transform: translateY(-8px);
+            box-shadow: 0 15px 40px rgba(34, 197, 94, 0.2);
+            border-color: #86efac;
+        }
+
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-card h3 {
+            color: #86efac;
+            margin-bottom: 1rem;
+            font-size: 1.3rem;
+        }
+
+        .feature-card p {
+            color: #cbd5e0;
+            font-size: 0.95rem;
+            line-height: 1.7;
+        }
+
+        /* Tech Stack */
+        .tech-stack {
+            background: rgba(34, 197, 94, 0.05);
+            border-top: 2px solid #22c55e;
+            border-bottom: 2px solid #22c55e;
+            padding: 4rem 2rem;
+            margin: 4rem 0;
+        }
+
+        .tech-grid {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 2rem;
+        }
+
+        .tech-item {
+            text-align: center;
+            padding: 1.5rem;
+            background: rgba(15, 20, 35, 0.5);
+            border: 1px solid #22c55e;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .tech-item:hover {
+            background: rgba(34, 197, 94, 0.15);
+            transform: scale(1.05);
+            box-shadow: 0 8px 25px rgba(34, 197, 94, 0.3);
+        }
+
+        .tech-item span {
+            display: block;
+            color: #22c55e;
+            font-weight: 700;
+            font-family: 'Space Mono', monospace;
+            font-size: 0.9rem;
+        }
+
+        /* Code Section */
+        .code-section {
+            max-width: 1400px;
+            margin: 4rem auto;
+            padding: 0 2rem;
+        }
+
+        .code-block {
+            background: rgba(15, 20, 35, 0.8);
+            border: 1px solid #22c55e;
+            border-radius: 8px;
+            padding: 2rem;
+            overflow-x: auto;
+            margin-top: 1.5rem;
+        }
+
+        .code-block code {
+            font-family: 'JetBrains Mono', monospace;
+            color: #86efac;
+            font-size: 0.9rem;
+            line-height: 1.8;
+        }
+
+        /* Footer */
+        footer {
+            background: rgba(15, 20, 35, 0.95);
+            border-top: 2px solid #22c55e;
+            padding: 3rem 2rem;
+            margin-top: 4rem;
+        }
+
+        .footer-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .footer-section h4 {
+            color: #22c55e;
+            margin-bottom: 1rem;
+            font-family: 'Space Mono', monospace;
+        }
+
+        .footer-section a {
+            display: block;
+            color: #a0aec0;
+            text-decoration: none;
+            margin-bottom: 0.5rem;
+            transition: color 0.3s;
+        }
+
+        .footer-section a:hover {
+            color: #22c55e;
+        }
+
+        .footer-bottom {
+            text-align: center;
+            color: #718096;
+            border-top: 1px solid rgba(34, 197, 94, 0.2);
+            padding-top: 2rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2.5rem;
+            }
+
+            .subtitle {
+                font-size: 1.1rem;
+            }
+
+            .nav-links {
+                gap: 1rem;
+                font-size: 0.85rem;
+            }
+
+            .cactus-emoji {
+                font-size: 4rem;
+            }
+
+            .stats-container {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav>
+        <div class="nav-container">
+            <a href="#" class="logo">🌵 CACTKERNEL</a>
+            <ul class="nav-links">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#tech">Tech</a></li>
+                <li><a href="#code">Build</a></li>
+                <li><a href="https://github.com/QwaYer/CactKernel-x86_32" target="_blank">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <div class="cactus-emoji">🌵</div>
+            <h1>CactKernel/x86_32</h1>
+            <p class="subtitle">Hybrid Monolithic Kernel for 32-bit x86 Architecture</p>
+            <p style="color: #cbd5e0; margin-bottom: 2rem;">Low-level code in C and NASM. Critical subsystems in Rust. 95 syscalls. MLFQ scheduler.</p>
+            
+            <div class="cta-buttons">
+                <a href="https://github.com/QwaYer/CactKernel-x86_32" class="btn btn-secondary">📖 GitHub Repository</a>
+                <a href="https://github.com/QwaYer/CactOS-x86_32" class="btn">🖥️ CactOS Distribution</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Stats Section -->
+    <section class="stats">
+        <div class="stats-container">
+            <div class="stat-card">
+                <div class="stat-number">95</div>
+                <div class="stat-label">System Calls</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">32+IRQ</div>
+                <div class="stat-label">CPU ISRs</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">4</div>
+                <div class="stat-label">MLFQ Levels</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">256</div>
+                <div class="stat-label">File Descriptors</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features" id="features">
+        <h2 class="section-title">🚀 Core Features</h2>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">🧠</div>
+                <h3>Memory Manager</h3>
+                <p>PMM, VMM, heap, slab, mmap, COW, swap. Complete virtual memory support with page faults and OOM handling.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">⏱️</div>
+                <h3>MLFQ Scheduler</h3>
+                <p>4-level multilevel feedback queue with priority boosting, anti-starvation, and sleep queue management.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">💾</div>
+                <h3>Filesystems</h3>
+                <p>ext4, VFS, devfs, procfs, mntfs, etcfs, tmpfs, binfs, sbinfs, libfs with full read/write support.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🌐</div>
+                <h3>Network Stack</h3>
+                <p>Ethernet, ARP, IPv4, ICMP, TCP/UDP sockets, smoltcp, virtio-net, DNS resolver and DHCP client.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🔌</div>
+                <h3>Drivers</h3>
+                <p>PCI, AHCI, NVMe, xHCI, USB, PS/2, virtio-net, framebuffer console with MTRR and shadow buffer.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🔒</div>
+                <h3>Synchronization</h3>
+                <p>Spinlock, IRQ spinlock, mutex, semaphore. Full multi-process synchronization primitives.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🧬</div>
+                <h3>Processes</h3>
+                <p>fork, exec, exit, waitpid. 13 signals, sigaction, full multi-process execution support.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">📦</div>
+                <h3>ELF & Dynamic Linking</h3>
+                <p>Complete ELF loader, dynamic linking, i386 relocations including R_386_COPY support.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🎯</div>
+                <h3>Multiboot2</h3>
+                <p>Full Multiboot2 bootloader support, framebuffer, memory map, modules and PCI configuration.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tech Stack Section -->
+    <section class="tech-stack" id="tech">
+        <h2 class="section-title">🔧 Technology Stack</h2>
+        <div class="tech-grid">
+            <div class="tech-item">
+                <span>C</span>
+                <p style="color: #a0aec0; font-size: 0.85rem;">66%</p>
+            </div>
+            <div class="tech-item">
+                <span>Rust</span>
+                <p style="color: #a0aec0; font-size: 0.85rem;">30.5%</p>
+            </div>
+            <div class="tech-item">
+                <span>Assembly</span>
+                <p style="color: #a0aec0; font-size: 0.85rem;">1.1%</p>
+            </div>
+            <div class="tech-item">
+                <span>Makefile</span>
+                <p style="color: #a0aec0; font-size: 0.85rem;">2%</p>
+            </div>
+            <div class="tech-item">
+                <span>NASM</span>
+                <p style="color: #a0aec0; font-size: 0.85rem;">Asm</p>
+            </div>
+            <div class="tech-item">
+                <span>GCC -m32</span>
+                <p style="color: #a0aec0; font-size: 0.85rem;">Compiler</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Code Section -->
+    <section class="code-section" id="code">
+        <h2 class="section-title">🏗️ Quick Start</h2>
+        
+        <h3 style="color: #86efac; margin-top: 2rem; font-family: 'Space Mono', monospace;">Full Build (from workspace):</h3>
+        <div class="code-block">
+            <code>
+./build-cact-qemu.sh           # full ISO + disk, 1 command<br>
+./build-cact-qemu.sh && CACT_ISO=build/cact.iso CactKernel-x86_32/run_qemu.sh<br>
+RUN_QEMU=1 ./build-cact-qemu.sh  # build + run
+            </code>
+        </div>
+
+        <h3 style="color: #86efac; margin-top: 2rem; font-family: 'Space Mono', monospace;">Kernel Only:</h3>
+        <div class="code-block">
+            <code>
+make -j$(nproc)               # kernel + ISO<br>
+make -j$(nproc) kernel        # kernel only<br>
+./run_qemu.sh                 # run in QEMU
+            </code>
+        </div>
+
+        <h3 style="color: #86efac; margin-top: 2rem; font-family: 'Space Mono', monospace;">Requirements:</h3>
+        <div class="code-block">
+            <code>
+• gcc -m32 (multilib on amd64)<br>
+• nasm — Multiboot2 entry<br>
+• ld -m elf_i386 — GNU binutils<br>
+• cargo +nightly — Rust subsystems<br>
+• grub-mkrescue + xorriso — ISO creation<br>
+• qemu-img, mkfs.ext4 — Disk images
+            </code>
+        </div>
+    </section>
+
+    <!-- Memory Map -->
+    <section class="features" style="margin-bottom: 4rem;">
+        <h2 class="section-title">💾 Memory Architecture (x86_32)</h2>
+        <div style="max-width: 900px; margin: 0 auto;">
+            <div class="code-block">
+                <code>
+0xC0000000  ├─ Kernel-only (ring 0)<br>
+0xBF000000  ├─ User stack floor<br>
+0xBEFFF000  ├─ Per-process sigreturn trampoline<br>
+0xB0000000  ├─ SHM ceiling (SHM_VA_LIMIT)<br>
+0xA0000000  ├─ SHM base (SHM_VA_BASE)<br>
+0x80000000  ├─ User heap ceiling<br>
+0x40000000  ├─ mmap + brk region (256 regions max)<br>
+0x08048000  ├─ Typical ELF PT_LOAD base<br>
+0x00000000  └─ NULL / guard page<br>
+                </code>
+            </div>
+        </div>
+    </section>
+
+    <!-- Links Section -->
+    <section class="features" style="margin-bottom: 4rem;">
+        <h2 class="section-title">🔗 Project Ecosystem</h2>
+        <div class="features-grid">
+            <a href="https://github.com/QwaYer/CactKernel-x86_32" style="text-decoration: none;">
+                <div class="feature-card">
+                    <div class="feature-icon">🔥</div>
+                    <h3>CactKernel</h3>
+                    <p>Core kernel with memory manager, scheduler, and drivers.</p>
+                </div>
+            </a>
+
+            <a href="https://github.com/QwaYer/CactLib-x86_32" style="text-decoration: none;">
+                <div class="feature-card">
+                    <div class="feature-icon">📚</div>
+                    <h3>CactLib</h3>
+                    <p>Userspace libc.a / libc.so with full syscall interface support.</p>
+                </div>
+            </a>
+
+            <a href="https://github.com/QwaYer/CactOS-x86_32" style="text-decoration: none;">
+                <div class="feature-card">
+                    <div class="feature-icon">🖥️</div>
+                    <h3>CactOS</h3>
+                    <p>Workspace integrator — assembles everything into a complete OS.</p>
+                </div>
+            </a>
+
+            <a href="https://github.com/QwaYer/Cactsole-x86_32" style="text-decoration: none;">
+                <div class="feature-card">
+                    <div class="feature-icon">🐚</div>
+                    <h3>Cactsole</h3>
+                    <p>User shell for system interaction and command execution.</p>
+                </div>
+            </a>
+
+            <a href="https://github.com/QwaYer/LocalRepoCactOS" style="text-decoration: none;">
+                <div class="feature-card">
+                    <div class="feature-icon">📦</div>
+                    <h3>LocalRepo</h3>
+                    <p>Module packer for .cctk files and cctkfs.img creation.</p>
+                </div>
+            </a>
+
+            <a href="https://github.com/QwaYer/CactBridge" style="text-decoration: none;">
+                <div class="feature-card">
+                    <div class="feature-icon">🌉</div>
+                    <h3>CactBridge</h3>
+                    <p>Final ISO builder from kernel.bin and cctkfs.img.</p>
+                </div>
+            </a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-content">
+            <div class="footer-section">
+                <h4>🌵 CactKernel</h4>
+                <a href="https://github.com/QwaYer/CactKernel-x86_32">GitHub Repository</a>
+                <a href="https://github.com/QwaYer/CactKernel-x86_32/releases">Releases</a>
+                <a href="https://github.com/QwaYer/CactKernel-x86_32/issues">Issues</a>
+            </div>
+
+            <div class="footer-section">
+                <h4>📚 Documentation</h4>
+                <a href="https://github.com/QwaYer/CactKernel-x86_32/blob/main/README.md">README</a>
+                <a href="https://github.com/QwaYer/CactKernel-x86_32/tree/main/Cact">Source Code</a>
+                <a href="https://github.com/QwaYer/CactKernel-x86_32/blob/main/Cact/kernel/core/syscalls/syscalls.h">Syscalls Reference</a>
+            </div>
+
+            <div class="footer-section">
+                <h4>🔗 Project</h4>
+                <a href="https://github.com/QwaYer">Developer: QwaYer</a>
+                <a href="https://github.com/QwaYer/CactOS-x86_32">CactOS Distribution</a>
+                <a href="https://github.com/QwaYer/CactLib-x86_32">CactLib libc</a>
+            </div>
+
+            <div class="footer-section">
+                <h4>⚖️ License</h4>
+                <a href="https://github.com/QwaYer/CactKernel-x86_32/blob/main/LICENSE">GNU GPLv3</a>
+                <p style="color: #718096; font-size: 0.85rem; margin-top: 1rem;">Free and open source OS kernel.</p>
+            </div>
+        </div>
+
+        <div class="footer-bottom">
+            <p>🌵 CactKernel/x86_32 v1.0.0 — A hybrid monolithic kernel for 32-bit x86</p>
+            <p style="margin-top: 0.5rem; font-size: 0.85rem;">© 2024 QwaYer. Licensed under GNU GPLv3</p>
+        </div>
+    </footer>
+</body>
+</html>
