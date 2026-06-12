@@ -78,6 +78,19 @@ NET_TCP_DIR      = Cact/kernel/net/protocols/tcp
 NET_SOCKET_DIR   = Cact/kernel/net/socket
 DRIVER_FB_DIR    = Cact/drivers/video/fb
 DRIVER_FONT_DIR  = Cact/drivers/video/font
+DRIVER_ACPI_DIR  = Cact/drivers/acpi
+ACPICA_DIR       = $(DRIVER_ACPI_DIR)/acpica
+ACPICA_SRC_DIR   = $(ACPICA_DIR)/source
+ACPICA_INC_DIR   = $(ACPICA_SRC_DIR)/include
+ACPICA_COMP_DIRS  = $(ACPICA_SRC_DIR)/components/tables \
+                    $(ACPICA_SRC_DIR)/components/namespace \
+                    $(ACPICA_SRC_DIR)/components/parser \
+                    $(ACPICA_SRC_DIR)/components/dispatcher \
+                    $(ACPICA_SRC_DIR)/components/executer \
+                    $(ACPICA_SRC_DIR)/components/hardware \
+                    $(ACPICA_SRC_DIR)/components/events \
+                    $(ACPICA_SRC_DIR)/components/resources \
+                    $(ACPICA_SRC_DIR)/components/utilities
 BUILD_DIR        = build
 # По умолчанию: только ядро + GRUB (без cctkfs). Полный образ с модулем cctkfs: make iso-full
 GRUB_CFG         ?= grub.cfg.kernelonly
@@ -139,9 +152,12 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(NET_UDP_DIR) \
          -I$(NET_TCP_DIR) \
          -I$(NET_SOCKET_DIR) \
-         -I$(DRIVER_FB_DIR) \
-         -I$(DRIVER_FONT_DIR) \
-         -Wall
+          -I$(DRIVER_FB_DIR) \
+          -I$(DRIVER_FONT_DIR) \
+          -I$(DRIVER_ACPI_DIR) \
+          -I$(DRIVER_ACPI_DIR)/include \
+          -I$(ACPICA_INC_DIR) \
+          -Wall
 
 # Отладка под QEMU+GDB: make clean && KERN_DEBUG=1 make
 KERN_DEBUG ?=
@@ -226,8 +242,15 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/fb.o \
       $(BUILD_DIR)/font.o \
       $(BUILD_DIR)/mtrr.o \
-      $(BUILD_DIR)/stack_guard.o
+      $(BUILD_DIR)/stack_guard.o \
+      $(BUILD_DIR)/acpi.o \
+      $(BUILD_DIR)/osl.o
 
+ACPICA_C_SRCS = $(shell find $(ACPICA_COMP_DIRS) -type f -name '*.c' 2>/dev/null \
+    | grep -v '/utclib\.c$$' | grep -v '/hwxfsleep\.c$$' \
+    | grep -v '/rsdump\.c$$' | grep -v '/rsdumpinfo\.c$$' \
+    | LC_ALL=C sort)
+ACPICA_C_OBJS = $(patsubst $(ACPICA_SRC_DIR)/%.c,$(BUILD_DIR)/acpica_%.o,$(ACPICA_C_SRCS))
 
 all: $(BUILD_DIR)/cact.iso
 	@echo "--------------------------------------------------"
@@ -241,6 +264,24 @@ all: $(BUILD_DIR)/cact.iso
 	 KERN_SECTORS=$$(( ($$KERN_SIZE + 511) / 512 )); \
 	 echo "  Kernel size: $$KERN_SIZE bytes ($$KERN_SECTORS sectors)";
 	@echo "--------------------------------------------------"
+
+
+ACPICA_REPO ?= git://github.com/acpica/acpica.git
+
+$(ACPICA_DIR):
+	@echo "Cloning ACPICA from $(ACPICA_REPO)..."
+	git clone --depth 1 $(ACPICA_REPO) $(ACPICA_DIR)
+
+acpica-fetch: $(ACPICA_DIR)
+	@echo "ACPICA source ready at $(ACPICA_DIR)"
+
+acpica-update:
+	cd $(ACPICA_DIR) && git pull
+
+acpica-clean:
+	rm -rf $(ACPICA_DIR)
+
+acpica-distclean: acpica-clean
 
 
 $(BUILD_DIR)/cact.iso: $(BUILD_DIR)/kernel.bin $(GRUB_CFG)
@@ -264,8 +305,8 @@ $(RUST_NET_LIB): FORCE
 
 FORCE:
 
-$(BUILD_DIR)/kernel.bin: $(OBJ) $(RUST_MM_LIB) $(RUST_NET_LIB) $(SCHED_TARGET)
-	ld $(LDFLAGS) -o $@ --start-group $(OBJ) $(RUST_MM_LIB) $(RUST_NET_LIB) -L$(dir $(SCHED_TARGET)) -lsched --end-group
+$(BUILD_DIR)/kernel.bin: $(OBJ) $(ACPICA_C_OBJS) $(RUST_MM_LIB) $(RUST_NET_LIB) $(SCHED_TARGET) | $(ACPICA_DIR)
+	ld $(LDFLAGS) -o $@ --start-group $(OBJ) $(ACPICA_C_OBJS) $(RUST_MM_LIB) $(RUST_NET_LIB) -L$(dir $(SCHED_TARGET)) -lsched --end-group
 
 
 $(BUILD_DIR)/kernel_entry.o: $(KERN_CORE_DIR)/kernel.asm
@@ -577,6 +618,22 @@ $(BUILD_DIR)/mtrr.o: $(KERN_MEM_DIR)/mtrr.c $(KERN_MEM_DIR)/mtrr.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/acpi.o: $(DRIVER_ACPI_DIR)/acpi.c $(DRIVER_ACPI_DIR)/cact_acpi.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/osl.o: $(DRIVER_ACPI_DIR)/osl.c $(DRIVER_ACPI_DIR)/cact_acpi.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/acpica_%.o: $(ACPICA_SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
+	gcc $(CFLAGS) -Wno-unused-parameter -Wno-unused-variable \
+	    -Wno-sign-compare -Wno-missing-braces -Wno-strict-aliasing \
+	    -Wno-implicit-function-declaration \
+	    -DACPI_MUTEX_TYPE=0 \
+	    -c $< -o $@
+
 $(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -616,11 +673,14 @@ $(BUILD_DIR)/ksocket.o: $(NET_SOCKET_DIR)/socket.c
 
 clean:
 	rm -rf $(BUILD_DIR)
+	rm -f $(BUILD_DIR)/acpica_*.o
 	cd $(SCHED_DIR) && cargo +nightly clean
 	cd $(KERN_SYNC_DIR) && cargo +nightly clean
 	cd $(RUST_MM_DIR) && cargo clean
 	cd $(RUST_NET_DIR) && cargo +nightly clean
 
-.PHONY: all clean sched FORCE iso-full
+acpica-distclean: acpica-clean
+
+.PHONY: all clean sched FORCE iso-full acpica-fetch acpica-update acpica-clean acpica-distclean
 .PHONY: sched
 sched: $(SCHED_TARGET)
