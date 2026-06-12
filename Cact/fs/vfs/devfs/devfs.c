@@ -478,9 +478,7 @@ void devfs_init(void) {
     devfs_register("keyboard", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_keyboard, 0);
     devfs_register("mouse",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_mouse,    0);
 
-    if (fb_get_width() != 0) {
-        devfs_register("fb0", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_fb, 0);
-    }
+    devfs_register("fb0", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_fb, 0);
 
     devfs_ready = 1;
 }
