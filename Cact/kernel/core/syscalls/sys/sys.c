@@ -16,7 +16,7 @@ int sys_mount(char* src, char* target, char* fstype) {
     if (!validate_user_str(src))    return -1;
     if (!validate_user_str(target)) return -1;
     if (!current_task) return -1;
-    if (current_task->euid != 0) return -1;   // root only
+    if (current_task->proc->euid != 0) return -1;   // root only
 
     vfs_node_t* src_node = _resolve_path(src);
     if (!src_node) return -1;
@@ -32,7 +32,7 @@ int sys_mount(char* src, char* target, char* fstype) {
 int sys_umount(char* target) {
     if (!validate_user_str(target)) return -1;
     if (!current_task) return -1;
-    if (current_task->euid != 0) return -1;   // root only
+    if (current_task->proc->euid != 0) return -1;   // root only
 
     char basename[128];
     vfs_node_t* parent = _resolve_parent(target, basename, 128);
@@ -44,7 +44,7 @@ int sys_umount(char* target) {
 // reboot() — restart or power off the system (root only)
 int sys_reboot(uint32_t cmd) {
     if (!current_task) return -1;
-    if (current_task->euid != 0) return -1;   // root only
+    if (current_task->proc->euid != 0) return -1;   // root only
 
     __asm__ volatile ("cli");   // disable interrupts
 

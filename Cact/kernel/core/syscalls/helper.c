@@ -13,11 +13,11 @@ extern int udp_sock_read_ready(int idx);
 // Increments the VFS refcount on success.
 int alloc_fd(vfs_node_t* node) {
     for (int i = 3; i < MAX_FD; i++) {
-        if (!current_task->fds->fd_table[i]) {
-            current_task->fds->fd_table[i]   = node;
-            current_task->fds->fd_offset[i]  = 0;
-            current_task->fds->fd_flags[i]   = 0;
-            current_task->fds->fd_cloexec[i] = 0;
+        if (!current_task->proc->fds->fd_table[i]) {
+            current_task->proc->fds->fd_table[i]   = node;
+            current_task->proc->fds->fd_offset[i]  = 0;
+            current_task->proc->fds->fd_flags[i]   = 0;
+            current_task->proc->fds->fd_cloexec[i] = 0;
             open_vfs(node);   // increment refcount
             return i;
         }
@@ -85,13 +85,13 @@ int fd_write_ready(vfs_node_t* node) {
 // user stack and redirecting EIP to the signal handler.
 // Called from syscall_handler before returning to userspace.
 void deliver_pending_signal(struct task_struct* t, struct syscall_frame* regs) {
-    uint32_t deliverable = t->pending_signals & ~t->signal_mask;
+    uint32_t deliverable = t->proc->pending_signals & ~t->proc->signal_mask;
     if (!deliverable) return;
 
     for (int bit = 0; bit < NSIG; bit++) {
         uint32_t mask = (1u << bit);
         if (!(deliverable & mask)) continue;
-        uint32_t handler = t->signal_handlers[bit];
+        uint32_t handler = t->proc->signal_handlers[bit];
         if (handler <= SIG_IGN) continue;         // default or ignore
         if (handler < USER_SPACE_START || handler >= KERNEL_BASE) continue;  // invalid
 
@@ -115,7 +115,7 @@ void deliver_pending_signal(struct task_struct* t, struct syscall_frame* regs) {
         signal_frame_t* frame = (signal_frame_t*)(phys_page + page_off);
 
         // Save the current user context into the signal frame
-        frame->ret_addr = t->sigreturn_trampoline;
+        frame->ret_addr = t->proc->sigreturn_trampoline;
         frame->signum   = (uint32_t)bit;
         frame->eax      = regs->eax;
         frame->ecx      = regs->ecx;
@@ -132,7 +132,7 @@ void deliver_pending_signal(struct task_struct* t, struct syscall_frame* regs) {
         regs->useresp = new_esp;
         regs->eip     = handler;
 
-        t->pending_signals &= ~mask;   // clear this signal
+        t->proc->pending_signals &= ~mask;   // clear this signal
         return;   // deliver at most one signal per syscall return
     }
 }

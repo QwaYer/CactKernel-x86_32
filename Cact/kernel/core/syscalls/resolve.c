@@ -1,14 +1,14 @@
 #include "resolve.h"
 #include "task.h"
 
-// Build an absolute path from a potentially relative path using current_task->cwd.
+// Build an absolute path from a potentially relative path using current_task->proc->cwd.
 // The result is always null-terminated and fits within abs_max bytes.
 void _make_abs(const char* path, char* abs, int abs_max) {
     int p = 0;
     if (path[0] != '/') {
         // Relative path — prepend current working directory
-        for (int i = 0; current_task->cwd[i] && p < abs_max - 2; i++)
-            abs[p++] = current_task->cwd[i];
+        for (int i = 0; current_task->proc->cwd[i] && p < abs_max - 2; i++)
+            abs[p++] = current_task->proc->cwd[i];
         if (p > 0 && abs[p-1] != '/') abs[p++] = '/';
     }
     // Append the given path
@@ -46,7 +46,7 @@ vfs_node_t* _resolve_parent_follow(const char* path,
         int i = 0;
         while (path[i] && i < basename_max - 1) { basename_out[i] = path[i]; i++; }
         basename_out[i] = '\0';
-        return vfs_walk_path_follow(vfs_root, current_task->cwd, 0);
+        return vfs_walk_path_follow(vfs_root, current_task->proc->cwd, 0);
     }
 
     // Copy the basename (everything after the last slash)

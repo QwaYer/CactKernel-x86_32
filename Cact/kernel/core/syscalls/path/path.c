@@ -168,7 +168,7 @@ int sys_getdents(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    struct vfs_node* node = current_task->fds->fd_table[fd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
     if (!node) return -1;
     if (node->type != VFS_DIRECTORY) return -1;
 
@@ -177,7 +177,7 @@ int sys_getdents(struct syscall_frame* regs) {
     if (count < entry_size) return -1;
 
     uint32_t written = 0;
-    uint32_t index   = current_task->fds->fd_offset[fd];
+    uint32_t index   = current_task->proc->fds->fd_offset[fd];
 
     while (written + entry_size <= count) {
         struct vfs_dirent* de = readdir_vfs(node, index);
@@ -194,7 +194,7 @@ int sys_getdents(struct syscall_frame* regs) {
         index++;
     }
 
-    current_task->fds->fd_offset[fd] = index;
+    current_task->proc->fds->fd_offset[fd] = index;
     return (int)written;
 }
 
@@ -213,8 +213,8 @@ int sys_chdir(struct syscall_frame* regs) {
         abs[i] = '\0';
     } else {
         int p = 0;
-        for (int i = 0; current_task->cwd[i] && p < 254; i++)
-            abs[p++] = current_task->cwd[i];
+        for (int i = 0; current_task->proc->cwd[i] && p < 254; i++)
+            abs[p++] = current_task->proc->cwd[i];
         if (p > 0 && abs[p-1] != '/') abs[p++] = '/';
         for (int i = 0; path[i] && p < 255; i++)
             abs[p++] = path[i];
@@ -266,8 +266,8 @@ int sys_chdir(struct syscall_frame* regs) {
     }
 
     int i = 0;
-    while (norm[i] && i < 255) { current_task->cwd[i] = norm[i]; i++; }
-    current_task->cwd[i] = '\0';
+    while (norm[i] && i < 255) { current_task->proc->cwd[i] = norm[i]; i++; }
+    current_task->proc->cwd[i] = '\0';
 
     return 0;
 }
@@ -282,13 +282,13 @@ int sys_getcwd(struct syscall_frame* regs) {
     if (!validate_user_ptr(buf, size)) return -1;
 
     uint32_t len = 0;
-    while (current_task->cwd[len]) len++;
+    while (current_task->proc->cwd[len]) len++;
     len++;   // include null terminator
 
     if (len > size) return -1;
 
     for (uint32_t i = 0; i < len; i++)
-        buf[i] = current_task->cwd[i];
+        buf[i] = current_task->proc->cwd[i];
 
     return (int)buf;
 }
@@ -297,9 +297,9 @@ int sys_getcwd(struct syscall_frame* regs) {
 int sys_chroot(char* path) {
     if (!validate_user_str(path)) return -1;
     if (!current_task) return -1;
-    if (current_task->euid != 0) return -1;   // root only
+    if (current_task->proc->euid != 0) return -1;   // root only
     vfs_node_t* node = _resolve_path(path);
     if (!node || node->type != VFS_DIRECTORY) return -1;
-    current_task->root = node;
+    current_task->proc->root = node;
     return 0;
 }

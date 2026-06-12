@@ -26,7 +26,8 @@ fn oom_score(t: *mut TaskStruct) -> u32 {
         if (*t).state == TASK_ZOMBIE {
             return 0;
         }
-        (*t).mm.count
+        if (*t).proc.is_null() { return 0; }
+        (*(*t).proc).mm.count
     }
 }
 
@@ -66,7 +67,7 @@ pub extern "C" fn oom_kill() -> i32 {
 
     // SAFETY: victim is valid.
     let victim_pid = unsafe { (*victim).pid };
-    let victim_pages = unsafe { (*victim).mm.count };
+    let victim_pages = unsafe { (*(*victim).proc).mm.count };
 
     extern "C" {
         fn task_signal_locked(pid: u32, signal: u32);

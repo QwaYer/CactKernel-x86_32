@@ -393,12 +393,12 @@ int vfs_check_perm(vfs_node_t *node, uint32_t perm) {
     if (!current_task || current_task->is_kernel) return 0;
 
     // Root (euid=0) bypasses permission checks
-    if (current_task->euid == 0) return 0;
+    if (current_task->proc && current_task->proc->euid == 0) return 0;
 
     uint32_t shift;
-    if (current_task->euid == node->uid)
+    if (current_task->proc && current_task->proc->euid == node->uid)
         shift = 6;         // owner
-    else if (current_task->egid == node->gid)
+    else if (current_task->proc && current_task->proc->egid == node->gid)
         shift = 3;         // group
     else
         shift = 0;         // other

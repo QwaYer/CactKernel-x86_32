@@ -87,7 +87,7 @@ static int sys_sigpending_impl(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (!validate_user_ptr(set, sizeof(uint32_t))) return -1;
 
-    *set = current_task->pending_signals & current_task->signal_mask;
+    *set = current_task->proc->pending_signals & current_task->proc->signal_mask;
     return 0;
 }
 
@@ -98,9 +98,9 @@ static int sys_sigsuspend_impl(struct syscall_frame* regs) {
     if (!current_task || current_task->is_kernel) return -1;
     if (!validate_user_ptr(mask, sizeof(uint32_t))) return -1;
 
-    current_task->saved_signal_mask = current_task->signal_mask;
-    current_task->signal_mask = *mask & ~SIG_UNCATCHABLE;
-    current_task->in_sigsuspend = 1;
+    current_task->proc->saved_signal_mask = current_task->proc->signal_mask;
+    current_task->proc->signal_mask = *mask & ~SIG_UNCATCHABLE;
+    current_task->proc->in_sigsuspend = 1;
     current_task->state = TASK_SLEEPING;
 
     schedule();   // will be woken by a delivered signal
@@ -117,16 +117,16 @@ static int sys_alarm_impl(struct syscall_frame* regs) {
     uint32_t remaining = 0;
 
     // Return remaining time of the previous alarm, if any
-    if (current_task->alarm_ticks) {
-        uint32_t left_ticks = (current_task->alarm_ticks > now)
-                              ? (current_task->alarm_ticks - now) : 0;
+    if (current_task->proc->alarm_ticks) {
+        uint32_t left_ticks = (current_task->proc->alarm_ticks > now)
+                              ? (current_task->proc->alarm_ticks - now) : 0;
         remaining = (left_ticks + TIMER_HZ_SIGNALS - 1) / TIMER_HZ_SIGNALS;
     }
 
     if (seconds == 0) {
-        current_task->alarm_ticks = 0;   // cancel
+        current_task->proc->alarm_ticks = 0;   // cancel
     } else {
-        current_task->alarm_ticks = now + seconds * TIMER_HZ_SIGNALS;
+        current_task->proc->alarm_ticks = now + seconds * TIMER_HZ_SIGNALS;
     }
 
     return (int)remaining;
@@ -147,8 +147,8 @@ static int sys_setitimer_impl(struct syscall_frame* regs) {
 
     // Return old value if requested
     if (oldval) {
-        if (current_task->itimer_value && current_task->itimer_value > now) {
-            uint32_t left = current_task->itimer_value - now;
+        if (current_task->proc->itimer_value && current_task->proc->itimer_value > now) {
+            uint32_t left = current_task->proc->itimer_value - now;
             oldval->it_value.tv_sec  = left / TIMER_HZ_SIGNALS;
             oldval->it_value.tv_usec = (long)((left % TIMER_HZ_SIGNALS) *
                                                (1000000 / TIMER_HZ_SIGNALS));
@@ -156,8 +156,8 @@ static int sys_setitimer_impl(struct syscall_frame* regs) {
             oldval->it_value.tv_sec  = 0;
             oldval->it_value.tv_usec = 0;
         }
-        oldval->it_interval.tv_sec  = current_task->itimer_interval / TIMER_HZ_SIGNALS;
-        oldval->it_interval.tv_usec = (long)((current_task->itimer_interval % TIMER_HZ_SIGNALS) *
+        oldval->it_interval.tv_sec  = current_task->proc->itimer_interval / TIMER_HZ_SIGNALS;
+        oldval->it_interval.tv_usec = (long)((current_task->proc->itimer_interval % TIMER_HZ_SIGNALS) *
                                               (1000000 / TIMER_HZ_SIGNALS));
     }
 
@@ -169,11 +169,11 @@ static int sys_setitimer_impl(struct syscall_frame* regs) {
                              (uint32_t)((newval->it_interval.tv_usec * TIMER_HZ_SIGNALS) / 1000000);
 
         if (val_ticks == 0) {
-            current_task->itimer_value    = 0;
-            current_task->itimer_interval = 0;
+            current_task->proc->itimer_value    = 0;
+            current_task->proc->itimer_interval = 0;
         } else {
-            current_task->itimer_value    = now + val_ticks;
-            current_task->itimer_interval = int_ticks;
+            current_task->proc->itimer_value    = now + val_ticks;
+            current_task->proc->itimer_interval = int_ticks;
         }
     }
 

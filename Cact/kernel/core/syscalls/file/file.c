@@ -31,7 +31,7 @@ int sys_fstat(struct syscall_frame* regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(ubuf, 16)) return -1;
 
-    struct vfs_node* node = current_task->fds->fd_table[fd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
     if (!node) {
         return -1;
     }
@@ -64,7 +64,7 @@ int sys_chmod(char* path, uint32_t mode) {
     if (!node) return -1;
 
     // Only owner or root can change mode
-    if (current_task->euid != 0 && current_task->euid != node->uid)
+    if (current_task->proc->euid != 0 && current_task->proc->euid != node->uid)
         return -1;
 
     node->mode = mode & 0777;
@@ -80,7 +80,7 @@ int sys_chown(char* path, uint32_t new_uid, uint32_t new_gid) {
     if (!node) return -1;
 
     // Only root can change ownership
-    if (current_task->euid != 0) return -1;
+    if (current_task->proc->euid != 0) return -1;
 
     if (new_uid != (uint32_t)-1) node->uid = new_uid;
     if (new_gid != (uint32_t)-1) node->gid = new_gid;
@@ -90,8 +90,8 @@ int sys_chown(char* path, uint32_t new_uid, uint32_t new_gid) {
 // umask() — set file creation mask
 int sys_umask(uint32_t mask) {
     if (!current_task) return -1;
-    uint32_t old = current_task->umask;
-    current_task->umask = mask & 0777;
+    uint32_t old = current_task->proc->umask;
+    current_task->proc->umask = mask & 0777;
     return (int)old;
 }
 
@@ -110,7 +110,7 @@ int sys_truncate(char* path, uint32_t length) {
 int sys_ftruncate(int fd, uint32_t length) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_FILE) return -1;
     node->size = length;
     return 0;
