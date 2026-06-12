@@ -20,6 +20,7 @@
 #include "version.h"
 #include "serial.h"
 #include "mtrr.h"
+#include "cact_acpi.h"
 
 // Kernel page directory (defined in paging.c)
 extern uint32_t page_directory[1024];
@@ -236,6 +237,12 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         if (pci_device_count <= 0)
             klog(LOG_WARN, "no PCI devices — storage/net/USB unavailable");
     }
+
+    // ACPI subsystem
+    if (acpi_init())
+        klog(LOG_WARN, "ACPI init returned error — hardware limited");
+    else
+        klog(LOG_OK, "ACPI subsystem ready");
 
     // USB xHCI stack
     extern void usb_init(void);
