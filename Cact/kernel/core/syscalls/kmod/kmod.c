@@ -39,7 +39,7 @@ static int require_root(void) {
         return -1;
     if (current_task->is_kernel)
         return 0;
-    if (current_task->euid != 0)
+    if (current_task->proc->euid != 0)
         return -1;
     return 0;
 }

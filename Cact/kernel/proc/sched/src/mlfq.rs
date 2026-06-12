@@ -246,7 +246,7 @@ pub unsafe extern "C" fn schedule() {
     }
 
     if matches!((*prev).state, TaskState::Zombie) {
-        let parent_pid = (*prev).parent_pid;
+        let parent_pid = (*(*prev).proc).parent_pid;
         if parent_pid != 0 {
             crate::task::task_signal_locked(parent_pid, crate::task::SIGCHLD);
             let parent = crate::task::find_task_by_pid(parent_pid);
@@ -305,8 +305,8 @@ pub unsafe extern "C" fn schedule() {
         ffi::switch_paging(effective_next_pd);
     }
 
-    if !(*next).stack_base.is_null() {
-        ffi::tss_entry.esp0 = (*next).stack_base as u32 + crate::task::KERNEL_STACK_SIZE as u32;
+    if !(*next).proc.is_null() && !(*(*next).proc).stack_base.is_null() {
+        ffi::tss_entry.esp0 = (*(*next).proc).stack_base as u32 + crate::task::KERNEL_STACK_SIZE as u32;
     }
 
     ffi::cli();
@@ -330,7 +330,7 @@ fn wake_expired_sleepers() {
 
         while !cur.is_null() {
             let next = (*cur).queue_next;
-            if (*cur).sleep_until != 0 && now >= (*cur).sleep_until {
+            if (*(*cur).proc).sleep_until != 0 && now >= (*(*cur).proc).sleep_until {
                 if prev.is_null() {
                     sq.head = next;
                 } else {
@@ -341,7 +341,7 @@ fn wake_expired_sleepers() {
                 }
                 sq.count -= 1;
 
-                (*cur).sleep_until = 0;
+                (*(*cur).proc).sleep_until = 0;
                 (*cur).state = TaskState::Ready;
                 mlfq_enqueue_locked(cur, (*cur).priority);
             } else {

@@ -78,7 +78,7 @@ fn find_shm_va(num_pages: u32) -> u32 {
 
     // SAFETY: current_task is a valid kernel global.
     let t = unsafe { current_task };
-    if t.is_null() {
+    if t.is_null() || unsafe { (*t).proc.is_null() } {
         return 0;
     }
 
@@ -86,12 +86,12 @@ fn find_shm_va(num_pages: u32) -> u32 {
         let mut clash = false;
         // SAFETY: t is valid.
         for i in 0..TASK_SHM_MAX {
-            let id = unsafe { (*t).shm_attachments[i].shm_id };
+            let id = unsafe { (*(*t).proc).shm_attachments[i].shm_id };
             if id == 0 || !seg_valid(id) {
                 continue;
             }
             let seg = &SHM_TABLE.get_mut()[(id - 1) as usize];
-            let base = unsafe { (*t).shm_attachments[i].shm_vaddr };
+            let base = unsafe { (*(*t).proc).shm_attachments[i].shm_vaddr };
             let end = base + seg.num_pages * PAGE_SIZE;
             let cend = candidate + size;
             if candidate < end && cend > base {
@@ -214,7 +214,7 @@ pub extern "C" fn shm_at(shmid: i32, shmaddr: u32, flags: i32) -> u32 {
 
     // SAFETY: current_task is a valid kernel global.
     let t = unsafe { current_task };
-    if t.is_null() || unsafe { (*t).is_kernel } != 0 {
+    if t.is_null() || unsafe { (*t).is_kernel } != 0 || unsafe { (*t).proc.is_null() } {
         return u32::MAX;
     }
 
@@ -228,7 +228,7 @@ pub extern "C" fn shm_at(shmid: i32, shmaddr: u32, flags: i32) -> u32 {
     let mut slot: i32 = -1;
     // SAFETY: t is valid.
     for i in 0..TASK_SHM_MAX {
-        if unsafe { (*t).shm_attachments[i].shm_id } == 0 {
+        if unsafe { (*(*t).proc).shm_attachments[i].shm_id } == 0 {
             slot = i as i32;
             break;
         }
@@ -275,8 +275,8 @@ pub extern "C" fn shm_at(shmid: i32, shmaddr: u32, flags: i32) -> u32 {
 
     // SAFETY: t is valid.
     unsafe {
-        (*t).shm_attachments[slot as usize].shm_id = shmid;
-        (*t).shm_attachments[slot as usize].shm_vaddr = va;
+        (*(*t).proc).shm_attachments[slot as usize].shm_id = shmid;
+        (*(*t).proc).shm_attachments[slot as usize].shm_vaddr = va;
     }
     seg.nattch += 1;
     seg.lpid = unsafe { (*t).pid };
@@ -291,7 +291,7 @@ pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
 
     // SAFETY: current_task is a valid kernel global.
     let t = unsafe { current_task };
-    if t.is_null() || unsafe { (*t).is_kernel } != 0 {
+    if t.is_null() || unsafe { (*t).is_kernel } != 0 || unsafe { (*t).proc.is_null() } {
         return -1;
     }
 
@@ -300,7 +300,7 @@ pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
     let mut slot: i32 = -1;
     // SAFETY: t is valid.
     for i in 0..TASK_SHM_MAX {
-        let att = unsafe { &(*t).shm_attachments[i] };
+        let att = unsafe { &(*(*t).proc).shm_attachments[i] };
         if att.shm_vaddr == shmaddr && att.shm_id != 0 {
             slot = i as i32;
             break;
@@ -312,11 +312,11 @@ pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
     }
 
     // SAFETY: t is valid.
-    let id = unsafe { (*t).shm_attachments[slot as usize].shm_id };
+    let id = unsafe { (*(*t).proc).shm_attachments[slot as usize].shm_id };
     if !seg_valid(id) {
         unsafe {
-            (*t).shm_attachments[slot as usize].shm_id = 0;
-            (*t).shm_attachments[slot as usize].shm_vaddr = 0;
+            (*(*t).proc).shm_attachments[slot as usize].shm_id = 0;
+            (*(*t).proc).shm_attachments[slot as usize].shm_vaddr = 0;
         }
         lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
         return -1;
@@ -326,8 +326,8 @@ pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
     shm_unmap_from(unsafe { (*t).page_directory }, shmaddr, seg.num_pages);
 
     unsafe {
-        (*t).shm_attachments[slot as usize].shm_id = 0;
-        (*t).shm_attachments[slot as usize].shm_vaddr = 0;
+        (*(*t).proc).shm_attachments[slot as usize].shm_id = 0;
+        (*(*t).proc).shm_attachments[slot as usize].shm_vaddr = 0;
     }
     if seg.nattch > 0 {
         seg.nattch -= 1;
@@ -417,26 +417,26 @@ pub extern "C" fn shm_detach_all(pid: u32, page_directory: *mut u32) {
 
     // SAFETY: found is a valid TaskStruct.
     for i in 0..TASK_SHM_MAX {
-        let id = unsafe { (*found).shm_attachments[i].shm_id };
+        let id = unsafe { (*(*found).proc).shm_attachments[i].shm_id };
         if id == 0 {
             continue;
         }
         if !seg_valid(id) {
             unsafe {
-                (*found).shm_attachments[i].shm_id = 0;
-                (*found).shm_attachments[i].shm_vaddr = 0;
+                (*(*found).proc).shm_attachments[i].shm_id = 0;
+                (*(*found).proc).shm_attachments[i].shm_vaddr = 0;
             }
             continue;
         }
         let seg = &mut SHM_TABLE.get_mut()[(id - 1) as usize];
         shm_unmap_from(
             page_directory,
-            unsafe { (*found).shm_attachments[i].shm_vaddr },
+            unsafe { (*(*found).proc).shm_attachments[i].shm_vaddr },
             seg.num_pages,
         );
         unsafe {
-            (*found).shm_attachments[i].shm_id = 0;
-            (*found).shm_attachments[i].shm_vaddr = 0;
+            (*(*found).proc).shm_attachments[i].shm_id = 0;
+            (*(*found).proc).shm_attachments[i].shm_vaddr = 0;
         }
         if seg.nattch > 0 {
             seg.nattch -= 1;

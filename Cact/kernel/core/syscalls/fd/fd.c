@@ -46,11 +46,11 @@ int sys_open(char* name, int flags) {
 
     // Find a free fd slot (3..MAX_FD-1)
     for (int i = 3; i < MAX_FD; i++) {
-        if (!current_task->fds->fd_table[i]) {
-            current_task->fds->fd_table[i]   = node;
-            current_task->fds->fd_offset[i]  = 0;
-            current_task->fds->fd_flags[i]   = (uint32_t)flags;
-            current_task->fds->fd_cloexec[i] = 0;
+        if (!current_task->proc->fds->fd_table[i]) {
+            current_task->proc->fds->fd_table[i]   = node;
+            current_task->proc->fds->fd_offset[i]  = 0;
+            current_task->proc->fds->fd_flags[i]   = (uint32_t)flags;
+            current_task->proc->fds->fd_cloexec[i] = 0;
             open_vfs(node);   // increment VFS refcount
 
             // Truncate regular files on open(O_TRUNC) when opened writable.
@@ -58,10 +58,10 @@ int sys_open(char* name, int flags) {
                 (((flags & OPEN_ACCMODE) == OPEN_WRONLY) ||
                  ((flags & OPEN_ACCMODE) == OPEN_RDWR))) {
                 if (sys_ftruncate(i, 0) != 0) {
-                    current_task->fds->fd_table[i]   = 0;
-                    current_task->fds->fd_offset[i]  = 0;
-                    current_task->fds->fd_flags[i]   = 0;
-                    current_task->fds->fd_cloexec[i] = 0;
+                    current_task->proc->fds->fd_table[i]   = 0;
+                    current_task->proc->fds->fd_offset[i]  = 0;
+                    current_task->proc->fds->fd_flags[i]   = 0;
+                    current_task->proc->fds->fd_cloexec[i] = 0;
                     close_vfs(node);
                     return -1;
                 }
@@ -80,11 +80,11 @@ int sys_read(int fd, char* buf, unsigned int size) {
     if (!current_task)                 return -1;
     if (fd < 0 || fd >= MAX_FD)        return -1;
 
-    struct vfs_node* node = current_task->fds->fd_table[fd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
     if (!node) return -1;
-    int ret = read_vfs(node, current_task->fds->fd_offset[fd], size, buf);
+    int ret = read_vfs(node, current_task->proc->fds->fd_offset[fd], size, buf);
     if (ret > 0)
-        current_task->fds->fd_offset[fd] += (uint32_t)ret;
+        current_task->proc->fds->fd_offset[fd] += (uint32_t)ret;
     return ret;
 }
 
@@ -94,11 +94,11 @@ int sys_write(int fd, char* buf, unsigned int size) {
     if (!validate_user_ptr(buf, size)) return -1;
     if (!current_task)                 return -1;
     if (fd < 0 || fd >= MAX_FD)        return -1;
-    struct vfs_node* node = current_task->fds->fd_table[fd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
     if (!node) return -1;
-    int ret = write_vfs(node, current_task->fds->fd_offset[fd], size, buf);
+    int ret = write_vfs(node, current_task->proc->fds->fd_offset[fd], size, buf);
     if (ret > 0)
-        current_task->fds->fd_offset[fd] += (uint32_t)ret;
+        current_task->proc->fds->fd_offset[fd] += (uint32_t)ret;
     return ret;
 }
 
@@ -106,12 +106,12 @@ int sys_write(int fd, char* buf, unsigned int size) {
 int sys_close(int fd) {
     if (!current_task)          return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
-    struct vfs_node* node = current_task->fds->fd_table[fd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
     if (!node) return -1;
-    current_task->fds->fd_table[fd]   = 0;
-    current_task->fds->fd_offset[fd]  = 0;
-    current_task->fds->fd_flags[fd]   = 0;
-    current_task->fds->fd_cloexec[fd] = 0;
+    current_task->proc->fds->fd_table[fd]   = 0;
+    current_task->proc->fds->fd_offset[fd]  = 0;
+    current_task->proc->fds->fd_flags[fd]   = 0;
+    current_task->proc->fds->fd_cloexec[fd] = 0;
     close_vfs(node);   // decrement VFS refcount
     return 0;
 }
@@ -124,7 +124,7 @@ int sys_lseek(struct syscall_frame* regs) {
 
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
-    struct vfs_node* node = current_task->fds->fd_table[fd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
     if (!node) return -1;
 
     uint32_t new_off;
@@ -134,7 +134,7 @@ int sys_lseek(struct syscall_frame* regs) {
             new_off = (uint32_t)offset;
             break;
         case SEEK_CUR: {
-            int cur = (int)current_task->fds->fd_offset[fd] + offset;
+            int cur = (int)current_task->proc->fds->fd_offset[fd] + offset;
             if (cur < 0) return -1;
             new_off = (uint32_t)cur;
             break;
@@ -148,7 +148,7 @@ int sys_lseek(struct syscall_frame* regs) {
         default:
             return -1;
     }
-    current_task->fds->fd_offset[fd] = new_off;
+    current_task->proc->fds->fd_offset[fd] = new_off;
     return (int)new_off;
 }
 
@@ -184,7 +184,7 @@ int sys_ioctl(struct syscall_frame* regs) {
         return 0;
     }
 
-    struct vfs_node* node = current_task->fds->fd_table[fd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
     if (!node) return -1;
 
     if (arg && !validate_user_ptr(arg, 1)) return -1;
@@ -197,7 +197,7 @@ int sys_fcntl(int fd, int cmd, int arg) {
     if (!current_task)          return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    struct vfs_node* node = current_task->fds->fd_table[fd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
     if (!node) return -1;
 
     switch (cmd) {
@@ -206,11 +206,11 @@ int sys_fcntl(int fd, int cmd, int arg) {
     case 0: {
         if (arg < 0 || arg >= MAX_FD) return -1;
         for (int i = arg; i < MAX_FD; i++) {
-            if (!current_task->fds->fd_table[i]) {
-                current_task->fds->fd_table[i]   = node;
-                current_task->fds->fd_offset[i]  = current_task->fds->fd_offset[fd];
-                current_task->fds->fd_flags[i]   = current_task->fds->fd_flags[fd];
-                current_task->fds->fd_cloexec[i] = 0;
+            if (!current_task->proc->fds->fd_table[i]) {
+                current_task->proc->fds->fd_table[i]   = node;
+                current_task->proc->fds->fd_offset[i]  = current_task->proc->fds->fd_offset[fd];
+                current_task->proc->fds->fd_flags[i]   = current_task->proc->fds->fd_flags[fd];
+                current_task->proc->fds->fd_cloexec[i] = 0;
                 open_vfs(node);
                 return i;
             }
@@ -220,22 +220,22 @@ int sys_fcntl(int fd, int cmd, int arg) {
 
     // F_GETFD: get close-on-exec flag
     case 1:
-        return (int)current_task->fds->fd_cloexec[fd];
+        return (int)current_task->proc->fds->fd_cloexec[fd];
 
     // F_SETFD: set close-on-exec flag
     case 2:
-        current_task->fds->fd_cloexec[fd] = (arg & 1) ? 1 : 0;
+        current_task->proc->fds->fd_cloexec[fd] = (arg & 1) ? 1 : 0;
         return 0;
 
     // F_GETFL: get file status flags
     case 3:
-        return (int)current_task->fds->fd_flags[fd];
+        return (int)current_task->proc->fds->fd_flags[fd];
 
     // F_SETFL: set file status flags (only O_NONBLOCK and O_APPEND allowed)
     case 4: {
-        uint32_t new_flags = (current_task->fds->fd_flags[fd] & ~(uint32_t)SETFL_MASK)
+        uint32_t new_flags = (current_task->proc->fds->fd_flags[fd] & ~(uint32_t)SETFL_MASK)
                            | ((uint32_t)arg & SETFL_MASK);
-        current_task->fds->fd_flags[fd] = new_flags;
+        current_task->proc->fds->fd_flags[fd] = new_flags;
 
         // Propagate O_NONBLOCK to pipe if applicable
         if (node->type == VFS_PIPE && node->priv) {
@@ -257,15 +257,15 @@ int sys_fcntl(int fd, int cmd, int arg) {
 int sys_dup(int oldfd) {
     if (!current_task) return -1;
     if (oldfd < 0 || oldfd >= MAX_FD) return -1;
-    struct vfs_node* node = current_task->fds->fd_table[oldfd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[oldfd];
     if (!node) return -1;
     for (int i = 0; i < MAX_FD; i++) {
-        if (!current_task->fds->fd_table[i]) {
+        if (!current_task->proc->fds->fd_table[i]) {
             open_vfs(node);
-            current_task->fds->fd_table[i]   = node;
-            current_task->fds->fd_offset[i]  = current_task->fds->fd_offset[oldfd];
-            current_task->fds->fd_flags[i]   = current_task->fds->fd_flags[oldfd];
-            current_task->fds->fd_cloexec[i] = 0;
+            current_task->proc->fds->fd_table[i]   = node;
+            current_task->proc->fds->fd_offset[i]  = current_task->proc->fds->fd_offset[oldfd];
+            current_task->proc->fds->fd_flags[i]   = current_task->proc->fds->fd_flags[oldfd];
+            current_task->proc->fds->fd_cloexec[i] = 0;
             return i;
         }
     }
@@ -284,17 +284,17 @@ int sys_dup2(struct syscall_frame* regs) {
     // POSIX: dup2(fd, fd) is a no-op
     if (oldfd == newfd) return newfd;
 
-    struct vfs_node* node = current_task->fds->fd_table[oldfd];
+    struct vfs_node* node = current_task->proc->fds->fd_table[oldfd];
     if (!node) return -1;
 
     // Increment refcount before installing to avoid transient UAF
     open_vfs(node);
 
-    struct vfs_node* old_newnode = current_task->fds->fd_table[newfd];
-    current_task->fds->fd_table[newfd]   = node;
-    current_task->fds->fd_offset[newfd]  = current_task->fds->fd_offset[oldfd];
-    current_task->fds->fd_flags[newfd]   = current_task->fds->fd_flags[oldfd];
-    current_task->fds->fd_cloexec[newfd] = 0;
+    struct vfs_node* old_newnode = current_task->proc->fds->fd_table[newfd];
+    current_task->proc->fds->fd_table[newfd]   = node;
+    current_task->proc->fds->fd_offset[newfd]  = current_task->proc->fds->fd_offset[oldfd];
+    current_task->proc->fds->fd_flags[newfd]   = current_task->proc->fds->fd_flags[oldfd];
+    current_task->proc->fds->fd_cloexec[newfd] = 0;
 
     if (old_newnode)
         close_vfs(old_newnode);   // release old occupant of newfd
@@ -313,7 +313,7 @@ int sys_pipe(struct syscall_frame* regs) {
 
     int rfd = -1, wfd = -1;
     for (int i = 3; i < MAX_FD && (rfd < 0 || wfd < 0); i++) {
-        if (!current_task->fds->fd_table[i]) {
+        if (!current_task->proc->fds->fd_table[i]) {
             if (rfd < 0) rfd = i;
             else         wfd = i;
         }
@@ -325,14 +325,14 @@ int sys_pipe(struct syscall_frame* regs) {
         return -1;
     }
 
-    current_task->fds->fd_table[rfd]   = pipefd[0];
-    current_task->fds->fd_table[wfd]   = pipefd[1];
-    current_task->fds->fd_offset[rfd]  = 0;
-    current_task->fds->fd_offset[wfd]  = 0;
-    current_task->fds->fd_flags[rfd]   = 0;
-    current_task->fds->fd_flags[wfd]   = 0;
-    current_task->fds->fd_cloexec[rfd] = 0;
-    current_task->fds->fd_cloexec[wfd] = 0;
+    current_task->proc->fds->fd_table[rfd]   = pipefd[0];
+    current_task->proc->fds->fd_table[wfd]   = pipefd[1];
+    current_task->proc->fds->fd_offset[rfd]  = 0;
+    current_task->proc->fds->fd_offset[wfd]  = 0;
+    current_task->proc->fds->fd_flags[rfd]   = 0;
+    current_task->proc->fds->fd_flags[wfd]   = 0;
+    current_task->proc->fds->fd_cloexec[rfd] = 0;
+    current_task->proc->fds->fd_cloexec[wfd] = 0;
 
     user_fds[0] = rfd;
     user_fds[1] = wfd;
@@ -384,7 +384,7 @@ int sys_select(struct syscall_frame* regs) {
         int ready = 0;
 
         for (int fd = 0; fd < nfds; fd++) {
-            vfs_node_t* node = t->fds->fd_table[fd];
+            vfs_node_t* node = t->proc->fds->fd_table[fd];
 
             if (urfds && SEL_ISSET(fd, &orig_r)) {
                 if (node && fd_read_ready(node)) { SEL_SET(fd, &res_r); ready++; }
@@ -442,7 +442,7 @@ int sys_poll(struct syscall_frame* regs) {
             fds[i].revents = 0;
             int fd = fds[i].fd;
             if (fd < 0 || fd >= MAX_FD) { fds[i].revents = POLLNVAL; continue; }
-            vfs_node_t* node = t->fds->fd_table[fd];
+            vfs_node_t* node = t->proc->fds->fd_table[fd];
             if (!node)                  { fds[i].revents = POLLNVAL; continue; }
 
             short ev = 0;

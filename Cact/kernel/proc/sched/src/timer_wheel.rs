@@ -23,11 +23,18 @@ impl TimerSlot {
         Self { head: ptr::null_mut(), count: 0 }
     }
 
-    fn push(&mut self, task: &mut TaskStruct) {
-        let tp: *mut TaskStruct = task;
-        task.wait_next = self.head;
-        self.head = tp;
-        self.count += 1;
+    fn push(&mut self, task: *mut TaskStruct) {
+        if task.is_null() {
+            return;
+        }
+        unsafe {
+            let p = (*task).proc;
+            if !p.is_null() {
+                (*p).wait_next = self.head;
+            }
+            self.head = task;
+            self.count += 1;
+        }
     }
 
     fn drain(&mut self) -> *mut TaskStruct {
@@ -82,9 +89,10 @@ pub fn timer_wheel_add(task: *mut TaskStruct, sleep_ticks: u32) {
     }
     unsafe {
         let sw = &mut *sleep_wheel_mut();
-        let task = &mut *task;
         let wake_tick = sw.current_tick.wrapping_add(sleep_ticks);
-        task.sleep_until = wake_tick;
+        if !(*task).proc.is_null() {
+            (*(*task).proc).sleep_until = wake_tick;
+        }
         let slot_idx = (wake_tick as usize) % WHEEL_SIZE;
         sw.slots[slot_idx].push(task);
     }
@@ -96,7 +104,7 @@ pub fn timer_wheel_remove(task: *mut TaskStruct) {
     }
     unsafe {
         let sw = &mut *sleep_wheel_mut();
-        let slot_idx = ((*task).sleep_until as usize) % WHEEL_SIZE;
+        let slot_idx = ((*(*task).proc).sleep_until as usize) % WHEEL_SIZE;
         let slot = &mut sw.slots[slot_idx];
 
         let mut prev: *mut TaskStruct = ptr::null_mut();
@@ -105,16 +113,16 @@ pub fn timer_wheel_remove(task: *mut TaskStruct) {
         while !cur.is_null() {
             if cur == task {
                 if prev.is_null() {
-                    slot.head = (*task).wait_next;
+                    slot.head = (*(*task).proc).wait_next;
                 } else {
-                    (*prev).wait_next = (*task).wait_next;
+                    (*(*prev).proc).wait_next = (*(*task).proc).wait_next;
                 }
                 slot.count -= 1;
-                (*task).wait_next = ptr::null_mut();
+                (*(*task).proc).wait_next = ptr::null_mut();
                 return;
             }
             prev = cur;
-            cur  = (*cur).wait_next;
+            cur = if !(*cur).proc.is_null() { (*(*cur).proc).wait_next } else { ptr::null_mut() };
         }
     }
 }
@@ -130,17 +138,17 @@ pub fn timer_wheel_tick() {
         irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
         while !cur.is_null() {
-            let next = (*cur).wait_next;
-            (*cur).wait_next = ptr::null_mut();
+            let next = (*(*cur).proc).wait_next;
+            (*(*cur).proc).wait_next = ptr::null_mut();
 
-            if (*cur).sleep_until <= now {
+            if (*(*cur).proc).sleep_until <= now {
                 if matches!((*cur).state, TaskState::Sleeping) {
-                    (*cur).sleep_until = 0;
+                    (*(*cur).proc).sleep_until = 0;
                     (*cur).state       = TaskState::Ready;
                     mlfq::mlfq_enqueue_locked(cur, (*cur).priority);
                 }
             } else {
-                let future_slot = ((*cur).sleep_until as usize) % WHEEL_SIZE;
+                let future_slot = ((*(*cur).proc).sleep_until as usize) % WHEEL_SIZE;
                 sw.slots[future_slot].push(&mut *cur);
             }
 
@@ -156,16 +164,17 @@ pub unsafe extern "C" fn sched_sleep_ticks(ticks: u32) {
     irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
     let cur = crate::task::current_task;
-    if cur.is_null() {
+    if cur.is_null() || (*cur).proc.is_null() {
         irq_spinlock_release(&raw mut SCHEDULER_LOCK);
         return;
     }
 
     unsafe {
         let sw = &mut *sleep_wheel_mut();
+        let p = (*cur).proc;
         (*cur).state       = TaskState::Sleeping;
-        (*cur).sleep_until = sw.current_tick.wrapping_add(ticks);
-        let future_slot = ((*cur).sleep_until as usize) % WHEEL_SIZE;
+        (*p).sleep_until = sw.current_tick.wrapping_add(ticks);
+        let future_slot = ((*p).sleep_until as usize) % WHEEL_SIZE;
         sw.slots[future_slot].push(&mut *cur);
     }
 

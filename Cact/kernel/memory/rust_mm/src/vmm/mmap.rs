@@ -15,7 +15,8 @@ fn fd_to_node(fd: i32) -> *mut VfsNode {
         return core::ptr::null_mut();
     }
     unsafe {
-        let fds = (*t).fds;
+        if (*t).proc.is_null() { return core::ptr::null_mut(); }
+        let fds = (*(*t).proc).fds;
         if fds.is_null() { return core::ptr::null_mut(); }
         (*fds).fd_table[fd as usize]
     }

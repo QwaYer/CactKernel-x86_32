@@ -1,8 +1,3 @@
-//! `TaskStruct` and related types: binary-compatible with the C task control block.
-//!
-//! Field order and padding are enforced by `sched` (`_ABI_CHECK`); change this layout
-//! only together with the C header and those assertions.
-
 use core::ffi::c_void;
 
 use crate::kernel_types::{DynCtx, MmapTable, ProcPageTracker, TaskFdTable, VfsNode};
@@ -28,22 +23,32 @@ pub struct TaskShmAttach {
     pub shm_vaddr: u32,
 }
 
+/// Lightweight hardware/scheduler context (48 bytes), matches C `task_struct`.
+/// Process metadata (signals, fds, cwd, etc.) lives in `ProcMeta` on the heap.
 #[repr(C)]
 pub struct TaskStruct {
-    pub esp:            u32,
-    pub pid:            u32,
-    pub state:          TaskState,
-    pub is_kernel:      u8,
-    pub _pad0:          [u8; 3],
-    pub stack_base:     *mut c_void,
-    pub ustack_phys:    *mut c_void,
-    pub ustack_virt:    u32,
-    pub page_directory: *mut u32,
-    pub next:           *mut TaskStruct,
-    pub queue_next:     *mut TaskStruct,
-    pub priority:       u32,
-    pub time_slice:     u32,
-    pub ticks_used:     u32,
+    pub esp:            u32,              //  0
+    pub page_directory: *mut u32,         //  4
+    pub fpu_context_ptr: *mut c_void,     //  8
+    pub pid:            u32,              // 12
+    pub state:          TaskState,        // 16 (u32)
+    pub is_kernel:      u8,               // 20
+    pub _pad0:          [u8; 3],          // 21
+    pub next:           *mut TaskStruct,  // 24
+    pub queue_next:     *mut TaskStruct,  // 28
+    pub priority:       u32,              // 32
+    pub time_slice:     u32,              // 36
+    pub ticks_used:     u32,              // 40
+    pub proc:           *mut ProcMeta,    // 44
+}
+
+/// Heap-allocated process metadata, matches C `proc_metadata_t`.
+#[repr(C)]
+pub struct ProcMeta {
+    pub stack_base:         *mut c_void,
+    pub ustack_phys:        *mut c_void,
+    pub ustack_virt:        u32,
+    pub ustack_phys_extra:  [*mut c_void; 3],
     pub pending_signals:    u32,
     pub signal_mask:        u32,
     pub saved_signal_mask:  u32,
@@ -75,8 +80,9 @@ pub struct TaskStruct {
     pub sid:                u32,
     pub umask:              u32,
     pub root:               *mut VfsNode,
-    pub ustack_phys_extra:  [*mut c_void; 3],
 }
 
 unsafe impl Send for TaskStruct {}
 unsafe impl Sync for TaskStruct {}
+unsafe impl Send for ProcMeta {}
+unsafe impl Sync for ProcMeta {}

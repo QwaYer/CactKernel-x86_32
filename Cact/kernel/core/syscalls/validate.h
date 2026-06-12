@@ -3,7 +3,9 @@
 
 #include "kernel.h"
 
+#ifndef KERNEL_BASE
 #define KERNEL_BASE      0xC0000000U
+#endif
 #define USER_SPACE_START 0x08000000U  /* low 128 MiB is identity-mapped kernel space */
 #define USER_STR_MAX     4096
 

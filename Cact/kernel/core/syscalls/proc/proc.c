@@ -14,7 +14,7 @@ int sys_get_pid(void) {
 // getppid() — return the parent process's PID
 int sys_getppid(void) {
     if (!current_task) return -1;
-    return (int)current_task->parent_pid;
+    return (int)current_task->proc->parent_pid;
 }
 
 // fork() — create a child process that is a copy of the caller

@@ -14,9 +14,6 @@
 #define USER_DATA_SEL 0x23
 #define MAX_FD        256
 
-typedef uint32_t uid_t;
-typedef uint32_t gid_t;
-
 #define SIGKILL  (1u << 0)
 #define SIGTERM  (1u << 1)
 #define SIGSTOP  (1u << 2)
@@ -27,14 +24,26 @@ typedef uint32_t gid_t;
 #define SIGFPE   (1u << 7)
 #define SIGSEGV  (1u << 8)
 #define SIGWINCH (1u << 9)
-#define SIGHUP   (1u << 10)  
-#define SIGINT   (1u << 11)  
-#define SIGQUIT  (1u << 12)  
+#define SIGHUP   (1u << 10)
+#define SIGINT   (1u << 11)
+#define SIGQUIT  (1u << 12)
 
 #define NSIG     13
 
 #define SIG_DFL  ((uint32_t)0)
 #define SIG_IGN  ((uint32_t)1)
+
+#define SIG_UNCATCHABLE  (SIGKILL | SIGSTOP)
+
+#define KERNEL_STACK_SIZE 4096
+#define USER_STACK_PAGES  4
+#define USER_STACK_BYTES  (USER_STACK_PAGES * 4096)
+#define KERNEL_BASE       0xC0000000
+
+#define MLFQ_LEVEL_RT          0
+#define MLFQ_LEVEL_INTERACTIVE 1
+#define MLFQ_LEVEL_NORMAL      2
+#define MLFQ_LEVEL_BACKGROUND  3
 
 typedef struct {
     struct vfs_node* fd_table[MAX_FD];
@@ -43,12 +52,9 @@ typedef struct {
     uint32_t         fd_cloexec[MAX_FD];
 } task_fd_table_t;
 
-#define SIG_UNCATCHABLE  (SIGKILL | SIGSTOP)
-
-
 typedef struct {
-    uint32_t ret_addr;  
-    uint32_t signum;   
+    uint32_t ret_addr;
+    uint32_t signum;
     uint32_t eax, ecx, edx, ebx;
     uint32_t esp, ebp, esi, edi;
     uint32_t eip;
@@ -73,37 +79,28 @@ struct context_frame {
     uint32_t useresp, ss;
 };
 
-struct task_struct {
-    uint32_t esp;
-    uint32_t pid;
-    task_state state;
-    uint8_t  is_kernel;
-    void* stack_base;
-    void* ustack_phys;
+typedef uint32_t uid_t;
+typedef uint32_t gid_t;
+
+typedef struct proc_metadata {
+    void*    stack_base;
+    void*    ustack_phys;
     uint32_t ustack_virt;
-    uint32_t* page_directory;
-
-    struct task_struct* next;
-    struct task_struct* queue_next;
-
-    /* MLFQ scheduler fields (managed by Rust scheduler, do not touch from C) */
-    uint32_t priority;
-    uint32_t time_slice;
-    uint32_t ticks_used;
+    void*    ustack_phys_extra[3];
 
     uint32_t pending_signals;
-    uint32_t signal_mask;    
-    uint32_t saved_signal_mask;    
-    uint8_t  in_sigsuspend;         
+    uint32_t signal_mask;
+    uint32_t saved_signal_mask;
+    uint8_t  in_sigsuspend;
     uint32_t signal_handlers[NSIG];
     uint32_t sigreturn_trampoline;
 
-    uint32_t alarm_ticks;     
-    uint32_t itimer_value;     
-    uint32_t itimer_interval;   
+    uint32_t alarm_ticks;
+    uint32_t itimer_value;
+    uint32_t itimer_interval;
+
     task_fd_table_t *fds;
     proc_page_tracker_t mm;
-
     mmap_table_t *mmap_table;
     dyn_ctx_t* dyn_ctx;
 
@@ -125,13 +122,27 @@ struct task_struct {
 
     task_shm_attach_t shm_attachments[TASK_SHM_MAX];
 
-    struct task_struct* wait_next;  /* timer_wheel linkage (managed by Rust) */
+    struct task_struct* wait_next;
 
-    uint32_t    pgid;   /* process group ID */
-    uint32_t    sid;    /* session ID */
-    uint32_t    umask;  /* file creation mask */
-    vfs_node_t *root;   /* chroot root (NULL = global vfs_root) */
-    void *ustack_phys_extra[3]; /* user stack pages 1..3 (page 0 is ustack_phys) */
+    uint32_t pgid;
+    uint32_t sid;
+    uint32_t umask;
+    vfs_node_t *root;
+} proc_metadata_t;
+
+struct task_struct {
+    uint32_t esp;
+    uint32_t* page_directory;
+    void* fpu_context_ptr;
+    uint32_t pid;
+    task_state state;
+    uint8_t  is_kernel;
+    struct task_struct* next;
+    struct task_struct* queue_next;
+    uint32_t priority;
+    uint32_t time_slice;
+    uint32_t ticks_used;
+    struct proc_metadata* proc;
 };
 
 typedef struct sched_queue {
@@ -208,13 +219,11 @@ void task_check_timers(void);
 void task_reap();
 void schedule();
 int init_scheduler();
-void list_tasks();
-
 void task_set_state(struct task_struct* t, task_state old_state, task_state new_state);
 
 struct task_struct* create_task_with_entry(void*                entry,
-                                            uint32_t*            pd,
-                                            proc_page_tracker_t* tracker);
+                                             uint32_t*            pd,
+                                             proc_page_tracker_t* tracker);
 
 struct task_struct* create_task_dynamic(void*                entry,
                                          uint32_t*            pd,

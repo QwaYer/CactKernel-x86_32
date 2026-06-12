@@ -31,7 +31,7 @@ int sys_bind(struct syscall_frame* regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(addr, sizeof(struct sockaddr_in))) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t* ks = ksock_from_node(node);
@@ -69,7 +69,7 @@ int sys_connect(struct syscall_frame* regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(addr, sizeof(struct sockaddr_in))) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t* ks = ksock_from_node(node);
@@ -87,7 +87,7 @@ int sys_listen(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t* ks = ksock_from_node(node);
@@ -111,7 +111,7 @@ int sys_accept(struct syscall_frame* regs) {
     if (peer_addrlen && !validate_user_ptr(peer_addrlen, sizeof(uint32_t)))
         return -1;
 
-    vfs_node_t* listen_node = current_task->fds->fd_table[fd];
+    vfs_node_t* listen_node = current_task->proc->fds->fd_table[fd];
     if (!listen_node || listen_node->type != VFS_SOCKET) return -1;
 
     vfs_node_t* conn_node = ksock_tcp_accept(listen_node, peer_addr);
@@ -137,7 +137,7 @@ int sys_send(struct syscall_frame* regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(buf, len)) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     return write_vfs(node, 0, len, buf);
@@ -153,7 +153,7 @@ int sys_recv(struct syscall_frame* regs) {
     if (fd < 0 || fd >= MAX_FD) return -1;
     if (!validate_user_ptr(buf, len)) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     return read_vfs(node, 0, len, buf);
@@ -174,7 +174,7 @@ int sys_sendto(struct syscall_frame* regs) {
     if (!validate_user_ptr(buf, len)) return -1;
     if (!validate_user_ptr(dest, sizeof(struct sockaddr_in))) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t* ks = ksock_from_node(node);
@@ -209,7 +209,7 @@ int sys_recvfrom(struct syscall_frame* regs) {
     if (src     && !validate_user_ptr(src,     sizeof(struct sockaddr_in))) return -1;
     if (addrlen && !validate_user_ptr(addrlen, sizeof(uint32_t)))           return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t* ks = ksock_from_node(node);
@@ -248,7 +248,7 @@ int sys_shutdown(struct syscall_frame* regs) {
     if (!current_task) return -1;
     if (fd < 0 || fd >= MAX_FD) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     return ksock_shutdown(node, how);
@@ -270,7 +270,7 @@ int sys_setsockopt(struct syscall_frame* regs) {
     if (!optval || optlen < sizeof(int)) return -1;
     if (!validate_user_ptr(optval, optlen)) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t* ks = ksock_from_node(node);
@@ -323,7 +323,7 @@ int sys_getsockopt(struct syscall_frame* regs) {
     if (*optlen < sizeof(int)) return -1;
     if (!validate_user_ptr(optval, *optlen)) return -1;
 
-    vfs_node_t* node = current_task->fds->fd_table[fd];
+    vfs_node_t* node = current_task->proc->fds->fd_table[fd];
     if (!node || node->type != VFS_SOCKET) return -1;
 
     ksock_t* ks = ksock_from_node(node);
