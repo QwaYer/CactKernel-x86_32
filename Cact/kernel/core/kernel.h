@@ -88,7 +88,7 @@ extern void keyboard_isr();
 extern void syscall_isr();
 extern void isr0();  extern void isr1();  extern void isr2();
 extern void isr3();  extern void isr4();  extern void isr5();
-extern void isr6();  extern void isr7();  extern void isr8();
+extern void isr6();  extern void isr8();
 extern void isr9();  extern void isr10(); extern void isr11();
 extern void isr12(); extern void isr13(); extern void isr14();
 extern void isr15(); extern void isr16(); extern void isr17();
@@ -155,6 +155,9 @@ void                 list_tasks    (void);
 struct task_struct*  create_task   (void (*entry_point)(void));
 extern void          switch_to     (uint32_t* old_esp, uint32_t new_esp);
 extern struct task_struct* volatile current_task;
+
+int  fpu_global_init(void);
+void fpu_cleanup_task(struct task_struct* task);
 
 // Paging / memory management
 void      init_paging            (void);

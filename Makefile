@@ -157,6 +157,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/task_asm.o \
       $(BUILD_DIR)/mm.o \
       $(BUILD_DIR)/interrupt.o \
+      $(BUILD_DIR)/fpu_entry.o \
+      $(BUILD_DIR)/fpu_hd.o \
       $(BUILD_DIR)/io.o \
       $(BUILD_DIR)/serial.o \
       $(BUILD_DIR)/gdt.o \
@@ -281,6 +283,14 @@ $(BUILD_DIR)/task_asm.o: $(KERN_PROC_DIR)/task.asm
 $(BUILD_DIR)/interrupt.o: $(KERN_CORE_DIR)/interrupt.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
+
+$(BUILD_DIR)/fpu_entry.o: $(KERN_CORE_DIR)/idt/fpu_entry.asm
+	@mkdir -p $(BUILD_DIR)
+	nasm -f elf32 $< -o $@
+
+$(BUILD_DIR)/fpu_hd.o: $(KERN_CORE_DIR)/idt/fpu_hd.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/io.o: $(DRIVER_INPUT_DIR)/io.asm
 	@mkdir -p $(BUILD_DIR)

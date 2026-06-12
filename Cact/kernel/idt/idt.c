@@ -8,7 +8,7 @@ extern uint32_t irq_stub_table[];
 // Exception handlers (ISRs 0-31)
 extern void isr0();  extern void isr1();  extern void isr2();
 extern void isr3();  extern void isr4();  extern void isr5();
-extern void isr6();  extern void isr7();  extern void isr8();
+extern void isr6();  extern void isr7_nm_stub();  extern void isr8();
 extern void isr9();  extern void isr10(); extern void isr11();
 extern void isr12(); extern void isr13(); extern void isr14();
 extern void isr15(); extern void isr16(); extern void isr17();
@@ -75,7 +75,7 @@ int init_idt(void) {
     set_idt_gate(4,  (uint32_t)isr4);
     set_idt_gate(5,  (uint32_t)isr5);
     set_idt_gate(6,  (uint32_t)isr6);
-    set_idt_gate(7,  (uint32_t)isr7);
+    set_idt_gate(7,  (uint32_t)isr7_nm_stub);
     set_idt_gate(8,  (uint32_t)isr8);
     set_idt_gate(9,  (uint32_t)isr9);
     set_idt_gate(10, (uint32_t)isr10);
