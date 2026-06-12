@@ -11,7 +11,6 @@ global isr3
 global isr4
 global isr5
 global isr6
-global isr7
 global isr8
 global isr9
 global isr10
@@ -98,11 +97,6 @@ isr5:
 isr6:
     push dword 0
     push dword 6
-    jmp isr_common_stub
-
-isr7:
-    push dword 0
-    push dword 7
     jmp isr_common_stub
 
 isr8:
