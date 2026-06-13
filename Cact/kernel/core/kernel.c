@@ -19,7 +19,7 @@
 #include "blkdev.h"
 #include "version.h"
 #include "serial.h"
-#include "mtrr.h"
+#include "pat.h"
 #include "cact_acpi.h"
 #include "acpi_timer.h"
 #include "acpi_hpet.h"
@@ -184,20 +184,19 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Display
     init_framebuffer();
 
-    // Probe MTRR support and, if available, mark the framebuffer as Write-
-    // Combining. The boot identity map sets PCD|PWT on every page above
-    // PCI_HOLE_START (so MMIO registers remain strictly UC), which would
-    // otherwise pin the FB to UC and make the kprint() flood below crawl;
-    // mtrr_enable_wc_for_framebuffer() programs a variable MTRR pair AND
-    // clears PCD|PWT on the FB's PTEs so the WC type can take effect.
-    mtrr_init();
+    // Probe PAT support and, if available, mark the framebuffer as Write-
+    // Combining via the PAT bit in each PTE. The boot identity map sets
+    // PCD|PWT on every page above PCI_HOLE_START (so MMIO registers remain
+    // strictly UC).  PAT lets us override individual FB PTEs to WC by
+    // setting the PAT bit and clearing PCD|PWT — no MTRR ranges needed.
+    pat_init();
     if (fb_get_width() != 0) {
-        mtrr_enable_wc_for_framebuffer((uint32_t)(uintptr_t)fb_get_buffer(),
+        pat_enable_wc_for_framebuffer((uint32_t)(uintptr_t)fb_get_buffer(),
                                        fb_get_pitch(),
                                        fb_get_height());
         // Back-buffer in WB RAM: kills the FB->FB read penalty in scroll() and
         // coalesces all per-character writes into one rectangular blit per
-        // kprint(). Must run AFTER MTRR enables WC (the seeding memcpy reads
+        // kprint(). Must run AFTER PAT enables WC (the seeding memcpy reads
         // the FB once; under UC this would stall, under WC it's bearable).
         fb_enable_shadow();
         klog(LOG_OK, "Framebuffer WC + shadow buffer configured");

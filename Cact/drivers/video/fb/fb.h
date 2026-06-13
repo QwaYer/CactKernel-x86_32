@@ -54,7 +54,7 @@ void init_framebuffer(void);
  *   - Multiple writes to the same pixel coalesce in the shadow at cache speed
  *     and only the final value is shipped out to the bus.
  *
- * Call AFTER init_heap() and AFTER mtrr_enable_wc_for_framebuffer() so the
+ * Call AFTER init_heap() and AFTER pat_enable_wc_for_framebuffer() so the
  * shadow can be seeded from the current FB contents under WC reads (UC reads
  * during seeding would otherwise stall for tens of ms).
  *

@@ -241,7 +241,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/usb_hub.o \
       $(BUILD_DIR)/fb.o \
       $(BUILD_DIR)/font.o \
-      $(BUILD_DIR)/mtrr.o \
+      $(BUILD_DIR)/pat.o \
       $(BUILD_DIR)/stack_guard.o \
       $(BUILD_DIR)/acpi.o \
       $(BUILD_DIR)/osl.o \
@@ -617,7 +617,7 @@ $(BUILD_DIR)/font.o: $(DRIVER_FONT_DIR)/font.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/mtrr.o: $(KERN_MEM_DIR)/mtrr.c $(KERN_MEM_DIR)/mtrr.h
+$(BUILD_DIR)/pat.o: $(KERN_MEM_DIR)/pat.c $(KERN_MEM_DIR)/pat.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
