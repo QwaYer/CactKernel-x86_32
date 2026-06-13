@@ -329,7 +329,6 @@ syscall_isr:
     push esp
     call syscall_handler
     add esp, 4
-    call schedule
 
 .sc_no_switch:
     pop es
