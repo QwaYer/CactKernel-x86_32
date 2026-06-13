@@ -127,6 +127,10 @@ void hex_to_ascii  (uint32_t n, char str[]);
 // CPU exception dispatcher
 void exception_handler(struct context_frame* regs);
 
+// EOI dispatchers — APIC or PIC as appropriate
+void timer_eoi(void);
+void irq_master_slave_eoi(void);
+
 // Read CR2 (page fault linear address)
 static inline uint32_t read_cr2(void) {
     uint32_t val;
@@ -144,7 +148,6 @@ static inline uint32_t* get_current_pd(void) {
 // Hardware detection helpers
 int         probe_io_ports  (void);
 int         detect_memory   (void);
-void init_timer      (uint32_t frequency);
 
 // Task scheduling
 struct task_struct;

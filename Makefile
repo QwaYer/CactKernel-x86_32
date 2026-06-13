@@ -244,7 +244,10 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/mtrr.o \
       $(BUILD_DIR)/stack_guard.o \
       $(BUILD_DIR)/acpi.o \
-      $(BUILD_DIR)/osl.o
+      $(BUILD_DIR)/osl.o \
+      $(BUILD_DIR)/acpi_timer.o \
+      $(BUILD_DIR)/acpi_hpet.o \
+      $(BUILD_DIR)/apic.o
 
 ACPICA_C_SRCS = $(shell find $(ACPICA_COMP_DIRS) -type f -name '*.c' 2>/dev/null \
     | grep -v '/utclib\.c$$' | grep -v '/hwxfsleep\.c$$' \
@@ -623,6 +626,18 @@ $(BUILD_DIR)/acpi.o: $(DRIVER_ACPI_DIR)/acpi.c $(DRIVER_ACPI_DIR)/cact_acpi.h
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/osl.o: $(DRIVER_ACPI_DIR)/osl.c $(DRIVER_ACPI_DIR)/cact_acpi.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/acpi_timer.o: $(DRIVER_ACPI_DIR)/acpi_timer.c $(DRIVER_ACPI_DIR)/acpi_timer.h $(DRIVER_ACPI_DIR)/cact_acpi.h $(DRIVER_ACPI_DIR)/acpi_hpet.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/acpi_hpet.o: $(DRIVER_ACPI_DIR)/acpi_hpet.c $(DRIVER_ACPI_DIR)/acpi_hpet.h $(DRIVER_ACPI_DIR)/cact_acpi.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/apic.o: $(DRIVER_ACPI_DIR)/apic.c $(DRIVER_ACPI_DIR)/apic.h $(DRIVER_ACPI_DIR)/cact_acpi.h $(DRIVER_ACPI_DIR)/acpi_hpet.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

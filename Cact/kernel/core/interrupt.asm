@@ -48,21 +48,15 @@ extern ps2_mouse_handler
 extern current_task
 extern schedule
 extern on_timer_tick       
+extern acpi_pm_timer_tick
+extern timer_eoi
+extern irq_master_slave_eoi
 extern page_fault_handler
 extern xhci_irq_handler
 extern tss_entry
 extern page_directory
 
-global timer_ticks_get
-
-section .data
-timer_ticks dd 0
-
 section .text
-
-timer_ticks_get:
-    mov eax, [timer_ticks]
-    ret
 
 isr0:
     push dword 0
@@ -257,13 +251,9 @@ timer_isr:
     mov ds, ax
     mov es, ax
 
-    inc dword [timer_ticks]
+    call acpi_pm_timer_tick
 
-    ; Send EOI early — on_timer_tick may call schedule() → switch_to()
-    ; and never return here.  The PIC must be acked before that happens,
-    ; otherwise IRQ0 stays masked and the timer stops.
-    mov al, 0x20
-    out 0x20, al
+    call timer_eoi
 
     call on_timer_tick
 
@@ -280,8 +270,7 @@ keyboard_isr:
     mov ds, ax
     mov es, ax
     call ps2_keyboard_handler
-    mov al, 0x20
-    out 0x20, al
+    call timer_eoi
     pop es
     pop ds
     popa
@@ -295,9 +284,7 @@ mouse_isr:
     mov ds, ax
     mov es, ax
     call ps2_mouse_handler
-    mov al, 0x20
-    out 0xA0, al
-    out 0x20, al
+    call irq_master_slave_eoi
     pop es
     pop ds
     popa
@@ -311,9 +298,7 @@ usb_isr:
     mov ds, ax
     mov es, ax
     call xhci_irq_handler
-    mov al, 0x20
-    out 0xA0, al
-    out 0x20, al
+    call irq_master_slave_eoi
     pop es
     pop ds
     popa
@@ -327,9 +312,7 @@ xhci_isr:
     mov ds, ax
     mov es, ax
     call xhci_irq_handler
-    mov al, 0x20
-    out 0xA0, al
-    out 0x20, al
+    call irq_master_slave_eoi
     pop es
     pop ds
     popa
@@ -415,13 +398,7 @@ irq_common_dispatch:
     push esi
     call irq_dispatch
     add esp, 4
-    cmp esi, 8
-    jl .irq_master_eoi_only
-    mov al, 0x20
-    out 0xA0, al
-.irq_master_eoi_only:
-    mov al, 0x20
-    out 0x20, al
+    call irq_master_slave_eoi
     pop es
     pop ds
     popa
