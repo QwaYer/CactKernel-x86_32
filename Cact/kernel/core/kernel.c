@@ -95,7 +95,6 @@ void exception_handler(struct context_frame* regs) {
     while(1);
 }
 
-// Initialize PIT (8253) timer at given frequency (Hz)
 void timer_eoi(void) {
     if (apic_is_enabled())
         apic_eoi();

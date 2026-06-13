@@ -144,13 +144,24 @@ int apic_init(void)
 
     port_byte_out(0x21, 0xFF);
     port_byte_out(0xA1, 0xFF);
+
+    unsigned int timer_entry = irq_override[0] - global_irq_base;
+    uint64_t period = hpet_get_freq() / 500;
+    int hpet_ok = (period > 0 && hpet_start_periodic(timer_entry, period) == 0);
+
     apic_enabled = 1;
 
     {
         char buf[64]; char num[32];
-        strcpy(buf, "APIC: 15 IRQs routed, PIT via IOAPIC entry ");
-        itoa((int)(irq_override[0] - global_irq_base), num); strcat(buf, num);
-        klog(LOG_OK, buf);
+        if (hpet_ok) {
+            strcpy(buf, "APIC: HPET timer0 → IOAPIC entry ");
+            itoa((int)timer_entry, num); strcat(buf, num);
+            klog(LOG_OK, buf);
+        } else {
+            strcpy(buf, "APIC: PIT via IOAPIC entry ");
+            itoa((int)timer_entry, num); strcat(buf, num);
+            klog(LOG_WARN, buf);
+        }
     }
 
     return 0;
