@@ -7,6 +7,9 @@ edition = "2021"
 crate-type = ["staticlib"]
 
 [dependencies]
+cact_shim = { path = "../../crypto/cact_shim" }
+cact_crypto = { path = "../../crypto" }
+rustls = { path = "../../crypto/vendor/rustls-0.23.40/rustls", default-features = false, features = ["custom-provider", "hashbrown"] }
 smoltcp = { version = "0.12", default-features = false, features = [
     "medium-ethernet",
     "proto-ipv4",
