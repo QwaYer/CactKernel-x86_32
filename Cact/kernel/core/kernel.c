@@ -21,6 +21,9 @@
 #include "serial.h"
 #include "mtrr.h"
 #include "cact_acpi.h"
+#include "acpi_timer.h"
+#include "acpi_hpet.h"
+#include "apic.h"
 
 // Kernel page directory (defined in paging.c)
 extern uint32_t page_directory[1024];
@@ -93,11 +96,20 @@ void exception_handler(struct context_frame* regs) {
 }
 
 // Initialize PIT (8253) timer at given frequency (Hz)
-void init_timer(unsigned int frequency) {
-    unsigned int divisor = 1193180 / frequency;  // PIT input clock
-    port_byte_out(0x43, 0x36);                  // Channel 0, lobyte/hibyte, rate generator
-    port_byte_out(0x40, (unsigned char)(divisor & 0xFF));       // Low byte
-    port_byte_out(0x40, (unsigned char)((divisor >> 8) & 0xFF)); // High byte
+void timer_eoi(void) {
+    if (apic_is_enabled())
+        apic_eoi();
+    else
+        port_byte_out(0x20, 0x20);
+}
+
+void irq_master_slave_eoi(void) {
+    if (apic_is_enabled())
+        apic_eoi();
+    else {
+        port_byte_out(0xA0, 0x20);
+        port_byte_out(0x20, 0x20);
+    }
 }
 
 // Kernel logging with color-coded levels
@@ -220,15 +232,32 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
             klog(LOG_WARN, "CMOS returned 0 KB — memory size unreliable");
     }
 
-    /* PIT before PCI scan: GDD prompts use timer_ticks + IRQ keyboard while interrupts stay globally masked until init(). */
-    init_timer(100);
-    klog(LOG_OK, "PIT timer running (100 Hz)");
+    // ACPI subsystem (before PCI — HPET/APIC need ACPI tables)
+    if (acpi_init())
+        klog(LOG_WARN, "ACPI init returned error — hardware limited");
+    else
+        klog(LOG_OK, "ACPI subsystem ready");
+
+    if (acpi_pm_timer_init() == 0)
+        klog(LOG_OK, "ACPI PM timer: timekeeping ready");
+    else
+        klog(LOG_WARN, "ACPI PM timer unavailable — timekeeping degraded");
+
+    if (hpet_init() == 0)
+        klog(LOG_OK, "HPET ready — replacing PIT for timekeeping");
+    else
+        klog(LOG_WARN, "HPET not available — PIT stays for timekeeping");
+
+    if (apic_init() == 0)
+        klog(LOG_OK, "APIC operational");
+    else
+        klog(LOG_WARN, "APIC init failed — keeping PIC");
 
     // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
     // kmods can blkdev_register(); otherwise mntfs sees no boot disk.
     blkdev_init();
 
-    // PCI enumeration and drivers
+    // PCI enumeration and drivers (after APIC — all IRQs routed through I/O APIC)
     if (search_pci())
         klog(LOG_WARN, "PCI scan reported error");
 
@@ -237,12 +266,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         if (pci_device_count <= 0)
             klog(LOG_WARN, "no PCI devices — storage/net/USB unavailable");
     }
-
-    // ACPI subsystem
-    if (acpi_init())
-        klog(LOG_WARN, "ACPI init returned error — hardware limited");
-    else
-        klog(LOG_OK, "ACPI subsystem ready");
 
     // USB xHCI stack
     extern void usb_init(void);
