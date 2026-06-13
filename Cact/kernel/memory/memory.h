@@ -34,7 +34,8 @@
 #define PAGE_RW      0x2
 #define PAGE_USER    0x4
 #define PAGE_PWT     0x8   /* write-through cache policy for MMIO mappings */
-#define PAGE_PCD     0x10  /* cache-disable for MMIO/device memory */
+#define PAGE_PCD     0x10  /* cache-disable for MMIO/device memory          */
+#define PAGE_PAT     0x80  /* PAT bit (selects PAT entry 4 = WC when PCD|PWT=0) */
 
 
 void      pmm_init_from_mmap(const mb2_mmap_table_t* mmap);
