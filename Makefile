@@ -23,8 +23,8 @@ KERN_SC_USER_DIR     = $(KERN_SYSCALLS_DIR)/user
 KERN_SC_NET_DIR      = $(KERN_SYSCALLS_DIR)/net
 KERN_SC_KMOD_DIR     = $(KERN_SYSCALLS_DIR)/kmod
 KERN_GDT_DIR     = Cact/kernel/gdt
-KERN_ELF_DIR     = Cact/kernel/elf
-KERN_DYNLINK_DIR = Cact/kernel/elf/dynlink
+KERN_ELF_DIR     = Cact/elf
+KERN_DYNLINK_DIR = Cact/elf/dynlink
 KERN_MEM_DIR     = Cact/kernel/memory
 KERN_PROC_DIR    = Cact/kernel/proc
 KERN_SYNC_DIR    = Cact/kernel/sync
@@ -38,7 +38,7 @@ CARGO        = cargo +nightly
 RUST_MM_DIR  = Cact/kernel/memory/rust_mm
 RUST_MM_LIB  = $(RUST_MM_DIR)/target/i686-cact/release/libcact_mm.a
 # Rust network core
-RUST_NET_DIR = Cact/kernel/net/rust_net
+RUST_NET_DIR = Cact/net/rust_net
 RUST_NET_LIB = $(RUST_NET_DIR)/target/libcact_net.a
 KERN_IDT_DIR     = Cact/kernel/idt
 DRIVER_INPUT_DIR     = Cact/drivers/input
@@ -55,7 +55,7 @@ DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xHCI
 DRIVER_USB_HID_DIR   = Cact/drivers/usb/hid
 DRIVER_USB_HUB_DIR   = Cact/drivers/usb/hub
 FS_VFS_DIR       = Cact/fs/vfs
-FS_PIPE_DIR      = Cact/kernel/pipe
+FS_PIPE_DIR      = Cact/pipe
 FS_DEVFS_DIR     = Cact/fs/vfs/devfs
 FS_PG_DIR        = Cact/drivers/block/pagecache
 FS_EXT4_DIR      = Cact/fs/ext4
@@ -68,14 +68,14 @@ FS_SBINFS_DIR    = Cact/fs/vfs/sbinfs
 FS_LIBFS_DIR     = Cact/fs/vfs/libfs
 FS_VARFS_DIR     = Cact/fs/vfs/varfs
 FS_USRFS_DIR     = Cact/fs/vfs/usrfs
-NET_DIR          = Cact/kernel/net
-NET_ARP_DIR      = Cact/kernel/net/arp
-NET_ETH_DIR      = Cact/kernel/net/ethernet
-NET_IP_DIR       = Cact/kernel/net/ip
-NET_ICMP_DIR     = Cact/kernel/net/icmp
-NET_UDP_DIR      = Cact/kernel/net/protocols/udp
-NET_TCP_DIR      = Cact/kernel/net/protocols/tcp
-NET_SOCKET_DIR   = Cact/kernel/net/socket
+NET_DIR          = Cact/net
+NET_ARP_DIR      = Cact/net/arp
+NET_ETH_DIR      = Cact/net/ethernet
+NET_IP_DIR       = Cact/net/ip
+NET_ICMP_DIR     = Cact/net/icmp
+NET_UDP_DIR      = Cact/net/protocols/udp
+NET_TCP_DIR      = Cact/net/protocols/tcp
+NET_SOCKET_DIR   = Cact/net/socket
 DRIVER_FB_DIR    = Cact/drivers/video/fb
 DRIVER_FONT_DIR  = Cact/drivers/video/font
 DRIVER_ACPI_DIR  = Cact/drivers/acpi
@@ -328,11 +328,11 @@ $(BUILD_DIR)/interrupt.o: $(KERN_CORE_DIR)/interrupt.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
 
-$(BUILD_DIR)/fpu_entry.o: $(KERN_CORE_DIR)/idt/fpu_entry.asm
+$(BUILD_DIR)/fpu_entry.o: $(KERN_IDT_DIR)/fpu/fpu_entry.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
 
-$(BUILD_DIR)/fpu_hd.o: $(KERN_CORE_DIR)/idt/fpu_hd.c
+$(BUILD_DIR)/fpu_hd.o: $(KERN_IDT_DIR)/fpu/fpu_hd.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
