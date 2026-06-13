@@ -168,8 +168,6 @@ void scroll(void) {
 }
 
 void kprint_color(char* message, uint32_t color) {
-    vmm_sync_kernel_mmio_mappings(get_current_pd());
-
     uint32_t w = fb_get_width();
     uint32_t h = fb_get_height();
     int have_fb = (w != 0 && h != 0);

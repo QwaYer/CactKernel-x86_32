@@ -22,7 +22,6 @@ void serial_init(void) {
 }
 
 void serial_putc(char c) {
-    while ((com_rd(5) & 0x20u) == 0u) {
-    }
-    com_wr(0, (uint8_t)c);
+    if (com_rd(5) & 0x20u)
+        com_wr(0, (uint8_t)c);
 }
