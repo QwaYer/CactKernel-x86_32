@@ -4,9 +4,9 @@
 #include "kernel.h"
 #include "mod.h"
 
-// Timer frequency constants (1000 Hz = 1 ms per tick)
-#define TIMER_HZ         1000
-#define TIMER_HZ_SIGNALS 1000
+// Timer frequency constants (100 Hz = 10 ms per tick)
+#define TIMER_HZ         100
+#define TIMER_HZ_SIGNALS 100
 
 // Clock IDs for clock_gettime()
 #define CLOCK_REALTIME  0
