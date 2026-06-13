@@ -1,0 +1,59 @@
+[package]
+name = "rustls"
+version = "0.23.40"
+edition = "2021"
+rust-version = "1.71"
+license = "Apache-2.0 OR ISC OR MIT"
+readme = "../README.md"
+description = "Rustls is a modern TLS library written in Rust."
+homepage = "https://github.com/rustls/rustls"
+repository = "https://github.com/rustls/rustls"
+categories = ["network-programming", "cryptography"]
+autobenches = false
+autotests = false
+exclude = ["src/testdata", "tests/**"]
+build = "build.rs"
+
+[features]
+default = ["logging", "tls12"]
+custom-provider = []
+hashbrown = ["dep:hashbrown"]
+logging = ["log"]
+std = ["once_cell/std"]
+tls12 = []
+
+[build-dependencies]
+
+[dependencies]
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"], optional = true }
+log = { version = "0.4", optional = true }
+once_cell = { version = "1", default-features = false, features = ["alloc"] }
+cact_shim = { path = "../../../cact_shim" }
+subtle = { version = "2", default-features = false }
+webpki = { path = "../../rustls-webpki", package = "rustls-webpki", default-features = false, features = ["alloc"] }
+pki-types = { path = "../../rustls-pki-types", package = "rustls-pki-types", default-features = false, features = ["alloc"] }
+zeroize = { version = "1", default-features = false }
+zlib-rs = { version = "0.6", optional = true }
+
+[dev-dependencies]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "rustls_docsrs"]
+
+[package.metadata.cargo_check_external_types]
+allowed_external_types = [
+  # ---
+  "rustls_pki_types",
+  "rustls_pki_types::*",
+]
+
+[package.metadata.cargo-semver-checks.lints]
+enum_no_repr_variant_discriminant_changed = "warn"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  "cfg(bench)",
+  "cfg(coverage_nightly)",
+  "cfg(read_buf)",
+  "cfg(rustls_docsrs)",
+] }

@@ -300,7 +300,7 @@ $(RUST_MM_LIB): FORCE
 $(RUST_NET_LIB): FORCE
 	cd $(RUST_NET_DIR) && $(CARGO) build --release \
 		-Z json-target-spec \
-		-Z build-std=core,compiler_builtins \
+		-Z build-std=core,alloc,compiler_builtins \
 		-Z build-std-features=compiler-builtins-mem 2>&1 && \
 	mkdir -p target && \
 	TARGET_DIR="$${CARGO_TARGET_DIR:-target}" && \
