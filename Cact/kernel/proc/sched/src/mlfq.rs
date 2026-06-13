@@ -18,7 +18,7 @@ pub const MLFQ_LEVEL_INTERACTIVE: u32 = 1;
 pub const MLFQ_LEVEL_NORMAL:      u32 = 2;
 pub const MLFQ_LEVEL_BACKGROUND:  u32 = 3;
 
-pub const MLFQ_QUANTUM: [u32; MLFQ_LEVELS] = [5, 3, 4, 6];
+pub const MLFQ_QUANTUM: [u32; MLFQ_LEVELS] = [5, 1, 2, 4];
 
 const BOOST_INTERVAL: u32 = 50;
 const BOOST_TARGET: u32 = MLFQ_LEVEL_INTERACTIVE;
