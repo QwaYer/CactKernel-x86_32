@@ -17,6 +17,9 @@ int elf_is_dynamic(char* path) {
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) return 0;
     if (hdr.e_machine != 3) return 0;
     if (hdr.e_type == 3) return 1; // ET_DYN
+    if (hdr.e_phentsize < sizeof(Elf32_Phdr)) return 0;
+    uint32_t ph_end = hdr.e_phoff + (uint32_t)hdr.e_phnum * hdr.e_phentsize;
+    if (ph_end < hdr.e_phoff || ph_end > file->size) return 0;
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
@@ -57,6 +60,15 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
         kprint("[ELF] ERR: not i386\n");
         return 0;
     }
+    if (hdr.e_phentsize < sizeof(Elf32_Phdr)) {
+        kprint("[ELF] ERR: phentsize too small\n");
+        return 0;
+    }
+    uint32_t ph_end = hdr.e_phoff + (uint32_t)hdr.e_phnum * hdr.e_phentsize;
+    if (ph_end < hdr.e_phoff || ph_end > file->size) {
+        kprint("[ELF] ERR: program headers overflow file\n");
+        return 0;
+    }
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
@@ -70,6 +82,9 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
         }
 
         if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
+
+        if (ph.p_vaddr + ph.p_memsz < ph.p_vaddr) continue;
+        if (ph.p_vaddr + ph.p_filesz < ph.p_vaddr) continue;
 
         uint32_t seg_start = ph.p_vaddr & ~0xFFFu;
         uint32_t seg_end   = (ph.p_vaddr + ph.p_memsz + 0xFFF) & ~0xFFFu;
@@ -165,6 +180,15 @@ void* load_elf_dynamic(char*                path,
         kprint("[ELF-DYN] ERR: not i386\n");
         return 0;
     }
+    if (hdr.e_phentsize < sizeof(Elf32_Phdr)) {
+        kprint("[ELF-DYN] ERR: phentsize too small\n");
+        return 0;
+    }
+    uint32_t ph_end = hdr.e_phoff + (uint32_t)hdr.e_phnum * hdr.e_phentsize;
+    if (ph_end < hdr.e_phoff || ph_end > file->size) {
+        kprint("[ELF-DYN] ERR: program headers overflow file\n");
+        return 0;
+    }
 
     Elf32_Dyn* dyn_vaddr = 0;
     uint32_t   min_load_vaddr = 0xFFFFFFFFu;
@@ -201,6 +225,8 @@ void* load_elf_dynamic(char*                path,
         }
 
         if (ph.p_type == PT_LOAD && ph.p_memsz > 0) {
+            if (ph.p_vaddr + ph.p_memsz < ph.p_vaddr) continue;
+            if (ph.p_vaddr + ph.p_filesz < ph.p_vaddr) continue;
             uint32_t seg_start = (ph.p_vaddr + load_bias) & ~0xFFFu;
             uint32_t seg_end   = (ph.p_vaddr + load_bias + ph.p_memsz + 0xFFF) & ~0xFFFu;
             uint32_t file_end  = ph.p_vaddr + ph.p_filesz;
@@ -304,7 +330,10 @@ uint32_t elf_get_brk_start(struct vfs_node* file) {
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) return 0;
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) return 0;
- 
+    if (hdr.e_phentsize < sizeof(Elf32_Phdr)) return 0;
+    uint32_t ph_end = hdr.e_phoff + (uint32_t)hdr.e_phnum * hdr.e_phentsize;
+    if (ph_end < hdr.e_phoff || ph_end > file->size) return 0;
+
     uint32_t highest = 0;
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
@@ -313,6 +342,7 @@ uint32_t elf_get_brk_start(struct vfs_node* file) {
                      sizeof(Elf32_Phdr), (char*)&ph) <= 0)
             break;
         if (ph.p_type != PT_LOAD) continue;
+        if (ph.p_vaddr + ph.p_memsz < ph.p_vaddr) continue;
         uint32_t end = ph.p_vaddr + ph.p_memsz;
         if (end > highest) highest = end;
     }

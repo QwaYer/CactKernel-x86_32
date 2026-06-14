@@ -124,9 +124,12 @@ static int validate_header(uint32_t size) {
     if (h->version != CCTKFS_VERSION) return -3;
     if (h->total_size != size)        return -4;
     if (h->entries_off < sizeof(cctkfs_hdr_t)) return -5;
-    if (h->names_off + h->names_size > size)   return -6;
-    if (h->entries_off + h->count * sizeof(cctkfs_entry_t) > h->names_off)
-        return -7;
+    if (h->names_off + h->names_size < h->names_off ||
+        h->names_off + h->names_size > size)          return -6;
+    if (h->count > (UINT32_MAX / sizeof(cctkfs_entry_t))) return -7;
+    uint32_t entries_end = h->entries_off + h->count * sizeof(cctkfs_entry_t);
+    if (entries_end < h->entries_off ||
+        entries_end > h->names_off)    return -7;
 
     /* CRC-32 container integrity check.
      * checksum == 0  →  backward-compatible with old images that
@@ -220,7 +223,8 @@ int pci_modblob_get(const char *path, const uint8_t **out_data,
 
     for (uint32_t i = 0; i < h->count; i++) {
         if (!name_eq(path, n, e[i].name_off, e[i].name_len)) continue;
-        if (e[i].data_off + e[i].data_size > cctkfs_size)    return -1;
+        uint32_t data_end = e[i].data_off + e[i].data_size;
+        if (data_end < e[i].data_off || data_end > cctkfs_size) return -1;
         *out_data = cctkfs_stage + e[i].data_off;
         *out_size = e[i].data_size;
         return 0;
@@ -230,7 +234,8 @@ int pci_modblob_get(const char *path, const uint8_t **out_data,
     if (!*want_bn) return -1;
     for (uint32_t i = 0; i < h->count; i++) {
         if (!basename_eq(want_bn, n, e[i].name_off, e[i].name_len)) continue;
-        if (e[i].data_off + e[i].data_size > cctkfs_size) return -1;
+        uint32_t data_end = e[i].data_off + e[i].data_size;
+        if (data_end < e[i].data_off || data_end > cctkfs_size) return -1;
         *out_data = cctkfs_stage + e[i].data_off;
         *out_size = e[i].data_size;
         return 0;
@@ -248,7 +253,11 @@ int pci_modblob_at(int idx, const char **out_path,
     const cctkfs_hdr_t   *h = hdr_ptr();
     if (idx < 0 || (uint32_t)idx >= h->count) return -1;
     const cctkfs_entry_t *e = &entries_ptr()[idx];
+    uint32_t data_end = e->data_off + e->data_size;
+    if (data_end < e->data_off || data_end > cctkfs_size) return -1;
     /* Names in the blob are NUL-terminated (the packer guarantees it). */
+    uint32_t name_end = e->name_off + e->name_len;
+    if (name_end < e->name_off || name_end > h->names_size) return -1;
     *out_path = names_ptr() + e->name_off;
     *out_data = cctkfs_stage + e->data_off;
     *out_size = e->data_size;
