@@ -2,6 +2,7 @@
 #include "pci_driver.h"
 #include "pci_enum.h"
 #include "pci_modblob.h"
+#include "cctkfs.h"
 #include "vfs.h"
 #include "memory.h"
 #include "kernel.h"
@@ -11,6 +12,10 @@
 // HMAC-SHA256 module signing — implemented in cact_crypto (Rust, no_std)
 extern int  cact_hmac_verify(const uint8_t *data, uint32_t data_len,
                              const uint8_t *tag, uint32_t tag_len);
+
+#define CACT_HMAC_TAG_SIZE 32
+
+CACT_STATIC_ASSERT(CACT_HMAC_TAG_SIZE == 32);
 
 // Wildcard ID — must match PCI_ANY_ID in pci_driver.h
 #define LDR_PCI_ANY_ID 0xFFFFu
@@ -102,8 +107,6 @@ static void module_proc_name(const char *path, char *out, int out_sz) {
     }
     out[i] = '\0';
 }
-
-#define CACT_HMAC_TAG_SIZE 32
 
 static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
     if (*file_size <= CACT_HMAC_TAG_SIZE) {

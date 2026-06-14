@@ -18,6 +18,9 @@
 #define CCTKFS_MAGIC    0x53464B43u   /* 'C','K','F','S' little-endian */
 #define CCTKFS_VERSION  1u
 
+/* Offset of the checksum field within cctkfs_hdr_t (byte offset 28). */
+#define CCTKFS_CKSUM_OFF  28u
+
 typedef struct {
     uint32_t magic;        /* CCTKFS_MAGIC */
     uint32_t version;      /* CCTKFS_VERSION */
@@ -26,7 +29,7 @@ typedef struct {
     uint32_t entries_off;  /* file offset to entries[] */
     uint32_t names_off;    /* file offset to name blob */
     uint32_t names_size;   /* bytes in name blob */
-    uint32_t reserved;
+    uint32_t checksum;     /* CRC-32 over the image with this field zeroed */
 } cctkfs_hdr_t;
 
 typedef struct {
@@ -37,5 +40,15 @@ typedef struct {
     uint32_t flags;        /* reserved, 0 */
     uint32_t reserved;
 } cctkfs_entry_t;
+
+/* Compile-time assertions for struct layout and crypto constants. */
+#define CACT_STATIC_ASSERT(cond) \
+    extern int __cact_sa_line_##__LINE__[(cond) ? 1 : -1] __attribute__((unused))
+
+CACT_STATIC_ASSERT(sizeof(cctkfs_hdr_t)   == 32);
+CACT_STATIC_ASSERT(sizeof(cctkfs_entry_t) == 24);
+CACT_STATIC_ASSERT(CCTKFS_CKSUM_OFF      == 28);
+CACT_STATIC_ASSERT(CCTKFS_MAGIC          == 0x53464B43u);
+CACT_STATIC_ASSERT(CCTKFS_VERSION        == 1);
 
 #endif

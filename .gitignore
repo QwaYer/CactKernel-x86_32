@@ -12,5 +12,7 @@ Cact/drivers/acpi/acpica/
 .vscode/
 *.swp
 *~
-
 *.log
+
+# HMAC signing key — generate with: make $(CRYPTO_KEY)  or  python3 tools/gen_hmac_key.py
+Cact/crypto/hmac_ffi/hmac_key.bin
