@@ -26,7 +26,7 @@ pub mod tcp {
 
     impl Read for TcpStream {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-            extern "C" {
+            unsafe extern "C" {
                 fn tcp_recv(sock: i32, buf: *mut u8, max_len: u16) -> i32;
             }
             if self.sock < 0 {
@@ -50,7 +50,7 @@ pub mod tcp {
 
     impl Write for TcpStream {
         fn write(&mut self, buf: &[u8]) -> Result<usize> {
-            extern "C" {
+            unsafe extern "C" {
                 fn tcp_send(sock: i32, data: *mut u8, len: u16) -> i32;
             }
             if self.sock < 0 {

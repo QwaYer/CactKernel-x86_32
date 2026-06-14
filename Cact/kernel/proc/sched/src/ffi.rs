@@ -2,6 +2,7 @@
 //!
 //! `ContextFrame` matches the interrupt stack frame layout on iret/syscall boundaries.
 
+use core::cell::SyncUnsafeCell;
 use core::ffi::c_void;
 
 pub use cact_sync::kernel_types::{
@@ -29,7 +30,12 @@ pub struct ContextFrame {
     pub ss:       u32,
 }
 
-extern "C" {
+// SAFETY: All functions and statics are backed by C definitions in the kernel.
+// Pointer parameters must be non-null and correctly aligned.  The mutable
+// statics (`page_directory`, `tss_entry`, `vfs_root`, `terminal_fg_pid`) are
+// read/written under the scheduler spinlock or during boot — callers must
+// hold the appropriate lock (or be in a single-threaded context).
+unsafe extern "C" {
     pub fn kmalloc(size: usize) -> *mut c_void;
     pub fn kfree_heap(ptr: *mut c_void);
     pub fn kalloc() -> *mut c_void;       
@@ -94,10 +100,10 @@ extern "C" {
     pub fn hex_to_ascii(n: u32, buf: *mut u8);
     pub fn klog(level: i32, s: *const u8);
 
-    pub static mut page_directory: u32;       
-    pub static mut tss_entry: TssEntry;
-    pub static mut vfs_root: *mut VfsNode;
-    pub static mut terminal_fg_pid: u32;
+    pub static page_directory: SyncUnsafeCell<u32>;       
+    pub static tss_entry: SyncUnsafeCell<TssEntry>;
+    pub static vfs_root: SyncUnsafeCell<*mut VfsNode>;
+    pub static terminal_fg_pid: SyncUnsafeCell<u32>;
     pub static sys_sigreturn_num: u32;
 }
 

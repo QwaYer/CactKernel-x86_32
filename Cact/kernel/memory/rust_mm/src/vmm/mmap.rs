@@ -7,7 +7,7 @@ use crate::fault::page_fault::vmm_map_zero;
 use crate::safe::{zero_page, flush_tlb, flush_tlb_all, kprint_str};
 
 fn fd_to_node(fd: i32) -> *mut VfsNode {
-    let t = unsafe { current_task };
+    let t = unsafe { *current_task.get() };
     if t.is_null() {
         return core::ptr::null_mut();
     }

@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "cact_std"
+name = "cact_shim"
 version = "0.1.0"

@@ -92,7 +92,8 @@ fn make_config() -> Arc<ClientConfig> {
     )
 }
 
-extern "C" {
+// SAFETY: backed by C tcp_send/tcp_recv implementations.
+unsafe extern "C" {
     fn tcp_send(sock: i32, data: *mut u8, len: u16) -> i32;
     fn tcp_recv(sock: c_int, buf: *mut u8, max_len: u16) -> i32;
 }

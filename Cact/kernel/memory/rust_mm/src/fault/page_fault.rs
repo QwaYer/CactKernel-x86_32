@@ -99,7 +99,7 @@ fn pte_get(pd: *mut u32, vaddr: u32) -> *mut u32 {
 }
 
 fn kill_current(fault_addr: u32, err: u32, eip: u32, cr3: &mut Cr3Guard) {
-    let t = unsafe { current_task };
+    let t = unsafe { *current_task.get() };
 
     // SAFETY: kprint_color is a C function that takes valid strings.
     unsafe { kprint_color(b"\n[PF] SEGFAULT pid=\0".as_ptr(), COLOR_LIGHT_RED); }
@@ -161,7 +161,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
 
     G_STATS.get_mut().total_faults += 1;
 
-    let t = unsafe { current_task };
+    let t = unsafe { *current_task.get() };
     let pd = if !t.is_null() && !unsafe { (*t).page_directory }.is_null() {
         unsafe { (*t).page_directory }
     } else {
