@@ -157,8 +157,6 @@ int sys_ioctl(struct syscall_frame *regs) {
 
     if (!f || !f->node) return -1;
 
-    if (arg && !validate_user_ptr(arg, 1)) return -1;
-
     return ioctl_vfs(f->node, cmd, arg);
 }
 

@@ -1502,7 +1502,14 @@ pub unsafe extern "C" fn task_set_state(
     new_state:  u32,
 ) {
     if t.is_null() { return; }
-    let ns = core::mem::transmute::<u32, TaskState>(new_state);
+    let ns = match new_state {
+        0 => TaskState::Ready,
+        1 => TaskState::Running,
+        2 => TaskState::Sleeping,
+        3 => TaskState::Zombie,
+        4 => TaskState::Waiting,
+        _ => return,
+    };
     (*t).state = ns;
     match ns {
         TaskState::Ready => mlfq::mlfq_enqueue_locked(t, (*t).priority),
