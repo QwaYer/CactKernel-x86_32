@@ -307,9 +307,9 @@ void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
     if (x >= fb_width || y >= fb_height)
         return;
-    if (x + width > fb_width)
+    if ((uint64_t)x + (uint64_t)width > (uint64_t)fb_width)
         width = fb_width - x;
-    if (y + height > fb_height)
+    if ((uint64_t)y + (uint64_t)height > (uint64_t)fb_height)
         height = fb_height - y;
 
     uint32_t words_per_row = fb_pitch / 4u;
@@ -345,7 +345,13 @@ void fb_enable_shadow(void) {
 
     /* Allocate the shadow page-aligned: gives us cache-line-friendly rows
      * and lets us upgrade to SSE/AVX memcpy later without re-allocating. */
-    size_t shadow_bytes = (size_t)fb_pitch * (size_t)fb_height;
+    size_t fb_pitch_s = (size_t)fb_pitch;
+    size_t fb_height_s = (size_t)fb_height;
+    if (fb_pitch_s > 0 && fb_height_s > SIZE_MAX / fb_pitch_s) {
+        klog(LOG_WARN, "FB shadow: pitch*height overflow; staying in direct mode");
+        return;
+    }
+    size_t shadow_bytes = fb_pitch_s * fb_height_s;
     uint32_t* shadow = (uint32_t*)kmalloc_aligned((uint32_t)shadow_bytes, 4096);
     if (!shadow) {
         klog(LOG_WARN, "FB shadow: kmalloc_aligned failed; staying in direct mode");
