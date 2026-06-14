@@ -61,10 +61,10 @@ int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
 
     char nb[16];
     itoa((int)hdr_ptr()->count, nb);
-    kprint("[MODBLOB] cctkfs ready: ");
+    kprint("[MODBLOB] ready: ");
     kprint(nb);
-    kprint(" module(s), ");
-    itoa((int)size, nb); kprint(nb); kprint(" bytes\n");
+    kprint(" mods, ");
+    itoa((int)size, nb); kprint(nb); kprint(" B\n");
     return 0;
 }
 

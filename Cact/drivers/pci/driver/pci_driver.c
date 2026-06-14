@@ -108,20 +108,18 @@ static int pci_driver_match_internal(pci_device_t *dev) {
             return -1;
         }
 
-        kprint("[DRV] calling probe "); kprint(drv->name);
-        kprint(" for ");
-        kprint_hex(dev->vendor_id); kprint(":"); kprint_hex(dev->device_id);
-        kprint(" @"); kprint_hex(dev->bus); kprint(":"); kprint_hex(dev->dev);
-        kprint("."); kprint_hex(dev->fn); kprint("\n");
+        kprint("[DRV] "); kprint(drv->name);
+        kprint(" attached "); kprint_hex(dev->vendor_id);
+        kprint(":"); kprint_hex(dev->device_id);
+        kprint(" @"); kprint_hex(dev->bus); kprint(":");
+        kprint_hex(dev->dev); kprint("."); kprint_hex(dev->fn);
+        kprint("\n");
 
-        if (drv->probe(dev) != 0)
+        if (drv->probe(dev) != 0) {
             kprint("[DRV] probe() returned error\n");
-        else {
-            kprint("[DRV] probe() OK\n");
-            return 1;
+            return -1;
         }
-
-        return -1;  // first match wins
+        return 1;
     }
     return 0;
 }
@@ -149,7 +147,6 @@ void pci_driver_probe_deferred_all(void) {
         klog(LOG_OK, "PCI deferred driver probe: queue empty");
         return;
     }
-    kprint("[DRV] deferred probe start\n");
     uint32_t failed = 0;
     uint32_t no_driver = 0;
     for (uint32_t i = 0; i < deferred_count; i++) {
@@ -170,7 +167,7 @@ void pci_driver_probe_deferred_all(void) {
     char a[16], b[16];
     itoa((int)failed, a);
     itoa((int)no_driver, b);
-    kprint("[DRV] deferred probe done, failed=");
+    kprint("[DRV] deferred done: failed=");
     kprint(a);
     kprint(" no-driver=");
     kprint(b);

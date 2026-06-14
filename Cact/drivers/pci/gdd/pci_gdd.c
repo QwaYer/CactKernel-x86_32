@@ -187,7 +187,7 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
         return;
     }
 
-    kprint("[GDD] registered lazy driver for ");
+    kprint("[GDD] lazy driver registered: ");
     kprint((char *)ent->module_path);
-    kprint(" — pci_driver_match follows\n");
+    kprint("\n");
 }
