@@ -1,12 +1,11 @@
 #include "fd.h"
 #include "validate.h"
 #include "helper.h"
-#include "resolve.h"
 #include "pipe.h"
 #include "path/path.h"
 #include "file/file.h"
+#include "kernel.h"   // terminal_winsize
 
-// Flags that may be changed via fcntl F_SETFL
 #define SETFL_MASK  (0x0800 | 0x0400)
 #define OPEN_ACCMODE 0x0003
 #define OPEN_WRONLY  0x0001
@@ -14,348 +13,272 @@
 #define OPEN_CREAT   0x0040
 #define OPEN_TRUNC   0x0200
 
-// Open a file by path, allocate an fd starting from 3 (0-2 are stdin/stdout/stderr)
-int sys_open(char* name, int flags) {
+static inline file_t *_get_file(int fd) {
+    if (!current_task) return 0;
+    if (fd < 0 || fd >= MAX_FD) return 0;
+    return current_task->proc->fds->files[fd];
+}
+
+int sys_open(char *name, int flags) {
     if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
 
-    vfs_node_t* node = _resolve_path(name);
+    vfs_node_t *node = _resolve_path(name);
     if (!node) {
-        if ((flags & OPEN_CREAT) == 0) {
-            return -1;
-        }
-
-        if (sys_create(name) != 0) {
-            return -1;
-        }
-
+        if (!(flags & OPEN_CREAT)) return -1;
+        if (sys_create(name) != 0) return -1;
         node = _resolve_path(name);
-        if (!node) {
-            return -1;
-        }
+        if (!node) return -1;
     }
 
-    // Permission check based on requested access mode (bits 0-1 of flags)
-    {
-        uint32_t need = 0;
-        uint32_t acc  = (uint32_t)flags & OPEN_ACCMODE;
-        if (acc == 0 || acc == 2) need |= VFS_PERM_READ;
-        if (acc == 1 || acc == 2) need |= VFS_PERM_WRITE;
-        if (vfs_check_perm(node, need) < 0) return -1;
-    }
+    uint32_t need = 0;
+    uint32_t acc  = (uint32_t)flags & OPEN_ACCMODE;
+    if (acc == 0 || acc == 2) need |= VFS_PERM_READ;
+    if (acc == 1 || acc == 2) need |= VFS_PERM_WRITE;
+    if (vfs_check_perm(node, need) < 0) return -1;
 
-    // Find a free fd slot (3..MAX_FD-1)
+    file_t *f = file_alloc(node);
+    if (!f) return -1;
+    f->flags = (uint32_t)flags;
+
     for (int i = 3; i < MAX_FD; i++) {
-        if (!current_task->proc->fds->fd_table[i]) {
-            current_task->proc->fds->fd_table[i]   = node;
-            current_task->proc->fds->fd_offset[i]  = 0;
-            current_task->proc->fds->fd_flags[i]   = (uint32_t)flags;
-            current_task->proc->fds->fd_cloexec[i] = 0;
-            open_vfs(node);   // increment VFS refcount
+        if (!current_task->proc->fds->files[i]) {
+            current_task->proc->fds->files[i] = f;
 
-            // Truncate regular files on open(O_TRUNC) when opened writable.
             if ((flags & OPEN_TRUNC) &&
                 (((flags & OPEN_ACCMODE) == OPEN_WRONLY) ||
                  ((flags & OPEN_ACCMODE) == OPEN_RDWR))) {
-                if (sys_ftruncate(i, 0) != 0) {
-                    current_task->proc->fds->fd_table[i]   = 0;
-                    current_task->proc->fds->fd_offset[i]  = 0;
-                    current_task->proc->fds->fd_flags[i]   = 0;
-                    current_task->proc->fds->fd_cloexec[i] = 0;
-                    close_vfs(node);
+                if (truncate_vfs(node, 0) != 0) {
+                    current_task->proc->fds->files[i] = 0;
+                    file_unref(f);
                     return -1;
                 }
             }
-
             return i;
         }
     }
+
+    file_unref(f);
     return -1;
 }
 
-// Read from a file descriptor at the current offset, advancing it
-int sys_read(int fd, char* buf, unsigned int size) {
+int sys_read(int fd, char *buf, unsigned int size) {
     if (!size)                         return -1;
     if (!validate_user_ptr(buf, size)) return -1;
-    if (!current_task)                 return -1;
-    if (fd < 0 || fd >= MAX_FD)        return -1;
 
-    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
-    if (!node) return -1;
-    int ret = read_vfs(node, current_task->proc->fds->fd_offset[fd], size, buf);
-    if (ret > 0)
-        current_task->proc->fds->fd_offset[fd] += (uint32_t)ret;
+    file_t *f = _get_file(fd);
+    if (!f || !f->node) return -1;
+
+    int ret = read_vfs(f->node, f->offset, size, buf);
+    if (ret > 0) f->offset += (uint32_t)ret;
     return ret;
 }
 
-// Write to a file descriptor at the current offset, advancing it
-int sys_write(int fd, char* buf, unsigned int size) {
+int sys_write(int fd, char *buf, unsigned int size) {
     if (!size)                         return -1;
     if (!validate_user_ptr(buf, size)) return -1;
-    if (!current_task)                 return -1;
-    if (fd < 0 || fd >= MAX_FD)        return -1;
-    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
-    if (!node) return -1;
-    int ret = write_vfs(node, current_task->proc->fds->fd_offset[fd], size, buf);
-    if (ret > 0)
-        current_task->proc->fds->fd_offset[fd] += (uint32_t)ret;
+
+    file_t *f = _get_file(fd);
+    if (!f || !f->node) return -1;
+
+    int ret = write_vfs(f->node, f->offset, size, buf);
+    if (ret > 0) f->offset += (uint32_t)ret;
     return ret;
 }
 
-// Close a file descriptor, releasing the VFS reference
 int sys_close(int fd) {
-    if (!current_task)          return -1;
-    if (fd < 0 || fd >= MAX_FD) return -1;
-    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
-    if (!node) return -1;
-    current_task->proc->fds->fd_table[fd]   = 0;
-    current_task->proc->fds->fd_offset[fd]  = 0;
-    current_task->proc->fds->fd_flags[fd]   = 0;
-    current_task->proc->fds->fd_cloexec[fd] = 0;
-    close_vfs(node);   // decrement VFS refcount
+    file_t *f = _get_file(fd);
+    if (!f) return -1;
+    current_task->proc->fds->files[fd] = 0;
+    file_unref(f);
     return 0;
 }
 
-// Reposition the file offset for a descriptor (SEEK_SET, SEEK_CUR, SEEK_END)
-int sys_lseek(struct syscall_frame* regs) {
+int sys_lseek(struct syscall_frame *regs) {
     int fd     = (int)regs->ebx;
     int offset = (int)regs->ecx;
     int whence = (int)regs->edx;
 
-    if (!current_task) return -1;
-    if (fd < 0 || fd >= MAX_FD) return -1;
-    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
-    if (!node) return -1;
+    file_t *f = _get_file(fd);
+    if (!f || !f->node) return -1;
 
     uint32_t new_off;
+    if (f->node->ops && f->node->ops->lseek) {
+        if (f->node->ops->lseek(f->node, offset, whence, &new_off) == 0) {
+            f->offset = new_off;
+            return (int)new_off;
+        }
+        return -1;
+    }
+
     switch (whence) {
-        case SEEK_SET:
+        case 0: // SEEK_SET
             if (offset < 0) return -1;
             new_off = (uint32_t)offset;
             break;
-        case SEEK_CUR: {
-            int cur = (int)current_task->proc->fds->fd_offset[fd] + offset;
-            if (cur < 0) return -1;
-            new_off = (uint32_t)cur;
+        case 1: // SEEK_CUR:
+            new_off = (uint32_t)((int)f->offset + offset);
             break;
-        }
-        case SEEK_END: {
-            int end = (int)node->size + offset;
-            if (end < 0) return -1;
-            new_off = (uint32_t)end;
+        case 2: // SEEK_END:
+            new_off = f->node->size + (uint32_t)offset;
             break;
-        }
         default:
             return -1;
     }
-    current_task->proc->fds->fd_offset[fd] = new_off;
+    f->offset = new_off;
     return (int)new_off;
 }
 
-// I/O control: terminal window size (TIOCGWINSZ/TIOCSWINSZ) or device-specific ioctl
-int sys_ioctl(struct syscall_frame* regs) {
+int sys_ioctl(struct syscall_frame *regs) {
     int      fd  = (int)regs->ebx;
     uint32_t cmd = regs->ecx;
-    void*    arg = (void*)regs->edx;
+    void    *arg = (void *)regs->edx;
 
-    if (!current_task) return -1;
-    if (fd < 0 || fd >= MAX_FD) return -1;
+    file_t *f = _get_file(fd);
 
-    // Terminal window size queries
-    if (cmd == TIOCGWINSZ) {
+    if (cmd == TIOCGWINSZ || cmd == TIOCSWINSZ) {
         if (!arg || !validate_user_ptr(arg, sizeof(struct winsize))) return -1;
-        struct winsize* ws = (struct winsize*)arg;
-        ws->ws_row    = terminal_winsize.ws_row;
-        ws->ws_col    = terminal_winsize.ws_col;
-        ws->ws_xpixel = terminal_winsize.ws_xpixel;
-        ws->ws_ypixel = terminal_winsize.ws_ypixel;
+        struct winsize *ws = (struct winsize *)arg;
+        if (cmd == TIOCGWINSZ) {
+            ws->ws_row    = terminal_winsize.ws_row;
+            ws->ws_col    = terminal_winsize.ws_col;
+            ws->ws_xpixel = terminal_winsize.ws_xpixel;
+            ws->ws_ypixel = terminal_winsize.ws_ypixel;
+        } else {
+            terminal_winsize.ws_row    = ws->ws_row;
+            terminal_winsize.ws_col    = ws->ws_col;
+            terminal_winsize.ws_xpixel = ws->ws_xpixel;
+            terminal_winsize.ws_ypixel = ws->ws_ypixel;
+            if (terminal_fg_pid)
+                task_signal(terminal_fg_pid, SIGWINCH);
+        }
         return 0;
     }
 
-    if (cmd == TIOCSWINSZ) {
-        if (!arg || !validate_user_ptr(arg, sizeof(struct winsize))) return -1;
-        struct winsize* ws = (struct winsize*)arg;
-        terminal_winsize.ws_row    = ws->ws_row;
-        terminal_winsize.ws_col    = ws->ws_col;
-        terminal_winsize.ws_xpixel = ws->ws_xpixel;
-        terminal_winsize.ws_ypixel = ws->ws_ypixel;
-        if (terminal_fg_pid)
-            task_signal(terminal_fg_pid, SIGWINCH);   // notify terminal
-        return 0;
-    }
-
-    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
-    if (!node) return -1;
+    if (!f || !f->node) return -1;
 
     if (arg && !validate_user_ptr(arg, 1)) return -1;
 
-    return ioctl_vfs(node, cmd, arg);
+    return ioctl_vfs(f->node, cmd, arg);
 }
 
-// File descriptor control: dup, get/set CLOEXEC, get/set flags
 int sys_fcntl(int fd, int cmd, int arg) {
-    if (!current_task)          return -1;
-    if (fd < 0 || fd >= MAX_FD) return -1;
-
-    struct vfs_node* node = current_task->proc->fds->fd_table[fd];
-    if (!node) return -1;
+    file_t *f = _get_file(fd);
+    if (!f) return -1;
 
     switch (cmd) {
-
-    // F_DUPFD: duplicate fd starting from 'arg'
-    case 0: {
+    case 0: {  // F_DUPFD
         if (arg < 0 || arg >= MAX_FD) return -1;
         for (int i = arg; i < MAX_FD; i++) {
-            if (!current_task->proc->fds->fd_table[i]) {
-                current_task->proc->fds->fd_table[i]   = node;
-                current_task->proc->fds->fd_offset[i]  = current_task->proc->fds->fd_offset[fd];
-                current_task->proc->fds->fd_flags[i]   = current_task->proc->fds->fd_flags[fd];
-                current_task->proc->fds->fd_cloexec[i] = 0;
-                open_vfs(node);
+            if (!current_task->proc->fds->files[i]) {
+                current_task->proc->fds->files[i] = file_ref(f);
                 return i;
             }
         }
         return -1;
     }
-
-    // F_GETFD: get close-on-exec flag
-    case 1:
-        return (int)current_task->proc->fds->fd_cloexec[fd];
-
-    // F_SETFD: set close-on-exec flag
-    case 2:
-        current_task->proc->fds->fd_cloexec[fd] = (arg & 1) ? 1 : 0;
+    case 1:  // F_GETFD
+        return (int)f->cloexec;
+    case 2:  // F_SETFD
+        f->cloexec = (arg & 1) ? 1 : 0;
         return 0;
-
-    // F_GETFL: get file status flags
-    case 3:
-        return (int)current_task->proc->fds->fd_flags[fd];
-
-    // F_SETFL: set file status flags (only O_NONBLOCK and O_APPEND allowed)
-    case 4: {
-        uint32_t new_flags = (current_task->proc->fds->fd_flags[fd] & ~(uint32_t)SETFL_MASK)
+    case 3:  // F_GETFL
+        return (int)f->flags;
+    case 4: { // F_SETFL
+        uint32_t new_flags = (f->flags & ~(uint32_t)SETFL_MASK)
                            | ((uint32_t)arg & SETFL_MASK);
-        current_task->proc->fds->fd_flags[fd] = new_flags;
-
-        // Propagate O_NONBLOCK to pipe if applicable
-        if (node->type == VFS_PIPE && node->priv) {
-            pipe_t* p = (pipe_t*)node->priv;
-            if (new_flags & 0x0800)
-                p->flags |=  O_NONBLOCK;
-            else
-                p->flags &= ~O_NONBLOCK;
-        }
+        f->flags = new_flags;
         return 0;
     }
-
     default:
         return -1;
     }
 }
 
-// Duplicate a file descriptor (kernel picks the lowest available number)
 int sys_dup(int oldfd) {
-    if (!current_task) return -1;
-    if (oldfd < 0 || oldfd >= MAX_FD) return -1;
-    struct vfs_node* node = current_task->proc->fds->fd_table[oldfd];
-    if (!node) return -1;
+    file_t *f = _get_file(oldfd);
+    if (!f) return -1;
     for (int i = 0; i < MAX_FD; i++) {
-        if (!current_task->proc->fds->fd_table[i]) {
-            open_vfs(node);
-            current_task->proc->fds->fd_table[i]   = node;
-            current_task->proc->fds->fd_offset[i]  = current_task->proc->fds->fd_offset[oldfd];
-            current_task->proc->fds->fd_flags[i]   = current_task->proc->fds->fd_flags[oldfd];
-            current_task->proc->fds->fd_cloexec[i] = 0;
+        if (!current_task->proc->fds->files[i]) {
+            current_task->proc->fds->files[i] = file_ref(f);
             return i;
         }
     }
     return -1;
 }
 
-// Duplicate oldfd to newfd, closing newfd first if necessary
-int sys_dup2(struct syscall_frame* regs) {
+int sys_dup2(struct syscall_frame *regs) {
     int oldfd = (int)regs->ebx;
     int newfd = (int)regs->ecx;
 
-    if (!current_task) return -1;
-    if (oldfd < 0 || oldfd >= MAX_FD) return -1;
-    if (newfd < 0 || newfd >= MAX_FD) return -1;
-
-    // POSIX: dup2(fd, fd) is a no-op
+    file_t *f = _get_file(oldfd);
+    if (!f) return -1;
     if (oldfd == newfd) return newfd;
 
-    struct vfs_node* node = current_task->proc->fds->fd_table[oldfd];
-    if (!node) return -1;
+    file_ref(f);
 
-    // Increment refcount before installing to avoid transient UAF
-    open_vfs(node);
+    file_t *old = current_task->proc->fds->files[newfd];
+    current_task->proc->fds->files[newfd] = f;
 
-    struct vfs_node* old_newnode = current_task->proc->fds->fd_table[newfd];
-    current_task->proc->fds->fd_table[newfd]   = node;
-    current_task->proc->fds->fd_offset[newfd]  = current_task->proc->fds->fd_offset[oldfd];
-    current_task->proc->fds->fd_flags[newfd]   = current_task->proc->fds->fd_flags[oldfd];
-    current_task->proc->fds->fd_cloexec[newfd] = 0;
-
-    if (old_newnode)
-        close_vfs(old_newnode);   // release old occupant of newfd
-
+    if (old) file_unref(old);
     return newfd;
 }
 
-// Create a pipe pair, storing the fds in user_fds[2]
-int sys_pipe(struct syscall_frame* regs) {
-    int* user_fds = (int*)regs->ebx;
+int sys_pipe(struct syscall_frame *regs) {
+    int *user_fds = (int *)regs->ebx;
     if (!validate_user_ptr(user_fds, sizeof(int) * 2)) return -1;
     if (!current_task) return -1;
 
-    struct vfs_node* pipefd[2];
+    vfs_node_t *pipefd[2];
     if (pipe_create(pipefd, 0) != 0) return -1;
+
+    file_t *rf = file_alloc(pipefd[0]);
+    file_t *wf = file_alloc(pipefd[1]);
+    if (!rf || !wf) {
+        if (rf) file_unref(rf);
+        if (wf) file_unref(wf);
+        close_vfs(pipefd[0]);
+        close_vfs(pipefd[1]);
+        return -1;
+    }
 
     int rfd = -1, wfd = -1;
     for (int i = 3; i < MAX_FD && (rfd < 0 || wfd < 0); i++) {
-        if (!current_task->proc->fds->fd_table[i]) {
+        if (!current_task->proc->fds->files[i]) {
             if (rfd < 0) rfd = i;
             else         wfd = i;
         }
     }
 
     if (rfd < 0 || wfd < 0) {
-        close_vfs(pipefd[0]);
-        close_vfs(pipefd[1]);
+        file_unref(rf);
+        file_unref(wf);
         return -1;
     }
 
-    current_task->proc->fds->fd_table[rfd]   = pipefd[0];
-    current_task->proc->fds->fd_table[wfd]   = pipefd[1];
-    current_task->proc->fds->fd_offset[rfd]  = 0;
-    current_task->proc->fds->fd_offset[wfd]  = 0;
-    current_task->proc->fds->fd_flags[rfd]   = 0;
-    current_task->proc->fds->fd_flags[wfd]   = 0;
-    current_task->proc->fds->fd_cloexec[rfd] = 0;
-    current_task->proc->fds->fd_cloexec[wfd] = 0;
-
+    current_task->proc->fds->files[rfd] = rf;
+    current_task->proc->fds->files[wfd] = wf;
     user_fds[0] = rfd;
     user_fds[1] = wfd;
     return 0;
 }
 
-// POSIX select(): wait for readiness on multiple fds with optional timeout
-int sys_select(struct syscall_frame* regs) {
-    sel_args_t* ua = (sel_args_t*)regs->ebx;
+int sys_select(struct syscall_frame *regs) {
+    sel_args_t *ua = (sel_args_t *)regs->ebx;
     if (!validate_user_ptr(ua, sizeof(sel_args_t))) return -1;
     if (!current_task) return -1;
 
     int              nfds  = ua->nfds;
-    sel_fdset_t*     urfds = ua->readfds;
-    sel_fdset_t*     uwfds = ua->writefds;
-    sel_fdset_t*     uefds = ua->exceptfds;
-    struct timeval_fd* utv = ua->timeout;
+    sel_fdset_t     *urfds = ua->readfds;
+    sel_fdset_t     *uwfds = ua->writefds;
+    sel_fdset_t     *uefds = ua->exceptfds;
+    struct timeval_fd *utv = ua->timeout;
 
-    if (nfds < 0 || nfds > MAX_FD)                                     return -1;
-    if (urfds && !validate_user_ptr(urfds, sizeof(sel_fdset_t)))        return -1;
-    if (uwfds && !validate_user_ptr(uwfds, sizeof(sel_fdset_t)))        return -1;
-    if (uefds && !validate_user_ptr(uefds, sizeof(sel_fdset_t)))        return -1;
-    if (utv   && !validate_user_ptr(utv,   sizeof(struct timeval_fd)))  return -1;
+    if (nfds < 0 || nfds > MAX_FD) return -1;
+    if (urfds && !validate_user_ptr(urfds, sizeof(sel_fdset_t))) return -1;
+    if (uwfds && !validate_user_ptr(uwfds, sizeof(sel_fdset_t))) return -1;
+    if (uefds && !validate_user_ptr(uefds, sizeof(sel_fdset_t))) return -1;
+    if (utv && !validate_user_ptr(utv, sizeof(struct timeval_fd))) return -1;
 
 #define TIMER_HZ_FD 100
     int      infinite    = (utv == 0);
@@ -376,7 +299,7 @@ int sys_select(struct syscall_frame* regs) {
     if (uwfds) orig_w = *uwfds;
     if (uefds) orig_e = *uefds;
 
-    struct task_struct* t = current_task;
+    struct task_struct *t = current_task;
 
     for (;;) {
         sel_fdset_t res_r, res_w, res_e;
@@ -384,18 +307,24 @@ int sys_select(struct syscall_frame* regs) {
         int ready = 0;
 
         for (int fd = 0; fd < nfds; fd++) {
-            vfs_node_t* node = t->proc->fds->fd_table[fd];
+            file_t *f = t->proc->fds->files[fd];
 
             if (urfds && SEL_ISSET(fd, &orig_r)) {
-                if (node && fd_read_ready(node)) { SEL_SET(fd, &res_r); ready++; }
+                if (f && f->node && (poll_vfs(f->node, VFS_POLLIN) & VFS_POLLIN)) {
+                    SEL_SET(fd, &res_r); ready++;
+                }
             }
             if (uwfds && SEL_ISSET(fd, &orig_w)) {
-                if (node && fd_write_ready(node)) { SEL_SET(fd, &res_w); ready++; }
+                if (f && f->node && (poll_vfs(f->node, VFS_POLLOUT) & VFS_POLLOUT)) {
+                    SEL_SET(fd, &res_w); ready++;
+                }
             }
             if (uefds && SEL_ISSET(fd, &orig_e)) {
-                if (node && node->type == VFS_PIPE) {
-                    pipe_t* p = (pipe_t*)node->priv;
-                    if (p && !p->write_open) { SEL_SET(fd, &res_e); ready++; }
+                if (f && f->node) {
+                    uint32_t rev = poll_vfs(f->node, VFS_POLLHUP | VFS_POLLERR);
+                    if (rev & (VFS_POLLHUP | VFS_POLLERR)) {
+                        SEL_SET(fd, &res_e); ready++;
+                    }
                 }
             }
         }
@@ -408,13 +337,12 @@ int sys_select(struct syscall_frame* regs) {
             return ready;
         }
 
-        schedule();   // yield CPU, will be woken by timer or IRQ
+        schedule();
     }
 }
 
-// POSIX poll(): similar to select but uses pollfd array
-int sys_poll(struct syscall_frame* regs) {
-    struct pollfd* fds        = (struct pollfd*)regs->ebx;
+int sys_poll(struct syscall_frame *regs) {
+    struct pollfd *fds        = (struct pollfd *)regs->ebx;
     int            nfds       = (int)regs->ecx;
     int            timeout_ms = (int)regs->edx;
 
@@ -433,7 +361,7 @@ int sys_poll(struct syscall_frame* regs) {
     }
 #undef TIMER_HZ_POLL
 
-    struct task_struct* t = current_task;
+    struct task_struct *t = current_task;
 
     for (;;) {
         int ready = 0;
@@ -442,24 +370,21 @@ int sys_poll(struct syscall_frame* regs) {
             fds[i].revents = 0;
             int fd = fds[i].fd;
             if (fd < 0 || fd >= MAX_FD) { fds[i].revents = POLLNVAL; continue; }
-            vfs_node_t* node = t->proc->fds->fd_table[fd];
-            if (!node)                  { fds[i].revents = POLLNVAL; continue; }
+            file_t *f = t->proc->fds->files[fd];
+            if (!f || !f->node) { fds[i].revents = POLLNVAL; continue; }
+
+            uint32_t events = 0;
+            if (fds[i].events & POLLIN)  events |= VFS_POLLIN;
+            if (fds[i].events & POLLOUT) events |= VFS_POLLOUT;
+
+            uint32_t revents = (uint32_t)poll_vfs(f->node, events);
 
             short ev = 0;
-            if ((fds[i].events & POLLIN)  && fd_read_ready(node))  ev |= POLLIN;
-            if ((fds[i].events & POLLOUT) && fd_write_ready(node)) ev |= POLLOUT;
-
-            // Pipes: report hangup/error regardless of requested events
-            if (node->type == VFS_PIPE) {
-                pipe_t* pp = (pipe_t*)node->priv;
-                if (pp) {
-                    int is_wr = (int)node->inode;
-                    if (!is_wr && !pp->write_open && pp->len == 0)
-                        ev |= POLLHUP;     // read end, writer gone, no data
-                    if (is_wr && !pp->read_open)
-                        ev |= POLLERR;     // write end, reader gone
-                }
-            }
+            if (revents & VFS_POLLIN)  ev |= POLLIN;
+            if (revents & VFS_POLLOUT) ev |= POLLOUT;
+            if (revents & VFS_POLLHUP) ev |= POLLHUP;
+            if (revents & VFS_POLLERR) ev |= POLLERR;
+            if (revents & VFS_POLLNVAL) ev |= POLLNVAL;
 
             fds[i].revents = ev;
             if (ev) ready++;

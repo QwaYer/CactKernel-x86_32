@@ -215,7 +215,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
 	  $(BUILD_DIR)/blkdev.o \
       $(BUILD_DIR)/sc_mod.o \
       $(BUILD_DIR)/sc_validate.o \
-      $(BUILD_DIR)/sc_resolve.o \
       $(BUILD_DIR)/sc_helper.o \
       $(BUILD_DIR)/sc_proc.o \
       $(BUILD_DIR)/sc_signal.o \
@@ -370,10 +369,6 @@ $(BUILD_DIR)/sc_mod.o: $(KERN_SYSCALLS_DIR)/mod.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/sc_validate.o: $(KERN_SYSCALLS_DIR)/validate.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/sc_resolve.o: $(KERN_SYSCALLS_DIR)/resolve.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

@@ -1,7 +1,7 @@
 #include "proc.h"
-#include "validate.h"
-#include "resolve.h"
+#include "proc_mm.h"
 #include "vfs.h"
+#include "validate.h"
 
 // Maximum number of argv/envp entries to validate (prevents runaway loops)
 #define EXEC_VALIDATE_MAX 256

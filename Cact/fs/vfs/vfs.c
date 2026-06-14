@@ -3,6 +3,7 @@
 #include "sync.h"
 #include "kernel.h"
 #include "task.h"
+#include "memory.h"
 
 // Global VFS root.
 vfs_node_t *vfs_root = 0;
@@ -407,4 +408,198 @@ int vfs_check_perm(vfs_node_t *node, uint32_t perm) {
     if ((allowed & perm) == perm)
         return 0;
     return -1;
+}
+
+// ── File descriptor management ──────────────────────────────────────────
+
+file_t *file_alloc(vfs_node_t *node) {
+    if (!node) return 0;
+    file_t *f = (file_t *)kmalloc(sizeof(file_t));
+    if (!f) return 0;
+    f->node     = node;
+    f->offset   = 0;
+    f->flags    = 0;
+    f->cloexec  = 0;
+    f->refcount = 1;
+    open_vfs(node);
+    return f;
+}
+
+void file_free(file_t *f) {
+    if (!f) return;
+    close_vfs(f->node);
+    kfree_heap(f);
+}
+
+file_t *file_ref(file_t *f) {
+    if (f) f->refcount++;
+    return f;
+}
+
+int file_unref(file_t *f) {
+    if (!f) return -1;
+    if (f->refcount == 0) return -1;
+    f->refcount--;
+    if (f->refcount == 0) {
+        file_free(f);
+        return 0;
+    }
+    return f->refcount;
+}
+
+// ── Path resolution (moved from syscall layer) ───────────────────────────
+
+void vfs_make_abs(const char *path, char *abs, int abs_max) {
+    int p = 0;
+    if (path[0] != '/') {
+        for (int i = 0; current_task->proc->cwd[i] && p < abs_max - 2; i++)
+            abs[p++] = current_task->proc->cwd[i];
+        if (p > 0 && abs[p-1] != '/') abs[p++] = '/';
+    }
+    for (int i = 0; path[i] && p < abs_max - 1; i++)
+        abs[p++] = path[i];
+    abs[p] = '\0';
+}
+
+vfs_node_t *vfs_resolve_path(const char *path) {
+    if (!path || !current_task) return 0;
+    char abs[512];
+    vfs_make_abs(path, abs, 512);
+    return vfs_walk_path_follow(vfs_root, abs, 0);
+}
+
+vfs_node_t *vfs_resolve_parent_follow(const char *path,
+                                       char *basename_out, int basename_max) {
+    if (!path || !current_task) return 0;
+
+    char abs[512];
+    vfs_make_abs(path, abs, 512);
+
+    int last_slash = -1;
+    for (int i = 0; abs[i]; i++)
+        if (abs[i] == '/') last_slash = i;
+
+    if (last_slash < 0) {
+        int i = 0;
+        while (path[i] && i < basename_max - 1) { basename_out[i] = path[i]; i++; }
+        basename_out[i] = '\0';
+        return vfs_walk_path_follow(vfs_root, current_task->proc->cwd, 0);
+    }
+
+    const char *bn = abs + last_slash + 1;
+    int i = 0;
+    while (bn[i] && i < basename_max - 1) { basename_out[i] = bn[i]; i++; }
+    basename_out[i] = '\0';
+
+    if (last_slash == 0) return vfs_root;
+
+    char parent_path[512];
+    for (int j = 0; j < last_slash && j < 511; j++)
+        parent_path[j] = abs[j];
+    parent_path[last_slash] = '\0';
+
+    return vfs_walk_path_follow(vfs_root, parent_path, 0);
+}
+
+vfs_node_t *vfs_resolve_parent(const char *path,
+                                char *basename_out, int basename_max) {
+    return vfs_resolve_parent_follow(path, basename_out, basename_max);
+}
+
+// ── New VFS wrapper functions ───────────────────────────────────────────
+
+int truncate_vfs(vfs_node_t *node, uint32_t length) {
+    if (!node) return -1;
+    if (node->ops && node->ops->truncate)
+        return node->ops->truncate(node, length);
+    node->size = length;
+    return 0;
+}
+
+int chmod_vfs(vfs_node_t *node, uint32_t mode) {
+    if (!node) return -1;
+    if (node->ops && node->ops->chmod)
+        return node->ops->chmod(node, mode);
+    node->mode = mode & 0777;
+    return 0;
+}
+
+int chown_vfs(vfs_node_t *node, uint32_t uid, uint32_t gid) {
+    if (!node) return -1;
+    if (node->ops && node->ops->chown)
+        return node->ops->chown(node, uid, gid);
+    if (uid != (uint32_t)-1) node->uid = uid;
+    if (gid != (uint32_t)-1) node->gid = gid;
+    return 0;
+}
+
+int mknod_vfs(vfs_node_t *dir, const char *name, uint32_t mode, uint32_t dev) {
+    (void)dev;
+    if (!dir || dir->type != VFS_DIRECTORY || !name) return -1;
+    if (dir->ops && dir->ops->mknod)
+        return dir->ops->mknod(dir, name, mode, dev);
+    if (!dir->ops || !dir->ops->create) return -1;
+    int ret = dir->ops->create(dir, (char *)name);
+    if (ret < 0) return -1;
+    vfs_node_t *node = finddir_vfs(dir, (char *)name);
+    if (!node) return -1;
+    if ((mode & 0xF000) == 0x2000)
+        node->type = VFS_CHARDEVICE;
+    else if ((mode & 0xF000) == 0x6000)
+        node->type = VFS_BLOCKDEVICE;
+    node->mode = mode & 0777;
+    return 0;
+}
+
+int stat_vfs(vfs_node_t *node, uint32_t *buf) {
+    if (!node || !buf) return -1;
+    if (node->ops && node->ops->stat)
+        return node->ops->stat(node, buf);
+    vfs_fill_stat(node, buf);
+    return 0;
+}
+
+int poll_vfs(vfs_node_t *node, uint32_t events) {
+    if (!node) return VFS_POLLNVAL;
+    if (node->ops && node->ops->poll)
+        return node->ops->poll(node, events);
+    // Default: regular files and dirs are always ready
+    uint32_t revents = 0;
+    if (events & VFS_POLLIN)  revents |= VFS_POLLIN;
+    if (events & VFS_POLLOUT) revents |= VFS_POLLOUT;
+    return (int)revents;
+}
+
+int lseek_vfs(vfs_node_t *node, int offset, int whence, uint32_t *result) {
+    if (!node || !result) return -1;
+    if (node->ops && node->ops->lseek)
+        return node->ops->lseek(node, offset, whence, result);
+    // Default: files always support seek
+    return -1;  // caller handles default lseek logic
+}
+
+// ── Helper functions (moved from syscall helper.c) ──────────────────────
+
+uint32_t vfs_type_to_mode(uint32_t type) {
+    switch (type) {
+    case VFS_FILE:        return 0x8000;   // S_IFREG
+    case VFS_DIRECTORY:   return 0x4000;   // S_IFDIR
+    case VFS_CHARDEVICE:  return 0x2000;   // S_IFCHR
+    case VFS_BLOCKDEVICE: return 0x6000;   // S_IFBLK
+    case VFS_PIPE:        return 0x1000;   // S_IFIFO
+    default:              return 0;
+    }
+}
+
+void vfs_fill_stat(vfs_node_t *node, uint32_t *buf) {
+    buf[0] = node->inode;
+    buf[1] = vfs_type_to_mode(node->type);
+    buf[2] = node->size;
+    buf[3] = node->type;
+}
+
+void vfs_strlcpy(char *dst, const char *src, int max) {
+    int i = 0;
+    while (src[i] && i < max - 1) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
 }

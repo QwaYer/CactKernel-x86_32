@@ -17,6 +17,13 @@
 #define VFS_PERM_WRITE   0x02
 #define VFS_PERM_EXEC    0x01
 
+// Poll event flags (match Linux POLL*)
+#define VFS_POLLIN   0x001
+#define VFS_POLLOUT  0x004
+#define VFS_POLLERR  0x008
+#define VFS_POLLHUP  0x010
+#define VFS_POLLNVAL 0x020
+
 // Symlink resolution depth limit
 #define VFS_SYMLINK_MAX_DEPTH 8
 
@@ -25,6 +32,16 @@
 
 struct vfs_node;
 struct vfs_dirent;
+
+// File description — intermediate between fd table and vfs_node.
+// dup() shares the same file_t (POSIX semantics).
+typedef struct file {
+    struct vfs_node *node;
+    uint32_t         offset;
+    uint32_t         flags;     // open flags (O_RDWR, O_NONBLOCK, etc.)
+    uint32_t         cloexec;
+    uint32_t         refcount;
+} file_t;
 
 // Per-filesystem operations table — each method may be NULL if unsupported
 typedef struct vfs_ops {
@@ -43,13 +60,21 @@ typedef struct vfs_ops {
     int (*rmdir)   (struct vfs_node *dir, const char *name);
     int (*rename)  (struct vfs_node *dir, const char *oldname, const char *newname);
 
-    // Symlink and hard-link operations (optional)
     int (*symlink) (struct vfs_node *dir, const char *name, const char *target);
     int (*link)    (struct vfs_node *dir, const char *name, struct vfs_node *target);
     int (*unlink)  (struct vfs_node *dir, const char *name);
     int (*readlink)(struct vfs_node *node, char *buf, uint32_t bufsz);
 
-    int (*ioctl) (struct vfs_node *node, uint32_t cmd, void *arg);
+    int (*ioctl)   (struct vfs_node *node, uint32_t cmd, void *arg);
+
+    // New VFS operations — pull logic out of syscall layer
+    int (*truncate)(struct vfs_node *node, uint32_t length);
+    int (*chmod)   (struct vfs_node *node, uint32_t mode);
+    int (*chown)   (struct vfs_node *node, uint32_t uid, uint32_t gid);
+    int (*mknod)   (struct vfs_node *dir, const char *name, uint32_t mode, uint32_t dev);
+    int (*stat)    (struct vfs_node *node, uint32_t *buf);   // 4-word stat buffer
+    int (*poll)    (struct vfs_node *node, uint32_t events);  // returns ready events
+    int (*lseek)   (struct vfs_node *node, int offset, int whence, uint32_t *result);
 } vfs_ops_t;
 
 // Generic VFS node — embedded by each filesystem
@@ -88,6 +113,27 @@ vfs_node_t   *vfs_walk_path       (vfs_node_t *start, const char *path);
 // Walk a path following symlinks; sets *err_out to ELOOP on depth overflow
 vfs_node_t   *vfs_walk_path_follow(vfs_node_t *start, const char *path, int *err_out);
 
+// Path resolution helpers (moved from syscall layer)
+void          vfs_make_abs   (const char *path, char *abs, int abs_max);
+vfs_node_t   *vfs_resolve_path       (const char *path);
+vfs_node_t   *vfs_resolve_parent     (const char *path, char *basename_out, int basename_max);
+vfs_node_t   *vfs_resolve_parent_follow(const char *path, char *basename_out, int basename_max);
+
+// Legacy aliases for compatibility
+#define _make_abs vfs_make_abs
+#define _resolve_path vfs_resolve_path
+#define _resolve_parent vfs_resolve_parent
+#define _resolve_parent_follow vfs_resolve_parent_follow
+#define _fill_stat vfs_fill_stat
+#define _vfs_type_to_mode vfs_type_to_mode
+#define _kstrcpy vfs_strlcpy
+
+// File descriptor helpers
+file_t       *file_alloc     (vfs_node_t *node);
+void          file_free      (file_t *f);
+file_t       *file_ref       (file_t *f);
+int           file_unref     (file_t *f);
+
 // Generic I/O wrappers
 int           read_vfs     (vfs_node_t *node, uint32_t off, uint32_t size, char *buf);
 int           write_vfs    (vfs_node_t *node, uint32_t off, uint32_t size, char *buf);
@@ -118,5 +164,23 @@ void          vfs_node_unref     (vfs_node_t *node);
 
 // Permission checking (returns 0 on success, -1 on deny)
 int           vfs_check_perm     (vfs_node_t *node, uint32_t perm);
+
+// New VFS wrapper functions (dispatch through vfs_ops_t)
+int           truncate_vfs (vfs_node_t *node, uint32_t length);
+int           chmod_vfs    (vfs_node_t *node, uint32_t mode);
+int           chown_vfs    (vfs_node_t *node, uint32_t uid, uint32_t gid);
+int           mknod_vfs    (vfs_node_t *dir, const char *name, uint32_t mode, uint32_t dev);
+int           stat_vfs     (vfs_node_t *node, uint32_t *buf);
+int           poll_vfs     (vfs_node_t *node, uint32_t events);
+int           lseek_vfs    (vfs_node_t *node, int offset, int whence, uint32_t *result);
+
+// Helper: convert VFS node type to POSIX stat mode
+uint32_t      vfs_type_to_mode(uint32_t type);
+
+// Helper: fill 4-word stat buffer
+void          vfs_fill_stat(vfs_node_t *node, uint32_t *buf);
+
+// Helper: bounded string copy (always null-terminates)
+void          vfs_strlcpy(char *dst, const char *src, int max);
 
 #endif

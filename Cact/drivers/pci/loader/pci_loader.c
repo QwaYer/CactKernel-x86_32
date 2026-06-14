@@ -7,7 +7,6 @@
 #include "kernel.h"
 #include "klib.h"
 #include "ksym.h"
-#include "resolve.h"
 
 // Wildcard ID — must match PCI_ANY_ID in pci_driver.h
 #define LDR_PCI_ANY_ID 0xFFFFu

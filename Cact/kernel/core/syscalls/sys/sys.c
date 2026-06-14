@@ -1,6 +1,5 @@
 #include "sys.h"
 #include "validate.h"
-#include "resolve.h"
 #include "helper.h"
 
 // print() — print a message to the kernel console (debug)
