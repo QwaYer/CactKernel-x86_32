@@ -113,19 +113,21 @@ void blkdev_dump(void) {
 
 // Read a sector from the boot device (zeroes buffer if no device)
 void blkdev_read_sector(uint32_t lba, uint8_t *buf) {
-    if (!boot_dev) {
+    struct blkdev *dev = boot_dev;
+    if (!dev) {
         kprint("[blkdev] no boot device for read\n");
         memset(buf, 0, 512);
         return;
     }
-    boot_dev->read_sector(lba, buf);
+    dev->read_sector(lba, buf);
 }
 
 // Write a sector to the boot device (no-op if no device)
 void blkdev_write_sector(uint32_t lba, uint8_t *buf) {
-    if (!boot_dev) {
+    struct blkdev *dev = boot_dev;
+    if (!dev) {
         kprint("[blkdev] no boot device for write\n");
         return;
     }
-    boot_dev->write_sector(lba, buf);
+    dev->write_sector(lba, buf);
 }
