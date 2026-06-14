@@ -36,9 +36,11 @@ pub extern "C" fn skb_push(skb: *mut Skb, len: u16) -> *mut u8 {
     if skb.is_null() {
         return core::ptr::null_mut();
     }
-    // SAFETY: caller ensures len fits skb headroom.
     unsafe {
-        (*skb).data_offset = (*skb).data_offset.wrapping_sub(len);
+        if (*skb).data_offset < len {
+            return core::ptr::null_mut();
+        }
+        (*skb).data_offset -= len;
         (*skb).total_len = (*skb).total_len.wrapping_add(len);
         (*skb).data.as_mut_ptr().add((*skb).data_offset as usize)
     }
@@ -49,12 +51,14 @@ pub extern "C" fn skb_put(skb: *mut Skb, len: u16) -> *mut u8 {
     if skb.is_null() {
         return core::ptr::null_mut();
     }
-    // SAFETY: caller ensures tailroom.
     unsafe {
-        let ptr = (*skb)
-            .data
-            .as_mut_ptr()
-            .add((*skb).data_offset as usize + (*skb).total_len as usize);
+        let offset = (*skb).data_offset as usize;
+        let cur_len = (*skb).total_len as usize;
+        let new_total = offset + cur_len + len as usize;
+        if new_total > SKB_MAX_SIZE {
+            return core::ptr::null_mut();
+        }
+        let ptr = (*skb).data.as_mut_ptr().add(offset + cur_len);
         (*skb).total_len = (*skb).total_len.wrapping_add(len);
         ptr
     }
