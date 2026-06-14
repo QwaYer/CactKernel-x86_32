@@ -69,6 +69,9 @@ unsafe extern "C" {
     pub fn close_vfs(node: *mut VfsNode);
     pub fn open_vfs(node: *mut VfsNode);
 
+    pub fn file_ref(f: *mut c_void) -> *mut c_void;
+    pub fn file_unref(f: *mut c_void) -> i32;
+
     pub fn proc_tracker_add(tracker: *mut ProcPageTracker, phys: *mut c_void) -> i32;
     pub fn proc_free_pages(tracker: *mut ProcPageTracker);
 
