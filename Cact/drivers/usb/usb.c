@@ -101,10 +101,10 @@ static void usb_parse_config(usb_device_t *dev) {
     uint8_t *end = p + dev->config_len;
     dev->ep_count = 0;
 
-    while (p < end) {
+    while (p + 2 <= end) {
         uint8_t len  = p[0];
         uint8_t type = p[1];
-        if (len < 2) break;
+        if (len < 2 || p + len > end) break;
 
         if (type == USB_DESC_INTERFACE && len >= 9) {
             usb_iface_desc_t *iface = (usb_iface_desc_t *)p;
