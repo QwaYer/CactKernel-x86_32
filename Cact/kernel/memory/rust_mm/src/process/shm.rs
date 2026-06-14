@@ -77,7 +77,7 @@ fn find_shm_va(num_pages: u32) -> u32 {
     let mut candidate = SHM_VA_BASE;
 
     // SAFETY: current_task is a valid kernel global.
-    let t = unsafe { current_task };
+    let t = unsafe { *current_task.get() };
     if t.is_null() || unsafe { (*t).proc.is_null() } {
         return 0;
     }
@@ -188,8 +188,8 @@ pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
         s.pages[i] = p;
     }
 
-    let cur_pid = if !unsafe { current_task }.is_null() {
-        unsafe { (*current_task).pid }
+    let cur_pid = if !unsafe { *current_task.get() }.is_null() {
+        unsafe { (*(*current_task.get())).pid }
     } else {
         0
     };
@@ -213,7 +213,7 @@ pub extern "C" fn shm_at(shmid: i32, shmaddr: u32, flags: i32) -> u32 {
     shm_ensure_init();
 
     // SAFETY: current_task is a valid kernel global.
-    let t = unsafe { current_task };
+    let t = unsafe { *current_task.get() };
     if t.is_null() || unsafe { (*t).is_kernel } != 0 || unsafe { (*t).proc.is_null() } {
         return u32::MAX;
     }
@@ -290,7 +290,7 @@ pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
     shm_ensure_init();
 
     // SAFETY: current_task is a valid kernel global.
-    let t = unsafe { current_task };
+    let t = unsafe { *current_task.get() };
     if t.is_null() || unsafe { (*t).is_kernel } != 0 || unsafe { (*t).proc.is_null() } {
         return -1;
     }
@@ -393,7 +393,7 @@ pub extern "C" fn shm_detach_all(pid: u32, page_directory: *mut u32) {
 
     // SAFETY: task_list_head is a valid kernel global.
     let mut found: *mut TaskStruct = core::ptr::null_mut();
-    let mut cur = unsafe { task_list_head };
+    let mut cur = unsafe { *task_list_head.get() };
     if cur.is_null() {
         return;
     }
@@ -404,7 +404,7 @@ pub extern "C" fn shm_detach_all(pid: u32, page_directory: *mut u32) {
             break;
         }
         cur = unsafe { (*cur).next };
-        if cur.is_null() || cur == unsafe { task_list_head } {
+        if cur.is_null() || cur == unsafe { *task_list_head.get() } {
             break;
         }
     }

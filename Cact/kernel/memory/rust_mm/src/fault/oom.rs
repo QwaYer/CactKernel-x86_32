@@ -33,12 +33,12 @@ fn oom_score(t: *mut TaskStruct) -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn oom_kill() -> i32 {
-    lock_acquire(&raw mut scheduler_lock as *mut IrqSpinlock);
+    lock_acquire(unsafe { scheduler_lock.get() });
 
     // SAFETY: task_list_head is a valid kernel global.
-    let head = unsafe { task_list_head };
+    let head = unsafe { *task_list_head.get() };
     if head.is_null() {
-        lock_release(&raw mut scheduler_lock as *mut IrqSpinlock);
+        lock_release(unsafe { scheduler_lock.get() });
         return -1;
     }
 
@@ -59,7 +59,7 @@ pub extern "C" fn oom_kill() -> i32 {
     }
 
     if victim.is_null() || best_score == 0 {
-        lock_release(&raw mut scheduler_lock as *mut IrqSpinlock);
+        lock_release(unsafe { scheduler_lock.get() });
         // SAFETY: kprint_color takes a valid string.
         unsafe { kprint_color(b"[OOM] no killable process found\n\0".as_ptr(), COLOR_LIGHT_RED); }
         return -1;
@@ -69,13 +69,13 @@ pub extern "C" fn oom_kill() -> i32 {
     let victim_pid = unsafe { (*victim).pid };
     let victim_pages = unsafe { (*(*victim).proc).mm.count };
 
-    extern "C" {
+    unsafe extern "C" {
         fn task_signal_locked(pid: u32, signal: u32);
     }
     // SAFETY: task_signal_locked is a C function; we hold the scheduler lock.
     unsafe { task_signal_locked(victim_pid, SIGKILL); }
 
-    lock_release(&raw mut scheduler_lock as *mut IrqSpinlock);
+    lock_release(unsafe { scheduler_lock.get() });
 
     let stats = G_STATS.get_mut();
     stats.oom_kills += 1;

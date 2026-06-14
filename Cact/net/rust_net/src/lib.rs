@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(sync_unsafe_cell)]
 #![allow(static_mut_refs)]
 
 //! In-kernel TCP/IP stack (smoltcp): Ethernet shim, sockets, DHCP/DNS helpers, and
@@ -12,11 +13,11 @@ struct CactAllocator;
 
 unsafe impl GlobalAlloc for CactAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        extern "C" { fn kmalloc_aligned(size: usize, align: u32) -> *mut core::ffi::c_void; }
+        unsafe extern "C" { fn kmalloc_aligned(size: usize, align: u32) -> *mut core::ffi::c_void; }
         kmalloc_aligned(layout.size(), layout.align() as u32) as *mut u8
     }
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-        extern "C" { fn kfree_heap(ptr: *mut core::ffi::c_void); }
+        unsafe extern "C" { fn kfree_heap(ptr: *mut core::ffi::c_void); }
         kfree_heap(ptr as *mut core::ffi::c_void);
     }
 }

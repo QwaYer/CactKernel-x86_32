@@ -288,13 +288,13 @@ pub unsafe extern "C" fn schedule() {
     let next_pd = (*next).page_directory;
 
     let effective_next_pd = if next_pd.is_null() {
-        ptr::addr_of!(ffi::page_directory) as *mut u32
+        ffi::page_directory.get()
     } else {
         next_pd
     };
 
     let effective_prev_pd = if prev_pd.is_null() {
-        ptr::addr_of!(ffi::page_directory) as *mut u32
+        ffi::page_directory.get()
     } else {
         prev_pd
     };
@@ -306,7 +306,7 @@ pub unsafe extern "C" fn schedule() {
     }
 
     if !(*next).proc.is_null() && !(*(*next).proc).stack_base.is_null() {
-        ffi::tss_entry.esp0 = (*(*next).proc).stack_base as u32 + crate::task::KERNEL_STACK_SIZE as u32;
+        unsafe { (*ffi::tss_entry.get()).esp0 = (*(*next).proc).stack_base as u32 + crate::task::KERNEL_STACK_SIZE as u32; }
     }
 
     ffi::cli();

@@ -5,8 +5,9 @@ use core::time::Duration as CoreDuration;
 
 pub use core::time::Duration;
 
-/// Kernel timer via FFI — wraps timer_ticks_get().
-extern "C" {
+// Kernel timer via FFI — wraps timer_ticks_get().
+// SAFETY: backed by the C kernel's timer_ticks_get.
+unsafe extern "C" {
     fn timer_ticks_get() -> u32;
 }
 

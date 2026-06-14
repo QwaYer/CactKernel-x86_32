@@ -4,6 +4,27 @@
 //!
 //! This is the single source of truth for sizes and symbols shared between `rust_mm` and C.
 
+use core::cell::UnsafeCell;
+
+/// A `Sync`-safe transparent wrapper for `UnsafeCell<T>`, used for `extern` statics
+/// that are mutated by C code under spinlock protection.
+///
+/// # Safety
+///
+/// All access through [`SyncMut::get`] is `unsafe` — the caller must ensure
+/// the kernel's spinlock protocol is observed.
+#[repr(transparent)]
+pub struct SyncMut<T>(UnsafeCell<T>);
+
+// SAFETY: kernel guarantees access is serialised via IrqSpinlock.
+unsafe impl<T: Send> Sync for SyncMut<T> {}
+
+impl<T> SyncMut<T> {
+    pub fn get(&self) -> *mut T {
+        self.0.get()
+    }
+}
+
 pub const PAGE_SIZE: u32 = 4096;
 
 /// Physical address where the kernel is loaded (1 MB mark).
@@ -345,7 +366,12 @@ pub struct Mb2MmapTable {
     pub count:   u32,
 }
 
-extern "C" {
+// SAFETY: Each function and static in this block is backed by a C definition
+// in the kernel.  All pointer parameters must be non-null and correctly
+// aligned.  `current_task`, `task_list_head`, and `scheduler_lock` are
+// mutated under the scheduler spinlock — callers must hold that lock or be
+// in a single-threaded context (boot / IRQ-off) before accessing them.
+unsafe extern "C" {
     pub fn kprint(msg: *const u8);
     pub fn kprint_color(msg: *const u8, color: u32);
     pub fn kprint_hex(n: u32);
@@ -362,9 +388,9 @@ extern "C" {
 
     pub fn read_vfs(node: *mut VfsNode, off: u32, size: u32, buf: *mut u8) -> i32;
 
-    pub static mut current_task: *mut TaskStruct;
-    pub static mut task_list_head: *mut TaskStruct;
-    pub static mut scheduler_lock: IrqSpinlock;
+    pub static current_task: SyncMut<*mut TaskStruct>;
+    pub static task_list_head: SyncMut<*mut TaskStruct>;
+    pub static scheduler_lock: SyncMut<IrqSpinlock>;
 
     pub fn task_signal(pid: u32, signal: u32);
     pub fn schedule();

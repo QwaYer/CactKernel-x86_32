@@ -956,7 +956,7 @@ pub unsafe extern "C" fn task_exec(
     }
 
     {
-        let file = ffi::vfs_walk_path(ffi::vfs_root, path);
+        let file = ffi::vfs_walk_path(unsafe { *ffi::vfs_root.get() }, path);
         if !file.is_null() {
             let brk = ffi::elf_get_brk_start(file);
             (*p).brk_start   = brk;
@@ -967,7 +967,7 @@ pub unsafe extern "C" fn task_exec(
     map_sigreturn_trampoline_on_pd(t, new_pd);
     ffi::vmm_sync_kernel_mmio_mappings(new_pd);
 
-    ffi::tss_entry.esp0 = (*p).stack_base as u32 + KERNEL_STACK_SIZE as u32;
+    unsafe { (*ffi::tss_entry.get()).esp0 = (*p).stack_base as u32 + KERNEL_STACK_SIZE as u32; }
 
     let ustack_top = (*p).ustack_virt + USER_STACK_BYTES;
     let mut sp     = ustack_top - 4;
@@ -1114,7 +1114,7 @@ pub unsafe extern "C" fn task_exec(
 
     crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-    ffi::terminal_fg_pid = (*t).pid;
+    unsafe { *ffi::terminal_fg_pid.get() = (*t).pid; }
 
     let pd_val = new_pd as u32;
     let entry_u = entry as u32;
