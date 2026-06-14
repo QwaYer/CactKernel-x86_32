@@ -641,8 +641,12 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     }
 
     for i in 0..MAX_FD {
-        if !(*(*child_p).fds).fd_table[i].is_null() {
-            ffi::open_vfs((*(*child_p).fds).fd_table[i]);
+        let ft = (*(*child_p).fds).fd_table[i];
+        if !ft.is_null() {
+            let node = unsafe { *(ft as *const *mut VfsNode) };
+            if !node.is_null() {
+                ffi::open_vfs(node);
+            }
         }
     }
 
@@ -1045,8 +1049,12 @@ pub unsafe extern "C" fn task_exec(
     ffi::mmap_table_init((*p).mmap_table);
 
     for i in 3..MAX_FD {
-        if !(*(*p).fds).fd_table[i].is_null() && (*(*p).fds).fd_cloexec[i] != 0 {
-            ffi::close_vfs((*(*p).fds).fd_table[i]);
+        let ft = (*(*p).fds).fd_table[i];
+        if !ft.is_null() && (*(*p).fds).fd_cloexec[i] != 0 {
+            let node = unsafe { *(ft as *const *mut VfsNode) };
+            if !node.is_null() {
+                ffi::close_vfs(node);
+            }
             (*(*p).fds).fd_table[i]   = ptr::null_mut();
             (*(*p).fds).fd_offset[i]  = 0;
             (*(*p).fds).fd_flags[i]   = 0;
@@ -1416,8 +1424,12 @@ fn reap_task_free(t: *mut TaskStruct) {
 
         if !(*p).fds.is_null() {
             for j in 0..MAX_FD {
-                if !(*(*p).fds).fd_table[j].is_null() {
-                    ffi::close_vfs((*(*p).fds).fd_table[j]);
+                let ft = (*(*p).fds).fd_table[j];
+                if !ft.is_null() {
+                    let node = unsafe { *(ft as *const *mut VfsNode) };
+                    if !node.is_null() {
+                        ffi::close_vfs(node);
+                    }
                 }
             }
             ffi::kfree_heap((*p).fds as *mut c_void);
