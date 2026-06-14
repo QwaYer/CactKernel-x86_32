@@ -86,7 +86,7 @@ void net_receive(skb_t* skb);        /* drivers call this on RX             */
 /* Stable alias for loadable modules / external driver sources */
 void net_receive_packet(skb_t* skb);
 
-/* Wake knetd after NIC IRQ (semaphore lives in Rust net core). */
+/* Wake net_poll_task after NIC IRQ (semaphore lives in Rust net core). */
 void net_driver_irq_wake(void);
 
 #endif

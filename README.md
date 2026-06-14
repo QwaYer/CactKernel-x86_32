@@ -190,7 +190,7 @@ Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register; **PIT** bef
 | 6 | **PIT @ 100 Hz** — timer ticks before PCI scan (driver prompts) |
 | 7 | **`blkdev_init`** → **PCI bus scan** + **enumeration** → **`usb_init`** (xHCI) |
 | 8 | **Page cache** + **swap** (optional swap partition; failure logs a warning) |
-| 9 | **`vfs_init`** + **`net_init`** (Rust `stack_init`, **`knetd`** thread on semaphore + `net_poll` / `stack_poll`) |
+| 9 | **`vfs_init`** + **`net_init`** (Rust `stack_init`, **`net_poll_task`** thread on semaphore + `net_poll` / `stack_poll`) |
 | 10 | **`task_init`** + **`init_scheduler`** (Rust MLFQ) |
 
 ### Phase C — `kernel_bootstrap_main` (first real task)
@@ -332,7 +332,7 @@ The legacy **C** path still owns **Ethernet demux**, **ARP**, parts of **IPv4/IC
 | **Ethernet / ARP / IPv4 / ICMP** | Mostly C; ICMP echo path bridges into Rust |
 | **TCP / UDP** | **smoltcp** sockets + C-side `ksock` / `tcp_socket_t` metadata |
 | **Sockets / VFS** | Up to **16** kernel socket nodes integrated with `read`/`write`/`close` |
-| **knetd** | Dedicated kernel thread: sleeps on a semaphore, wakes on NIC RX, calls **`net_poll` → `stack_poll()`** |
+| **net_poll_task** | Dedicated kernel thread: sleeps on a semaphore, wakes on NIC RX, calls **`net_poll` → `stack_poll()`** |
 
 **Limits (non-exhaustive):** no **IPv6**, no **TLS** inside the kernel; default NIC is **virtio-net** in QEMU; **`send`/`recv` flags** may be ignored in libc; DNS resolver is **A-record only** and needs a configured DNS IP (from DHCP or **`SYS_NETCFG_SET`**).
 

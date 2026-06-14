@@ -44,10 +44,12 @@ void deliver_pending_signal(struct task_struct *t, struct syscall_frame *regs) {
         uint32_t  pti = PT_INDEX(new_esp);
         if (!(pd[pdi] & PAGE_PRESENT)) continue;
         uint32_t *pt = (uint32_t *)(pd[pdi] & ~0xFFFu);
-        if (!(pt[pti] & PAGE_PRESENT)) continue;
+        uint32_t pte = pt[pti];
+        if (!(pte & PAGE_PRESENT)) continue;
+        if (!(pte & PAGE_USER))    continue;
+        if (!(pte & PAGE_RW))      continue;
 
-        uint32_t phys_page = pt[pti] & ~0xFFFu;
-        signal_frame_t *frame = (signal_frame_t *)(phys_page + page_off);
+        signal_frame_t *frame = (signal_frame_t *)new_esp;
 
         frame->ret_addr = t->proc->sigreturn_trampoline;
         frame->signum   = (uint32_t)bit;

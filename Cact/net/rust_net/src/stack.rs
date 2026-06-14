@@ -231,7 +231,7 @@ impl Device for CactPhy {
     }
 }
 
-/// Copy one Ethernet frame from driver `Skb` into the PHY RX staging buffer and wake `knetd`.
+/// Copy one Ethernet frame from driver `Skb` into the PHY RX staging buffer and wake `net_poll_task`.
 pub fn stack_enqueue_rx(skb: *mut Skb) {
     if skb.is_null() {
         return;
@@ -304,7 +304,7 @@ pub fn stack_init() {
         STACK_READY = true;
         ffi_kernel::klog_static(
             ffi_kernel::LOG_OK,
-            b"smoltcp interface and sockets ready (poll from knetd)\0",
+            b"smoltcp interface and sockets ready (poll from net_poll_task)\0",
         );
     }
 }

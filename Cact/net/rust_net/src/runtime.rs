@@ -1,6 +1,6 @@
-//! Driver registration, background `knetd` poll thread, and RX entry from the NIC driver.
+//! Driver registration, background `net_poll_task` poll thread, and RX entry from the NIC driver.
 //!
-//! `net_sema` serializes access between the interrupt/RX path and `knetd`.
+//! `net_sema` serializes access between the interrupt/RX path and `net_poll_task`.
 
 use crate::ffi_kernel;
 use crate::dhcp;
@@ -18,7 +18,7 @@ pub static mut net_sema: Semaphore = Semaphore {
     waiter_count: 0,
 };
 
-extern "C" fn knetd() {
+extern "C" fn net_poll_task() {
     loop {
         // SAFETY: semaphore lives for kernel lifetime.
         unsafe {
@@ -68,11 +68,11 @@ pub extern "C" fn net_init() {
     // SAFETY: globals are static and valid.
     unsafe {
         ffi_kernel::sema_init(core::ptr::addr_of_mut!(net_sema), 0);
-        let _ = ffi_kernel::create_task(knetd);
+        let _ = ffi_kernel::create_task(net_poll_task);
         dhcp::rust_net_dhcp_start_daemon();
         ffi_kernel::klog_static(
             ffi_kernel::LOG_OK,
-            b"Network subsystem ready (knetd, RX semaphore, DHCP)\0",
+            b"Network subsystem ready (net_poll_task, RX semaphore, DHCP)\0",
         );
     }
 }
