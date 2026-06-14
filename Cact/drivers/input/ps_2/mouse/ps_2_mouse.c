@@ -3,8 +3,8 @@
 #include "kernel.h"
 
 // Packet reassembly state
-static uint8_t mouse_cycle  = 0;
-static int8_t  mouse_byte[3];
+static volatile uint8_t mouse_cycle  = 0;
+static volatile int8_t  mouse_byte[3];
 
 // Wait for PS/2 controller status bit: type 0 = read-ready, type 1 = write-ready
 static void ps2_wait(uint8_t type) {
