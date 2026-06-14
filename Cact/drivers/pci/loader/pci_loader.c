@@ -447,6 +447,12 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         uint32_t   rel_cnt = sh->sh_size / sizeof(Elf32_Rel);
         for (uint32_t r = 0; r < rel_cnt; r++) {
             uint32_t   sym_idx = ELF32_R_SYM(rels[r].r_info);
+            if (sym_idx >= sym_cnt) {
+                kprint("[LDR] Relocation symbol index out of bounds\n");
+                kfree_heap(image);
+                kfree_heap(elf_data);
+                return -7;
+            }
             uint8_t    type    = ELF32_R_TYPE(rels[r].r_info);
             Elf32_Sym *sym     = &syms[sym_idx];
             uint32_t   S;
@@ -477,6 +483,12 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
                     return -7;
                 }
                 S = (uint32_t)(image + sym_sh->sh_addr + sym->st_value);
+            }
+            if (rels[r].r_offset + sizeof(uint32_t) > target_sh->sh_size) {
+                kprint("[LDR] Relocation offset out of section bounds\n");
+                kfree_heap(image);
+                kfree_heap(elf_data);
+                return -7;
             }
             uint32_t *patch = (uint32_t *)(image
                                 + target_sh->sh_addr
