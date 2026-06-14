@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 // Cache sizing
-#define PC_MAX_PAGES       64
+#define PC_MAX_PAGES       256
 #define PC_MAX_BLOCK_SIZE  4096
 #define PC_HASH_SIZE       64    // must be power of 2
 

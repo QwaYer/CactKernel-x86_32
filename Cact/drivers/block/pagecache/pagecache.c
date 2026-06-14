@@ -163,9 +163,30 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
 
     stat_misses++;
 
+    if (block_size == 0 || block_size % 512 != 0) {
+        kprint("[pc] pc_get_page: block_size must be non-zero multiple of 512\n");
+        return 0;
+    }
+
     if (block_size > PC_MAX_BLOCK_SIZE) {
         kprint("[pc] pc_get_page: block_size exceeds PC_MAX_BLOCK_SIZE\n");
         return 0;
+    }
+
+    uint32_t spb = block_size / 512;
+
+    // Check LBA overflow and device bounds
+    blkdev_t *bd = blkdev_get_boot();
+    if (bd) {
+        if (block_no > (UINT32_MAX / spb)) {
+            kprint("[pc] pc_get_page: LBA computation overflow\n");
+            return 0;
+        }
+        uint32_t lba = block_no * spb;
+        if (lba + spb > bd->max_lba) {
+            kprint("[pc] pc_get_page: LBA out of device range\n");
+            return 0;
+        }
     }
 
     p = _alloc_page();
@@ -189,7 +210,6 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     p->flags      = PC_FLAG_USED;
     p->pin_count  = 1;
 
-    uint32_t spb = block_size / 512;
     uint32_t lba = block_no * spb;
     memory_set(p->data, 0, block_size);
     for (uint32_t i = 0; i < spb; i++)
@@ -202,12 +222,15 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     return p->data;
 }
 
-// Mark page dirty and immediately write back (aggressive — see audit P-02)
+// Mark page dirty and immediately write back.
+// Pins the page temporarily to prevent TOCTOU eviction between lookup and writeback.
 void pc_mark_dirty(uint32_t dev, uint32_t block_no) {
     struct page *p = _hash_find(dev, block_no);
     if (!p) return;
+    p->pin_count++;
     p->flags |= PC_FLAG_DIRTY;
     _writeback(p);
+    p->pin_count--;
 }
 
 // Decrement pin count so page becomes eligible for eviction
@@ -229,23 +252,30 @@ void pc_flush_dev(uint32_t dev) {
     }
 }
 
-// Remove a single block from cache, writing back first if dirty
+// Remove a single block from cache, writing back first if dirty.
+// Refuses to invalidate pinned pages — caller must unpin first.
+// Frees the data buffer to prevent use-after-free on reallocation.
 void pc_invalidate_block(uint32_t dev, uint32_t block_no) {
     struct page *p = _hash_find(dev, block_no);
     if (!p) return;
+    if (p->pin_count > 0) return;
     if (p->flags & PC_FLAG_DIRTY) _writeback(p);
     _lru_remove(p);
     _hash_remove(p);
+    kfree_page(p->data);
+    p->data      = 0;
     p->flags     = 0;
     p->pin_count = 0;
 }
 
-// Flush and remove all pages belonging to a device, freeing their data
+// Flush and remove all pages belonging to a device, freeing their data.
+// Skips pages that are still pinned.
 void pc_invalidate_dev(uint32_t dev) {
     pc_flush_dev(dev);
     for (int i = 0; i < PC_MAX_PAGES; i++) {
         struct page *p = &pool[i];
         if ((p->flags & PC_FLAG_VALID) && p->dev == dev) {
+            if (p->pin_count > 0) continue;
             _lru_remove(p);
             _hash_remove(p);
             kfree_page(p->data);
