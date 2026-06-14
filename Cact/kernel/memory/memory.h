@@ -12,12 +12,13 @@
 
 /*
  * PMM manages physical addresses 0 … PCI_HOLE_START.
- * PCI_HOLE_START = 0xE0000000 (3584 MB) — start of MMIO/PCI window.
+ * PCI_HOLE_START = 0xC0000000 (3072 MB) — start of MMIO/PCI window.
+ * Q35 with 4 GB RAM places the hole at 0xC0000000; adjust for your board.
  */
-#define PCI_HOLE_START  0xE0000000u
-#define MEM_SIZE        PCI_HOLE_START          /* 3584 MB */
-#define TOTAL_PAGES     (MEM_SIZE / PAGE_SIZE)  /* 917 504 pages */
-#define BITMAP_SIZE     (TOTAL_PAGES / 8)       /* ~112 KB */
+#define PCI_HOLE_START  0xC0000000u
+#define MEM_SIZE        PCI_HOLE_START          /* 3072 MB */
+#define TOTAL_PAGES     (MEM_SIZE / PAGE_SIZE)  /* 786 432 pages */
+#define BITMAP_SIZE     (TOTAL_PAGES / 8)       /* ~96 KB */
 
 /*
  * Heap window.  The heap allocator starts right after the hard-reserved

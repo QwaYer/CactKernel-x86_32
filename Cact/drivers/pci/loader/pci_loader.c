@@ -8,6 +8,11 @@
 #include "klib.h"
 #include "ksym.h"
 
+// HMAC-SHA256 module signing — implemented in cact_crypto (Rust, no_std)
+extern int  cact_hmac_verify(const uint8_t *data, uint32_t data_len,
+                             const uint8_t *tag, uint32_t tag_len);
+extern uint32_t cact_debug_xor(const uint8_t *data, uint32_t data_len);
+
 // Wildcard ID — must match PCI_ANY_ID in pci_driver.h
 #define LDR_PCI_ANY_ID 0xFFFFu
 
@@ -99,14 +104,50 @@ static void module_proc_name(const char *path, char *out, int out_sz) {
     out[i] = '\0';
 }
 
+#define CACT_HMAC_TAG_SIZE 32
+
+static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
+    if (*file_size <= CACT_HMAC_TAG_SIZE) {
+        kprint("[LDR] HMAC: unsigned module (no signature) — rejected\n");
+        return -1;
+    }
+    uint32_t  data_len = *file_size - CACT_HMAC_TAG_SIZE;
+    uint8_t  *tag      = elf_data + data_len;
+    // DEBUG: compute XOR on C side to compare with Rust side
+    uint32_t xor_c = 0;
+    for (uint32_t i = 0; i < data_len; i++) xor_c ^= elf_data[i];
+    uint32_t xor_rs = cact_debug_xor(elf_data, data_len);
+    char nb[16];
+    kprint("[LDR] HMAC: data_len="); itoa((int)data_len, nb); kprint(nb);
+    kprint(" xor_c="); itoa((int)xor_c, nb); kprint(nb);
+    kprint(" xor_rs="); itoa((int)xor_rs, nb); kprint(nb);
+    kprint("\n");
+    int       rc       = cact_hmac_verify(elf_data, data_len, tag, CACT_HMAC_TAG_SIZE);
+    if (rc != 0) {
+        kprint("[LDR] HMAC: signature mismatch — rejected\n");
+        return -1;
+    }
+    *file_size = data_len;
+    // Zero the tag area so stray section-header reads past data_len
+    // (e.g. the last .shstrtab entry that lands on the HMAC tag) do
+    // not pick up garbage flags/alignment/sizes.
+    for (uint32_t i = 0; i < CACT_HMAC_TAG_SIZE; i++)
+        elf_data[data_len + i] = 0;
+    return 0;
+}
+
 // Return pointer to section header 'idx'
 static Elf32_Shdr *get_shdr(Elf32_Ehdr *eh, uint16_t idx) {
+    if (idx >= eh->e_shnum)
+        return NULL;
     return (Elf32_Shdr *)((uint8_t *)eh + eh->e_shoff + idx * eh->e_shentsize);
 }
 
 // Return string from string table 'strtab_idx' at offset 'off'
 static const char *get_str(Elf32_Ehdr *eh, uint16_t strtab_idx, uint32_t off) {
     Elf32_Shdr *sh = get_shdr(eh, strtab_idx);
+    if (!sh)
+        return NULL;
     return (const char *)((uint8_t *)eh + sh->sh_offset + off);
 }
 
@@ -194,7 +235,7 @@ static int read_sym_u16(Elf32_Ehdr *eh, const uint8_t *elf_data, const Elf32_Sym
     if (sym->st_shndx == SHN_UNDEF || sym->st_size < sizeof(uint16_t))
         return -1;
     Elf32_Shdr *sh = get_shdr(eh, sym->st_shndx);
-    if (sh->sh_type != SHT_PROGBITS)
+    if (!sh || sh->sh_type != SHT_PROGBITS)
         return -1;
     const uint8_t *p = elf_data + sh->sh_offset + sym->st_value;
     *out             = read_le16(p);
@@ -206,7 +247,7 @@ static int read_sym_u8(Elf32_Ehdr *eh, const uint8_t *elf_data, const Elf32_Sym 
     if (sym->st_shndx == SHN_UNDEF || sym->st_size < 1)
         return -1;
     Elf32_Shdr *sh = get_shdr(eh, sym->st_shndx);
-    if (sh->sh_type != SHT_PROGBITS)
+    if (!sh || sh->sh_type != SHT_PROGBITS)
         return -1;
     *out = elf_data[sh->sh_offset + sym->st_value];
     return 0;
@@ -218,7 +259,7 @@ static int read_device_id_list(Elf32_Ehdr *eh, const uint8_t *elf_data, Elf32_Sy
     if (sym->st_shndx == SHN_UNDEF)
         return 0;
     Elf32_Shdr *sh = get_shdr(eh, sym->st_shndx);
-    if (sh->sh_type != SHT_PROGBITS || sym->st_size < 2)
+    if (!sh || sh->sh_type != SHT_PROGBITS || sym->st_size < 2)
         return 0;
     const uint8_t *base = elf_data + sh->sh_offset + sym->st_value;
     uint32_t       nbytes = sym->st_size;
@@ -258,6 +299,11 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     if (rr == -2) {
         kprint("[LDR] manifest: not a valid ELF32 relocatable\n");
         return -2;
+    }
+    if (hmac_verify_module(elf_data, &file_size) != 0) {
+        kprint("[LDR] manifest: HMAC verification failed\n");
+        kfree_heap(elf_data);
+        return -5;
     }
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
@@ -348,6 +394,11 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         kprint("[LDR] Invalid ELF32 relocatable\n");
         return -2;
     }
+    if (hmac_verify_module(elf_data, &file_size) != 0) {
+        kprint("[LDR] HMAC verification failed\n");
+        kfree_heap(elf_data);
+        return -8;
+    }
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
 
@@ -399,7 +450,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         Elf32_Shdr *sh = get_shdr(eh, i);
         if (sh->sh_type != SHT_REL) continue;
         Elf32_Shdr *target_sh = get_shdr(eh, sh->sh_info);
-        if (!(target_sh->sh_flags & SHF_ALLOC)) continue;
+        if (!target_sh || !(target_sh->sh_flags & SHF_ALLOC)) continue;
         Elf32_Rel *rels    = (Elf32_Rel *)(elf_data + sh->sh_offset);
         uint32_t   rel_cnt = sh->sh_size / sizeof(Elf32_Rel);
         for (uint32_t r = 0; r < rel_cnt; r++) {
@@ -410,6 +461,12 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
 
             if (sym->st_shndx == SHN_UNDEF) {
                 const char *sym_name = get_str(eh, strtab_idx, sym->st_name);
+                if (!sym_name) {
+                    kprint("[LDR] Bad string table index\n");
+                    kfree_heap(image);
+                    kfree_heap(elf_data);
+                    return -7;
+                }
                 S = ksym_resolve(sym_name);
                 if (S == 0 && ELF32_ST_BIND(sym->st_info) != STB_WEAK) {
                     kprint("[LDR] Unresolved symbol: ");
@@ -420,9 +477,14 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
                     return -7;
                 }
             } else {
-                S = (uint32_t)(image
-                       + get_shdr(eh, sym->st_shndx)->sh_addr
-                       + sym->st_value);
+                Elf32_Shdr *sym_sh = get_shdr(eh, sym->st_shndx);
+                if (!sym_sh) {
+                    kprint("[LDR] Symbol section index out of bounds\n");
+                    kfree_heap(image);
+                    kfree_heap(elf_data);
+                    return -7;
+                }
+                S = (uint32_t)(image + sym_sh->sh_addr + sym->st_value);
             }
             uint32_t *patch = (uint32_t *)(image
                                 + target_sh->sh_addr
@@ -440,8 +502,10 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         if (ELF32_ST_BIND(syms[s].st_info) != STB_GLOBAL) continue;
         if (ELF32_ST_TYPE(syms[s].st_info) != STT_FUNC)   continue;
         const char *sym_name = get_str(eh, strtab_idx, syms[s].st_name);
-        if (strcmp((char *)sym_name, "pci_driver_probe") != 0) continue;
+        if (!sym_name || strcmp((char *)sym_name, "pci_driver_probe") != 0) continue;
+        if (syms[s].st_shndx == SHN_UNDEF) continue;
         Elf32_Shdr *sym_sh = get_shdr(eh, syms[s].st_shndx);
+        if (!sym_sh) continue;
         found_probe = (probe_fn_t)(image + sym_sh->sh_addr + syms[s].st_value);
         break;
     }
@@ -461,9 +525,10 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         if (ELF32_ST_BIND(syms[s].st_info) != STB_GLOBAL) continue;
         if (ELF32_ST_TYPE(syms[s].st_info) != STT_FUNC)   continue;
         const char *sym_name = get_str(eh, strtab_idx, syms[s].st_name);
-        if (strcmp((char *)sym_name, "pci_driver_remove") != 0) continue;
+        if (!sym_name || strcmp((char *)sym_name, "pci_driver_remove") != 0) continue;
         if (syms[s].st_shndx == SHN_UNDEF) continue;
         Elf32_Shdr *sym_sh = get_shdr(eh, syms[s].st_shndx);
+        if (!sym_sh) continue;
         found_remove = (remove_fn_t)(image + sym_sh->sh_addr + syms[s].st_value);
         break;
     }
