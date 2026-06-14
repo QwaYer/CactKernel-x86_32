@@ -34,6 +34,10 @@ CACT_SYNC_RS := $(shell find $(KERN_SYNC_DIR)/src -type f -name '*.rs' 2>/dev/nu
 SCHED_TARGET = $(SCHED_DIR)/target/libsched.a
 CARGO        = cargo +nightly
 
+# Rust crypto library (HMAC-SHA256 for module signing)
+CRYPTO_DIR  = Cact/crypto/hmac_ffi
+CRYPTO_LIB  = $(CRYPTO_DIR)/target/i686-cact/release/libcact_hmac_ffi.a
+
 # Rust memory manager
 RUST_MM_DIR  = Cact/kernel/memory/rust_mm
 RUST_MM_LIB  = $(RUST_MM_DIR)/target/i686-cact/release/libcact_mm.a
@@ -305,10 +309,16 @@ $(RUST_NET_LIB): FORCE
 	TARGET_DIR="$${CARGO_TARGET_DIR:-target}" && \
 	cp "$$TARGET_DIR/i686-cact/release/libcact_net.a" target/libcact_net.a
 
+$(CRYPTO_LIB): FORCE
+	cd $(CRYPTO_DIR) && $(CARGO) build --release 2>&1 && \
+	mkdir -p target && \
+	TARGET_DIR="$${CARGO_TARGET_DIR:-target}" && \
+	cp "$$TARGET_DIR/i686-cact/release/libcact_hmac_ffi.a" target/libcact_hmac_ffi.a
+
 FORCE:
 
-$(BUILD_DIR)/kernel.bin: $(OBJ) $(ACPICA_C_OBJS) $(RUST_MM_LIB) $(RUST_NET_LIB) $(SCHED_TARGET) | $(ACPICA_DIR)
-	ld $(LDFLAGS) -o $@ --start-group $(OBJ) $(ACPICA_C_OBJS) $(RUST_MM_LIB) $(RUST_NET_LIB) -L$(dir $(SCHED_TARGET)) -lsched --end-group
+$(BUILD_DIR)/kernel.bin: $(OBJ) $(ACPICA_C_OBJS) $(RUST_MM_LIB) $(RUST_NET_LIB) $(CRYPTO_LIB) $(SCHED_TARGET) | $(ACPICA_DIR)
+	ld $(LDFLAGS) -o $@ --start-group $(OBJ) $(ACPICA_C_OBJS) $(RUST_MM_LIB) $(RUST_NET_LIB) $(CRYPTO_LIB) -L$(dir $(SCHED_TARGET)) -lsched --end-group
 
 
 $(BUILD_DIR)/kernel_entry.o: $(KERN_CORE_DIR)/kernel.asm
@@ -559,6 +569,7 @@ $(BUILD_DIR)/cact-full.iso: $(BUILD_DIR)/kernel.bin $(GRUB_CFG_FULL) $(CCTKFS_IM
 	@mkdir -p $(BUILD_DIR)/isodir-full/boot/grub
 	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/isodir-full/boot/kernel.bin
 	cp $(CCTKFS_IMG)           $(BUILD_DIR)/isodir-full/boot/cctkfs.img
+	python3 tools/cact_sign_cctkfs.py $(BUILD_DIR)/isodir-full/boot/cctkfs.img
 	cp $(GRUB_CFG_FULL)        $(BUILD_DIR)/isodir-full/boot/grub/grub.cfg
 	grub-mkrescue -o $(BUILD_DIR)/cact-full.iso $(BUILD_DIR)/isodir-full
 
@@ -688,6 +699,7 @@ clean:
 	cd $(KERN_SYNC_DIR) && cargo +nightly clean
 	cd $(RUST_MM_DIR) && cargo clean
 	cd $(RUST_NET_DIR) && cargo +nightly clean
+	cd $(CRYPTO_DIR) && cargo +nightly clean
 
 acpica-distclean: acpica-clean
 

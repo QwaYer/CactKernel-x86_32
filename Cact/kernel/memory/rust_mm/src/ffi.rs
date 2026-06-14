@@ -22,24 +22,25 @@ pub const MEM_START: u32 = 0x0010_0000;
 ///   0x0000_0000 – 0x000F_FFFF :  1 MB  BIOS / IVT / ROM (reserved)
 ///   0x0010_0000 – 0x01FF_FFFF : 31 MB  kernel text + BSS + static page tables
 ///   0x0200_0000 – 0x02FF_FFFF : 16 MB  heap window
-///   0x0200_0000 – 0xDFFF_FFFF : ~3.5 GB  general-purpose physical RAM
-///   0xE000_0000 – 0xFFFF_FFFF : PCI/MMIO hole — never touched by PMM
+///   0x0200_0000 – 0xBFFF_FFFF : ~3 GB  general-purpose physical RAM
+///   0xC000_0000 – 0xFFFF_FFFF : PCI/MMIO hole — never touched by PMM
 ///
 /// TOTAL_PAGES covers every 4K frame from address 0 up to PCI_HOLE_START.
 /// ---------------------------------------------------------------------------
 
 /// Upper boundary of the region managed by PMM (= start of PCI/MMIO hole).
-/// 0xE000_0000 = 3584 MB.  Change this if your board has RAM above 3.5 GB.
-pub const PCI_HOLE_START: u32 = 0xE000_0000;
+/// 0xC000_0000 = 3072 MB (Q35 with 4 GB).  Change this if your board has
+/// a different PCI hole location.
+pub const PCI_HOLE_START: u32 = 0xC000_0000;
 
 /// Manageable physical memory: 0 … PCI_HOLE_START.
-pub const MEM_SIZE: u32 = PCI_HOLE_START; /* 3584 MB */
+pub const MEM_SIZE: u32 = PCI_HOLE_START; /* 3072 MB */
 
 /// Total number of 4K pages in the managed range.
-pub const TOTAL_PAGES: u32 = MEM_SIZE / PAGE_SIZE; /* 917 504 pages */
+pub const TOTAL_PAGES: u32 = MEM_SIZE / PAGE_SIZE; /* 786 432 pages */
 
 /// Bitmap byte count (1 bit per page).
-pub const BITMAP_SIZE: u32 = TOTAL_PAGES / 8; /* 114 688 bytes ≈ 112 KB */
+pub const BITMAP_SIZE: u32 = TOTAL_PAGES / 8; /* 98 304 bytes ≈ 96 KB */
 
 /// Heap starts right after the hard-reserved 32 MB low-memory region.
 pub const HEAP_START: u32 = 32 * 1024 * 1024; /* 0x0200_0000 */
