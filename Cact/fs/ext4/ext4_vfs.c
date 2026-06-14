@@ -28,7 +28,10 @@ static void ext4_readdir_cb(struct ext4_dir_entry_2* de, void* ud) {
     name[de->name_len] = '\0';
     if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) return;
     if (rc->cur++ == rc->target_idx) {
-        memory_copy(rc->de.name, name, de->name_len + 1);
+        uint32_t copy_len = de->name_len;
+        if (copy_len >= sizeof(rc->de.name)) copy_len = sizeof(rc->de.name) - 1;
+        memory_copy(rc->de.name, name, copy_len);
+        rc->de.name[copy_len] = '\0';
         rc->de.inode = de->inode;
         rc->found    = 1;
     }
@@ -120,7 +123,8 @@ static void ext4_finddir_cb(struct ext4_dir_entry_2* de, void* ud) {
     if (compare_string(name, fc->target) != 0) return;
     vfs_node_t* res = (vfs_node_t*)kmalloc(sizeof(*res));
     if (!res) return;
-    copy_string(res->name, name);
+    memory_copy(res->name, name, sizeof(res->name) - 1);
+    res->name[sizeof(res->name) - 1] = '\0';
     ext4_make_node(fc->ctx, res, de->inode, de->file_type);
     fc->result = res;
 }
