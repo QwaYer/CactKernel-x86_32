@@ -7,7 +7,7 @@ int mouse_y       = 0;
 int mouse_buttons = 0;
 
 // Circular buffer for mouse events — single-producer (IRQ) / single-consumer (userspace)
-static mouse_packet_t      mouse_buf[MOUSE_BUF_SIZE];
+static volatile mouse_packet_t mouse_buf[MOUSE_BUF_SIZE];
 static volatile uint32_t   mouse_wr = 0;   // IRQ handler writes here
 static volatile uint32_t   mouse_rd = 0;   // userspace reads here
 
