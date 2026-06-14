@@ -12,6 +12,7 @@ static int _vfs_pipe_read (vfs_node_t *node, uint32_t off, uint32_t size, char *
 static int _vfs_pipe_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf);
 static void _vfs_pipe_open (vfs_node_t *node);
 static void _vfs_pipe_close(vfs_node_t *node);
+static int  _vfs_pipe_poll (vfs_node_t *node, uint32_t events);
 
 // VFS operation table for pipe/fifo nodes
 static vfs_ops_t pipe_ops = {
@@ -19,6 +20,7 @@ static vfs_ops_t pipe_ops = {
     .write = _vfs_pipe_write,
     .open  = _vfs_pipe_open,
     .close = _vfs_pipe_close,
+    .poll  = _vfs_pipe_poll,
 };
 
 // Extract pipe_t from vfs_node_t private data
@@ -294,4 +296,31 @@ static void _vfs_pipe_close(vfs_node_t *node) {
         kfree_heap(node);
     else
         node->refcount--;
+}
+
+static int _vfs_pipe_poll(vfs_node_t *node, uint32_t events) {
+    pipe_t *p = _node_to_pipe(node);
+    if (!p || p->magic != PIPE_MAGIC) return VFS_POLLERR;
+
+    uint32_t revents = 0;
+    int is_wr = _node_is_write(node);
+
+    mutex_lock(&p->lock);
+
+    if (is_wr) {
+        // Write end
+        if (events & VFS_POLLOUT) {
+            if (p->len < PIPE_BUF_SIZE) revents |= VFS_POLLOUT;
+        }
+        if (!p->read_open) revents |= VFS_POLLERR;
+    } else {
+        // Read end
+        if (events & VFS_POLLIN) {
+            if (p->len > 0) revents |= VFS_POLLIN;
+        }
+        if (!p->write_open && p->len == 0) revents |= VFS_POLLHUP;
+    }
+
+    mutex_unlock(&p->lock);
+    return (int)revents;
 }

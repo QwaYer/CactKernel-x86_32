@@ -10,6 +10,11 @@ pub const TCP_MAX_SOCKETS: usize = 8;
 pub const TCP_RX_BUF_SIZE: usize = 4096;
 pub const KSOCK_MAX: usize = 16;
 pub const VFS_SOCKET: u32 = 0x06;
+pub const VFS_POLLIN: u32 = 0x001;
+pub const VFS_POLLOUT: u32 = 0x004;
+pub const VFS_POLLERR: u32 = 0x008;
+pub const VFS_POLLHUP: u32 = 0x010;
+pub const VFS_POLLNVAL: u32 = 0x020;
 pub const AF_INET: u16 = 2;
 
 pub const ETH_TYPE_IPV4: u16 = 0x0800;
@@ -221,6 +226,13 @@ pub struct VfsOps {
     pub unlink: *mut c_void,
     pub readlink: *mut c_void,
     pub ioctl: *mut c_void,
+    pub truncate: *mut c_void,
+    pub chmod: *mut c_void,
+    pub chown: *mut c_void,
+    pub mknod: *mut c_void,
+    pub stat: *mut c_void,
+    pub poll: Option<extern "C" fn(*mut VfsNode, u32) -> c_int>,
+    pub lseek: *mut c_void,
 }
 
 #[repr(C)]

@@ -86,6 +86,53 @@ extern "C" fn socket_close_op(node: *mut VfsNode) {
     }
 }
 
+extern "C" fn socket_poll_op(node: *mut VfsNode, events: u32) -> c_int {
+    if node.is_null() {
+        return VFS_POLLNVAL as c_int;
+    }
+    unsafe {
+        let ks = ksock_from_node(node);
+        if ks.is_null() {
+            return VFS_POLLERR as c_int;
+        }
+        let mut revents: u32 = 0;
+        if (*ks).kind == KS_TCP {
+            let idx = (*ks).proto_idx as usize;
+            if idx >= TCP_MAX_SOCKETS {
+                return VFS_POLLERR as c_int;
+            }
+            let s = &tcp::tcp_sockets[idx];
+            if s.used == 0 {
+                return VFS_POLLERR as c_int;
+            }
+            if events & VFS_POLLIN != 0 {
+                if s.rx_head != s.rx_tail {
+                    revents |= VFS_POLLIN;
+                }
+            }
+            if events & VFS_POLLOUT != 0 {
+                if s.state == TCP_ESTABLISHED || s.state == TCP_CLOSE_WAIT {
+                    revents |= VFS_POLLOUT;
+                }
+            }
+        } else if (*ks).kind == KS_UDP {
+            if events & VFS_POLLIN != 0 {
+                let idx = (*ks).proto_idx as usize;
+                if idx < UDP_SOCK_MAX {
+                    let s = &udp::udp_socks[idx];
+                    if s.rx_ready != 0 {
+                        revents |= VFS_POLLIN;
+                    }
+                }
+            }
+            if events & VFS_POLLOUT != 0 {
+                revents |= VFS_POLLOUT;
+            }
+        }
+        revents as c_int
+    }
+}
+
 static mut SOCKET_OPS: VfsOps = VfsOps {
     read: Some(socket_read_op),
     write: Some(socket_write_op),
@@ -104,6 +151,13 @@ static mut SOCKET_OPS: VfsOps = VfsOps {
     unlink: core::ptr::null_mut(),
     readlink: core::ptr::null_mut(),
     ioctl: core::ptr::null_mut(),
+    truncate: core::ptr::null_mut(),
+    chmod: core::ptr::null_mut(),
+    chown: core::ptr::null_mut(),
+    mknod: core::ptr::null_mut(),
+    stat: core::ptr::null_mut(),
+    poll: Some(socket_poll_op),
+    lseek: core::ptr::null_mut(),
 };
 
 #[no_mangle]

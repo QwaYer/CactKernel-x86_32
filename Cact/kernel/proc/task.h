@@ -46,10 +46,7 @@
 #define MLFQ_LEVEL_BACKGROUND  3
 
 typedef struct {
-    struct vfs_node* fd_table[MAX_FD];
-    uint32_t         fd_offset[MAX_FD];
-    uint32_t         fd_flags[MAX_FD];
-    uint32_t         fd_cloexec[MAX_FD];
+    file_t *files[MAX_FD];
 } task_fd_table_t;
 
 typedef struct {
