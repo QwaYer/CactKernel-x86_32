@@ -11,7 +11,6 @@
 // HMAC-SHA256 module signing — implemented in cact_crypto (Rust, no_std)
 extern int  cact_hmac_verify(const uint8_t *data, uint32_t data_len,
                              const uint8_t *tag, uint32_t tag_len);
-extern uint32_t cact_debug_xor(const uint8_t *data, uint32_t data_len);
 
 // Wildcard ID — must match PCI_ANY_ID in pci_driver.h
 #define LDR_PCI_ANY_ID 0xFFFFu
@@ -113,15 +112,6 @@ static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
     }
     uint32_t  data_len = *file_size - CACT_HMAC_TAG_SIZE;
     uint8_t  *tag      = elf_data + data_len;
-    // DEBUG: compute XOR on C side to compare with Rust side
-    uint32_t xor_c = 0;
-    for (uint32_t i = 0; i < data_len; i++) xor_c ^= elf_data[i];
-    uint32_t xor_rs = cact_debug_xor(elf_data, data_len);
-    char nb[16];
-    kprint("[LDR] HMAC: data_len="); itoa((int)data_len, nb); kprint(nb);
-    kprint(" xor_c="); itoa((int)xor_c, nb); kprint(nb);
-    kprint(" xor_rs="); itoa((int)xor_rs, nb); kprint(nb);
-    kprint("\n");
     int       rc       = cact_hmac_verify(elf_data, data_len, tag, CACT_HMAC_TAG_SIZE);
     if (rc != 0) {
         kprint("[LDR] HMAC: signature mismatch — rejected\n");
@@ -381,7 +371,6 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
 // Load a relocatable ELF module, relocate it into a private image,
 // find the exported symbol "pci_driver_probe", and wire it into 'drv'.
 int pci_load_module(const char *path, struct pci_driver *drv) {
-    kprint("[LDR] pci_load_module: "); kprint((char *)path); kprint("\n");
 
     uint8_t *elf_data = NULL;
     uint32_t file_size = 0;
@@ -549,9 +538,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     drv->flags    |= PCI_DRV_F_RELOC_MODULE;
 
     kfree_heap(elf_data);   // ELF header no longer needed
-
     kprint("[LDR] module ready: "); kprint(mm->proc_name);
-    kprint(" (pci_driver_probe linked)\n");
 
     return 0;
 }
