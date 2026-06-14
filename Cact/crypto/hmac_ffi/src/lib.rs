@@ -3,7 +3,9 @@
 use hmac::Mac;
 use sha2::Sha256;
 
-const CACT_HMAC_KEY: &[u8] = b"CactKernel-HMAC-Secret-2026-32B!!";
+/// HMAC key loaded from hmac_key.bin at compile time.
+/// Generate with: python3 tools/gen_hmac_key.py
+const CACT_HMAC_KEY: &[u8] = include_bytes!("../hmac_key.bin");
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {

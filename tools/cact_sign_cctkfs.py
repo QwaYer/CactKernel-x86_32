@@ -2,25 +2,62 @@
 """cact_sign_cctkfs.py — Sign all .cctk modules inside a cctkfs archive.
 
 Reads cctkfs.img, signs each module data blob with HMAC-SHA256,
-rebuilds the archive with properly aligned signed blobs.
+rebuilds the archive with properly aligned signed blobs,
+and writes a CRC-32 container checksum into the header.
 
-Must match the key in cact_crypto/src/hmac_ffi.rs.
+Key is read from Cact/crypto/hmac_ffi/hmac_key.bin
+(relative to the project root, resolved from this script's location).
+Generate with: python3 tools/gen_hmac_key.py
 """
 
+import os
 import sys
 import struct
 import hmac
 import hashlib
+import zlib
 
-CACT_HMAC_KEY = b"CactKernel-HMAC-Secret-2026-32B!!"
 CCTKFS_MAGIC  = 0x53464B43
+CCTKFS_CKSUM_OFF = 28
 TAG_SIZE      = 32
+
+
+def _key_path() -> str:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(script_dir, "..", "Cact", "crypto", "hmac_ffi", "hmac_key.bin")
+
+
+def _load_key() -> bytes:
+    path = _key_path()
+    try:
+        with open(path, "rb") as f:
+            key = f.read()
+    except FileNotFoundError:
+        print(f"HMAC key not found at {path}", file=sys.stderr)
+        print("Generate one with: python3 tools/gen_hmac_key.py", file=sys.stderr)
+        sys.exit(1)
+    if len(key) != 32:
+        print(f"HMAC key must be exactly 32 bytes, got {len(key)}", file=sys.stderr)
+        sys.exit(1)
+    return key
+
+
+CACT_HMAC_KEY = _load_key()
+
 
 def hmac_sign(data: bytes) -> bytes:
     return hmac.new(CACT_HMAC_KEY, data, hashlib.sha256).digest()
 
+
 def align_up(val: int, align: int) -> int:
     return (val + align - 1) & ~(align - 1)
+
+
+def set_checksum(data: bytearray) -> None:
+    data[CCTKFS_CKSUM_OFF:CCTKFS_CKSUM_OFF + 4] = b'\x00\x00\x00\x00'
+    crc = zlib.crc32(bytes(data)) & 0xFFFFFFFF
+    struct.pack_into("<I", data, CCTKFS_CKSUM_OFF, crc)
+
 
 def main():
     if len(sys.argv) != 2:
@@ -45,7 +82,6 @@ def main():
 
     print(f"cctkfs: {count} modules, {total_size} bytes")
 
-    # Parse entries
     entries = []
     for i in range(count):
         off = entries_off + i * 24
@@ -66,7 +102,6 @@ def main():
             "data": data,
         })
 
-    # Rebuild archive
     HEADER_SIZE  = 32
     ENTRY_SIZE   = 24
     NAME_ALIGN   = 8
@@ -76,17 +111,14 @@ def main():
     new_names_off   = new_entries_off + count * ENTRY_SIZE
     new_names_off   = align_up(new_names_off, NAME_ALIGN)
 
-    # Build name blob (same as original)
     name_blob = img[names_off : names_off + names_size]
     new_names_size = names_size
     new_data_off = new_names_off + new_names_size
     new_data_off = align_up(new_data_off, DATA_ALIGN)
 
-    # Sign data blobs
     new_data_blobs = []
     for ent in entries:
         blob = ent["data"]
-        # If already exactly signed (ends with valid tag), detect and skip
         if len(blob) >= TAG_SIZE:
             elf_data = blob[:-TAG_SIZE]
             stored_tag = blob[-TAG_SIZE:]
@@ -99,13 +131,11 @@ def main():
         new_data_blobs.append(signed)
         print(f"  [{ent['name']}]: signed tag={hmac_sign(blob).hex()}")
 
-    # Write output
     out = bytearray()
     out.extend(struct.pack("<IIIIIIII",
-        CCTKFS_MAGIC, 1, 0,  # magic, version, total_size placeholder
+        CCTKFS_MAGIC, 1, 0,
         count, HEADER_SIZE, new_names_off, new_names_size, 0))
 
-    # Entries
     cur_data_off = new_data_off
     for i, ent in enumerate(entries):
         data_size = len(new_data_blobs[i])
@@ -115,13 +145,10 @@ def main():
         cur_data_off += data_size
         cur_data_off = align_up(cur_data_off, DATA_ALIGN)
 
-    # Name blob
     out.extend(name_blob)
-    # Pad to DATA_ALIGN
     while len(out) % DATA_ALIGN != 0:
         out.append(0)
 
-    # Data blobs (each 16-byte aligned)
     for blob in new_data_blobs:
         out.extend(blob)
         while len(out) % DATA_ALIGN != 0:
@@ -130,11 +157,17 @@ def main():
     total_size = len(out)
     struct.pack_into("<I", out, 8, total_size)
 
+    set_checksum(out)
+
     with open(path, "wb") as f:
         f.write(out)
 
-    print(f"cctkfs: done — {count} modules signed, total_size={total_size}")
+    ck = out[CCTKFS_CKSUM_OFF:CCTKFS_CKSUM_OFF + 4]
+    print(f"cctkfs: done — {count} modules signed, "
+          f"total_size={total_size}, "
+          f"crc32=0x{ck.hex()}")
     sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

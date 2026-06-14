@@ -35,8 +35,13 @@ SCHED_TARGET = $(SCHED_DIR)/target/libsched.a
 CARGO        = cargo +nightly
 
 # Rust crypto library (HMAC-SHA256 for module signing)
-CRYPTO_DIR  = Cact/crypto/hmac_ffi
-CRYPTO_LIB  = $(CRYPTO_DIR)/target/i686-cact/release/libcact_hmac_ffi.a
+CRYPTO_DIR   = Cact/crypto/hmac_ffi
+CRYPTO_LIB   = $(CRYPTO_DIR)/target/i686-cact/release/libcact_hmac_ffi.a
+CRYPTO_KEY   = $(CRYPTO_DIR)/hmac_key.bin
+
+# Auto-generate HMAC key if missing (gitignored — see .gitignore)
+$(CRYPTO_KEY):
+	python3 tools/gen_hmac_key.py
 
 # Rust memory manager
 RUST_MM_DIR  = Cact/kernel/memory/rust_mm
@@ -309,7 +314,7 @@ $(RUST_NET_LIB): FORCE
 	TARGET_DIR="$${CARGO_TARGET_DIR:-target}" && \
 	cp "$$TARGET_DIR/i686-cact/release/libcact_net.a" target/libcact_net.a
 
-$(CRYPTO_LIB): FORCE
+$(CRYPTO_LIB): $(CRYPTO_KEY) FORCE
 	cd $(CRYPTO_DIR) && $(CARGO) build --release 2>&1 && \
 	mkdir -p target && \
 	TARGET_DIR="$${CARGO_TARGET_DIR:-target}" && \
@@ -701,8 +706,11 @@ clean:
 	cd $(RUST_NET_DIR) && cargo +nightly clean
 	cd $(CRYPTO_DIR) && cargo +nightly clean
 
+distclean: clean
+	rm -f $(CRYPTO_KEY)
+
 acpica-distclean: acpica-clean
 
-.PHONY: all clean sched FORCE iso-full acpica-fetch acpica-update acpica-clean acpica-distclean
+.PHONY: all clean sched FORCE iso-full acpica-fetch acpica-update acpica-clean acpica-distclean distclean
 .PHONY: sched
 sched: $(SCHED_TARGET)
