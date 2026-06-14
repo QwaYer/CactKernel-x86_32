@@ -599,6 +599,14 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     }
     ffi::memory_copy(child_fds as *mut c_void, (*parent_p).fds as *const c_void,
                      core::mem::size_of::<ffi::TaskFdTable>());
+
+    for i in 0..MAX_FD {
+        let ft = (*child_fds).fd_table[i];
+        if !ft.is_null() {
+            ffi::file_ref(ft as *mut c_void);
+        }
+    }
+
     (*child_p).fds = child_fds;
 
     let child_mmap = ffi::kmalloc(core::mem::size_of::<MmapTable>()) as *mut MmapTable;
@@ -1051,10 +1059,7 @@ pub unsafe extern "C" fn task_exec(
     for i in 3..MAX_FD {
         let ft = (*(*p).fds).fd_table[i];
         if !ft.is_null() && (*(*p).fds).fd_cloexec[i] != 0 {
-            let node = unsafe { *(ft as *const *mut VfsNode) };
-            if !node.is_null() {
-                ffi::close_vfs(node);
-            }
+            ffi::file_unref(ft as *mut c_void);
             (*(*p).fds).fd_table[i]   = ptr::null_mut();
             (*(*p).fds).fd_offset[i]  = 0;
             (*(*p).fds).fd_flags[i]   = 0;
@@ -1426,10 +1431,7 @@ fn reap_task_free(t: *mut TaskStruct) {
             for j in 0..MAX_FD {
                 let ft = (*(*p).fds).fd_table[j];
                 if !ft.is_null() {
-                    let node = unsafe { *(ft as *const *mut VfsNode) };
-                    if !node.is_null() {
-                        ffi::close_vfs(node);
-                    }
+                    ffi::file_unref(ft as *mut c_void);
                 }
             }
             ffi::kfree_heap((*p).fds as *mut c_void);
