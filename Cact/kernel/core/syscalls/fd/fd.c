@@ -348,6 +348,7 @@ int sys_poll(struct syscall_frame *regs) {
 
     if (!current_task) return -1;
     if (nfds <= 0)     return 0;
+    if ((uint32_t)nfds > UINT32_MAX / sizeof(struct pollfd)) return -1;
     if (!validate_user_ptr(fds, (uint32_t)nfds * sizeof(struct pollfd))) return -1;
 
 #define TIMER_HZ_POLL 100
