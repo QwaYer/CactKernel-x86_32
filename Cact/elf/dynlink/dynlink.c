@@ -3,6 +3,7 @@
 #include "memory.h"
 #include "klib.h"
 #include "kernel.h"
+#include "page_fault.h"
 
 static int _so_path_join(char* dst, int dst_sz,
                           const char* dir, const char* name)
@@ -46,9 +47,12 @@ static int _elf_map_file(struct vfs_node*     file,
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
-        read_vfs(file,
-                 hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
-                 sizeof(ph), (char*)&ph);
+        if (read_vfs(file,
+                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     sizeof(ph), (char*)&ph) <= 0) {
+            kprint("[DL] failed to read program header\n");
+            return -1;
+        }
         if (ph.p_type == PT_LOAD && ph.p_memsz > 0) {
             if (ph.p_vaddr < load_base) load_base = ph.p_vaddr;
             uint32_t end = ph.p_vaddr + ph.p_memsz;
@@ -65,9 +69,12 @@ static int _elf_map_file(struct vfs_node*     file,
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
-        read_vfs(file,
-                 hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
-                 sizeof(ph), (char*)&ph);
+        if (read_vfs(file,
+                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     sizeof(ph), (char*)&ph) <= 0) {
+            kprint("[DL] failed to read program header\n");
+            return -1;
+        }
 
         if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
 
@@ -112,9 +119,12 @@ static int _elf_map_file(struct vfs_node*     file,
     if (out_dyn) {
         for (int i = 0; i < hdr.e_phnum; i++) {
             Elf32_Phdr ph;
-            read_vfs(file,
-                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
-                     sizeof(ph), (char*)&ph);
+            if (read_vfs(file,
+                         hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                         sizeof(ph), (char*)&ph) <= 0) {
+                kprint("[DL] failed to read program header\n");
+                return -1;
+            }
             if (ph.p_type == PT_DYNAMIC) {
                 /* CactOS-policy: ET_DYN с фиксированной базой (см. libc.ld)
                  * + ET_EXEC PIE одинаково маппятся ровно на свои p_vaddr.
@@ -348,6 +358,12 @@ static void _apply_rel(dyn_ctx_t*  ctx,
     uint8_t   rel_type = ELF32_R_TYPE(rel->r_info);
     uint32_t* target   = (uint32_t*)rel->r_offset;
 
+    if (!vmm_is_user_address(rel->r_offset) ||
+        !vmm_get_phys(ctx->pd, rel->r_offset)) {
+        kprint("[DL] _apply_rel: invalid r_offset 0x%x\n", rel->r_offset);
+        return;
+    }
+
     uint32_t S = 0;
     uint32_t A = 0;
     uint32_t P = rel->r_offset;
@@ -402,8 +418,14 @@ static void _apply_rel(dyn_ctx_t*  ctx,
     case R_386_COPY:
         if (S && symtab) {
             Elf32_Sym* sym = &symtab[sym_idx];
-            if (sym->st_size > 0)
+            if (sym->st_size > 0 && sym->st_size <= 65536) {
+                if (!vmm_is_user_address(S) ||
+                    !vmm_get_phys(ctx->pd, S)) {
+                    kprint("[DL] R_386_COPY: invalid source 0x%x\n", S);
+                    break;
+                }
                 memcpy(target, (void*)S, sym->st_size);
+            }
         }
         break;
 
@@ -422,6 +444,12 @@ static void _apply_rela(dyn_ctx_t*  ctx,
     uint32_t  sym_idx  = ELF32_R_SYM(rela->r_info);
     uint8_t   rel_type = ELF32_R_TYPE(rela->r_info);
     uint32_t* target   = (uint32_t*)rela->r_offset;
+
+    if (!vmm_is_user_address(rela->r_offset) ||
+        !vmm_get_phys(ctx->pd, rela->r_offset)) {
+        kprint("[DL] _apply_rela: invalid r_offset 0x%x\n", rela->r_offset);
+        return;
+    }
 
     uint32_t S = 0;
     uint32_t A = (uint32_t)rela->r_addend; 
@@ -465,8 +493,14 @@ static void _apply_rela(dyn_ctx_t*  ctx,
     case R_386_COPY:
         if (S && symtab) {
             Elf32_Sym* sym = &symtab[sym_idx];
-            if (sym->st_size > 0)
+            if (sym->st_size > 0 && sym->st_size <= 65536) {
+                if (!vmm_is_user_address(S) ||
+                    !vmm_get_phys(ctx->pd, S)) {
+                    kprint("[DL] R_386_COPY: invalid source 0x%x\n", S);
+                    break;
+                }
                 memcpy(target, (void*)S, sym->st_size);
+            }
         }
         break;
     default:
