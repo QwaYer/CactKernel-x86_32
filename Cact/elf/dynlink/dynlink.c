@@ -360,7 +360,7 @@ static void _apply_rel(dyn_ctx_t*  ctx,
 
     if (!vmm_is_user_address(rel->r_offset) ||
         !vmm_get_phys(ctx->pd, rel->r_offset)) {
-        kprint("[DL] _apply_rel: invalid r_offset 0x%x\n", rel->r_offset);
+        kprint("[DL] _apply_rel: invalid r_offset 0x"); kprint_hex(rel->r_offset); kprint("\n");
         return;
     }
 
@@ -421,7 +421,7 @@ static void _apply_rel(dyn_ctx_t*  ctx,
             if (sym->st_size > 0 && sym->st_size <= 65536) {
                 if (!vmm_is_user_address(S) ||
                     !vmm_get_phys(ctx->pd, S)) {
-                    kprint("[DL] R_386_COPY: invalid source 0x%x\n", S);
+                    kprint("[DL] R_386_COPY: invalid source 0x"); kprint_hex(S); kprint("\n");
                     break;
                 }
                 memcpy(target, (void*)S, sym->st_size);
@@ -447,7 +447,7 @@ static void _apply_rela(dyn_ctx_t*  ctx,
 
     if (!vmm_is_user_address(rela->r_offset) ||
         !vmm_get_phys(ctx->pd, rela->r_offset)) {
-        kprint("[DL] _apply_rela: invalid r_offset 0x%x\n", rela->r_offset);
+        kprint("[DL] _apply_rela: invalid r_offset 0x"); kprint_hex(rela->r_offset); kprint("\n");
         return;
     }
 
@@ -496,7 +496,7 @@ static void _apply_rela(dyn_ctx_t*  ctx,
             if (sym->st_size > 0 && sym->st_size <= 65536) {
                 if (!vmm_is_user_address(S) ||
                     !vmm_get_phys(ctx->pd, S)) {
-                    kprint("[DL] R_386_COPY: invalid source 0x%x\n", S);
+                    kprint("[DL] R_386_COPY: invalid source 0x"); kprint_hex(S); kprint("\n");
                     break;
                 }
                 memcpy(target, (void*)S, sym->st_size);
