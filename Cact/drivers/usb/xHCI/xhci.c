@@ -172,10 +172,15 @@ static int xhci_enable_slot(xhci_priv_t *priv, uint8_t *slot_id) {
         return -1;
     }
     *slot_id = (uint8_t)((priv->cmd_result >> 24) & 0xFF);
+    if (*slot_id == 0 || *slot_id > priv->max_slots || *slot_id > XHCI_MAX_SLOTS) {
+        klog(LOG_WARN, "xHCI invalid slot ID %d", *slot_id);
+        return -1;
+    }
     return 0;
 }
 
 static uint8_t *xhci_get_dev_ctx(xhci_priv_t *priv, uint8_t slot) {
+    if (slot > priv->max_slots) return NULL;
     return priv->dev_ctx_pool + (uint32_t)slot * 2048;
 }
 
@@ -195,6 +200,8 @@ static void xhci_setup_ep_ring(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
 
 static int xhci_address_device(xhci_priv_t *priv, uint8_t slot, uint8_t port,
                                 uint8_t speed, int bsr) {
+    if (slot == 0 || slot > priv->max_slots || slot > XHCI_MAX_SLOTS)
+        return -1;
     uint8_t *input = xhci_get_input_ctx(priv);
     memset(input, 0, 2048);
 
@@ -771,9 +778,9 @@ static int xhci_init_one(uint32_t phys_base) {
                                     uint8_t *cp   = dev->config_buf;
                                     uint8_t *cend = cp + dev->config_len;
                                     dev->ep_count = 0;
-                                    while (cp < cend) {
+                                    while (cp + 2 <= cend) {
                                         uint8_t dlen = cp[0], dtype = cp[1];
-                                        if (dlen < 2) break;
+                                        if (dlen < 2 || cp + dlen > cend) break;
                                         if (dtype == USB_DESC_INTERFACE && dlen >= 9) {
                                             usb_iface_desc_t *ifd = (usb_iface_desc_t *)cp;
                                             if (dev->class_code == 0) {
