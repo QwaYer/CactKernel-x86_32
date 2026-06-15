@@ -381,7 +381,11 @@ int vfs_unlink(vfs_node_t *dir, const char *name) {
     }
     if (mounted) vfs_node_unref(mounted);
 
-    // Delegate to the underlying filesystem
+    // Delegate to the underlying filesystem.
+    // NOTE: finddir_vfs acquires vfs_mutex internally, so we cannot
+    // extend the mutex across finddir+unlink (would deadlock).  In a
+    // single-CPU non-preemptive kernel the TOCTOU window between the
+    // lookup and the removal is not practically exploitable.
     if (dir->ops && dir->ops->unlink) {
         vfs_node_t *node = finddir_vfs(dir, (char *)name);
         int ret = dir->ops->unlink(dir, name);
@@ -394,6 +398,9 @@ int vfs_unlink(vfs_node_t *dir, const char *name) {
 }
 
 // POSIX rwx permission check.
+// NOTE: This is a TOCTOU window — the node's mode/uid/gid or the current
+// task's credentials could change between the check and the VFS operation.
+// Callers should hold vfs_mutex (or equivalent) across check + operation.
 int vfs_check_perm(vfs_node_t *node, uint32_t perm) {
     if (!node) return -1;
 

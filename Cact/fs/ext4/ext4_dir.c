@@ -15,7 +15,9 @@ void ext4_dir_iter(struct ext4_ctx* ctx, vfs_node_t* node,
         if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
         struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)inode.i_block + sizeof(*eh));
         for (uint16_t ei = 0; ei < nr; ei++) {
-            for (uint32_t bi = 0; bi < ee[ei].ee_len; bi++) {
+            uint16_t elen = ee[ei].ee_len;
+            if (elen > 32768) elen = 32768;
+            for (uint32_t bi = 0; bi < elen; bi++) {
                 memory_set(buf, 0, ctx->block_size);
                 ext4_read_block(ctx, ee[ei].ee_start_lo + bi, buf);
                 uint32_t off = 0;
@@ -69,7 +71,9 @@ int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, con
     uint16_t nr = eh->eh_entries;
     if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
     for (uint16_t ei = 0; ei < nr; ei++) {
-        for (uint32_t bi = 0; bi < ee[ei].ee_len; bi++) {
+        uint16_t elen = ee[ei].ee_len;
+        if (elen > 32768) elen = 32768;
+        for (uint32_t bi = 0; bi < elen; bi++) {
             uint32_t phys = ee[ei].ee_start_lo + bi;
             memory_set(buf, 0, ctx->block_size);
             ext4_read_block(ctx, phys, buf);
@@ -148,7 +152,9 @@ int ext4_dir_remove(struct ext4_ctx* ctx, vfs_node_t* node, const char* name, ui
     uint16_t nr = eh->eh_entries;
     if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
     for (uint16_t ei = 0; ei < nr; ei++) {
-        for (uint32_t bi = 0; bi < ee[ei].ee_len; bi++) {
+        uint16_t elen = ee[ei].ee_len;
+        if (elen > 32768) elen = 32768;
+        for (uint32_t bi = 0; bi < elen; bi++) {
             uint32_t phys = ee[ei].ee_start_lo + bi;
             memory_set(buf, 0, ctx->block_size);
             ext4_read_block(ctx, phys, buf);
@@ -190,7 +196,9 @@ int ext4_dir_empty(struct ext4_ctx* ctx, uint32_t ino) {
     uint16_t nr = eh->eh_entries;
     if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
     for (uint16_t ei = 0; ei < nr; ei++) {
-        for (uint32_t bi = 0; bi < ee[ei].ee_len; bi++) {
+        uint16_t elen = ee[ei].ee_len;
+        if (elen > 32768) elen = 32768;
+        for (uint32_t bi = 0; bi < elen; bi++) {
             memory_set(buf, 0, ctx->block_size);
             ext4_read_block(ctx, ee[ei].ee_start_lo + bi, buf);
             uint32_t off = 0;

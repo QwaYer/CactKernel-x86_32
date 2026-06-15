@@ -65,10 +65,10 @@ pub extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
         let mut e = src.entries[i];
         if e.len != 0 {
             let end = e.base.saturating_add(e.len);
-            if e.base >= PCI_HOLE_START {
+            if e.base >= PCI_HOLE_START as u64 {
                 e.len = 0;
-            } else if end > PCI_HOLE_START {
-                e.len = PCI_HOLE_START - e.base;
+            } else if end > PCI_HOLE_START as u64 {
+                e.len = (PCI_HOLE_START as u64) - e.base;
             }
         }
         dst.entries[i] = e;
@@ -96,11 +96,11 @@ pub extern "C" fn init_memory_manager() {
             if e.len == 0 { continue; }
 
             let region_end = e.base.saturating_add(e.len);
-            let clip_end   = region_end.min(PCI_HOLE_START);
+            let clip_end   = region_end.min(PCI_HOLE_START as u64);
             if e.base >= clip_end { continue; }
 
-            let first_page = addr_to_page((e.base + PAGE_SIZE - 1) & !(PAGE_SIZE - 1));
-            let last_page  = addr_to_page(clip_end & !(PAGE_SIZE - 1));
+            let first_page = addr_to_page(((e.base + PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1)) as u32);
+            let last_page  = addr_to_page((clip_end & !(PAGE_SIZE as u64 - 1)) as u32);
             if first_page >= last_page { continue; }
 
             for pg in first_page..last_page {

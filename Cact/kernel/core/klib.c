@@ -48,13 +48,15 @@ char* copy_string(char* dest, const char* src) {
 
 // Convert integer to ASCII string (base 10), reversed then reversed back
 void itoa(int n, char str[]) {
-    int i, sign;
-    if ((sign = n) < 0) n = -n;
+    int i, sign = 0;
+    unsigned int un;
+    if (n < 0) { sign = 1; un = -(unsigned int)n; }
+    else       { un = (unsigned int)n; }
     i = 0;
     do {
-        str[i++] = n % 10 + '0';
-    } while ((n /= 10) > 0);
-    if (sign < 0) str[i++] = '-';
+        str[i++] = (un % 10) + '0';
+    } while ((un /= 10) > 0);
+    if (sign) str[i++] = '-';
     str[i] = '\0';
     // reverse
     for (int j = 0, k = i - 1; j < k; j++, k--) {

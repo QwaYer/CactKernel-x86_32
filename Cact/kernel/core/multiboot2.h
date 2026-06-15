@@ -90,10 +90,10 @@ struct mb2_tag_string {
 
 // Flat memory map entry for 32-bit kernel
 typedef struct {
-    uint32_t base;   // Base address (32-bit clipped)
-    uint32_t len;    // Length in bytes (32-bit clipped)
+    uint64_t base;   // Base address (preserved from MB2, may be >4 GB on PAE systems)
+    uint64_t len;    // Length in bytes (preserved from MB2)
     uint32_t type;   // Region type
-} mb2_mmap_flat_t;
+} __attribute__((packed)) mb2_mmap_flat_t;
 
 // Flat MMAP table passed to physical memory manager
 typedef struct {

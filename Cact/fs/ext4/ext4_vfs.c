@@ -344,9 +344,12 @@ int ext4_delete(vfs_node_t* node, char* name) {
             uint16_t nr = eh->eh_entries;
             if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
             struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)inode.i_block + sizeof(*eh));
-            for (uint16_t i = 0; i < nr; i++)
-                for (uint32_t b = 0; b < ee[i].ee_len; b++)
+            for (uint16_t i = 0; i < nr; i++) {
+                uint16_t elen = ee[i].ee_len;
+                if (elen > 32768) elen = 32768; // cap against corruption
+                for (uint32_t b = 0; b < elen; b++)
                     ext4_free_block(ctx, ee[i].ee_start_lo + b);
+            }
         }
         inode.i_dtime = 1;
         ext4_write_inode(ctx, del_ino, &inode);
@@ -385,9 +388,12 @@ int ext4_rmdir(vfs_node_t* node, char* name) {
         uint16_t nr = eh->eh_entries;
         if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
         struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)di.i_block + sizeof(*eh));
-        for (uint16_t i = 0; i < nr; i++)
-            for (uint32_t b = 0; b < ee[i].ee_len; b++)
+        for (uint16_t i = 0; i < nr; i++) {
+            uint16_t elen = ee[i].ee_len;
+            if (elen > 32768) elen = 32768;
+            for (uint32_t b = 0; b < elen; b++)
                 ext4_free_block(ctx, ee[i].ee_start_lo + b);
+        }
     }
     di.i_dtime = 1;
     ext4_write_inode(ctx, del_ino, &di);

@@ -118,23 +118,19 @@ void multiboot2_parse(uint32_t mb2_info_addr,
 
                 // Build flat mmap table for PMM (32-bit kernel only)
                 if (mmap_out && mmap_out->count < MB2_MMAP_MAX_ENTRIES) {
-                    // Skip regions above 4GB (unusable in 32-bit)
-                    if (e->addr > 0xFFFFFFFFULL) continue;
+                    // Skip regions entirely above 4GB (unusable in 32-bit)
+                    if (e->addr >= 0x100000000ULL) continue;
 
-                    uint64_t base64 = e->addr;
-                    uint64_t end64  = e->addr + e->len;
-
+                    uint64_t end64 = e->addr + e->len;
                     // Clip to 4GB limit
                     if (end64 > 0x100000000ULL) end64 = 0x100000000ULL;
-
-                    uint32_t base32 = (uint32_t)base64;
-                    uint32_t len32  = (uint32_t)(end64 - base64);
-                    if (len32 == 0) continue;
+                    uint64_t len64 = end64 - e->addr;
+                    if (len64 == 0) continue;
 
                     mb2_mmap_flat_t* fe =
                         &mmap_out->entries[mmap_out->count++];
-                    fe->base = base32;
-                    fe->len  = len32;
+                    fe->base = e->addr;
+                    fe->len  = len64;
                     fe->type = e->type;
                 }
             }

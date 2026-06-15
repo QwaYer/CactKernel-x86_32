@@ -346,6 +346,11 @@ static void kernel_bootstrap_main(void) {
 
 // Kernel entry point (called from boot.S)
 void init(uint32_t magic, uint32_t mb2_info_addr) {
+    // Validate multiboot2 signature BEFORE using any MB2 data
+    if (magic != MB2_BOOTLOADER_MAGIC) {
+        while(1) __asm__ __volatile__("hlt");
+    }
+
     static multiboot_info_t  mbi_storage;
     static mb2_mmap_table_t  mmap_storage;
     multiboot2_parse(mb2_info_addr, &mbi_storage, &mmap_storage);
@@ -366,16 +371,6 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     }
 
     clear_screen();
-
-    // Validate multiboot2 signature
-    if (magic != MB2_BOOTLOADER_MAGIC) {
-        kprint_color("[FAIL] Bad multiboot2 magic (got 0x", COLOR_LIGHT_RED);
-        char buf[16];
-        hex_to_ascii(magic, buf);
-        kprint_color(buf, COLOR_LIGHT_RED);
-        kprint_color(", expected 0x36D76289)\n", COLOR_LIGHT_RED);
-        while(1) __asm__ __volatile__("hlt");
-    }
 
     kernel_setup_hardware(mbi, &mmap_storage);
 

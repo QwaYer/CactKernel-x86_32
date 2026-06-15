@@ -84,11 +84,13 @@ pub const MB2_MMAP_TYPE_AVAILABLE: u32 = 1;
 pub const PAGE_PRESENT: u32 = 0x001;
 pub const PAGE_RW:      u32 = 0x002;
 pub const PAGE_USER:    u32 = 0x004;
-/// Bit 9 in a PDE — marks a page table as privately allocated for this
+/// Bit 8 in a PDE — marks a page table as privately allocated for this
 /// process (as opposed to a shared static kernel page table).  The CPU
 /// ignores this bit in PDEs; we use it to decide which page tables to
 /// free in vmm_free_address_space and to COW-copy in vmm_fork.
-pub const PDE_PRIVATE:  u32 = 0x200;
+/// Bit 8 is chosen because it is CPU-ignored for non-leaf PDEs (PS=0),
+/// while bit 9 (0x200) is reserved for PAGE_COW on PTEs.
+pub const PDE_PRIVATE:  u32 = 0x100;
 /// Bit 3 — Page Write-Through (PWT).  Set for MMIO/PCI-hole PTEs so that
 /// writes are not held in write buffers.  Also reused as PAGE_SWAPPED marker
 /// when PRESENT=0 (non-overlapping use: hw only checks PWT when PRESENT=1).
@@ -350,11 +352,12 @@ pub struct OomStats {
 
 /// Flat MMAP entry passed from the C multiboot2 parser.
 /// Must match `mb2_mmap_flat_t` in multiboot2.h exactly.
+/// base and len are 64-bit to preserve the full MB2 values (PAE-awareness).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Mb2MmapFlat {
-    pub base: u32,
-    pub len:  u32,
+    pub base: u64,
+    pub len:  u64,
     pub ty:   u32,
 }
 
