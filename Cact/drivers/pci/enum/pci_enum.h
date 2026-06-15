@@ -47,6 +47,8 @@ typedef struct pci_device {
     uint8_t   irq_pin;
     uint8_t   drv_probe_state; // 0=pending,1=queued,2=ok,3=failed/no-driver
 
+    int8_t    pcie_type;  // -1 = legacy PCI, 0..0xA = PCIe device type
+
     struct pci_device *next;   // global device list
 } pci_device_t;
 

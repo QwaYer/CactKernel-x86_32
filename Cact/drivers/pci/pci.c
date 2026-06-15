@@ -1,20 +1,30 @@
 #include "pci.h"
+#include "pcie.h"
 #include "kernel.h"
 
 // Read a 32-bit value from PCI configuration space.
+// Uses PCIe ECAM when available, falls back to legacy port IO.
 // reg must be DWORD-aligned (lower 2 bits are masked off).
 uint32_t pci_read32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg) {
-    uint32_t addr = (1u << 31)              // enable bit
+    if (pcie_is_available())
+        return pcie_read32(bus, dev, fn, reg);
+
+    uint32_t addr = (1u << 31)
                   | ((uint32_t)bus  << 16)
                   | ((uint32_t)dev  << 11)
                   | ((uint32_t)fn   <<  8)
-                  | (reg & 0xFC);           // DWORD-aligned
+                  | (reg & 0xFC);
     port_dword_out(PCI_CONFIG_ADDRESS, addr);
     return port_dword_in(PCI_CONFIG_DATA);
 }
 
 // Write a 32-bit value to PCI configuration space.
 void pci_write32(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg, uint32_t val) {
+    if (pcie_is_available()) {
+        pcie_write32(bus, dev, fn, reg, val);
+        return;
+    }
+
     uint32_t addr = (1u << 31)
                   | ((uint32_t)bus  << 16)
                   | ((uint32_t)dev  << 11)
