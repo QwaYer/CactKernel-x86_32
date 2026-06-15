@@ -27,8 +27,6 @@ extern void usb_isr();
 extern void uhci_isr();
 extern void ohci_isr();
 extern void xhci_isr();
-extern void spurious_irq7();
-extern void spurious_irq15();
 
 static struct idt_entry idt[256];
 static struct idt_ptr   idtp;
@@ -40,25 +38,6 @@ void set_idt_gate(int n, uint32_t handler) {
     idt[n].always0     = 0;
     idt[n].flags       = 0x8E;           // Present, ring0, 32-bit interrupt gate
     idt[n].high_offset = (uint16_t)((handler >> 16) & 0xFFFF);
-}
-
-// Initialize Programmable Interrupt Controller (8259)
-void init_pic(void) {
-    port_byte_out(0x20, 0x11);  // Master ICW1
-    port_byte_out(0xA0, 0x11);  // Slave ICW1
-
-    port_byte_out(0x21, 0x20);  // Master ICW2: offset 0x20
-    port_byte_out(0xA1, 0x28);  // Slave ICW2: offset 0x28
-
-    port_byte_out(0x21, 0x04);  // Master ICW3: slave on IRQ2
-    port_byte_out(0xA1, 0x02);  // Slave ICW3: cascade identity
-
-    port_byte_out(0x21, 0x01);  // Master ICW4: 8086 mode
-    port_byte_out(0xA1, 0x01);  // Slave ICW4: 8086 mode
-
-    // Set interrupt masks
-    port_byte_out(0x21, 0xF8);  // Master: unmask IRQ0(timer), IRQ1(kbd), IRQ2(cascade)
-    port_byte_out(0xA1, 0x80);  // Slave: mask only IRQ15, rest open for USB/mouse/storage modules
 }
 
 // Initialize IDT and load it
@@ -102,16 +81,16 @@ int init_idt(void) {
     set_idt_gate(31, (uint32_t)isr31);
 
     // Install IRQ handlers (hardware interrupts)
-    set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - PIT timer
+    set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - timer
     set_idt_gate(0x21, (uint32_t)keyboard_isr);     // IRQ1  - PS/2 keyboard
-    set_idt_gate(0x27, (uint32_t)spurious_irq7);    // IRQ7  - master spurious
+    set_idt_gate(0x27, irq_stub_table[7]);          // IRQ7
     set_idt_gate(0x29, (uint32_t)usb_isr);          // IRQ9  - USB (shared)
     set_idt_gate(0x2A, (uint32_t)usb_isr);          // IRQ10 - USB (shared)
     set_idt_gate(0x2B, (uint32_t)usb_isr);          // IRQ11 - USB (shared)
     set_idt_gate(0x2C, (uint32_t)mouse_isr);        // IRQ12 - PS/2 mouse
-    set_idt_gate(0x2D, irq_stub_table[13]);        // IRQ13 — NIC modules use irq_register_handler()
+    set_idt_gate(0x2D, irq_stub_table[13]);         // IRQ13 — NIC modules use irq_register_handler()
     set_idt_gate(0x2E, irq_stub_table[14]);         // IRQ14 - storage modules use irq_register_handler()
-    set_idt_gate(0x2F, (uint32_t)spurious_irq15);   // IRQ15 - slave spurious
+    set_idt_gate(0x2F, irq_stub_table[15]);         // IRQ15
 
     // System call gate (int 0x80) - ring3 accessible
     set_idt_gate(0x80, (uint32_t)syscall_isr);

@@ -19,7 +19,6 @@ struct idt_ptr {
 } __attribute__((packed));
 
 void set_idt_gate(int n, uint32_t handler);
-void init_pic(void);
 int  init_idt(void);
 
 #endif  

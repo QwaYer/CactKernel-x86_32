@@ -97,19 +97,11 @@ void exception_handler(struct context_frame* regs) {
 }
 
 void timer_eoi(void) {
-    if (apic_is_enabled())
-        apic_eoi();
-    else
-        port_byte_out(0x20, 0x20);
+    apic_eoi();
 }
 
 void irq_master_slave_eoi(void) {
-    if (apic_is_enabled())
-        apic_eoi();
-    else {
-        port_byte_out(0xA0, 0x20);
-        port_byte_out(0x20, 0x20);
-    }
+    apic_eoi();
 }
 
 // Kernel logging with color-coded levels
@@ -178,8 +170,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     klog(LOG_OK, "Page fault handler installed");
 
     // Interrupts
-    init_pic();                     // Programmable Interrupt Controller
-    klog(LOG_OK, "PIC programmed");
     init_idt();                     // Interrupt Descriptor Table
     klog(LOG_OK, "IDT loaded");
 
@@ -254,7 +244,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     if (apic_init() == 0)
         klog(LOG_OK, "APIC operational");
     else
-        klog(LOG_WARN, "APIC init failed — keeping PIC");
+        klog(LOG_WARN, "APIC init failed — interrupts will not work");
 
     // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
     // kmods can blkdev_register(); otherwise mntfs sees no boot disk.
