@@ -50,8 +50,9 @@ static vfs_node_t *_walk_one(vfs_node_t *dir, const char *name) {
 
     mutex_lock(&vfs_mutex);
     vfs_node_t *m = _lookup_mount(dir, name);
+    if (m) vfs_node_ref(m);
     mutex_unlock(&vfs_mutex);
-    if (m) return m;              // mount shadowing
+    if (m) return m;
 
     if (dir->ops && dir->ops->walk)
         return dir->ops->walk(dir, name);
@@ -111,6 +112,7 @@ vfs_node_t *vfs_walk_path(vfs_node_t *start, const char *path) {
         char seg[128];
         int  si = 0;
         while (*p && *p != '/' && si < 127) seg[si++] = *p++;
+        if (*p && *p != '/') return 0;
         seg[si] = '\0';
         if (*p == '/') p++;
         if (si == 0) continue;       // skip repeated '/'
@@ -282,6 +284,7 @@ static vfs_node_t *_walk_path_follow(vfs_node_t *start, const char *path,
         char seg[128];
         int  si = 0;
         while (*p && *p != '/' && si < 127) seg[si++] = *p++;
+        if (*p && *p != '/') { *err = ENAMETOOLONG; return 0; }
         seg[si] = '\0';
         if (*p == '/') p++;
         if (si == 0) continue;
@@ -302,14 +305,16 @@ vfs_node_t *vfs_walk_path_follow(vfs_node_t *start, const char *path, int *err_o
 
 // VFS node refcount helpers.
 void vfs_node_ref(vfs_node_t *node) {
-    if (node) node->refcount++;
+    if (node) __sync_fetch_and_add(&node->refcount, 1);
 }
 
 void vfs_node_unref(vfs_node_t *node) {
-    if (!node || node->refcount == 0) return;
-    node->refcount--;
-    // Free symlink pool slot when refcount reaches zero.
-    if (node->refcount == 0 && node->type == VFS_SYMLINK) {
+    if (!node) return;
+    if (__sync_fetch_and_sub(&node->refcount, 1) == 0) {
+        __sync_fetch_and_add(&node->refcount, 1);
+        return;
+    }
+    if (node->type == VFS_SYMLINK) {
         mutex_lock(&symlink_mutex);
         vfs_symlink_entry_t *entry = (vfs_symlink_entry_t *)node;
         if (entry >= symlink_pool &&
@@ -360,6 +365,7 @@ int vfs_unlink(vfs_node_t *dir, const char *name) {
     for (int i = 0; i < mount_count; i++) {
         if (mount_table[i].host == dir && streq(mount_table[i].name, name)) {
             mounted = mount_table[i].target;
+            if (mounted) vfs_node_ref(mounted);
             break;
         }
     }
@@ -368,8 +374,10 @@ int vfs_unlink(vfs_node_t *dir, const char *name) {
     if (mounted && mounted->type == VFS_SYMLINK) {
         int ret = vfs_umount(dir, name);
         if (ret == 0) vfs_node_unref(mounted);
+        vfs_node_unref(mounted);
         return ret;
     }
+    if (mounted) vfs_node_unref(mounted);
 
     // Delegate to the underlying filesystem
     if (dir->ops && dir->ops->unlink) {
