@@ -54,14 +54,19 @@ void ps2_mouse_handler(void) {
     switch (mouse_cycle) {
         case 0:
             mouse_byte[0] = port_byte_in(0x60);
-            if (mouse_byte[0] & 0x08) mouse_cycle++;   // bit 3 = sync bit
+            if (mouse_byte[0] & 0x08) {
+                __asm__ __volatile__("" ::: "memory");   // barrier: byte visible before cycle update
+                mouse_cycle++;
+            }
             break;
         case 1:
             mouse_byte[1] = port_byte_in(0x60);
+            __asm__ __volatile__("" ::: "memory");
             mouse_cycle++;
             break;
         case 2:
             mouse_byte[2] = port_byte_in(0x60);
+            __asm__ __volatile__("" ::: "memory");   // barrier: all bytes visible before cycle reset
             mouse_cycle = 0;
 
             // Sign-extend 9-bit deltas to 32-bit

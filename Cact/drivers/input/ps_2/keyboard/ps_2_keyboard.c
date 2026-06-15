@@ -71,7 +71,7 @@ void ps2_keyboard_handler(void) {
     else if (scancode == 0x3A) { caps_lock_active = !caps_lock_active;              return; }
 
     // Release codes (bit 7 set) — discard after modifier handling
-    if (scancode & 0x80) return;
+    if (scancode >= 128) return;
 
     // Ctrl-combos: send signal to foreground process group
     if (ctrl_pressed) {

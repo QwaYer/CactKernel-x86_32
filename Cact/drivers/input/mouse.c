@@ -2,9 +2,9 @@
 #include "fb.h"
 
 // Global mouse state — read by userspace GUI or terminal
-int mouse_x       = 0;
-int mouse_y       = 0;
-int mouse_buttons = 0;
+volatile int mouse_x       = 0;
+volatile int mouse_y       = 0;
+volatile int mouse_buttons = 0;
 
 // Circular buffer for mouse events — single-producer (IRQ) / single-consumer (userspace)
 static volatile mouse_packet_t mouse_buf[MOUSE_BUF_SIZE];
@@ -19,12 +19,14 @@ static void mouse_enqueue(int dx, int dy, int buttons, int absolute) {
     mouse_buf[mouse_wr].dy       = dy;
     mouse_buf[mouse_wr].buttons  = buttons;
     mouse_buf[mouse_wr].absolute = absolute;
+    __asm__ __volatile__("" ::: "memory");   // barrier: data visible before wr update
     mouse_wr = next;
 }
 
 // Dequeue one mouse event; returns 0 on success, -1 if buffer is empty.
 int mouse_read_event(mouse_packet_t *pkt) {
     if (mouse_rd == mouse_wr) return -1;
+    __asm__ __volatile__("" ::: "memory");   // barrier: read data after reading mouse_wr
     *pkt = mouse_buf[mouse_rd];
     mouse_rd = (mouse_rd + 1) % MOUSE_BUF_SIZE;
     return 0;

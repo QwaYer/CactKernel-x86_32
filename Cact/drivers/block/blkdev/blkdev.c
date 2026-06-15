@@ -111,11 +111,26 @@ void blkdev_dump(void) {
     }
 }
 
+// Returns true if lba is out of range; prints diagnostic
+static int blkdev_lba_oob(const char *op, uint32_t lba, uint32_t max_lba) {
+    if (lba < max_lba) return 0;
+    kprint("[blkdev] "); kprint(op); kprint(" out of range: lba=");
+    char _b[16]; hex_to_ascii(lba, _b); kprint(_b);
+    kprint(" >= max_lba=");
+    hex_to_ascii(max_lba, _b); kprint(_b);
+    kprint("\n");
+    return 1;
+}
+
 // Read a sector from the boot device (zeroes buffer if no device)
 void blkdev_read_sector(uint32_t lba, uint8_t *buf) {
     struct blkdev *dev = boot_dev;
     if (!dev) {
         kprint("[blkdev] no boot device for read\n");
+        memset(buf, 0, 512);
+        return;
+    }
+    if (blkdev_lba_oob("read", lba, dev->max_lba)) {
         memset(buf, 0, 512);
         return;
     }
@@ -129,5 +144,7 @@ void blkdev_write_sector(uint32_t lba, uint8_t *buf) {
         kprint("[blkdev] no boot device for write\n");
         return;
     }
+    if (blkdev_lba_oob("write", lba, dev->max_lba))
+        return;
     dev->write_sector(lba, buf);
 }

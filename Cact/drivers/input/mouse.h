@@ -4,9 +4,9 @@
 #include <stdint.h>
 
 // Current mouse state — updated by PS/2 or USB HID handler
-extern int mouse_x;
-extern int mouse_y;
-extern int mouse_buttons;
+extern volatile int mouse_x;
+extern volatile int mouse_y;
+extern volatile int mouse_buttons;
 
 // Mouse event packet for /dev/mouse
 typedef struct {
