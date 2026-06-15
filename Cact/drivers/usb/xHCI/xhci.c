@@ -43,8 +43,6 @@ static inline void xhci_rt_write32(xhci_priv_t *p, uint32_t off, uint32_t val) {
 }
 
 static inline void xhci_db_write32(xhci_priv_t *p, uint32_t idx, uint32_t val) {
-    extern void xhci_unmask_irq11(void);
-    xhci_unmask_irq11();
     p->db[idx] = val;
 }
 
@@ -494,16 +492,6 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
 
     default:
         break;
-    }
-}
-
-static volatile int xhci_irq_masked = 0;
-
-void xhci_unmask_irq11(void) {
-    if (xhci_irq_masked) {
-        uint8_t mask = port_byte_in(0xA1);
-        port_byte_out(0xA1, mask & ~(1u << 3));
-        xhci_irq_masked = 0;
     }
 }
 

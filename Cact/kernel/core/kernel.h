@@ -127,7 +127,7 @@ void hex_to_ascii  (uint32_t n, char str[]);
 // CPU exception dispatcher
 void exception_handler(struct context_frame* regs);
 
-// EOI dispatchers — APIC or PIC as appropriate
+// EOI dispatcher — always APIC (PIC is not used)
 void timer_eoi(void);
 void irq_master_slave_eoi(void);
 

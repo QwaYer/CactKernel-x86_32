@@ -38,8 +38,6 @@ global isr31
 global mouse_isr
 global xhci_isr
 global usb_isr
-global spurious_irq7
-global spurious_irq15
 
 extern ps2_keyboard_handler
 extern exception_handler
@@ -336,39 +334,8 @@ syscall_isr:
     popa
     iretd
 
-spurious_irq7:
-    push eax
-    mov al, 0x0B
-    out 0x20, al
-    in  al, 0x20
-    test al, 0x80
-    jz .spur7
-    mov al, 0x20
-    out 0x20, al
-.spur7:
-    pop eax
-    iretd
-
-spurious_irq15:
-    push eax
-    mov al, 0x0B
-    out 0xA0, al
-    in  al, 0xA0
-    test al, 0x80
-    jz .spur15
-    mov al, 0x20
-    out 0xA0, al
-    out 0x20, al
-    pop eax
-    iretd
-.spur15:
-    mov al, 0x20
-    out 0x20, al
-    pop eax
-    iretd
-
 ; ---------------------------------------------------------------------------
-; Generic PIC IRQ stubs (vector = 0x20 + irq) for irq_register_handler().
+; Generic IRQ stubs (vector = 0x20 + irq) for irq_register_handler().
 ; ---------------------------------------------------------------------------
 extern irq_dispatch
 

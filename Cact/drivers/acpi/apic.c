@@ -142,9 +142,6 @@ int apic_init(void)
         ioapic_set_redir(entry_idx, 0x20 + i, 0, 0);
     }
 
-    port_byte_out(0x21, 0xFF);
-    port_byte_out(0xA1, 0xFF);
-
     unsigned int timer_entry = irq_override[0] - global_irq_base;
     uint64_t period = hpet_get_freq() / 100;
     int hpet_ok = (period > 0 && hpet_start_periodic(timer_entry, period) == 0);
