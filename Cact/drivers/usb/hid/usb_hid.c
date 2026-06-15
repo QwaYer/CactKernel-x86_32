@@ -96,7 +96,7 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
 }
 
 static void hid_process_mouse(hid_mouse_report_t *rep) {
-    extern int mouse_x, mouse_y, mouse_buttons;
+    extern volatile int mouse_x, mouse_y, mouse_buttons;
     extern uint32_t fb_get_width(void);
     extern uint32_t fb_get_height(void);
 
@@ -114,7 +114,7 @@ static void hid_process_mouse(hid_mouse_report_t *rep) {
 }
 
 static void hid_process_tablet(hid_tablet_report_t *rep) {
-    extern int mouse_x, mouse_y, mouse_buttons;
+    extern volatile int mouse_x, mouse_y, mouse_buttons;
     extern uint32_t fb_get_width(void);
     extern uint32_t fb_get_height(void);
 
