@@ -3,6 +3,7 @@
 #include "acpi_timer.h"
 #include "acpi_hpet.h"
 #include "cact_acpi.h"
+#include "sync.h"
 #include <string.h>
 
 static uint16_t pm_timer_port = 0;
@@ -12,6 +13,7 @@ static int      pm_timer_available = 0;
 static uint32_t  last_pm_count = 0;
 static volatile uint32_t  pm_overflow_count = 0;
 static volatile uint32_t  timer_ticks = 0;
+static irq_spinlock_t pm_timer_lock;
 
 #define PM_TIMER_24BIT_MASK  0x00FFFFFFu
 #define PM_TIMER_32BIT_MASK  0xFFFFFFFFu
@@ -59,6 +61,7 @@ int acpi_pm_timer_init(void)
     last_pm_count = val;
     pm_overflow_count = 0;
     timer_ticks = 0;
+    irq_spinlock_init(&pm_timer_lock);
     pm_timer_available = 1;
 
     char buf[64];
@@ -97,17 +100,19 @@ uint64_t acpi_pm_timer_get_usec(void)
 {
     if (!pm_timer_available) return 0;
 
+    irq_spinlock_acquire(&pm_timer_lock);
+
     uint32_t val = acpi_pm_timer_read();
     uint32_t max_val = pm_timer_get_max();
-    uint64_t total_counts;
-    uint32_t current_overflow;
 
     if (val < last_pm_count && (last_pm_count - val) > (max_val / 2)) {
-        current_overflow = pm_overflow_count + 1;
-    } else {
-        current_overflow = pm_overflow_count;
+        pm_overflow_count++;
     }
+    last_pm_count = val;
 
-    total_counts = (uint64_t)current_overflow * (uint64_t)(max_val + 1) + val;
+    uint64_t total_counts = (uint64_t)pm_overflow_count * (uint64_t)(max_val + 1) + val;
+
+    irq_spinlock_release(&pm_timer_lock);
+
     return (total_counts * 1000000ull) / ACPI_PM_TIMER_FREQ;
 }

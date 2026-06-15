@@ -3,20 +3,13 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::{c_int, c_void};
-use core::fmt;
 
 use cact_crypto::provider::cact_crypto_provider;
 use rustls::pki_types::{ServerName, UnixTime};
-use rustls::client::danger::{ServerCertVerifier, ServerCertVerified, HandshakeSignatureValid};
 use rustls::time_provider::TimeProvider;
-use rustls::DigitallySignedStruct;
-use rustls::SignatureScheme;
-use rustls::Error;
 use rustls::ClientConfig;
 use rustls::client::UnbufferedClientConnection;
-use rustls::conn::unbuffered::{
-    ConnectionState, EncodeTlsData, TransmitTlsData, WriteTraffic, ReadTraffic,
-};
+use rustls::conn::unbuffered::ConnectionState;
 
 const TLS_MAX_CONNECTIONS: usize = 4;
 
@@ -45,49 +38,21 @@ impl TimeProvider for CactTimeProvider {
     }
 }
 
-#[derive(Debug)]
-struct SkipVerifier;
-
-impl ServerCertVerifier for SkipVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        Vec::new()
-    }
-}
-
 fn make_config() -> Arc<ClientConfig> {
     let provider = cact_crypto_provider();
+    let mut root_store = rustls::RootCertStore::empty();
+    for ta in webpki_roots::TLS_SERVER_ROOTS.iter() {
+        root_store.roots.push(rustls::pki_types::TrustAnchor {
+            subject: ta.subject.as_ref().into(),
+            subject_public_key_info: ta.subject_public_key_info.as_ref().into(),
+            name_constraints: ta.name_constraints.as_ref().map(|nc| nc.as_ref().into()),
+        });
+    }
     Arc::new(
         ClientConfig::builder_with_details(Arc::new(provider), Arc::new(CactTimeProvider))
             .with_safe_default_protocol_versions()
             .unwrap()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipVerifier))
+            .with_root_certificates(root_store)
             .with_no_client_auth(),
     )
 }

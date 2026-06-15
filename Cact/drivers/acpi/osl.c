@@ -27,6 +27,8 @@ static void* acpi_temp_map(UINT32 phys, UINT32 size)
     UINT32 offset    = phys & 0xFFF;
     UINT32 phys_page = phys & ~0xFFF;
     UINT32 pages     = ((offset + size + 0xFFF) >> 12);
+
+    spinlock_acquire(&acpi_mappings_lock);
     UINT32 virt      = acpi_mapping_next_va;
 
     for (UINT32 i = 0; i < pages; i++) {
@@ -45,6 +47,7 @@ static void* acpi_temp_map(UINT32 phys, UINT32 size)
         m->size = pages * 4096;
         m->used = 1;
     }
+    spinlock_release(&acpi_mappings_lock);
     return (void*)(UINT32)(virt + offset);
 }
 
@@ -62,12 +65,14 @@ static void acpi_temp_unmap(void *virt, UINT32 size)
     }
     asm volatile("invlpg (%0)" :: "r"(va) : "memory");
 
+    spinlock_acquire(&acpi_mappings_lock);
     for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
         if (acpi_mappings[i].used && acpi_mappings[i].virt == (void*)(UINT32)va) {
             acpi_mappings[i].used = 0;
             break;
         }
     }
+    spinlock_release(&acpi_mappings_lock);
 }
 
 static void udelay(UINT32 us)

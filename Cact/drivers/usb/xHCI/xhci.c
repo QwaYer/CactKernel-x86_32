@@ -11,6 +11,12 @@
 static usb_hc_t *xhci_hc_list = NULL;
 static irq_spinlock_t xhci_evt_lock;
 
+extern uint32_t page_directory[1024];
+
+static inline uint32_t xhci_va_to_pa(void *va) {
+    return vmm_get_phys(page_directory, (uint32_t)va);
+}
+
 static inline void xhci_udelay(uint32_t us) {
     for (volatile uint32_t i = 0; i < us * 50; i++)
         __asm__ __volatile__("pause");
@@ -75,7 +81,7 @@ static void xhci_ring_init(xhci_ring_t *ring, xhci_trb_t *mem, uint32_t size) {
     ring->size    = size;
     memset(mem, 0, size * sizeof(xhci_trb_t));
     xhci_trb_t *link = &mem[size - 1];
-    link->param_lo = (uint32_t)mem;
+    link->param_lo = xhci_va_to_pa(mem);
     link->param_hi = 0;
     link->status   = 0;
     link->control  = (XHCI_TRB_LINK << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_CYCLE | (1u << 1);
@@ -127,7 +133,7 @@ static void xhci_drain_events(xhci_priv_t *priv) {
     }
 
     if (processed) {
-        uint32_t erdp = (uint32_t)&priv->evt_ring[priv->evt_dequeue];
+        uint32_t erdp = xhci_va_to_pa(&priv->evt_ring[priv->evt_dequeue]);
         xhci_rt_write32(priv, 0x20 + XHCI_ERDP, erdp | (1u << 3));
         xhci_rt_write32(priv, 0x20 + XHCI_ERDP + 4, 0);
     }
@@ -203,6 +209,8 @@ static int xhci_address_device(xhci_priv_t *priv, uint8_t slot, uint8_t port,
                                 uint8_t speed, int bsr) {
     if (slot == 0 || slot > priv->max_slots || slot > XHCI_MAX_SLOTS)
         return -1;
+
+    spinlock_acquire(&priv->ctx_lock);
     uint8_t *input = xhci_get_input_ctx(priv);
     memset(input, 0, 2048);
 
@@ -236,27 +244,30 @@ static int xhci_address_device(xhci_priv_t *priv, uint8_t slot, uint8_t port,
     xhci_ring_t *ep0_ring = &priv->ep_rings[slot][0];
 
     ep0->ctx[1] = (XHCI_EP_CTX_TYPE_CTRL_BI << 3) | (3u << 1) | ((uint32_t)mps << 16);
-    ep0->ctx[2] = (uint32_t)ep0_ring->ring | ep0_ring->cycle;
+    ep0->ctx[2] = xhci_va_to_pa(ep0_ring->ring) | ep0_ring->cycle;
     ep0->ctx[3] = 0;
 
     uint8_t *dev_ctx = xhci_get_dev_ctx(priv, slot);
     memset(dev_ctx, 0, 2048);
-    priv->dcbaa[slot] = (uint32_t)dev_ctx;
+    priv->dcbaa[slot] = xhci_va_to_pa(dev_ctx);
 
     xhci_trb_t trb;
     memset(&trb, 0, sizeof(trb));
-    trb.param_lo = (uint32_t)input;
+    trb.param_lo = xhci_va_to_pa(input);
     trb.param_hi = 0;
     trb.control  = (XHCI_TRB_ADDRESS_DEV << XHCI_TRB_TYPE_SHIFT)
                  | ((uint32_t)slot << 24)
                  | (bsr ? XHCI_TRB_BSR : 0);
 
-    return xhci_send_cmd(priv, &trb);
+    int ret = xhci_send_cmd(priv, &trb);
+    spinlock_release(&priv->ctx_lock);
+    return ret;
 }
 
 static int xhci_configure_endpoint(xhci_priv_t *priv, uint8_t slot,
                                     uint8_t dci, uint8_t ep_type,
                                     uint16_t mps, uint8_t interval) {
+    spinlock_acquire(&priv->ctx_lock);
     uint8_t *input = xhci_get_input_ctx(priv);
     memset(input, 0, 2048);
 
@@ -279,18 +290,20 @@ static int xhci_configure_endpoint(xhci_priv_t *priv, uint8_t slot,
 
     ep->ctx[0] = ((uint32_t)interval << 16);
     ep->ctx[1] = ((uint32_t)ep_type << 3) | (3u << 1) | ((uint32_t)mps << 16);
-    ep->ctx[2] = (uint32_t)ring->ring | ring->cycle;
+    ep->ctx[2] = xhci_va_to_pa(ring->ring) | ring->cycle;
     ep->ctx[3] = 0;
     ep->ctx[4] = (uint32_t)mps;
 
     xhci_trb_t trb;
     memset(&trb, 0, sizeof(trb));
-    trb.param_lo = (uint32_t)input;
+    trb.param_lo = xhci_va_to_pa(input);
     trb.param_hi = 0;
     trb.control  = (XHCI_TRB_CONFIG_EP << XHCI_TRB_TYPE_SHIFT)
                  | ((uint32_t)slot << 24);
 
-    return xhci_send_cmd(priv, &trb);
+    int ret = xhci_send_cmd(priv, &trb);
+    spinlock_release(&priv->ctx_lock);
+    return ret;
 }
 
 static int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
@@ -320,7 +333,7 @@ static int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
 
     if (len > 0 && data) {
         memset(&trb, 0, sizeof(trb));
-        trb.param_lo = (uint32_t)data;
+        trb.param_lo = xhci_va_to_pa(data);
         trb.param_hi = 0;
         trb.status   = len;
         trb.control  = (XHCI_TRB_DATA << XHCI_TRB_TYPE_SHIFT);
@@ -355,7 +368,7 @@ static int xhci_interrupt_transfer(usb_hc_t *hc, usb_device_t *dev,
 
     xhci_trb_t trb;
     memset(&trb, 0, sizeof(trb));
-    trb.param_lo = (uint32_t)buf;
+    trb.param_lo = xhci_va_to_pa(buf);
     trb.param_hi = 0;
     trb.status   = len;
     trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
@@ -380,7 +393,7 @@ static int xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
 
     xhci_trb_t trb;
     memset(&trb, 0, sizeof(trb));
-    trb.param_lo = (uint32_t)buf;
+    trb.param_lo = xhci_va_to_pa(buf);
     trb.param_hi = 0;
     trb.status   = len;
     trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
@@ -446,7 +459,7 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
 
                     xhci_trb_t re_trb;
                     memset(&re_trb, 0, sizeof(re_trb));
-                    re_trb.param_lo = (uint32_t)s->buf;
+                    re_trb.param_lo = xhci_va_to_pa(s->buf);
                     re_trb.status   = s->len;
                     re_trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
                     xhci_ring_enqueue(&s->ring, &re_trb);
@@ -478,14 +491,6 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
 
 static volatile int xhci_irq_masked = 0;
 
-static void xhci_mask_irq11(void) {
-    if (!xhci_irq_masked) {
-        uint8_t mask = port_byte_in(0xA1);
-        port_byte_out(0xA1, mask | (1u << 3)); 
-        xhci_irq_masked = 1;
-    }
-}
-
 void xhci_unmask_irq11(void) {
     if (xhci_irq_masked) {
         uint8_t mask = port_byte_in(0xA1);
@@ -500,12 +505,10 @@ static void xhci_handle_irq(usb_hc_t *hc) {
     uint32_t sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
 
     if (!(sts & XHCI_STS_EINT)) {
-        xhci_mask_irq11();
         return;
     }
 
     xhci_op_write32(priv, XHCI_OP_USBSTS, XHCI_STS_EINT);
-
     xhci_drain_events(priv);
 
     xhci_rt_write32(priv, 0x20 + XHCI_IMAN, 0x3);
@@ -517,6 +520,18 @@ static void xhci_handle_irq(usb_hc_t *hc) {
 void xhci_irq_handler(void) {
     for (usb_hc_t *hc = xhci_hc_list; hc; hc = hc->irq_next)
         xhci_handle_irq(hc);
+}
+
+static void xhci_device_removed(usb_hc_t *hc, usb_device_t *dev) {
+    xhci_priv_t *priv = (xhci_priv_t *)hc->priv;
+    for (int i = 0; i < priv->intr_ep_count; i++) {
+        xhci_intr_ep_slot_t *s = &priv->intr_slots[i];
+        if (s->active && s->dev == dev) {
+            s->active = 0;
+            s->dev    = NULL;
+            s->buf    = NULL;
+        }
+    }
 }
 
 int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
@@ -559,7 +574,7 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
 
     xhci_trb_t trb;
     memset(&trb, 0, sizeof(trb));
-    trb.param_lo = (uint32_t)buf;
+    trb.param_lo = xhci_va_to_pa(buf);
     trb.status   = len;
     trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
     xhci_ring_enqueue(&s->ring, &trb);
@@ -589,6 +604,7 @@ static int xhci_init_one(uint32_t phys_base) {
     xhci_priv_t *priv = (xhci_priv_t *)kmalloc(sizeof(xhci_priv_t));
     if (!priv) { klog(LOG_WARN, "xHCI state allocation failed"); return -1; }
     memset(priv, 0, sizeof(xhci_priv_t));
+    spinlock_init(&priv->ctx_lock);
 
     priv->cap_phys = phys_base;
     priv->cap = (volatile uint32_t *)phys_base;
@@ -658,7 +674,7 @@ static int xhci_init_one(uint32_t phys_base) {
     priv->dcbaa = (uint64_t *)kmalloc_aligned((priv->max_slots + 1) * sizeof(uint64_t), 64);
     if (!priv->dcbaa) { kfree_heap(priv); return -1; }
     memset(priv->dcbaa, 0, (priv->max_slots + 1) * sizeof(uint64_t));
-    xhci_op_write32(priv, XHCI_OP_DCBAAP, (uint32_t)priv->dcbaa);
+    xhci_op_write32(priv, XHCI_OP_DCBAAP, xhci_va_to_pa(priv->dcbaa));
     xhci_op_write32(priv, XHCI_OP_DCBAAP + 4, 0);
 
     priv->dev_ctx_pool = (uint8_t *)kmalloc_aligned((priv->max_slots + 1) * 2048, 64);
@@ -672,7 +688,7 @@ static int xhci_init_one(uint32_t phys_base) {
     if (!cmd_mem) { kfree_heap(priv); return -1; }
     xhci_ring_init(&priv->cmd_ring, cmd_mem, XHCI_CMD_RING_SIZE);
 
-    xhci_op_write32(priv, XHCI_OP_CRCR, (uint32_t)cmd_mem | 1);
+    xhci_op_write32(priv, XHCI_OP_CRCR, xhci_va_to_pa(cmd_mem) | 1);
     xhci_op_write32(priv, XHCI_OP_CRCR + 4, 0);
 
     priv->evt_ring = (xhci_trb_t *)kmalloc_aligned(XHCI_EVT_RING_SIZE * sizeof(xhci_trb_t), 64);
@@ -684,14 +700,14 @@ static int xhci_init_one(uint32_t phys_base) {
     priv->erst = (xhci_erst_entry_t *)kmalloc_aligned(sizeof(xhci_erst_entry_t) * XHCI_ERST_SIZE, 64);
     if (!priv->erst) { kfree_heap(priv); return -1; }
     memset(priv->erst, 0, sizeof(xhci_erst_entry_t) * XHCI_ERST_SIZE);
-    priv->erst[0].seg_addr_lo = (uint32_t)priv->evt_ring;
+    priv->erst[0].seg_addr_lo = xhci_va_to_pa(priv->evt_ring);
     priv->erst[0].seg_addr_hi = 0;
     priv->erst[0].seg_size    = XHCI_EVT_RING_SIZE;
 
     xhci_rt_write32(priv, 0x20 + XHCI_ERSTSZ, XHCI_ERST_SIZE);
-    xhci_rt_write32(priv, 0x20 + XHCI_ERDP, (uint32_t)priv->evt_ring | (1u << 3));
+    xhci_rt_write32(priv, 0x20 + XHCI_ERDP, xhci_va_to_pa(priv->evt_ring) | (1u << 3));
     xhci_rt_write32(priv, 0x20 + XHCI_ERDP + 4, 0);
-    xhci_rt_write32(priv, 0x20 + XHCI_ERSTBA, (uint32_t)priv->erst);
+    xhci_rt_write32(priv, 0x20 + XHCI_ERSTBA, xhci_va_to_pa(priv->erst));
     xhci_rt_write32(priv, 0x20 + XHCI_ERSTBA + 4, 0);
 
     xhci_rt_write32(priv, 0x20 + XHCI_IMOD, 0x000003F8);
@@ -721,6 +737,7 @@ static int xhci_init_one(uint32_t phys_base) {
     hc->bulk_transfer      = xhci_bulk_transfer;
     hc->port_reset         = xhci_port_reset;
     hc->port_get_status    = xhci_port_get_status;
+    hc->device_removed     = xhci_device_removed;
     hc->num_ports          = priv->max_ports;
     hc->priv               = priv;
 

@@ -208,6 +208,8 @@ void usb_device_disconnect(usb_hc_t *hc, uint8_t port) {
     while (*pp) {
         usb_device_t *dev = *pp;
         if (dev->hc == hc && dev->port == port) {
+            if (hc->device_removed)
+                hc->device_removed(hc, dev);
             usb_driver_t *drv = usb_find_driver(dev);
             if (drv && drv->remove) drv->remove(dev);
             usb_free_address(dev->address);
