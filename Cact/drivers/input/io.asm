@@ -32,10 +32,10 @@ port_byte_out:
     ret
 
 ; uint8_t port_byte_in(uint16_t port)
-; NOTE: upper 24 bits of EAX are not zeroed — caller must mask if needed
 port_byte_in:
     mov edx, [esp + 4]   ; port
-    in al, dx             ; 8-bit read — AH and upper bits untouched
+    xor eax, eax          ; zero EAX so upper bits are clean
+    in al, dx             ; 8-bit read
     ret
 
 ; uint16_t port_word_in(uint16_t port)

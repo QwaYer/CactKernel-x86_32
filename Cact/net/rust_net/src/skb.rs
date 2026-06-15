@@ -59,6 +59,7 @@ pub extern "C" fn skb_put(skb: *mut Skb, len: u16) -> *mut u8 {
             return core::ptr::null_mut();
         }
         let ptr = (*skb).data.as_mut_ptr().add(offset + cur_len);
+        core::ptr::write_bytes(ptr, 0, len as usize);
         (*skb).total_len = (*skb).total_len.wrapping_add(len);
         ptr
     }

@@ -12,11 +12,12 @@ pub const MUTEX_WAIT_QUEUE_MAX: usize = 64;
 
 #[repr(C)]
 pub struct mutex_t {
-    pub locked:       AtomicU32,
-    pub guard:        crate::spinlock::spinlock_t,
-    pub owner:        *mut TaskStruct,
-    pub waiters:      [*mut TaskStruct; MUTEX_WAIT_QUEUE_MAX],
-    pub waiter_count: u32,
+    pub locked:          AtomicU32,
+    pub guard:           crate::spinlock::spinlock_t,
+    pub owner:           *mut TaskStruct,
+    pub waiters:         [*mut TaskStruct; MUTEX_WAIT_QUEUE_MAX],
+    pub waiter_count:    u32,
+    pub recursion_count: u32,
 }
 
 unsafe impl Send for mutex_t {}
@@ -32,6 +33,7 @@ fn mutex_init_impl(m: &mut mutex_t) {
     m.guard.init();
     m.owner = ptr::null_mut();
     m.waiter_count = 0;
+    m.recursion_count = 0;
     for slot in &mut m.waiters {
         *slot = ptr::null_mut();
     }
@@ -46,9 +48,16 @@ fn mutex_lock_impl(m: &mut mutex_t) {
     loop {
         m.guard.acquire();
 
+        if m.owner == sched_link::current_task_ptr() {
+            m.recursion_count += 1;
+            m.guard.release();
+            return;
+        }
+
         if m.locked.load(Ordering::Relaxed) == 0 {
             m.locked.store(1, Ordering::Relaxed);
             m.owner = sched_link::current_task_ptr();
+            m.recursion_count = 0;
             m.guard.release();
             return;
         }
@@ -81,9 +90,15 @@ pub unsafe extern "C" fn mutex_trylock(m: *mut mutex_t) -> i32 {
 
 fn mutex_trylock_impl(m: &mut mutex_t) -> i32 {
     m.guard.acquire();
+    if m.owner == sched_link::current_task_ptr() {
+        m.recursion_count += 1;
+        m.guard.release();
+        return 0;
+    }
     if m.locked.load(Ordering::Relaxed) == 0 {
         m.locked.store(1, Ordering::Relaxed);
         m.owner = sched_link::current_task_ptr();
+        m.recursion_count = 0;
         m.guard.release();
         return 0;
     }
@@ -102,6 +117,12 @@ fn mutex_unlock_impl(m: &mut mutex_t) {
     if m.locked.load(Ordering::Relaxed) == 0 {
         m.guard.release();
         sched_link::kprint_str(b"mutex: unlock of unlocked mutex!\n\0".as_ptr());
+        return;
+    }
+
+    if m.owner == sched_link::current_task_ptr() && m.recursion_count > 0 {
+        m.recursion_count -= 1;
+        m.guard.release();
         return;
     }
 
