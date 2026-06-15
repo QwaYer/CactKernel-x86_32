@@ -256,7 +256,7 @@ The PMM treats **all 4 GiB of physical address space** below the **PCI hole** as
 | `PAGE_COW` | `0x200` | Copy-on-write |
 | `PAGE_DEMAND` | `0x400` | Demand-filled / zero-on-first-touch |
 | `PAGE_ZERO` | `0x800` | Zero-fill on demand |
-| `PDE_PRIVATE` | `0x200` in **PDE** | CPU-ignored tag: “this page table is per-process” for fork/COW teardown |
+| `PDE_PRIVATE` | `0x100` in **PDE** | CPU-ignored tag: “this page table is per-process” for fork/COW teardown |
 
 ---
 
