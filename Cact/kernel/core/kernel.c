@@ -152,6 +152,11 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Memory management (order matters!)
     init_gdt();                     // Global Descriptor Table
     klog(LOG_OK, "GDT initialized");
+
+    // CPU feature detection — before IDT / APIC / PAT so the rest of
+    // the kernel can query cpu_vendor(), cpu_has_sep(), etc.
+    cpudev_init();
+
     pmm_init_from_mmap(mmap);       // Physical Memory Manager
     klog(LOG_OK, "Physical memory manager ready");
     init_memory_manager();          // Virtual memory manager
@@ -168,6 +173,10 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Interrupts
     init_idt();                     // Interrupt Descriptor Table
     klog(LOG_OK, "IDT loaded");
+
+    // Program fast-syscall MSRs now that GDT and IDT are ready.
+    // IA32_SYSENTER_ESP must be set per-task by the scheduler later.
+    cpu_syscall_commit();
 
     serial_init();                  // COM1 — kprint/klog also go here (QEMU: -serial stdio)
     klog(LOG_OK, "Serial console (COM1) ready");

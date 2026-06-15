@@ -23,6 +23,7 @@ KERN_SC_USER_DIR     = $(KERN_SYSCALLS_DIR)/user
 KERN_SC_NET_DIR      = $(KERN_SYSCALLS_DIR)/net
 KERN_SC_KMOD_DIR     = $(KERN_SYSCALLS_DIR)/kmod
 KERN_GDT_DIR     = Cact/kernel/gdt
+KERN_CPUDEV_DIR  = Cact/kernel/cpudev
 KERN_ELF_DIR     = Cact/elf
 KERN_DYNLINK_DIR = Cact/elf/dynlink
 KERN_MEM_DIR     = Cact/kernel/memory
@@ -120,6 +121,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_VER_DIR) \
 		 -I$(KERN_SYSCALLS_DIR) \
          -I$(KERN_GDT_DIR) \
+         -I$(KERN_CPUDEV_DIR) \
          -I$(KERN_ELF_DIR) \
          -I$(KERN_DYNLINK_DIR) \
          -I$(KERN_MEM_DIR) \
@@ -251,6 +253,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/font.o \
       $(BUILD_DIR)/pat.o \
       $(BUILD_DIR)/stack_guard.o \
+      $(BUILD_DIR)/cpudev.o \
       $(BUILD_DIR)/acpi.o \
       $(BUILD_DIR)/osl.o \
       $(BUILD_DIR)/acpi_timer.o \
@@ -661,6 +664,10 @@ $(BUILD_DIR)/acpica_%.o: $(ACPICA_SRC_DIR)/%.c
 	    -c $< -o $@
 
 $(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/cpudev.o: $(KERN_CPUDEV_DIR)/cpudev.c $(KERN_CPUDEV_DIR)/cpudev.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

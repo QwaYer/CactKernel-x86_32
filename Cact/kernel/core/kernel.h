@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "pci.h"
 #include "multiboot2.h"
+#include "cpudev.h"
 
 // Forward declaration for exception frame
 struct context_frame;
