@@ -5,8 +5,28 @@
 // Timer frequency for alarm/setitimer conversions
 #define TIMER_HZ_SIGNALS 100
 
+// Check whether the current task is allowed to signal the task with |pid|.
+// Returns 0 if permitted, -1 if denied.
+static int _signal_permitted(uint32_t pid) {
+    if (!current_task) return -1;
+    if (current_task->proc->euid == 0) return 0;  // root bypass
+
+    extern struct task_struct* volatile task_list_head;
+    struct task_struct *t = task_list_head;
+    while (t) {
+        if (t->pid == pid) {
+            if (t->proc && t->proc->uid == current_task->proc->uid)
+                return 0;
+            return -1;
+        }
+        t = t->next;
+    }
+    return -1;  // target not found
+}
+
 // kill() — send a signal to a process (simplified: always SIGKILL)
 static int sys_kill_impl(uint32_t pid) {
+    if (_signal_permitted(pid) < 0) return -1;
     task_kill(pid);
     return 0;
 }
@@ -14,6 +34,7 @@ static int sys_kill_impl(uint32_t pid) {
 // signal() — send any signal to a process by PID
 static int sys_signal_impl(uint32_t pid, uint32_t signal) {
     if (!pid) return -1;
+    if (_signal_permitted(pid) < 0) return -1;
     task_signal(pid, signal);
     return 0;
 }

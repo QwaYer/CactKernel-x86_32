@@ -64,10 +64,10 @@ int sys_exec(struct syscall_frame* regs) {
         }
     }
 
-    // Check execute permission on the file
+    // Check execute permission on the file — resolves path once before task_exec
     {
         vfs_node_t* exec_node = _resolve_path(path);
-        if (exec_node && vfs_check_perm(exec_node, VFS_PERM_EXEC) < 0)
+        if (!exec_node || vfs_check_perm(exec_node, VFS_PERM_EXEC) < 0)
             return -1;
     }
 
