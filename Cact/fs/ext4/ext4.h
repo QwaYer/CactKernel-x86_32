@@ -5,6 +5,10 @@
 #include "vfs.h"
 
 #define EXT4_SUPER_MAGIC 0xEF53
+#define EXT4_INODE_BLOCK_SIZE (15 * 4)           // i_block[15] in bytes
+#define EXT4_EXTENT_HEADER_SIZE sizeof(struct ext4_extent_header)
+#define EXT4_EXTENT_SIZE      sizeof(struct ext4_extent)
+#define EXT4_MAX_EXTENTS      ((EXT4_INODE_BLOCK_SIZE - EXT4_EXTENT_HEADER_SIZE) / EXT4_EXTENT_SIZE)
 
 // Directory entry file types
 #define EXT4_FT_UNKNOWN  0

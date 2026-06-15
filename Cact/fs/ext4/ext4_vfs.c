@@ -341,8 +341,10 @@ int ext4_delete(vfs_node_t* node, char* name) {
     if (!inode.i_links_count) {
         struct ext4_extent_header* eh = (struct ext4_extent_header*)inode.i_block;
         if (eh->eh_magic == 0xF30A) {
+            uint16_t nr = eh->eh_entries;
+            if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
             struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)inode.i_block + sizeof(*eh));
-            for (uint16_t i = 0; i < eh->eh_entries; i++)
+            for (uint16_t i = 0; i < nr; i++)
                 for (uint32_t b = 0; b < ee[i].ee_len; b++)
                     ext4_free_block(ctx, ee[i].ee_start_lo + b);
         }
@@ -380,8 +382,10 @@ int ext4_rmdir(vfs_node_t* node, char* name) {
     ext4_read_inode(ctx, del_ino, &di);
     struct ext4_extent_header* eh = (struct ext4_extent_header*)di.i_block;
     if (eh->eh_magic == 0xF30A) {
+        uint16_t nr = eh->eh_entries;
+        if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
         struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)di.i_block + sizeof(*eh));
-        for (uint16_t i = 0; i < eh->eh_entries; i++)
+        for (uint16_t i = 0; i < nr; i++)
             for (uint32_t b = 0; b < ee[i].ee_len; b++)
                 ext4_free_block(ctx, ee[i].ee_start_lo + b);
     }
@@ -424,6 +428,11 @@ vfs_node_t* ext4_mount_disk(uint32_t dev) {
         return 0;
     }
 
+    if (ctx->sb.s_log_block_size > 5 || ctx->sb.s_log_block_size == (uint32_t)-1) {
+        kprint("[ext4] ERROR: invalid s_log_block_size\n");
+        kfree_heap(ctx);
+        return 0;
+    }
     ctx->block_size = 1024u << ctx->sb.s_log_block_size;
 
     // Allocate root VFS node (inode 2)

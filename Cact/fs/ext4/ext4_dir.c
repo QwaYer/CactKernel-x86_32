@@ -2,7 +2,6 @@
 #include "klib.h"
 #include "memory.h"
 
-// Iterate over all directory entries in a directory inode, calling cb for each
 void ext4_dir_iter(struct ext4_ctx* ctx, vfs_node_t* node,
                      void (*cb)(struct ext4_dir_entry_2*, void*), void* ud) {
     struct ext4_inode inode;
@@ -12,23 +11,24 @@ void ext4_dir_iter(struct ext4_ctx* ctx, vfs_node_t* node,
 
     struct ext4_extent_header* eh = (struct ext4_extent_header*)inode.i_block;
     if (eh->eh_magic == 0xF30A) {
-        // Extent-based directory: walk each extent's blocks
+        uint16_t nr = eh->eh_entries;
+        if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
         struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)inode.i_block + sizeof(*eh));
-        for (uint16_t ei = 0; ei < eh->eh_entries; ei++) {
+        for (uint16_t ei = 0; ei < nr; ei++) {
             for (uint32_t bi = 0; bi < ee[ei].ee_len; bi++) {
                 memory_set(buf, 0, ctx->block_size);
                 ext4_read_block(ctx, ee[ei].ee_start_lo + bi, buf);
                 uint32_t off = 0;
                 while (off + sizeof(struct ext4_dir_entry_2) <= ctx->block_size) {
                     struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(buf + off);
-                    if (!de->rec_len) break;
+                    if (!de->rec_len || de->rec_len < sizeof(struct ext4_dir_entry_2)) break;
+                    if (off + de->rec_len > ctx->block_size) break;
                     if (de->inode && de->name_len) cb(de, ud);
                     off += de->rec_len;
                 }
             }
         }
     } else {
-        // Legacy indirect-block directory
         uint32_t total_blocks = inode.i_size_lo / ctx->block_size;
         if (inode.i_size_lo % ctx->block_size) total_blocks++;
         for (uint32_t bi = 0; bi < total_blocks; bi++) {
@@ -39,7 +39,8 @@ void ext4_dir_iter(struct ext4_ctx* ctx, vfs_node_t* node,
             uint32_t off = 0;
             while (off + sizeof(struct ext4_dir_entry_2) <= ctx->block_size) {
                 struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(buf + off);
-                if (!de->rec_len) break;
+                if (!de->rec_len || de->rec_len < sizeof(struct ext4_dir_entry_2)) break;
+                if (off + de->rec_len > ctx->block_size) break;
                 if (de->inode && de->name_len) cb(de, ud);
                 off += de->rec_len;
             }
@@ -48,8 +49,6 @@ void ext4_dir_iter(struct ext4_ctx* ctx, vfs_node_t* node,
     kfree_heap(buf);
 }
 
-// Add a directory entry with the given inode, name, and file type.
-// Splits an existing entry if there is enough free rec_len space.
 int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, const char* name,
                  uint8_t ft) {
     struct ext4_inode di;
@@ -67,7 +66,9 @@ int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, con
     if (!buf) return -1;
 
     struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)di.i_block + sizeof(*eh));
-    for (uint16_t ei = 0; ei < eh->eh_entries; ei++) {
+    uint16_t nr = eh->eh_entries;
+    if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
+    for (uint16_t ei = 0; ei < nr; ei++) {
         for (uint32_t bi = 0; bi < ee[ei].ee_len; bi++) {
             uint32_t phys = ee[ei].ee_start_lo + bi;
             memory_set(buf, 0, ctx->block_size);
@@ -75,11 +76,11 @@ int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, con
             uint32_t off = 0;
             while (off + sizeof(struct ext4_dir_entry_2) <= ctx->block_size) {
                 struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(buf + off);
-                if (!de->rec_len) break;
+                if (!de->rec_len || de->rec_len < sizeof(struct ext4_dir_entry_2)) break;
+                if (off + de->rec_len > ctx->block_size) break;
                 uint16_t real = de->inode
                     ? (uint16_t)((sizeof(struct ext4_dir_entry_2) + de->name_len + 3) & ~3u)
                     : 0;
-                // Reuse a deleted entry (inode==0) if it has enough space
                 if (!de->inode && de->rec_len >= needed) {
                     de->inode = entry_ino;
                     de->name_len = nl;
@@ -89,7 +90,6 @@ int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, con
                     kfree_heap(buf);
                     return 0;
                 }
-                // Split an existing entry if the tail space is large enough
                 if (de->inode && (de->rec_len - real) >= needed) {
                     uint16_t old = de->rec_len;
                     de->rec_len    = real;
@@ -108,7 +108,6 @@ int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, con
         }
     }
 
-    // No free space found — allocate a new block and add the entry there
     uint32_t np = ext4_alloc_block(ctx);
     if (!np) { kfree_heap(buf); return -1; }
     memory_set(buf, 0, ctx->block_size);
@@ -122,7 +121,7 @@ int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, con
     kfree_heap(buf);
 
     uint32_t next_fb = 0;
-    for (uint16_t ei = 0; ei < eh->eh_entries; ei++) next_fb += ee[ei].ee_len;
+    for (uint16_t ei = 0; ei < nr; ei++) next_fb += ee[ei].ee_len;
     if (ext4_extent_add(&di, next_fb, np, 1) < 0) {
         ext4_free_block(ctx, np);
         return -1;
@@ -133,7 +132,6 @@ int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, con
     return 0;
 }
 
-// Remove a directory entry by name. Returns the entry's inode and file type via out parameters.
 int ext4_dir_remove(struct ext4_ctx* ctx, vfs_node_t* node, const char* name, uint32_t* out_ino,
                     uint8_t* out_ft) {
     struct ext4_inode di;
@@ -147,7 +145,9 @@ int ext4_dir_remove(struct ext4_ctx* ctx, vfs_node_t* node, const char* name, ui
     if (!buf) return -1;
 
     struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)di.i_block + sizeof(*eh));
-    for (uint16_t ei = 0; ei < eh->eh_entries; ei++) {
+    uint16_t nr = eh->eh_entries;
+    if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
+    for (uint16_t ei = 0; ei < nr; ei++) {
         for (uint32_t bi = 0; bi < ee[ei].ee_len; bi++) {
             uint32_t phys = ee[ei].ee_start_lo + bi;
             memory_set(buf, 0, ctx->block_size);
@@ -155,7 +155,8 @@ int ext4_dir_remove(struct ext4_ctx* ctx, vfs_node_t* node, const char* name, ui
             uint32_t off = 0;
             while (off + sizeof(struct ext4_dir_entry_2) <= ctx->block_size) {
                 struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(buf + off);
-                if (!de->rec_len) break;
+                if (!de->rec_len || de->rec_len < sizeof(struct ext4_dir_entry_2)) break;
+                if (off + de->rec_len > ctx->block_size) break;
                 if (de->inode && de->name_len == nl) {
                     char en[256];
                     memory_copy(en, de->name, nl);
@@ -163,7 +164,7 @@ int ext4_dir_remove(struct ext4_ctx* ctx, vfs_node_t* node, const char* name, ui
                     if (compare_string(en, name) == 0) {
                         if (out_ino) *out_ino = de->inode;
                         if (out_ft)  *out_ft  = de->file_type;
-                        de->inode = 0;   // mark as deleted
+                        de->inode = 0;
                         ext4_write_block(ctx, phys, buf);
                         kfree_heap(buf);
                         return 0;
@@ -177,32 +178,33 @@ int ext4_dir_remove(struct ext4_ctx* ctx, vfs_node_t* node, const char* name, ui
     return -1;
 }
 
-// Check if a directory is empty (contains only "." and "..").
-// Returns 1 if empty, 0 otherwise.
 int ext4_dir_empty(struct ext4_ctx* ctx, uint32_t ino) {
     struct ext4_inode di;
     ext4_read_inode(ctx, ino, &di);
     struct ext4_extent_header* eh = (struct ext4_extent_header*)di.i_block;
-    if (eh->eh_magic != 0xF30A) return 1;  // empty extent-based inode → empty
+    if (eh->eh_magic != 0xF30A) return 1;
 
     uint8_t* buf = (uint8_t*)kmalloc(ctx->block_size);
     if (!buf) return 1;
     struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)di.i_block + sizeof(*eh));
-    for (uint16_t ei = 0; ei < eh->eh_entries; ei++) {
+    uint16_t nr = eh->eh_entries;
+    if (nr > EXT4_MAX_EXTENTS) nr = EXT4_MAX_EXTENTS;
+    for (uint16_t ei = 0; ei < nr; ei++) {
         for (uint32_t bi = 0; bi < ee[ei].ee_len; bi++) {
             memory_set(buf, 0, ctx->block_size);
             ext4_read_block(ctx, ee[ei].ee_start_lo + bi, buf);
             uint32_t off = 0;
             while (off + sizeof(struct ext4_dir_entry_2) <= ctx->block_size) {
                 struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(buf + off);
-                if (!de->rec_len) break;
+                if (!de->rec_len || de->rec_len < sizeof(struct ext4_dir_entry_2)) break;
+                if (off + de->rec_len > ctx->block_size) break;
                 if (de->inode && de->name_len) {
                     char en[256];
                     memory_copy(en, de->name, de->name_len);
                     en[de->name_len] = '\0';
                     if (compare_string(en, ".") != 0 && compare_string(en, "..") != 0) {
                         kfree_heap(buf);
-                        return 0;   // found an entry other than . or ..
+                        return 0;
                     }
                 }
                 off += de->rec_len;
