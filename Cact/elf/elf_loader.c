@@ -21,8 +21,9 @@ int elf_is_dynamic(char* path) {
     if (hdr.e_machine != 3) return 0;
     if (hdr.e_type == 3) return 1; // ET_DYN
     if (hdr.e_phentsize < sizeof(Elf32_Phdr)) return 0;
-    uint32_t ph_end = hdr.e_phoff + (uint32_t)hdr.e_phnum * hdr.e_phentsize;
-    if (ph_end < hdr.e_phoff || ph_end > file->size) return 0;
+    if ((uint32_t)hdr.e_phnum > 65535u) return 0;
+    uint64_t ph_end_check = (uint64_t)hdr.e_phoff + (uint64_t)hdr.e_phnum * hdr.e_phentsize;
+    if (ph_end_check > file->size) return 0;
 
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
@@ -79,8 +80,12 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
         kprint("[ELF] ERR: phentsize too small\n");
         return 0;
     }
-    uint32_t ph_end = hdr.e_phoff + (uint32_t)hdr.e_phnum * hdr.e_phentsize;
-    if (ph_end < hdr.e_phoff || ph_end > file->size) {
+    if ((uint32_t)hdr.e_phnum > 65535u) {
+        kprint("[ELF] ERR: too many program headers\n");
+        return 0;
+    }
+    uint64_t ph_end_check = (uint64_t)hdr.e_phoff + (uint64_t)hdr.e_phnum * hdr.e_phentsize;
+    if (ph_end_check > file->size) {
         kprint("[ELF] ERR: program headers overflow file\n");
         return 0;
     }
@@ -211,8 +216,12 @@ void* load_elf_dynamic(char*                path,
         kprint("[ELF-DYN] ERR: phentsize too small\n");
         return 0;
     }
-    uint32_t ph_end = hdr.e_phoff + (uint32_t)hdr.e_phnum * hdr.e_phentsize;
-    if (ph_end < hdr.e_phoff || ph_end > file->size) {
+    if ((uint32_t)hdr.e_phnum > 65535u) {
+        kprint("[ELF-DYN] ERR: too many program headers\n");
+        return 0;
+    }
+    uint64_t ph_end_check = (uint64_t)hdr.e_phoff + (uint64_t)hdr.e_phnum * hdr.e_phentsize;
+    if (ph_end_check > file->size) {
         kprint("[ELF-DYN] ERR: program headers overflow file\n");
         return 0;
     }
@@ -387,8 +396,9 @@ uint32_t elf_get_brk_start(struct vfs_node* file) {
     if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) return 0;
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) return 0;
     if (hdr.e_phentsize < sizeof(Elf32_Phdr)) return 0;
-    uint32_t ph_end = hdr.e_phoff + (uint32_t)hdr.e_phnum * hdr.e_phentsize;
-    if (ph_end < hdr.e_phoff || ph_end > file->size) return 0;
+    if ((uint32_t)hdr.e_phnum > 65535u) return 0;
+    uint64_t ph_end_check = (uint64_t)hdr.e_phoff + (uint64_t)hdr.e_phnum * hdr.e_phentsize;
+    if (ph_end_check > file->size) return 0;
 
     uint32_t highest = 0;
     for (int i = 0; i < hdr.e_phnum; i++) {

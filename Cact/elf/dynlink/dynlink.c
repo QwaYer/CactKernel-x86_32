@@ -41,6 +41,10 @@ static int _elf_map_file(struct vfs_node*     file,
         kprint("[DL] not i386\n");
         return -1;
     }
+    if ((uint32_t)hdr.e_phnum > 65535u) {
+        kprint("[DL] too many program headers\n");
+        return -1;
+    }
 
     uint32_t load_base = 0xFFFFFFFF;
     uint32_t load_end  = 0;
@@ -621,6 +625,10 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
     }
 
     if (rel && rel_sz > 0 && rel_ent > 0) {
+        if (rel_ent != sizeof(Elf32_Rel)) {
+            kprint("[DL] DT_RELENT != sizeof(Elf32_Rel)\n");
+            return -1;
+        }
         uint32_t n = rel_sz / rel_ent;
         for (uint32_t i = 0; i < n; i++) {
             Elf32_Rel* r = (Elf32_Rel*)((uint8_t*)rel + i * rel_ent);
@@ -629,6 +637,10 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
     }
 
     if (rela && rela_sz > 0 && rela_ent > 0) {
+        if (rela_ent != sizeof(Elf32_Rela)) {
+            kprint("[DL] DT_RELAENT != sizeof(Elf32_Rela)\n");
+            return -1;
+        }
         uint32_t n = rela_sz / rela_ent;
         for (uint32_t i = 0; i < n; i++) {
             Elf32_Rela* r = (Elf32_Rela*)((uint8_t*)rela + i * rela_ent);
@@ -676,5 +688,7 @@ dyn_ctx_t* dynlink_ctx_create(uint32_t* pd, proc_page_tracker_t* tracker) {
 void dynlink_ctx_destroy(dyn_ctx_t* ctx) {
     if (!ctx) return;
     dynlink_unload_all(ctx);
+    if (ctx->tracker)
+        proc_free_pages(ctx->tracker);
     kfree_heap(ctx);
 }
