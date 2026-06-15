@@ -222,6 +222,8 @@ int pci_modblob_get(const char *path, const uint8_t **out_data,
     const char           *n = names_ptr();
 
     for (uint32_t i = 0; i < h->count; i++) {
+        uint32_t name_end = e[i].name_off + e[i].name_len;
+        if (name_end < e[i].name_off || name_end > h->names_size) continue;
         if (!name_eq(path, n, e[i].name_off, e[i].name_len)) continue;
         uint32_t data_end = e[i].data_off + e[i].data_size;
         if (data_end < e[i].data_off || data_end > cctkfs_size) return -1;
@@ -233,6 +235,8 @@ int pci_modblob_get(const char *path, const uint8_t **out_data,
     const char *want_bn = basename_of(path);
     if (!*want_bn) return -1;
     for (uint32_t i = 0; i < h->count; i++) {
+        uint32_t name_end = e[i].name_off + e[i].name_len;
+        if (name_end < e[i].name_off || name_end > h->names_size) continue;
         if (!basename_eq(want_bn, n, e[i].name_off, e[i].name_len)) continue;
         uint32_t data_end = e[i].data_off + e[i].data_size;
         if (data_end < e[i].data_off || data_end > cctkfs_size) return -1;

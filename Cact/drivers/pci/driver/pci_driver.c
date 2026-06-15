@@ -54,10 +54,12 @@ int pci_driver_modinfo_read(uint32_t off, uint32_t size, char *buf)
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    class_code:      ");
         hex_to_ascii((unsigned int)d->class_code, hx);
+        p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    subclass:        ");
         hex_to_ascii((unsigned int)d->subclass, hx);
+        p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    module_path:     ");
@@ -122,22 +124,27 @@ int pci_driver_modinfo_read(uint32_t off, uint32_t size, char *buf)
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    class_code:      ");
         hex_to_ascii((unsigned int)dv->class_code, hx);
+        p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    subclass:        ");
         hex_to_ascii((unsigned int)dv->subclass, hx);
+        p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    prog_if:         ");
         hex_to_ascii((unsigned int)dv->prog_if, hx);
+        p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    revision:        ");
         hex_to_ascii((unsigned int)dv->revision, hx);
+        p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    header_type:     ");
         hex_to_ascii((unsigned int)dv->header_type, hx);
+        p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    irq_line:        ");
