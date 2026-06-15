@@ -5,13 +5,9 @@
 #include <stdbool.h>
 #include "pci_enum.h"
 
-#define PCI_CAP_ID_MSIX     0x11
-
 #define MSIX_VECTOR_BASE    0x30
 #define MSIX_VECTOR_COUNT   192
 #define MSIX_VECTOR_END     (MSIX_VECTOR_BASE + MSIX_VECTOR_COUNT)
-
-#define MSIX_MAX_HANDLERS   64
 
 #define MSIX_TABLE_ENTRY_SIZE   16
 

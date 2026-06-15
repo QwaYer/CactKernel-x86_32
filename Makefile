@@ -56,6 +56,7 @@ DRIVER_PCI_ENUM_DIR   = Cact/drivers/pci/enum
 DRIVER_PCI_DRV_DIR    = Cact/drivers/pci/driver
 DRIVER_PCI_LOADER_DIR = Cact/drivers/pci/loader
 DRIVER_PCI_GDD_DIR    = Cact/drivers/pci/gdd
+DRIVER_PCI_MSI_DIR    = Cact/drivers/pci/msi
 DRIVER_PCIE_DIR       = Cact/drivers/pci/pcie
 DRIVER_BLK_BLOCK_DIR  = Cact/drivers/block/blkdev
 DRIVER_USB_DIR       = Cact/drivers/usb
@@ -130,8 +131,9 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_PCI_ENUM_DIR) \
          -I$(DRIVER_PCI_DRV_DIR) \
          -I$(DRIVER_PCI_LOADER_DIR) \
-          -I$(DRIVER_PCI_GDD_DIR) \
-          -I$(DRIVER_PCIE_DIR) \
+         -I$(DRIVER_PCI_GDD_DIR) \
+         -I$(DRIVER_PCI_MSI_DIR) \
+         -I$(DRIVER_PCIE_DIR) \
 		 -I$(DRIVER_BLK_BLOCK_DIR) \
          -I$(DRIVER_USB_DIR) \
          -I$(DRIVER_USB_XHCI_DIR) \
@@ -191,7 +193,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/dynlink.o \
       $(BUILD_DIR)/idt.o \
-      $(BUILD_DIR)/irq.o \
       $(BUILD_DIR)/klib.o \
       $(BUILD_DIR)/ksym.o \
       $(BUILD_DIR)/vfs.o \
@@ -221,6 +222,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pcie.o \
       $(BUILD_DIR)/pcidev.o \
       $(BUILD_DIR)/pci_modblob.o \
+      $(BUILD_DIR)/msi.o \
 	  $(BUILD_DIR)/blkdev.o \
       $(BUILD_DIR)/sc_mod.o \
       $(BUILD_DIR)/sc_validate.o \
@@ -445,10 +447,6 @@ $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/irq.o: $(KERN_IDT_DIR)/irq.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
 $(BUILD_DIR)/net_shim.o: $(NET_DIR)/net_shim.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -566,6 +564,10 @@ $(BUILD_DIR)/pcidev.o: Cact/drivers/pci/pcidev.c
 $(BUILD_DIR)/pci_modblob.o: $(DRIVER_PCI_LOADER_DIR)/pci_modblob.c $(DRIVER_PCI_LOADER_DIR)/pci_modblob.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/msi.o: $(DRIVER_PCI_MSI_DIR)/msi.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(DRIVER_PCI_MSI_DIR) -c $< -o $@
 
 ifdef LOCAL_REPO
 CCTKFS_IMG := $(LOCAL_REPO)/cctkfs.img

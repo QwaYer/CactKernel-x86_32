@@ -18,8 +18,12 @@ void msix_init(void)
 {
     memset(msix_handlers, 0, sizeof(msix_handlers));
     memset(msix_vector_alloc, 0, sizeof(msix_vector_alloc));
+    // Reserve vector 0x80 (syscall gate) so MSI-X never overwrites it
+    unsigned int syscall_idx = 0x80 - MSIX_VECTOR_BASE;
+    if (syscall_idx < MSIX_VECTOR_COUNT)
+        msix_vector_alloc[syscall_idx] = 1;
     msix_initialized = 1;
-    klog(LOG_OK, "MSI-X: vector pool 0x30-0xEF ready");
+    klog(LOG_OK, "MSI-X: vector pool 0x30-0xEF ready (0x80 reserved for syscall)");
 }
 
 int msix_alloc_vector(void)
@@ -50,6 +54,7 @@ int msix_register_handler(int vector, void (*handler)(void))
     if (!handler) return -1;
 
     unsigned int idx = vector - MSIX_VECTOR_BASE;
+    if (msix_handlers[idx]) return -1;
     msix_handlers[idx] = handler;
     set_idt_gate(vector, msix_stub_table[idx]);
     return 0;
@@ -105,7 +110,7 @@ int pci_msix_table_map(pci_device_t *dev,
     uint32_t table_addr = bar->base + table_offset;
     uint32_t table_end  = table_addr + table_size * MSIX_TABLE_ENTRY_SIZE;
 
-    if (table_end > bar->base + bar->size) return -1;
+    if (table_end > bar->base + bar->size) { klog(LOG_WARN, "MSI-X: table beyond BAR"); return -1; }
 
     uint32_t page_base = table_addr & ~0xFFF;
     uint32_t page_end  = (table_end + 0xFFF) & ~0xFFF;
