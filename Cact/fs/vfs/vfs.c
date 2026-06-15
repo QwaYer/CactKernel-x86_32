@@ -106,7 +106,7 @@ vfs_node_t *vfs_walk_path(vfs_node_t *start, const char *path) {
     if (!cur) return 0;
 
     const char *p = path;
-    while (*p == '/') p++;           // skip leading '/'
+    while (*p == '/') p++;
 
     while (*p && cur) {
         char seg[128];
@@ -115,7 +115,8 @@ vfs_node_t *vfs_walk_path(vfs_node_t *start, const char *path) {
         if (*p && *p != '/') return 0;
         seg[si] = '\0';
         if (*p == '/') p++;
-        if (si == 0) continue;       // skip repeated '/'
+        if (si == 0) continue;
+        if (si == 2 && seg[0] == '.' && seg[1] == '.') continue;
         cur = _walk_one(cur, seg);
     }
     return cur;
@@ -288,6 +289,7 @@ static vfs_node_t *_walk_path_follow(vfs_node_t *start, const char *path,
         seg[si] = '\0';
         if (*p == '/') p++;
         if (si == 0) continue;
+        if (si == 2 && seg[0] == '.' && seg[1] == '.') continue;
         cur = _walk_one_follow(cur, seg, depth, err);
     }
     if (*err) return 0;

@@ -23,16 +23,20 @@ int strlen(const char* s) {
 
 // Append src to dest, return dest
 char* strcat(char* dest, const char* src) {
+    if (!dest || !src) return dest;
     char* ptr = dest + strlen(dest);
-    while (*src != '\0') *ptr++ = *src++;
+    uint32_t remaining = (uint32_t)-1;
+    while (*src != '\0' && remaining--) *ptr++ = *src++;
     *ptr = '\0';
     return dest;
 }
 
 // Copy src to dest, return dest
 char* strcpy(char* dest, const char* src) {
+    if (!dest || !src) return dest;
     char* ptr = dest;
-    while (*src != '\0') *ptr++ = *src++;
+    uint32_t remaining = (uint32_t)-1;
+    while (*src != '\0' && remaining--) *ptr++ = *src++;
     *ptr = '\0';
     return dest;
 }
