@@ -102,6 +102,11 @@ static void _lru_touch(struct page *p) {
 // Write dirty page back to disk
 static void _writeback(struct page *p) {
     if (!(p->flags & PC_FLAG_DIRTY)) return;
+    if (!p->data) {
+        kprint("[pc] _writeback: page has no data buffer, clearing dirty flag\n");
+        p->flags &= (uint8_t)~PC_FLAG_DIRTY;
+        return;
+    }
     uint32_t spb = p->block_size / 512;        // sectors per block
     uint32_t lba = p->block_no * spb;
     for (uint32_t i = 0; i < spb; i++)
@@ -237,7 +242,15 @@ void pc_mark_dirty(uint32_t dev, uint32_t block_no) {
 void pc_put_page(uint32_t dev, uint32_t block_no) {
     struct page *p = _hash_find(dev, block_no);
     if (!p) return;
-    if (p->pin_count > 0) p->pin_count--;
+    if (p->pin_count == 0) {
+        kprint("[pc] pc_put_page: pin_count underflow (dev=");
+        { char _b[16]; itoa((int)dev, _b); kprint(_b); }
+        kprint(", block=");
+        { char _b[16]; itoa((int)block_no, _b); kprint(_b); }
+        kprint(")\n");
+        return;
+    }
+    p->pin_count--;
 }
 
 // Flush all dirty pages belonging to a device

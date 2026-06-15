@@ -44,8 +44,17 @@ void mouse_post_move(int x, int y, int buttons, int absolute) {
         mouse_x = x;
         mouse_y = y;
     } else {
-        mouse_x += x;
-        mouse_y += y;
+        if ((x > 0 && mouse_x > (int)0x7FFFFFFF - x) ||
+            (x < 0 && mouse_x < (int)(-2147483647 - 1) - x))
+            mouse_x = (x > 0) ? (int)0x7FFFFFFF : (int)(-2147483647 - 1);
+        else
+            mouse_x += x;
+
+        if ((y > 0 && mouse_y > (int)0x7FFFFFFF - y) ||
+            (y < 0 && mouse_y < (int)(-2147483647 - 1) - y))
+            mouse_y = (y > 0) ? (int)0x7FFFFFFF : (int)(-2147483647 - 1);
+        else
+            mouse_y += y;
     }
 
     // Clamp to screen bounds

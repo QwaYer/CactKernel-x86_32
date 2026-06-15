@@ -65,10 +65,10 @@ void ps2_mouse_handler(void) {
             mouse_cycle = 0;
 
             // Sign-extend 9-bit deltas to 32-bit
-            int dx = mouse_byte[1];
-            int dy = mouse_byte[2];
-            if (mouse_byte[0] & 0x10) dx |= 0xFFFFFF00;   // bit 4 = X sign
-            if (mouse_byte[0] & 0x20) dy |= 0xFFFFFF00;   // bit 5 = Y sign
+            uint32_t raw_x = (uint8_t)mouse_byte[1];
+            uint32_t raw_y = (uint8_t)mouse_byte[2];
+            int dx = (mouse_byte[0] & 0x10) ? (int)(raw_x | 0xFFFFFF00) : (int)raw_x;
+            int dy = (mouse_byte[0] & 0x20) ? (int)(raw_y | 0xFFFFFF00) : (int)raw_y;
 
             // Y axis is inverted in PS/2 relative to screen coordinates
             mouse_post_move(dx, -dy, mouse_byte[0] & 0x07, 0);
