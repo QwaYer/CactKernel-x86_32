@@ -3,6 +3,7 @@
 //! Each open socket ties a `VfsNode` to a row in the fixed-size socket table.
 
 use core::ffi::{c_char, c_int, c_void};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::ffi_kernel;
 use crate::tcp;
@@ -61,7 +62,9 @@ extern "C" fn socket_open_op(node: *mut VfsNode) {
     if node.is_null() {
         return;
     }
-    unsafe { (*node).refcount = (*node).refcount.wrapping_add(1) }
+    unsafe {
+        node_refcount(node).fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 extern "C" fn socket_close_op(node: *mut VfsNode) {
@@ -69,8 +72,7 @@ extern "C" fn socket_close_op(node: *mut VfsNode) {
         return;
     }
     unsafe {
-        if (*node).refcount > 1 {
-            (*node).refcount -= 1;
+        if node_refcount(node).fetch_sub(1, Ordering::AcqRel) > 1 {
             return;
         }
         let ks = ksock_from_node(node);
@@ -194,6 +196,10 @@ fn ksock_alloc() -> *mut Ksock {
     core::ptr::null_mut()
 }
 
+unsafe fn node_refcount(node: *mut VfsNode) -> &'static AtomicU32 {
+    &*(core::ptr::addr_of!((*node).refcount) as *const AtomicU32)
+}
+
 unsafe fn make_socket_node(ks: *mut Ksock) -> *mut VfsNode {
     let node = ffi_kernel::kmalloc(core::mem::size_of::<VfsNode>()).cast::<VfsNode>();
     if node.is_null() {
@@ -201,7 +207,7 @@ unsafe fn make_socket_node(ks: *mut Ksock) -> *mut VfsNode {
     }
     core::ptr::write_bytes(node.cast::<u8>(), 0, core::mem::size_of::<VfsNode>());
     (*node).type_ = VFS_SOCKET;
-    (*node).refcount = 1;
+    node_refcount(node).store(1, Ordering::Relaxed);
     (*node).ops = core::ptr::addr_of_mut!(SOCKET_OPS);
     (*node).priv_ = ks.cast::<c_void>();
     node
