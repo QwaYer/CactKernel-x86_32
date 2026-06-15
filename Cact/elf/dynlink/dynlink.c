@@ -189,6 +189,7 @@ static loaded_so_t* _alloc_so_slot(dyn_ctx_t* ctx) {
     e->symtab       = 0;
     e->symtab_count = 0;
     e->strtab       = 0;
+    e->strtab_size  = 0;
     e->init_addr    = 0;
     e->fini_addr    = 0;
     return e;
@@ -203,6 +204,8 @@ static uint32_t _symcount_from_gnu_hash(uint32_t gnu_hash_addr) {
     uint32_t bloom_size = gh[2];
 
     if (nbuckets == 0) return 0;
+
+    if (bloom_size > 1024) bloom_size = 1024;
 
     uint32_t* buckets = gh + 4 + bloom_size;
     uint32_t* chains  = buckets + nbuckets;
@@ -228,13 +231,17 @@ static uint32_t _symcount_from_gnu_hash(uint32_t gnu_hash_addr) {
     return symoffset + 8192;
 }
 
-static void _fill_so_from_dynamic(loaded_so_t* so, Elf32_Dyn* dyn) {
+static void _fill_so_from_dynamic(loaded_so_t* so, Elf32_Dyn* dyn, uint32_t dyn_size) {
     uint32_t hash_addr = 0;
     uint32_t gnu_hash_addr = 0;
+    uint32_t max_entries = dyn_size / sizeof(Elf32_Dyn);
 
-    for (Elf32_Dyn* d = dyn; d->d_tag != DT_NULL; d++) {
+    for (uint32_t i = 0; i < max_entries; i++) {
+        Elf32_Dyn* d = &dyn[i];
+        if (d->d_tag == DT_NULL) break;
         switch (d->d_tag) {
         case DT_STRTAB: so->strtab    = (char*)      d->d_un.d_ptr; break;
+        case DT_STRSZ:  so->strtab_size = d->d_un.d_val;            break;
         case DT_SYMTAB: so->symtab    = (Elf32_Sym*) d->d_un.d_ptr; break;
         case DT_HASH:   hash_addr     = d->d_un.d_ptr;              break;
         case DT_GNU_HASH: gnu_hash_addr = d->d_un.d_ptr;            break;
@@ -316,10 +323,10 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
     so->load_base = bias;
     so->ref_count = 1;
     if (dyn_seg)
-        _fill_so_from_dynamic(so, dyn_seg);
+        _fill_so_from_dynamic(so, dyn_seg, dyn_size);
 
     if (dyn_seg)
-        dynlink_process_dynamic(ctx, bias, bias, dyn_seg);
+        dynlink_process_dynamic(ctx, bias, bias, dyn_seg, dyn_size);
 
     return so;
 }
@@ -337,6 +344,7 @@ uint32_t dynlink_resolve_symbol(dyn_ctx_t* ctx, const char* name) {
             int bind = ELF32_ST_BIND(sym->st_info);
             if (bind != STB_GLOBAL && bind != STB_WEAK) continue;
             if (sym->st_value == 0) continue;
+            if (sym->st_name >= so->strtab_size) continue;
 
             const char* sym_name = so->strtab + sym->st_name;
             if (strcmp((char*)sym_name, (char*)name) == 0)
@@ -352,6 +360,7 @@ static void _apply_rel(dyn_ctx_t*  ctx,
                         uint32_t    sym_bias,
                         Elf32_Sym*  symtab,
                         char*       strtab,
+                        uint32_t    strtab_size,
                         Elf32_Rel*  rel)
 {
     uint32_t  sym_idx  = ELF32_R_SYM(rel->r_info);
@@ -372,6 +381,10 @@ static void _apply_rel(dyn_ctx_t*  ctx,
     if (sym_idx != 0 && symtab && strtab) {
         Elf32_Sym* sym = &symtab[sym_idx];
         if (sym->st_shndx == SHN_UNDEF) {
+            if (sym->st_name >= strtab_size) {
+                kprint("[DL] _apply_rel: strtab offset out of bounds\n");
+                return;
+            }
             const char* sname = strtab + sym->st_name;
             S = dynlink_resolve_symbol(ctx, sname);
             if (S == 0) {
@@ -435,11 +448,12 @@ static void _apply_rel(dyn_ctx_t*  ctx,
 }
 
 static void _apply_rela(dyn_ctx_t*  ctx,
-                         uint32_t    image_start,
-                         uint32_t    sym_bias,
-                         Elf32_Sym*  symtab,
-                         char*       strtab,
-                         Elf32_Rela* rela)
+                          uint32_t    image_start,
+                          uint32_t    sym_bias,
+                          Elf32_Sym*  symtab,
+                          char*       strtab,
+                          uint32_t    strtab_size,
+                          Elf32_Rela* rela)
 {
     uint32_t  sym_idx  = ELF32_R_SYM(rela->r_info);
     uint8_t   rel_type = ELF32_R_TYPE(rela->r_info);
@@ -459,6 +473,10 @@ static void _apply_rela(dyn_ctx_t*  ctx,
     if (sym_idx != 0 && symtab && strtab) {
         Elf32_Sym* sym = &symtab[sym_idx];
         if (sym->st_shndx == SHN_UNDEF) {
+            if (sym->st_name >= strtab_size) {
+                kprint("[DL] _apply_rela: strtab offset out of bounds\n");
+                return;
+            }
             const char* sname = strtab + sym->st_name;
             S = dynlink_resolve_symbol(ctx, sname);
             if (S == 0) {
@@ -510,10 +528,11 @@ static void _apply_rela(dyn_ctx_t*  ctx,
 
 
 int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_bias,
-                             Elf32_Dyn* dyn)
+                             Elf32_Dyn* dyn, uint32_t dyn_size)
 {
     Elf32_Sym* symtab       = 0;
     char*      strtab       = 0;
+    uint32_t   strtab_size  = 0;
     uint32_t   symtab_count = 0;
     uint32_t   hash_addr    = 0;
     uint32_t   gnu_hash_addr = 0;
@@ -530,10 +549,15 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
     uint32_t    jmprel_sz = 0;
     uint32_t    pltrel   = DT_REL;
 
-    for (Elf32_Dyn* d = dyn; d->d_tag != DT_NULL; d++) {
+    uint32_t max_entries = dyn_size / sizeof(Elf32_Dyn);
+
+    for (uint32_t i = 0; i < max_entries; i++) {
+        Elf32_Dyn* d = &dyn[i];
+        if (d->d_tag == DT_NULL) break;
         switch (d->d_tag) {
         case DT_SYMTAB:   symtab    = (Elf32_Sym*) d->d_un.d_ptr; break;
         case DT_STRTAB:   strtab    = (char*)      d->d_un.d_ptr; break;
+        case DT_STRSZ:    strtab_size = d->d_un.d_val;            break;
         case DT_HASH:     hash_addr = d->d_un.d_ptr;              break;
         case DT_GNU_HASH: gnu_hash_addr = d->d_un.d_ptr;          break;
         case DT_REL:      rel       = (Elf32_Rel*) d->d_un.d_ptr; break;
@@ -573,14 +597,21 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
         cur->load_base = sym_bias;
         cur->symtab = symtab;
         cur->strtab = strtab;
+        cur->strtab_size = strtab_size;
         cur->symtab_count = symtab_count;
         cur->ref_count = 1;
     }
 
-    for (Elf32_Dyn* d = dyn; d->d_tag != DT_NULL; d++) {
+    for (uint32_t i = 0; i < max_entries; i++) {
+        Elf32_Dyn* d = &dyn[i];
+        if (d->d_tag == DT_NULL) break;
         if (d->d_tag == DT_NEEDED) {
             if (!strtab) {
                 kprint("[DL] DT_NEEDED but no strtab\n");
+                continue;
+            }
+            if (d->d_un.d_val >= strtab_size) {
+                kprint("[DL] DT_NEEDED: strtab offset out of bounds\n");
                 continue;
             }
             const char* soname = strtab + d->d_un.d_val;
@@ -589,19 +620,19 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
         }
     }
 
-    if (rel && rel_sz > 0) {
+    if (rel && rel_sz > 0 && rel_ent > 0) {
         uint32_t n = rel_sz / rel_ent;
         for (uint32_t i = 0; i < n; i++) {
             Elf32_Rel* r = (Elf32_Rel*)((uint8_t*)rel + i * rel_ent);
-            _apply_rel(ctx, image_start, sym_bias, symtab, strtab, r);
+            _apply_rel(ctx, image_start, sym_bias, symtab, strtab, strtab_size, r);
         }
     }
 
-    if (rela && rela_sz > 0) {
+    if (rela && rela_sz > 0 && rela_ent > 0) {
         uint32_t n = rela_sz / rela_ent;
         for (uint32_t i = 0; i < n; i++) {
             Elf32_Rela* r = (Elf32_Rela*)((uint8_t*)rela + i * rela_ent);
-            _apply_rela(ctx, image_start, sym_bias, symtab, strtab, r);
+            _apply_rela(ctx, image_start, sym_bias, symtab, strtab, strtab_size, r);
         }
     }
 
@@ -611,14 +642,14 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
             for (uint32_t i = 0; i < n; i++) {
                 Elf32_Rela* r = (Elf32_Rela*)((uint8_t*)jmprel
                                                + i * sizeof(Elf32_Rela));
-                _apply_rela(ctx, image_start, sym_bias, symtab, strtab, r);
+                _apply_rela(ctx, image_start, sym_bias, symtab, strtab, strtab_size, r);
             }
         } else {
             uint32_t n = jmprel_sz / sizeof(Elf32_Rel);
             for (uint32_t i = 0; i < n; i++) {
                 Elf32_Rel* r = (Elf32_Rel*)((uint8_t*)jmprel
                                              + i * sizeof(Elf32_Rel));
-                _apply_rel(ctx, image_start, sym_bias, symtab, strtab, r);
+                _apply_rel(ctx, image_start, sym_bias, symtab, strtab, strtab_size, r);
             }
         }
     }
