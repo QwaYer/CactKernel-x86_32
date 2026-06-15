@@ -161,12 +161,15 @@ int sys_sendto(struct syscall_frame *regs) {
     ksock_t *ks = ksock_from_node(node);
     if (!ks) return -1;
 
-    if (ks->kind == KS_TCP)
+    if (ks->kind == KS_TCP) {
+        if ((uint32_t)len > UINT16_MAX) return -1;
         return tcp_send(ks->proto_idx, (uint8_t *)buf, (uint16_t)len);
+    }
 
     if (ks->kind == KS_UDP) {
         uint32_t dst_ip   = dest->sin_addr;
         uint16_t dst_port = ntohs(dest->sin_port);
+        if ((uint32_t)len > UINT16_MAX) return -1;
         return udp_sock_send(ks->proto_idx, dst_ip, dst_port,
                              (const uint8_t *)buf, (uint16_t)len);
     }
@@ -196,6 +199,7 @@ int sys_recvfrom(struct syscall_frame *regs) {
 
     int ret = -1;
     if (ks->kind == KS_TCP) {
+        if ((uint32_t)len > UINT16_MAX) return -1;
         ret = tcp_recv(ks->proto_idx, (uint8_t *)buf, (uint16_t)len);
         if (ret > 0 && src) {
             tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
@@ -207,6 +211,7 @@ int sys_recvfrom(struct syscall_frame *regs) {
     } else if (ks->kind == KS_UDP) {
         uint32_t src_ip   = 0;
         uint16_t src_port = 0;
+        if ((uint32_t)len > UINT16_MAX) return -1;
         ret = udp_sock_recv(ks->proto_idx, (uint8_t *)buf, (uint16_t)len,
                             &src_ip, &src_port);
         if (ret > 0 && src) {
@@ -333,6 +338,7 @@ int sys_ping_echo(struct syscall_frame *regs) {
 }
 
 int sys_netcfg_set(struct syscall_frame *regs) {
+    if (!current_task || current_task->proc->euid != 0) return -1;
     netcfg_args_t *args = (netcfg_args_t *)regs->ebx;
     if (!validate_user_ptr(args, sizeof(netcfg_args_t))) return -1;
     rust_net_dhcp_lease_cfg_t lease = {

@@ -66,6 +66,7 @@ unsafe extern "C" {
     pub fn elf_get_brk_start(node: *mut VfsNode) -> u32;
 
     pub fn vfs_walk_path(root: *mut VfsNode, path: *const u8) -> *mut VfsNode;
+    pub fn vfs_check_perm(node: *mut VfsNode, perm: u32) -> i32;
     pub fn close_vfs(node: *mut VfsNode);
     pub fn open_vfs(node: *mut VfsNode);
 

@@ -26,7 +26,14 @@ int sys_open(char *name, int flags) {
     vfs_node_t *node = _resolve_path(name);
     if (!node) {
         if (!(flags & OPEN_CREAT)) return -1;
-        if (sys_create(name) != 0) return -1;
+
+        char basename[128];
+        vfs_node_t *parent = _resolve_parent(name, basename, 128);
+        if (!parent || !basename[0]) return -1;
+
+        if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
+
+        if (create_vfs(parent, basename) != 0) return -1;
         node = _resolve_path(name);
         if (!node) return -1;
     }

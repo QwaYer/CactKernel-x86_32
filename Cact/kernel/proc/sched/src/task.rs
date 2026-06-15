@@ -885,6 +885,22 @@ pub unsafe extern "C" fn task_exec(
 
     let mut new_dyn_ctx: *mut DynCtx = ptr::null_mut();
     let is_dynamic = ffi::elf_is_dynamic(path) != 0;
+
+    // Check execute permission before loading
+    {
+        let exec_node = ffi::vfs_walk_path(unsafe { *ffi::vfs_root.get() }, path);
+        if exec_node.is_null() || ffi::vfs_check_perm(exec_node, 0x01) < 0 {
+            if !new_dyn_ctx.is_null() {
+                ffi::dynlink_ctx_destroy(new_dyn_ctx);
+            }
+            ffi::vmm_free_address_space(new_pd);
+            for page in new_ustack_pages {
+                ffi::kfree_page(page);
+            }
+            return -1;
+        }
+    }
+
     let entry = if is_dynamic {
         new_dyn_ctx = ffi::dynlink_ctx_create(new_pd, &raw mut (*p).mm);
         if new_dyn_ctx.is_null() {

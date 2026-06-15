@@ -157,6 +157,10 @@ static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
 
 // Main hardware initialisation sequence
 void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
+    // Randomise stack canary before any function-prologue checks
+    extern void stack_guard_init(void);
+    stack_guard_init();
+
     // Memory management (order matters!)
     init_gdt();                     // Global Descriptor Table
     klog(LOG_OK, "GDT initialized");
