@@ -27,8 +27,9 @@
 // Symlink resolution depth limit
 #define VFS_SYMLINK_MAX_DEPTH 8
 
-// Error code returned when symlink depth is exceeded
-#define ELOOP 40
+// Error codes for VFS path resolution
+#define ELOOP         40
+#define ENAMETOOLONG  36
 
 struct vfs_node;
 struct vfs_dirent;
