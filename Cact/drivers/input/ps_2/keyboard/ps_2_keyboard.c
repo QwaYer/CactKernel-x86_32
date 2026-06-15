@@ -30,24 +30,30 @@ static int ctrl_pressed     = 0;
 
 // Initialise PS/2 controller: enable first port, unmask IRQ1
 int ps2_keyboard_init(void) {
-    while (port_byte_in(0x64) & 0x01)
+    uint32_t timeout;
+    for (timeout = 100000; timeout && (port_byte_in(0x64) & 0x01); timeout--)
         port_byte_in(0x60);
 
-    while (port_byte_in(0x64) & 0x02);
+    for (timeout = 100000; timeout && (port_byte_in(0x64) & 0x02); timeout--);
+    if (!timeout) return -1;
     port_byte_out(0x64, 0xAE);
 
-    while (port_byte_in(0x64) & 0x02);
+    for (timeout = 100000; timeout && (port_byte_in(0x64) & 0x02); timeout--);
+    if (!timeout) return -1;
     port_byte_out(0x64, 0x20);
-    while (!(port_byte_in(0x64) & 0x01));
+    for (timeout = 100000; timeout && !(port_byte_in(0x64) & 0x01); timeout--);
+    if (!timeout) return -1;
     unsigned char config = port_byte_in(0x60);
     config |= 0x01;  // enable IRQ1
 
-    while (port_byte_in(0x64) & 0x02);
+    for (timeout = 100000; timeout && (port_byte_in(0x64) & 0x02); timeout--);
+    if (!timeout) return -1;
     port_byte_out(0x64, 0x60);
-    while (port_byte_in(0x64) & 0x02);
+    for (timeout = 100000; timeout && (port_byte_in(0x64) & 0x02); timeout--);
+    if (!timeout) return -1;
     port_byte_out(0x60, config);
 
-    while (port_byte_in(0x64) & 0x01)
+    for (timeout = 100000; timeout && (port_byte_in(0x64) & 0x01); timeout--)
         port_byte_in(0x60);
 
     return 0;

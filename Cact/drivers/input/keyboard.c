@@ -18,6 +18,7 @@ void keyboard_post_key(char c) {
     uint32_t next = (kb_wr + 1) % KB_BUF_SIZE;
     if (next != kb_rd) {              // not full
         kb_buf[kb_wr] = c;
+        __asm__ __volatile__("" ::: "memory");   // barrier: data visible before wr update
         kb_wr = next;
     }
     last_char          = c;
@@ -29,6 +30,7 @@ void keyboard_post_key(char c) {
 // Returns -1 if buffer is empty.
 int keyboard_read_char(void) {
     if (kb_rd == kb_wr) return -1;    // empty
+    __asm__ __volatile__("" ::: "memory");   // barrier: read data after reading kb_wr
     char c = kb_buf[kb_rd];
     kb_rd = (kb_rd + 1) % KB_BUF_SIZE;
     return (unsigned char)c;
