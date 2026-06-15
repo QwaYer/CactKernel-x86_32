@@ -97,9 +97,10 @@ typedef struct loaded_so {
     uint32_t load_base;           
     uint32_t load_size;          
 
-    Elf32_Sym* symtab;           
-    uint32_t   symtab_count;      
-    char*      strtab;         
+    Elf32_Sym* symtab;
+    uint32_t   symtab_count;
+    char*      strtab;
+    uint32_t   strtab_size;
 
     uint32_t   init_addr;     
     uint32_t   fini_addr;        
@@ -132,7 +133,7 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name);
  *              ET_DYN/PIE, 0 for ET_EXEC where st_value is already absolute).
  */
 int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_bias,
-                             Elf32_Dyn* dyn);
+                             Elf32_Dyn* dyn, uint32_t dyn_size);
 
 uint32_t dynlink_resolve_symbol(dyn_ctx_t* ctx, const char* name);
 

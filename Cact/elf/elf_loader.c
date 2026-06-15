@@ -191,6 +191,7 @@ void* load_elf_dynamic(char*                path,
     }
 
     Elf32_Dyn* dyn_vaddr = 0;
+    uint32_t   dyn_size  = 0;
     uint32_t   min_load_vaddr = 0xFFFFFFFFu;
     uint32_t   load_bias = 0;
 
@@ -285,10 +286,8 @@ void* load_elf_dynamic(char*                path,
         }
 
         if (ph.p_type == PT_DYNAMIC) {
-            /* В CactOS-policy все исполняемые ELF (и ET_EXEC PIE, и ET_DYN с
-             * фиксированной базой) маппятся ровно на свои p_vaddr — bias = 0,
-             * адреса в .dynamic уже абсолютные. */
             dyn_vaddr = (Elf32_Dyn*)ph.p_vaddr;
+            dyn_size  = ph.p_filesz;
         }
     }
 
@@ -304,7 +303,7 @@ void* load_elf_dynamic(char*                path,
         uint32_t* saved_pd = get_current_pd();
         switch_paging(pd);
 
-        int rc = dynlink_process_dynamic(ctx, image_start, sym_bias, dyn_vaddr);
+        int rc = dynlink_process_dynamic(ctx, image_start, sym_bias, dyn_vaddr, dyn_size);
         if (rc != 0) {
             switch_paging(saved_pd);
             kprint("[ELF-DYN] ERR: dynamic linking failed\n");
