@@ -1,6 +1,7 @@
 //! smoltcp integration: Ethernet PHY shim, interface setup, DHCP, ICMP, and the central poll loop.
 
 use core::net::Ipv4Addr;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use smoltcp::iface::{Config, Interface, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -144,6 +145,13 @@ struct CactPhy {
     tx: [u8; PHY_MTU],
 }
 
+fn active_nic_ptr() -> *mut crate::types::NetDriver {
+    unsafe {
+        AtomicPtr::from_ptr(core::ptr::addr_of_mut!(runtime::active_nic))
+            .load(Ordering::Acquire)
+    }
+}
+
 impl CactPhy {
     const fn new() -> Self {
         Self {
@@ -179,13 +187,14 @@ impl TxToken for CactTxToken<'_> {
     {
         let r = f(&mut self.buf[..len]);
         unsafe {
-            if !runtime::active_nic.is_null() {
+            let nic = active_nic_ptr();
+            if !nic.is_null() {
                 let skb = skb::skb_alloc();
                 if !skb.is_null() {
                     let p = skb::skb_put(skb, len as u16);
                     if !p.is_null() {
                         core::ptr::copy_nonoverlapping(self.buf.as_ptr(), p, len);
-                        if let Some(send) = (*runtime::active_nic).send {
+                        if let Some(send) = (*nic).send {
                             let _ = send(skb);
                         } else {
                             skb::skb_free(skb);
@@ -311,8 +320,9 @@ pub fn stack_init() {
 
 pub fn stack_poll() {
     unsafe {
-        if let Some(poll) = (!runtime::active_nic.is_null())
-            .then(|| (*runtime::active_nic).poll)
+        let nic = active_nic_ptr();
+        if let Some(poll) = (!nic.is_null())
+            .then(|| (*nic).poll)
             .flatten()
         {
             poll();

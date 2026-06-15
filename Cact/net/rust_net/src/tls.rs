@@ -304,17 +304,24 @@ pub extern "C" fn cact_tls_recv(conn_idx: c_int, buf: *mut u8, max_len: u16) -> 
 
         let result = match status.state {
             Ok(ConnectionState::ReadTraffic(mut reader)) => {
-                let mut copied = 0;
+                let mut copied: isize = 0;
                 while let Some(rec) = reader.next_record() {
                     if let Ok(record) = rec {
                         let payload = record.payload;
                         let n = dst.len().min(payload.len());
-                        dst[..n].copy_from_slice(&payload[..n]);
                         if n < payload.len() {
-                            tls.ready_plaintext.extend_from_slice(&payload[n..]);
+                            let rem = &payload[n..];
+                            if tls.ready_plaintext.len() + rem.len() > BUF_SIZE * 4 {
+                                copied = -1;
+                                break;
+                            }
+                            dst[..n].copy_from_slice(&payload[..n]);
+                            tls.ready_plaintext.extend_from_slice(rem);
                             tls.plaintext_off = 0;
+                        } else {
+                            dst[..n].copy_from_slice(&payload[..n]);
                         }
-                        copied = n;
+                        copied = n as isize;
                         break;
                     }
                 }
