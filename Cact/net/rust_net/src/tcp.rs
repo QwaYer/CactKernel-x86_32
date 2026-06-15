@@ -11,16 +11,26 @@ use crate::stack::{self};
 use crate::types::*;
 
 fn tcp_lock() {
-    unsafe { core::arch::asm!("cli"); }
+    unsafe {
+        let flags: u32;
+        core::arch::asm!("pushfd; pop {flags}", flags = out(reg) flags, options(nomem, preserves_flags));
+        core::arch::asm!("cli");
+        TCP_SAVED_FLAGS.store(flags, Ordering::Relaxed);
+    }
     while TCP_LOCK.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
         unsafe { core::arch::asm!("pause"); }
     }
 }
 
 fn tcp_unlock() {
+    let flags = TCP_SAVED_FLAGS.load(Ordering::Relaxed);
     TCP_LOCK.store(0, Ordering::Release);
-    unsafe { core::arch::asm!("sti"); }
+    if flags & (1 << 9) != 0 {
+        unsafe { core::arch::asm!("sti"); }
+    }
 }
+
+static TCP_SAVED_FLAGS: AtomicU32 = AtomicU32::new(0);
 
 #[no_mangle]
 pub static mut tcp_sockets: [TcpSocket; TCP_MAX_SOCKETS] = [TcpSocket {
@@ -512,6 +522,12 @@ pub fn tcp_accept_transfer(listen_idx: i32, child_idx: i32) -> i32 {
         tcp_sockets[ci].accept_ready = 0;
         tcp_unlock();
         let Some(nh) = alloc_tcp_smoltcp(li, socks) else {
+            tcp_lock();
+            TCP_HANDLE[li] = Some(lh);
+            TCP_HANDLE[ci] = None;
+            tcp_sockets[ci].used = 0;
+            tcp_sockets[ci].listen_parent = -1;
+            tcp_unlock();
             return -1;
         };
         tcp_lock();

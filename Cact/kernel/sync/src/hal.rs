@@ -27,7 +27,7 @@ pub fn interrupts_enable() {
 pub fn eflags_read() -> u32 {
     unsafe {
         let flags: u32;
-        core::arch::asm!("pushfd; pop {}", out(reg) flags, options(nomem, nostack));
+        core::arch::asm!("pushfd; pop {}", out(reg) flags, options(nomem, preserves_flags));
         flags
     }
 }

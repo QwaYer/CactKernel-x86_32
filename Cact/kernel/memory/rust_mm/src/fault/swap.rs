@@ -2,6 +2,8 @@
 //!
 //! Encodes swapped-out PTEs with `PAGE_SWAPPED`; cooperates with the page-fault path.
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use crate::ffi::*;
 use crate::pmm::{kalloc, kfree_page};
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg, flush_tlb};
@@ -230,9 +232,9 @@ pub extern "C" fn swap_evict_page(pd: *mut u32) -> i32 {
             continue;
         }
 
-        let pt = (pde & !0xFFF) as *mut u32;
-        // SAFETY: pt is valid.
-        let pte = unsafe { *pt.add(ptj as usize) };
+        let pt_atomic = (pde & !0xFFF) as *mut AtomicU32;
+        // SAFETY: pt_atomic is valid — page table mapped in virtual space.
+        let pte = unsafe { (*pt_atomic.add(ptj as usize)).load(Ordering::Relaxed) };
 
         if pte & PAGE_PRESENT == 0 || swap_pte_is_swapped(pte) {
             ptj += 1;
@@ -252,8 +254,7 @@ pub extern "C" fn swap_evict_page(pd: *mut u32) -> i32 {
         }
 
         if pte & PTE_ACCESSED != 0 {
-            // SAFETY: clearing accessed bit in PTE.
-            unsafe { *pt.add(ptj as usize) = pte & !PTE_ACCESSED; }
+            unsafe { (*pt_atomic.add(ptj as usize)).fetch_and(!PTE_ACCESSED, Ordering::AcqRel); }
             let vaddr = (pdi << 22) | (ptj << 12);
             flush_tlb(vaddr);
             ptj += 1;
@@ -272,8 +273,7 @@ pub extern "C" fn swap_evict_page(pd: *mut u32) -> i32 {
 
         let mut new_pte = swap_encode_pte(slot);
         new_pte |= (pte & (PAGE_RW | PAGE_USER)) & !PAGE_PRESENT;
-        // SAFETY: writing swapped PTE.
-        unsafe { *pt.add(ptj as usize) = new_pte; }
+        unsafe { (*pt_atomic.add(ptj as usize)).store(new_pte, Ordering::Release); }
 
         let vaddr = (pdi << 22) | (ptj << 12);
         flush_tlb(vaddr);
@@ -310,9 +310,9 @@ pub extern "C" fn swap_handle_fault(pd: *mut u32, fault_addr: u32) -> i32 {
         return -1;
     }
 
-    let pt = (pde & !0xFFF) as *mut u32;
+    let pt = (pde & !0xFFF) as *mut AtomicU32;
     // SAFETY: pt is valid.
-    let pte = unsafe { *pt.add(pti) };
+    let pte = unsafe { (*pt.add(pti)).load(Ordering::Acquire) };
 
     if !swap_pte_is_swapped(pte) {
         return -1;
@@ -338,7 +338,7 @@ pub extern "C" fn swap_handle_fault(pd: *mut u32, fault_addr: u32) -> i32 {
 
     let old_flags = pte & (PAGE_RW | PAGE_USER);
     // SAFETY: writing the restored PTE.
-    unsafe { *pt.add(pti) = (phys as u32 & !0xFFF) | old_flags | PAGE_PRESENT; }
+    unsafe { (*pt.add(pti)).store((phys as u32 & !0xFFF) | old_flags | PAGE_PRESENT, Ordering::Release); }
     flush_tlb(page_va);
     0
 }
