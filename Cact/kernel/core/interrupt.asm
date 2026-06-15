@@ -1,6 +1,5 @@
 [bits 32]
 
-global keyboard_isr
 global timer_isr
 global syscall_isr
 global isr_common_stub
@@ -35,14 +34,10 @@ global isr28
 global isr29
 global isr30
 global isr31
-global mouse_isr
 global xhci_isr
-global usb_isr
 
-extern ps2_keyboard_handler
 extern exception_handler
 extern syscall_handler
-extern ps2_mouse_handler
 extern current_task
 extern schedule
 extern on_timer_tick       
@@ -260,48 +255,6 @@ timer_isr:
     popa
     iretd
 
-keyboard_isr:
-    pusha
-    push ds
-    push es
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    call ps2_keyboard_handler
-    call timer_eoi
-    pop es
-    pop ds
-    popa
-    iretd
-
-mouse_isr:
-    pusha
-    push ds
-    push es
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    call ps2_mouse_handler
-    call irq_master_slave_eoi
-    pop es
-    pop ds
-    popa
-    iretd
-
-usb_isr:
-    pusha
-    push ds
-    push es
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    call xhci_irq_handler
-    call irq_master_slave_eoi
-    pop es
-    pop ds
-    popa
-    iretd
-
 xhci_isr:
     pusha
     push ds
@@ -369,6 +322,23 @@ irq_common_dispatch:
     pop ds
     popa
     add esp, 4
+    iretd
+
+; ---------------------------------------------------------------------------
+; Generic PCI INTx ISR (vectors 0x30+). Just EOIs.
+; ---------------------------------------------------------------------------
+global pci_isr
+pci_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    call irq_master_slave_eoi
+    pop es
+    pop ds
+    popa
     iretd
 
 section .rodata

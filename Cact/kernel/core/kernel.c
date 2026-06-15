@@ -4,9 +4,7 @@
 #include "pcidev.h"
 #include "pci_enum.h"
 #include "pci_driver.h"
-#include "ps_2_keyboard.h"
-#include "keyboard.h"
-#include "ps_2_mouse.h"
+#include "pci_gdd.h"
 #include "memory.h"
 #include "gdt.h"
 #include "idt.h"
@@ -33,12 +31,6 @@ extern uint32_t page_directory[1024];
 struct winsize terminal_winsize;
 uint32_t       terminal_fg_pid = 0;
 
-// Probe PS/2 controller via port 0x64, return 1 if absent
-int probe_io_ports() {
-    if (port_byte_in(0x64) == 0xFF) return 1;
-    return 0;
-}
-
 // Read extended memory size from CMOS (regs 0x17/0x18), return 0 if valid
 int detect_memory() {
     port_byte_out(0x70, 0x17);
@@ -46,6 +38,26 @@ int detect_memory() {
     port_byte_out(0x70, 0x18);
     unsigned char high = port_byte_in(0x71);
     return ((high << 8) | low) > 0 ? 0 : 1;
+}
+
+// PS/2 keyboard handler (Set 1 scancode → ASCII)
+// Required for default QEMU (no xHCI / USB HID). Remove when all platforms
+// provide USB HID keyboard.
+#include "keyboard.h"
+static const char ps2_scancode_ascii[128] = {
+    0, 0, '1','2','3','4','5','6','7','8','9','0','-','=',0,0,
+    'q','w','e','r','t','y','u','i','o','p','[',']','\n',0,
+    'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\',
+    'z','x','c','v','b','n','m',',','.','/',0,'*',0,' '
+};
+static void ps2_keyboard_handler_minimal(void) {
+    uint8_t status = port_byte_in(0x64);
+    if (!(status & 0x01)) return;
+    uint8_t scancode = port_byte_in(0x60);
+    if (scancode < 0x80) {
+        char c = ps2_scancode_ascii[scancode];
+        if (c) keyboard_post_key(c);
+    }
 }
 
 // CPU exception handler — signals for user tasks, panic for kernel
@@ -172,6 +184,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Interrupts
     init_idt();                     // Interrupt Descriptor Table
     klog(LOG_OK, "IDT loaded");
+    irq_register_handler(1, ps2_keyboard_handler_minimal);
 
     serial_init();                  // COM1 — kprint/klog also go here (QEMU: -serial stdio)
     klog(LOG_OK, "Serial console (COM1) ready");
@@ -207,18 +220,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         terminal_winsize.ws_ypixel = (uint16_t)fb_h;
     }
 
-    // Input devices
-    ps2_keyboard_init();
-    ps2_mouse_init();
-    klog(LOG_OK, "PS/2 keyboard and mouse initialized");
-
     // Diagnostics
-    {
-        int io_status = probe_io_ports();
-        if (io_status)
-            klog(LOG_WARN, "port 0x64 = 0xFF — PS/2 controller absent or unresponsive");
-    }
-
     {
         int mem_status = detect_memory();
         if (mem_status)
@@ -261,6 +263,9 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     extern void usb_init(void);
     usb_init();
 
+    // GDD prompts — after USB init so USB HID keyboard works
+    pci_gdd_prompt_devices();
+
     // Process control block cache
     pc_init();
 
@@ -299,6 +304,26 @@ static void kernel_bootstrap_main(void) {
     extern void procfs_set_meminfo(uint32_t);
 
     pcidev_probe_all();
+
+    // Wire xHCI ISR — on q35 via PCI vector (GSI 16+, apic_pci_vector),
+    // on i440fx via shared ISA IRQ (irq_line).
+    {
+        extern pci_device_t *pci_device_list;
+        extern void set_idt_gate(int n, uint32_t handler);
+        extern void xhci_irq_handler(void);
+        extern void xhci_isr();
+        for (pci_device_t *d = pci_device_list; d; d = d->next) {
+            if (d->class_code != 0x0C || d->subclass != 0x03 || d->prog_if != 0x30)
+                continue;
+            // q35 path: PIRQ → GSI 16+ → PCI vector
+            int vec = apic_pci_vector(d->irq_pin);
+            if (vec > 0)
+                set_idt_gate(vec, (uint32_t)xhci_isr);
+            // i440fx path: PIRQ → ISA IRQ (shared with other PCI drivers)
+            if (d->irq_line > 0 && d->irq_line < 16)
+                irq_register_shared_handler(d->irq_line, xhci_irq_handler);
+        }
+    }
 
     mntfs_init();
 

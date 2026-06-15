@@ -191,3 +191,9 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
     kprint((char *)ent->module_path);
     kprint("\n");
 }
+
+void pci_gdd_prompt_devices(void) {
+    extern pci_device_t *pci_device_list;
+    for (pci_device_t *d = pci_device_list; d; d = d->next)
+        pci_user_prompt_module(d->class_code, d->subclass, d->prog_if, d);
+}

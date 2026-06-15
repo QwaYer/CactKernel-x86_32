@@ -20,13 +20,11 @@ extern void isr30(); extern void isr31();
 
 // IRQ handlers
 extern void timer_isr();
-extern void keyboard_isr();
-extern void mouse_isr();
 extern void syscall_isr();
 extern void usb_isr();
 extern void uhci_isr();
 extern void ohci_isr();
-extern void xhci_isr();
+extern void pci_isr();
 
 static struct idt_entry idt[256];
 static struct idt_ptr   idtp;
@@ -82,15 +80,21 @@ int init_idt(void) {
 
     // Install IRQ handlers (hardware interrupts)
     set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - timer
-    set_idt_gate(0x21, (uint32_t)keyboard_isr);     // IRQ1  - PS/2 keyboard
-    set_idt_gate(0x27, irq_stub_table[7]);          // IRQ7
-    set_idt_gate(0x29, (uint32_t)usb_isr);          // IRQ9  - USB (shared)
-    set_idt_gate(0x2A, (uint32_t)usb_isr);          // IRQ10 - USB (shared)
-    set_idt_gate(0x2B, (uint32_t)usb_isr);          // IRQ11 - USB (shared)
-    set_idt_gate(0x2C, (uint32_t)mouse_isr);        // IRQ12 - PS/2 mouse
-    set_idt_gate(0x2D, irq_stub_table[13]);         // IRQ13 — NIC modules use irq_register_handler()
-    set_idt_gate(0x2E, irq_stub_table[14]);         // IRQ14 - storage modules use irq_register_handler()
-    set_idt_gate(0x2F, irq_stub_table[15]);         // IRQ15
+    // IRQ1-IRQ15: generic stubs — dynamically overridden by irq_register_handler
+    for (int i = 1; i < 16; i++)
+        set_idt_gate(0x20 + i, irq_stub_table[i]);
+
+    // PCI INTx vectors (GSI 16+ mapped to 0x30+)
+    set_idt_gate(0x30, (uint32_t)pci_isr);
+    set_idt_gate(0x31, (uint32_t)pci_isr);
+    set_idt_gate(0x32, (uint32_t)pci_isr);
+    set_idt_gate(0x33, (uint32_t)pci_isr);
+    set_idt_gate(0x34, (uint32_t)pci_isr);
+    set_idt_gate(0x35, (uint32_t)pci_isr);
+    set_idt_gate(0x36, (uint32_t)pci_isr);
+    set_idt_gate(0x37, (uint32_t)pci_isr);
+    // Reserve a PCI vector for xHCI (overridden in kernel_bootstrap_main)
+    // xHCI may be on GSI 16 (q35) or ISA IRQ 11 (i440fx)
 
     // System call gate (int 0x80) - ring3 accessible
     set_idt_gate(0x80, (uint32_t)syscall_isr);

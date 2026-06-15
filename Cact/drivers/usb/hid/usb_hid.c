@@ -6,6 +6,7 @@
 #include "mouse.h"
 #include "memory.h"
 #include "klib.h"
+#include "keyboard.h"
 
 /* HID usage IDs for Ctrl-combo keys */
 #define HID_KEY_C      0x06   /* 'c'  — Ctrl-C → SIGINT  */
@@ -82,6 +83,8 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
 
         char c = use_shift ? hid_keymap_shift[kc] : hid_keymap[kc];
         if (!c) continue;
+
+        keyboard_post_key(c);
 
         usb_last_char = c;
         usb_key_event = 1;

@@ -51,8 +51,6 @@ RUST_NET_DIR = Cact/net/rust_net
 RUST_NET_LIB = $(RUST_NET_DIR)/target/libcact_net.a
 KERN_IDT_DIR     = Cact/kernel/idt
 DRIVER_INPUT_DIR     = Cact/drivers/input
-DRIVER_PS2_KBD_DIR   = Cact/drivers/input/ps_2/keyboard
-DRIVER_PS2_MOUSE_DIR = Cact/drivers/input/ps_2/mouse
 DRIVER_PCI_DIR        = Cact/drivers/pci
 DRIVER_PCI_ENUM_DIR   = Cact/drivers/pci/enum
 DRIVER_PCI_DRV_DIR    = Cact/drivers/pci/driver
@@ -128,8 +126,6 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_SYNC_DIR) \
          -I$(KERN_IDT_DIR) \
          -I$(DRIVER_INPUT_DIR) \
-         -I$(DRIVER_PS2_KBD_DIR) \
-         -I$(DRIVER_PS2_MOUSE_DIR) \
          -I$(DRIVER_PCI_DIR) \
          -I$(DRIVER_PCI_ENUM_DIR) \
          -I$(DRIVER_PCI_DRV_DIR) \
@@ -245,8 +241,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/net_shim.o \
       $(BUILD_DIR)/keyboard.o \
       $(BUILD_DIR)/mouse.o \
-      $(BUILD_DIR)/ps_2_keyboard.o \
-      $(BUILD_DIR)/ps_2_mouse.o \
       $(BUILD_DIR)/usb.o \
       $(BUILD_DIR)/xhci.o \
       $(BUILD_DIR)/usb_hid.o \
@@ -605,14 +599,6 @@ $(BUILD_DIR)/keyboard.o: $(DRIVER_INPUT_DIR)/keyboard.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/mouse.o: $(DRIVER_INPUT_DIR)/mouse.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ps_2_keyboard.o: $(DRIVER_PS2_KBD_DIR)/ps_2_keyboard.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ps_2_mouse.o: $(DRIVER_PS2_MOUSE_DIR)/ps_2_mouse.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

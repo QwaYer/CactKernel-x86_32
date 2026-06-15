@@ -7,5 +7,6 @@
 int  apic_init(void);
 bool apic_is_enabled(void);
 void apic_eoi(void);
+int  apic_pci_vector(uint8_t irq_pin);
 
 #endif
