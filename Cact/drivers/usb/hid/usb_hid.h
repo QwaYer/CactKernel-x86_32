@@ -50,6 +50,7 @@ typedef struct {
     hid_type_t  type;
     uint8_t     intr_ep;
     uint8_t     iface_num;
+    volatile uint8_t  removed;
     union {
         hid_kbd_report_t    kbd;
         hid_mouse_report_t  mouse;

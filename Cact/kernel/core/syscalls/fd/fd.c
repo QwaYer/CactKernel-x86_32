@@ -336,9 +336,9 @@ int sys_select(struct syscall_frame *regs) {
 
         if (ready > 0 || nonblocking ||
                 (!infinite && (int32_t)(timer_ticks_get() - deadline) >= 0)) {
-            if (urfds) *urfds = res_r;
-            if (uwfds) *uwfds = res_w;
-            if (uefds) *uefds = res_e;
+            if (urfds) copy_to_user(urfds, &res_r, sizeof(sel_fdset_t));
+            if (uwfds) copy_to_user(uwfds, &res_w, sizeof(sel_fdset_t));
+            if (uefds) copy_to_user(uefds, &res_e, sizeof(sel_fdset_t));
             return ready;
         }
 

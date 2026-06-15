@@ -142,21 +142,24 @@ static void xhci_drain_events(xhci_priv_t *priv) {
 static int xhci_wait_cmd(xhci_priv_t *priv, uint32_t timeout_ms) {
     uint32_t loops = timeout_ms * 100;
     while (loops--) {
-        if (priv->cmd_done) {
+        if (priv->cmd_done || priv->transfer_done) {
             priv->cmd_done = 0;
+            priv->transfer_done = 0;
             return priv->cmd_error ? -1 : 0;
         }
         irq_spinlock_acquire(&xhci_evt_lock);
         xhci_drain_events(priv);
         irq_spinlock_release(&xhci_evt_lock);
-        if (priv->cmd_done) {
+        if (priv->cmd_done || priv->transfer_done) {
             priv->cmd_done = 0;
+            priv->transfer_done = 0;
             return priv->cmd_error ? -1 : 0;
         }
         xhci_udelay(10);
     }
     klog(LOG_WARN, "xHCI command timeout");
     priv->cmd_done = 0;
+    priv->transfer_done = 0;
     return -1;
 }
 
@@ -202,6 +205,8 @@ static void xhci_setup_ep_ring(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
         klog(LOG_WARN, "xHCI endpoint ring allocation failed");
         return;
     }
+    if (ring->ring)
+        kfree_aligned(ring->ring);
     xhci_ring_init(ring, mem, XHCI_EP_RING_SIZE);
 }
 
@@ -352,6 +357,7 @@ static int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
 
     priv->cmd_done  = 0;
     priv->cmd_error = 0;
+    priv->transfer_done = 0;
     xhci_db_write32(priv, slot, 1);
 
     return xhci_wait_cmd(priv, 500);
@@ -376,6 +382,7 @@ static int xhci_interrupt_transfer(usb_hc_t *hc, usb_device_t *dev,
 
     priv->cmd_done  = 0;
     priv->cmd_error = 0;
+    priv->transfer_done = 0;
     xhci_db_write32(priv, slot, dci);
 
     return xhci_wait_cmd(priv, 500);
@@ -401,6 +408,7 @@ static int xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
 
     priv->cmd_done  = 0;
     priv->cmd_error = 0;
+    priv->transfer_done = 0;
     xhci_db_write32(priv, slot, dci);
 
     return xhci_wait_cmd(priv, 1000) == 0 ? len : -1;
@@ -471,7 +479,7 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
         } else {
             priv->cmd_error = 1;
         }
-        priv->cmd_done = 1;
+        priv->transfer_done = 1;
         break;
     }
 
@@ -509,7 +517,9 @@ static void xhci_handle_irq(usb_hc_t *hc) {
     }
 
     xhci_op_write32(priv, XHCI_OP_USBSTS, XHCI_STS_EINT);
+    irq_spinlock_acquire(&xhci_evt_lock);
     xhci_drain_events(priv);
+    irq_spinlock_release(&xhci_evt_lock);
 
     xhci_rt_write32(priv, 0x20 + XHCI_IMAN, 0x3);
 

@@ -184,6 +184,18 @@ static int sys_setitimer_impl(struct syscall_frame* regs) {
 
     // Set new value
     if (newval) {
+        if (newval->it_value.tv_sec < 0 ||
+            newval->it_value.tv_usec < 0 ||
+            newval->it_interval.tv_sec < 0 ||
+            newval->it_interval.tv_usec < 0)
+            return -1;
+
+        if ((uint64_t)newval->it_value.tv_sec * TIMER_HZ_SIGNALS > UINT32_MAX ||
+            (uint64_t)newval->it_value.tv_usec * TIMER_HZ_SIGNALS > UINT32_MAX ||
+            (uint64_t)newval->it_interval.tv_sec * TIMER_HZ_SIGNALS > UINT32_MAX ||
+            (uint64_t)newval->it_interval.tv_usec * TIMER_HZ_SIGNALS > UINT32_MAX)
+            return -1;
+
         uint32_t val_ticks = (uint32_t)(newval->it_value.tv_sec * TIMER_HZ_SIGNALS) +
                              (uint32_t)((newval->it_value.tv_usec * TIMER_HZ_SIGNALS) / 1000000);
         uint32_t int_ticks = (uint32_t)(newval->it_interval.tv_sec * TIMER_HZ_SIGNALS) +
