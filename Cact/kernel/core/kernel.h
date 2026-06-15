@@ -84,7 +84,6 @@ extern uint32_t port_long_in (uint16_t port);
 
 // Interrupt Service Routine stubs (defined in isr.S)
 extern void timer_isr();
-extern void keyboard_isr();
 extern void syscall_isr();
 extern void isr0();  extern void isr1();  extern void isr2();
 extern void isr3();  extern void isr4();  extern void isr5();
@@ -146,7 +145,6 @@ static inline uint32_t* get_current_pd(void) {
 }
 
 // Hardware detection helpers
-int         probe_io_ports  (void);
 int         detect_memory   (void);
 
 // Task scheduling
@@ -202,11 +200,5 @@ struct winsize {
 
 extern struct winsize terminal_winsize;
 extern uint32_t       terminal_fg_pid;
-
-// Global input device state
-extern volatile int    keyboard_irq_count;
-extern volatile uint8_t last_scancode_raw;
-extern volatile char   last_char;
-extern volatile int    key_event_happened;
 
 #endif  

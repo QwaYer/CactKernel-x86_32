@@ -6,8 +6,6 @@
 // Debug/diagnostic globals — updated by IRQ handler
 extern volatile char          last_char;
 extern volatile int           key_event_happened;
-extern volatile int           keyboard_irq_count;
-extern volatile unsigned char last_scancode_raw;
 
 // Circular buffer size (must be power of 2 for efficient wrapping)
 #define KB_BUF_SIZE 256

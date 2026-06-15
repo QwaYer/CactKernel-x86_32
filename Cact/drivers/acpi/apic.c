@@ -20,6 +20,8 @@
 #define IOAPIC_REDIR_HI(i)  (0x10 + 2 * (i) + 1)
 
 #define REDIR_MASKED        0x00010000u
+#define REDIR_LOW_POL       0x00002000u  // Active low
+#define REDIR_LEVEL         0x00008000u  // Level-triggered
 
 #define APIC_MMIO_VADDR     0xFE000000u
 #define IOAPIC_MMIO_VADDR   0xFE001000u
@@ -28,6 +30,8 @@ static volatile uint32_t *lapic = NULL;
 static volatile uint32_t *ioapic_regsel = NULL;
 static volatile uint32_t *ioapic_win = NULL;
 static int apic_enabled = 0;
+static unsigned int ioapic_max_redir = 0;
+static unsigned int ioapic_global_irq_base = 0;
 
 static inline uint64_t rdmsr(uint32_t msr)
 {
@@ -131,8 +135,9 @@ int apic_init(void)
     ioapic_regsel = (volatile uint32_t *)(IOAPIC_MMIO_VADDR + (ioapic_base & 0xFFF));
     ioapic_win    = (volatile uint32_t *)(IOAPIC_MMIO_VADDR + (ioapic_base & 0xFFF) + 0x10);
 
-    unsigned int max_redir = (ioapic_read(IOAPIC_VER) >> 16) & 0xFF;
-    for (unsigned int i = 0; i <= max_redir; i++)
+    ioapic_max_redir = (ioapic_read(IOAPIC_VER) >> 16) & 0xFF;
+    ioapic_global_irq_base = global_irq_base;
+    for (unsigned int i = 0; i <= ioapic_max_redir; i++)
         ioapic_set_redir(i, 0, REDIR_MASKED, 0);
 
     for (unsigned int i = 0; i < 16; i++) {
@@ -140,6 +145,14 @@ int apic_init(void)
         unsigned int gsi = irq_override[i];
         unsigned int entry_idx = gsi - global_irq_base;
         ioapic_set_redir(entry_idx, 0x20 + i, 0, 0);
+    }
+
+    // Program IOAPIC entries for PCI IRQs (GSI 16+, level-triggered active-low)
+    for (unsigned int i = 0; i <= ioapic_max_redir; i++) {
+        unsigned int gsi = global_irq_base + i;
+        if (gsi < 16) continue;
+        if (gsi > 23) continue;
+        ioapic_set_redir(i, 0x30 + (i & 0x0F), REDIR_LEVEL | REDIR_LOW_POL, 0);
     }
 
     unsigned int timer_entry = irq_override[0] - global_irq_base;
@@ -170,4 +183,15 @@ void apic_eoi(void)
 {
     if (apic_enabled && lapic)
         lapic[LAPIC_EOI / 4] = 0;
+}
+
+int apic_pci_vector(uint8_t irq_pin)
+{
+    if (!apic_enabled || irq_pin < 1 || irq_pin > 4)
+        return -1;
+    unsigned int gsi = irq_pin + 15;
+    unsigned int entry_idx = gsi - ioapic_global_irq_base;
+    if (entry_idx > ioapic_max_redir)
+        return -1;
+    return 0x30 + (entry_idx & 0x0F);
 }

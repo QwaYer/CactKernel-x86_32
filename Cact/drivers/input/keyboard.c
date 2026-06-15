@@ -3,8 +3,6 @@
 // Volatile globals — written by IRQ handler, read by userspace
 volatile char          last_char          = 0;
 volatile int           key_event_happened = 0;
-volatile int           keyboard_irq_count = 0;
-volatile unsigned char last_scancode_raw  = 0;
 
 // Circular buffer — protected by single-producer/single-consumer ordering
 static volatile char     kb_buf[KB_BUF_SIZE];
@@ -23,7 +21,6 @@ void keyboard_post_key(char c) {
     }
     last_char          = c;
     key_event_happened = 1;
-    keyboard_irq_count++;
 }
 
 // Pop a character from the buffer (called from userspace).
