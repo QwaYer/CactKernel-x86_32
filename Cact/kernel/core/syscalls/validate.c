@@ -1,4 +1,5 @@
 #include "validate.h"
+#include "klib.h"
 
 // Validate that a pointer range falls entirely within userspace.
 // Checks for NULL, address below USER_SPACE_START, address >= KERNEL_BASE,
@@ -28,4 +29,16 @@ int validate_user_str(const char* str) {
         if (str[i] == '\0')          return 1; // found null terminator
     }
     return 0;   // string too long or missing null terminator
+}
+
+int copy_to_user(void* dst, const void* src, uint32_t size) {
+    if (!validate_user_ptr(dst, size)) return -1;
+    memcpy(dst, src, size);
+    return 0;
+}
+
+int copy_from_user(void* dst, const void* src, uint32_t size) {
+    if (!validate_user_ptr(src, size)) return -1;
+    memcpy(dst, src, size);
+    return 0;
 }

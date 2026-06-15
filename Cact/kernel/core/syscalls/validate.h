@@ -12,4 +12,7 @@
 int validate_user_ptr(const void* ptr, uint32_t size);
 int validate_user_str(const char* str);
 
+int copy_to_user(void* dst, const void* src, uint32_t size);
+int copy_from_user(void* dst, const void* src, uint32_t size);
+
 #endif 

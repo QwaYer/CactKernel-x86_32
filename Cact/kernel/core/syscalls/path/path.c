@@ -50,6 +50,7 @@ int sys_delete(char *name) {
     char basename[128];
     vfs_node_t *parent = _resolve_parent(name, basename, 128);
     if (!parent || !basename[0]) return -1;
+    if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
     return delete_vfs(parent, basename);
 }

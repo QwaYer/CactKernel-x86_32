@@ -175,6 +175,7 @@ typedef struct {
     volatile uint8_t      cmd_done;
     volatile uint8_t      cmd_error;
     volatile uint32_t     cmd_result;
+    volatile uint8_t      transfer_done;
 
     uint8_t               slot_used[XHCI_MAX_SLOTS + 1];
     uint8_t               slot_port[XHCI_MAX_SLOTS + 1];
