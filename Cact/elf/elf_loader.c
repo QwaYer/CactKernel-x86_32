@@ -15,6 +15,9 @@ int elf_is_dynamic(char* path) {
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) return 0;
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) return 0;
+    if (hdr.e_ident[EI_CLASS] != ELFCLASS32) return 0;
+    if (hdr.e_ident[EI_DATA]  != ELFDATA2LSB) return 0;
+    if (hdr.e_ident[EI_VERSION] != EV_CURRENT) return 0;
     if (hdr.e_machine != 3) return 0;
     if (hdr.e_type == 3) return 1; // ET_DYN
     if (hdr.e_phentsize < sizeof(Elf32_Phdr)) return 0;
@@ -54,6 +57,18 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
         kprint("[ELF] ERR: bad magic\n");
+        return 0;
+    }
+    if (hdr.e_ident[EI_CLASS] != ELFCLASS32) {
+        kprint("[ELF] ERR: not 32-bit\n");
+        return 0;
+    }
+    if (hdr.e_ident[EI_DATA] != ELFDATA2LSB) {
+        kprint("[ELF] ERR: not little-endian\n");
+        return 0;
+    }
+    if (hdr.e_ident[EI_VERSION] != EV_CURRENT) {
+        kprint("[ELF] ERR: bad ident version\n");
         return 0;
     }
     if (hdr.e_machine != 3) {
@@ -176,6 +191,18 @@ void* load_elf_dynamic(char*                path,
         kprint("[ELF-DYN] ERR: bad magic\n");
         return 0;
     }
+    if (hdr.e_ident[EI_CLASS] != ELFCLASS32) {
+        kprint("[ELF-DYN] ERR: not 32-bit\n");
+        return 0;
+    }
+    if (hdr.e_ident[EI_DATA] != ELFDATA2LSB) {
+        kprint("[ELF-DYN] ERR: not little-endian\n");
+        return 0;
+    }
+    if (hdr.e_ident[EI_VERSION] != EV_CURRENT) {
+        kprint("[ELF-DYN] ERR: bad ident version\n");
+        return 0;
+    }
     if (hdr.e_machine != 3) {
         kprint("[ELF-DYN] ERR: not i386\n");
         return 0;
@@ -214,6 +241,11 @@ void* load_elf_dynamic(char*                path,
         return 0;
     }
 
+    uint32_t seg_count = 0;
+#define MAX_LOAD_SEGS 16
+    uint32_t seg_starts[MAX_LOAD_SEGS];
+    uint32_t seg_ends[MAX_LOAD_SEGS];
+
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
         if (read_vfs(file,
@@ -231,6 +263,12 @@ void* load_elf_dynamic(char*                path,
             uint32_t seg_start = (ph.p_vaddr + load_bias) & ~0xFFFu;
             uint32_t seg_end   = (ph.p_vaddr + load_bias + ph.p_memsz + 0xFFF) & ~0xFFFu;
             uint32_t file_end  = ph.p_vaddr + ph.p_filesz;
+
+            if (seg_count < MAX_LOAD_SEGS) {
+                seg_starts[seg_count] = seg_start;
+                seg_ends[seg_count]   = seg_end;
+                seg_count++;
+            }
 
             for (uint32_t va = seg_start; va < seg_end; va += PAGE_SIZE) {
                 uint32_t orig_va = va - load_bias;
@@ -286,7 +324,26 @@ void* load_elf_dynamic(char*                path,
         }
 
         if (ph.p_type == PT_DYNAMIC) {
-            dyn_vaddr = (Elf32_Dyn*)ph.p_vaddr;
+            if (ph.p_vaddr + ph.p_filesz < ph.p_vaddr) {
+                kprint("[ELF-DYN] ERR: PT_DYNAMIC size wraps\n");
+                proc_free_pages(tracker);
+                return 0;
+            }
+            uint32_t dyn_start = ph.p_vaddr + load_bias;
+            uint32_t dyn_end   = dyn_start + ph.p_filesz;
+            int dyn_ok = 0;
+            for (uint32_t s = 0; s < seg_count; s++) {
+                if (dyn_start >= seg_starts[s] && dyn_end <= seg_ends[s]) {
+                    dyn_ok = 1;
+                    break;
+                }
+            }
+            if (!dyn_ok) {
+                kprint("[ELF-DYN] ERR: PT_DYNAMIC outside any PT_LOAD\n");
+                proc_free_pages(tracker);
+                return 0;
+            }
+            dyn_vaddr = (Elf32_Dyn*)dyn_start;
             dyn_size  = ph.p_filesz;
         }
     }
