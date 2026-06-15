@@ -58,6 +58,7 @@ DRIVER_PCI_ENUM_DIR   = Cact/drivers/pci/enum
 DRIVER_PCI_DRV_DIR    = Cact/drivers/pci/driver
 DRIVER_PCI_LOADER_DIR = Cact/drivers/pci/loader
 DRIVER_PCI_GDD_DIR    = Cact/drivers/pci/gdd
+DRIVER_PCIE_DIR       = Cact/drivers/pci/pcie
 DRIVER_BLK_BLOCK_DIR  = Cact/drivers/block/blkdev
 DRIVER_USB_DIR       = Cact/drivers/usb
 DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xHCI
@@ -133,7 +134,8 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_PCI_ENUM_DIR) \
          -I$(DRIVER_PCI_DRV_DIR) \
          -I$(DRIVER_PCI_LOADER_DIR) \
-         -I$(DRIVER_PCI_GDD_DIR) \
+          -I$(DRIVER_PCI_GDD_DIR) \
+          -I$(DRIVER_PCIE_DIR) \
 		 -I$(DRIVER_BLK_BLOCK_DIR) \
          -I$(DRIVER_USB_DIR) \
          -I$(DRIVER_USB_XHCI_DIR) \
@@ -220,6 +222,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pci_driver.o \
       $(BUILD_DIR)/pci_loader.o \
       $(BUILD_DIR)/pci_gdd.o \
+      $(BUILD_DIR)/pcie.o \
+      $(BUILD_DIR)/pcidev.o \
       $(BUILD_DIR)/pci_modblob.o \
 	  $(BUILD_DIR)/blkdev.o \
       $(BUILD_DIR)/sc_mod.o \
@@ -554,6 +558,14 @@ $(BUILD_DIR)/pci_loader.o: $(DRIVER_PCI_LOADER_DIR)/pci_loader.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/pci_gdd.o: $(DRIVER_PCI_GDD_DIR)/pci_gdd.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pcie.o: $(DRIVER_PCIE_DIR)/pcie.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pcidev.o: Cact/drivers/pci/pcidev.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

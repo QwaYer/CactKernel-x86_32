@@ -1,15 +1,13 @@
 #include "pci_driver.h"
 #include "pci_gdd.h"
+#include "pcie.h"
+#include "pcidev.h"
 #include "kernel.h"
 #include "klib.h"
 
 // Static device pool — avoids dynamic allocation during early boot
 static pci_device_t  pool[MAX_PCI_DEVICES];
 static uint32_t      pool_idx = 0;
-
-// Global device list (built during enumeration, consumed by drivers)
-pci_device_t *pci_device_list  = NULL;
-uint32_t      pci_device_count = 0;
 
 // Allocate a device descriptor from the static pool
 static pci_device_t *alloc_dev(void) {
@@ -90,6 +88,16 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     d->irq_line  = (uint8_t) irq;
     d->irq_pin   = (uint8_t)(irq >> 8);
 
+    // Detect PCIe capability
+    d->pcie_type = -1;
+    if (pcie_is_available()) {
+        int cap_off = pcie_find_cap(bus, dev, fn, PCI_CAP_ID_EXP);
+        if (cap_off) {
+            uint16_t cap_reg = pcie_read16(bus, dev, fn, cap_off + 2);
+            d->pcie_type = (int8_t)((cap_reg >> 4) & 0x7);
+        }
+    }
+
     // Only decode BARs for normal (non-bridge) headers
     if ((d->header_type & 0x7F) == PCI_HEADER_TYPE_NORMAL)
         decode_bars(d);
@@ -109,7 +117,7 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     // Allow GDD to register lazy module mappings while still in early stage.
     pci_user_prompt_module(d->class_code, d->subclass, d->prog_if, d);
     // Defer actual probe to a scheduler-ready phase.
-    pci_driver_defer_device(d);
+    pcidev_defer_device(d);
 }
 
 // Scan all functions on a given bus
@@ -146,30 +154,6 @@ void pci_enumerate(void) {
         }
     }
     klog(LOG_OK, "PCI bus enumeration finished");
-}
-
-// Find first device matching class_code + subclass; returns NULL if none
-pci_device_t *pci_find_by_class(uint8_t cc, uint8_t sc) {
-    for (pci_device_t *d = pci_device_list; d; d = d->next)
-        if (d->class_code == cc && d->subclass == sc) return d;
-    return NULL;
-}
-
-pci_device_t *pci_device_by_index(int index_1based) {
-    if (index_1based < 1) return NULL;
-    int i = 0;
-    for (pci_device_t *d = pci_device_list; d; d = d->next) {
-        i++;
-        if (i == index_1based) return d;
-    }
-    return NULL;
-}
-
-// Find first device matching vendor ID + device ID; returns NULL if none
-pci_device_t *pci_find_by_id(uint16_t vid, uint16_t did) {
-    for (pci_device_t *d = pci_device_list; d; d = d->next)
-        if (d->vendor_id == vid && d->device_id == did) return d;
-    return NULL;
 }
 
 void pci_enum_dump(void) {

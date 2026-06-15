@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "multiboot2.h"
 #include "pci.h"
+#include "pcidev.h"
 #include "pci_enum.h"
 #include "pci_driver.h"
 #include "ps_2_keyboard.h"
@@ -255,11 +256,8 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // kmods can blkdev_register(); otherwise mntfs sees no boot disk.
     blkdev_init();
 
-    // PCI enumeration and drivers (after APIC — all IRQs routed through I/O APIC)
-    if (search_pci())
-        klog(LOG_WARN, "PCI scan reported error");
-
-    pci_enumerate();
+    // PCI Express ECAM init (needs ACPI tables, before PCI enumeration)
+    pcidev_init();
     {
         if (pci_device_count <= 0)
             klog(LOG_WARN, "no PCI devices — storage/net/USB unavailable");
@@ -306,7 +304,7 @@ static void kernel_bootstrap_main(void) {
     extern void mntfs_init(void);
     extern void procfs_set_meminfo(uint32_t);
 
-    pci_driver_probe_deferred_all();
+    pcidev_probe_all();
 
     mntfs_init();
 
