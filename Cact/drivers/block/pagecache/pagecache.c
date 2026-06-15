@@ -3,6 +3,7 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
+#include "sync.h"
 
 // Explicit redeclare in case transitive includes drop the prototypes
 extern void* memory_set(void* dest, int val, int len);
@@ -38,6 +39,9 @@ static uint32_t stat_hits;
 static uint32_t stat_misses;
 static uint32_t stat_evictions;
 static uint32_t stat_writebacks;
+
+// Synchronisation — protects hash table, LRU list, pool flags/pin_count
+static irq_spinlock_t pc_lock;
 
 // Jenkins-style 32-bit hash for (dev, block_no)
 static inline uint32_t _hash(uint32_t dev, uint32_t block_no) {
@@ -115,6 +119,17 @@ static void _writeback(struct page *p) {
     stat_writebacks++;
 }
 
+// Write back page while holding it pinned to prevent concurrent eviction.
+// Caller must hold pc_lock. Lock is released before _writeback and
+// re-acquired after; caller must re-check invariants after return.
+static void _writeback_pinned(struct page *p) {
+    p->pin_count++;
+    irq_spinlock_release(&pc_lock);
+    _writeback(p);
+    irq_spinlock_acquire(&pc_lock);
+    p->pin_count--;
+}
+
 // Evict the LRU tail page that is not pinned; returns NULL if all are pinned
 static struct page *_evict_one(void) {
     struct page *p = lru_tail;
@@ -143,7 +158,7 @@ static struct page *_alloc_page(void) {
     return _evict_one();
 }
 
-// Initialise page cache: zero pool, clear stats, reset LRU
+// Initialise page cache pool, hash table, LRU, and lock
 void pc_init(void) {
     memory_set(pool,       0, sizeof(pool));
     memory_set(hash_table, 0, sizeof(hash_table));
@@ -153,20 +168,23 @@ void pc_init(void) {
     stat_misses     = 0;
     stat_evictions  = 0;
     stat_writebacks = 0;
+    irq_spinlock_init(&pc_lock);
     klog(LOG_OK, "Page cache initialized");
 }
 
 // Get a page from cache; on miss, read from disk into a new or evicted slot
 uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
+    irq_spinlock_acquire(&pc_lock);
     struct page *p = _hash_find(dev, block_no);
     if (p) {
         stat_hits++;
         p->pin_count++;
         _lru_touch(p);
+        irq_spinlock_release(&pc_lock);
         return p->data;
     }
-
     stat_misses++;
+    irq_spinlock_release(&pc_lock);
 
     if (block_size == 0 || block_size % 512 != 0) {
         kprint("[pc] pc_get_page: block_size must be non-zero multiple of 512\n");
@@ -194,17 +212,24 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
         }
     }
 
+    irq_spinlock_acquire(&pc_lock);
     p = _alloc_page();
     if (!p) {
+        irq_spinlock_release(&pc_lock);
         kprint("[pc] pc_get_page: all pages pinned, cache full!\n");
         return 0;
     }
+    irq_spinlock_release(&pc_lock);
 
     // Lazy data allocation — pages start with NULL data until first use
     if (!p->data) {
         p->data = (uint8_t*)kalloc();
         if (!p->data) {
             kprint("[pc] pc_get_page: kalloc failed\n");
+            irq_spinlock_acquire(&pc_lock);
+            p->flags     = 0;
+            p->pin_count = 0;
+            irq_spinlock_release(&pc_lock);
             return 0;
         }
     }
@@ -219,10 +244,22 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     memory_set(p->data, 0, block_size);
     for (uint32_t i = 0; i < spb; i++)
         blkdev_read_sector(lba + i, p->data + i * 512);
-    p->flags |= PC_FLAG_VALID;
 
+    irq_spinlock_acquire(&pc_lock);
+    // Double-check: another thread may have inserted this block while we did I/O
+    struct page *existing = _hash_find(dev, block_no);
+    if (existing) {
+        existing->pin_count++;
+        _lru_touch(existing);
+        irq_spinlock_release(&pc_lock);
+        p->flags     = 0;
+        p->pin_count = 0;
+        return existing->data;
+    }
+    p->flags |= PC_FLAG_VALID;
     _hash_insert(p);
     _lru_touch(p);
+    irq_spinlock_release(&pc_lock);
 
     return p->data;
 }
@@ -230,19 +267,21 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
 // Mark page dirty and immediately write back.
 // Pins the page temporarily to prevent TOCTOU eviction between lookup and writeback.
 void pc_mark_dirty(uint32_t dev, uint32_t block_no) {
+    irq_spinlock_acquire(&pc_lock);
     struct page *p = _hash_find(dev, block_no);
-    if (!p) return;
-    p->pin_count++;
+    if (!p) { irq_spinlock_release(&pc_lock); return; }
     p->flags |= PC_FLAG_DIRTY;
-    _writeback(p);
-    p->pin_count--;
+    _writeback_pinned(p);
+    irq_spinlock_release(&pc_lock);
 }
 
 // Decrement pin count so page becomes eligible for eviction
 void pc_put_page(uint32_t dev, uint32_t block_no) {
+    irq_spinlock_acquire(&pc_lock);
     struct page *p = _hash_find(dev, block_no);
-    if (!p) return;
+    if (!p) { irq_spinlock_release(&pc_lock); return; }
     if (p->pin_count == 0) {
+        irq_spinlock_release(&pc_lock);
         kprint("[pc] pc_put_page: pin_count underflow (dev=");
         { char _b[16]; itoa((int)dev, _b); kprint(_b); }
         kprint(", block=");
@@ -251,56 +290,73 @@ void pc_put_page(uint32_t dev, uint32_t block_no) {
         return;
     }
     p->pin_count--;
+    irq_spinlock_release(&pc_lock);
 }
 
 // Flush all dirty pages belonging to a device
 void pc_flush_dev(uint32_t dev) {
+    irq_spinlock_acquire(&pc_lock);
     for (int i = 0; i < PC_MAX_PAGES; i++) {
         struct page *p = &pool[i];
         if ((p->flags & (PC_FLAG_VALID | PC_FLAG_DIRTY)) ==
                         (PC_FLAG_VALID | PC_FLAG_DIRTY) &&
             p->dev == dev) {
-            _writeback(p);
+            _writeback_pinned(p);
         }
     }
+    irq_spinlock_release(&pc_lock);
 }
 
 // Remove a single block from cache, writing back first if dirty.
 // Refuses to invalidate pinned pages — caller must unpin first.
 // Frees the data buffer to prevent use-after-free on reallocation.
 void pc_invalidate_block(uint32_t dev, uint32_t block_no) {
+    uint8_t *freed_data;
+    irq_spinlock_acquire(&pc_lock);
     struct page *p = _hash_find(dev, block_no);
-    if (!p) return;
-    if (p->pin_count > 0) return;
-    if (p->flags & PC_FLAG_DIRTY) _writeback(p);
+    if (!p) { irq_spinlock_release(&pc_lock); return; }
+    if (p->pin_count > 0) { irq_spinlock_release(&pc_lock); return; }
+    if (p->flags & PC_FLAG_DIRTY)
+        _writeback_pinned(p);
     _lru_remove(p);
     _hash_remove(p);
-    kfree_page(p->data);
+    freed_data = p->data;
     p->data      = 0;
     p->flags     = 0;
     p->pin_count = 0;
+    irq_spinlock_release(&pc_lock);
+
+    if (freed_data)
+        kfree_page(freed_data);
 }
 
 // Flush and remove all pages belonging to a device, freeing their data.
 // Skips pages that are still pinned.
 void pc_invalidate_dev(uint32_t dev) {
     pc_flush_dev(dev);
+    irq_spinlock_acquire(&pc_lock);
     for (int i = 0; i < PC_MAX_PAGES; i++) {
         struct page *p = &pool[i];
         if ((p->flags & PC_FLAG_VALID) && p->dev == dev) {
             if (p->pin_count > 0) continue;
             _lru_remove(p);
             _hash_remove(p);
-            kfree_page(p->data);
+            uint8_t *freed_data = p->data;
             p->data      = 0;
             p->flags     = 0;
             p->pin_count = 0;
+            irq_spinlock_release(&pc_lock);
+            if (freed_data)
+                kfree_page(freed_data);
+            irq_spinlock_acquire(&pc_lock);
         }
     }
+    irq_spinlock_release(&pc_lock);
 }
 
 // Print cache statistics and current state
 void pc_dump_stats(void) {
+    irq_spinlock_acquire(&pc_lock);
     kprint("[pc] hits=");      { char _b[16]; itoa((int)(stat_hits), _b); kprint(_b); };
     kprint(" misses=");        { char _b[16]; itoa((int)(stat_misses), _b); kprint(_b); };
     kprint(" evictions=");     { char _b[16]; itoa((int)(stat_evictions), _b); kprint(_b); };
@@ -313,6 +369,7 @@ void pc_dump_stats(void) {
         if (pool[i].flags & PC_FLAG_DIRTY)  dirty++;
         if (pool[i].pin_count > 0)          pinned++;
     }
+    irq_spinlock_release(&pc_lock);
     kprint("[pc] pages: valid="); { char _b[16]; itoa((int)(valid), _b); kprint(_b); };
     kprint(" dirty=");            { char _b[16]; itoa((int)(dirty), _b); kprint(_b); };
     kprint(" pinned=");           { char _b[16]; itoa((int)(pinned), _b); kprint(_b); };
