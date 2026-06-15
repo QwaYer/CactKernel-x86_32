@@ -10,6 +10,8 @@ crate-type = ["staticlib"]
 cact_shim = { path = "../../crypto/cact_shim" }
 cact_crypto = { path = "../../crypto" }
 rustls = { path = "../../crypto/vendor/rustls-0.23.40/rustls", default-features = false, features = ["custom-provider", "hashbrown"] }
+rustls-pki-types = { path = "../../crypto/vendor/rustls-pki-types", features = ["alloc"] }
+webpki-roots = { version = "1", default-features = false }
 smoltcp = { version = "0.12", default-features = false, features = [
     "medium-ethernet",
     "proto-ipv4",
@@ -19,6 +21,9 @@ smoltcp = { version = "0.12", default-features = false, features = [
     "socket-icmp",
     "socket-dhcpv4",
 ] }
+
+[patch.crates-io]
+rustls-pki-types = { path = "../../crypto/vendor/rustls-pki-types" }
 
 [profile.dev]
 panic = "abort"

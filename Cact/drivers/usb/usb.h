@@ -188,6 +188,7 @@ typedef struct usb_hc {
                                 void *buf, uint16_t len);
     int  (*port_reset)        (struct usb_hc *hc, uint8_t port);
     int  (*port_get_status)   (struct usb_hc *hc, uint8_t port);
+    void (*device_removed)    (struct usb_hc *hc, struct usb_device *dev);
 
     uint8_t  num_ports;
     void    *priv;

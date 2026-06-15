@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "usb.h"
 #include "pci_enum.h"
+#include "sync.h"
 
 #define XHCI_CAP_CAPLENGTH   0x00
 #define XHCI_CAP_HCIVERSION  0x02
@@ -181,6 +182,8 @@ typedef struct {
 
     xhci_intr_ep_slot_t   intr_slots[XHCI_MAX_INTR_EP];
     int                   intr_ep_count;
+
+    spinlock_t            ctx_lock;
 
     uint32_t              context_size;
 } xhci_priv_t;
