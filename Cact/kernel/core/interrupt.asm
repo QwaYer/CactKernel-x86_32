@@ -367,6 +367,65 @@ global spurious_apic_isr
 spurious_apic_isr:
     iretd
 
+; ---------------------------------------------------------------------------
+; Fast syscall entry point (SYSENTER / IA32_SYSENTER_EIP).
+; On entry:
+;   EAX = system call number
+;   EBX = arg1
+;   ECX = user ESP         (saved here by CPU, original arg2 lost)
+;   EDX = return EIP       (saved here by CPU, original arg3 lost)
+;   ESI = arg4
+;   EDI = arg5
+;
+; Stack must use iretd for now (sysexit needs GDT reorganisation:
+; user code at IA32_SYSENTER_CS+16 = 0x18, user data at +24 = 0x20).
+; ---------------------------------------------------------------------------
+global sysenter_entry
+sysenter_entry:
+    push edx                          ; [orig_esp - 4] = return EIP
+    push ecx                          ; [orig_esp - 8] = user ESP
+    sub esp, 52                       ; ESP = orig_esp - 60
+
+    mov ecx, [esp + 52]               ; saved user ESP  (2nd push)
+    mov edx, [esp + 56]               ; saved return EIP (1st push)
+
+    mov [esp + 56], dword 0x23        ; ss
+    mov [esp + 52], ecx               ; useresp
+    pushfd
+    pop eax
+    mov [esp + 48], eax               ; eflags
+    mov [esp + 44], dword 0x1B        ; cs (user code)
+    mov [esp + 40], edx               ; eip
+    mov [esp + 36], eax               ; syscall number → eax in frame
+    mov [esp + 32], ecx               ; ecx in frame (= user ESP, arg2 lost)
+    mov [esp + 28], edx               ; edx in frame (= ret EIP,  arg3 lost)
+    mov [esp + 24], ebx               ; arg1
+    mov [esp + 20], ecx               ; esp_dummy
+    mov [esp + 16], ebp               ; ebp
+    mov [esp + 12], esi               ; arg4
+    mov [esp +  8], edi               ; arg5
+    mov [esp +  4], dword 0x10        ; ds (kernel data)
+    mov [esp +  0], dword 0x10        ; es (kernel data)
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+
+    push esp
+    call syscall_handler
+    add esp, 4
+
+    mov eax, [esp + 36]               ; return value
+    mov ecx, [esp + 52]               ; user ESP
+    mov edx, [esp + 40]               ; return EIP
+    mov esi, [esp + 12]
+    mov edi, [esp +  8]
+    mov ebx, [esp + 24]
+    mov ebp, [esp + 16]
+
+    add esp, 40
+    iretd
+
 section .rodata
 global msix_stub_table
 msix_stub_table:
