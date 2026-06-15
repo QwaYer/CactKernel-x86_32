@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "pci.h"
-#include "irq.h"
 #include "multiboot2.h"
 
 // Forward declaration for exception frame

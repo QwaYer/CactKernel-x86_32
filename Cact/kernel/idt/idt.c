@@ -3,8 +3,6 @@
 #include "memory.h"
 #include "klib.h"
 
-extern uint32_t irq_stub_table[];
-
 // Exception handlers (ISRs 0-31)
 extern void isr0();  extern void isr1();  extern void isr2();
 extern void isr3();  extern void isr4();  extern void isr5();
@@ -80,21 +78,26 @@ int init_idt(void) {
 
     // Install IRQ handlers (hardware interrupts)
     set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - timer
-    // IRQ1-IRQ15: generic stubs — dynamically overridden by irq_register_handler
+    // ISA IRQ vectors 1-15: safe stubs (IOAPIC still routes here, any
+    // stray interrupt must have a valid gate to avoid #GP).
     for (int i = 1; i < 16; i++)
-        set_idt_gate(0x20 + i, irq_stub_table[i]);
+        set_idt_gate(0x20 + i, (uint32_t)pci_isr);
+    // ACPI SCI vector set dynamically by AcpiOsInstallInterruptHandler.
 
-    // PCI INTx vectors (GSI 16+ mapped to 0x30+)
-    set_idt_gate(0x30, (uint32_t)pci_isr);
-    set_idt_gate(0x31, (uint32_t)pci_isr);
-    set_idt_gate(0x32, (uint32_t)pci_isr);
-    set_idt_gate(0x33, (uint32_t)pci_isr);
-    set_idt_gate(0x34, (uint32_t)pci_isr);
-    set_idt_gate(0x35, (uint32_t)pci_isr);
-    set_idt_gate(0x36, (uint32_t)pci_isr);
-    set_idt_gate(0x37, (uint32_t)pci_isr);
-    // Reserve a PCI vector for xHCI (overridden in kernel_bootstrap_main)
-    // xHCI may be on GSI 16 (q35) or ISA IRQ 11 (i440fx)
+    // IOAPIC PCI INTx vectors (GSI 16+ mapped to 0xF0+)
+    set_idt_gate(0xF0, (uint32_t)pci_isr);
+    set_idt_gate(0xF1, (uint32_t)pci_isr);
+    set_idt_gate(0xF2, (uint32_t)pci_isr);
+    set_idt_gate(0xF3, (uint32_t)pci_isr);
+    set_idt_gate(0xF4, (uint32_t)pci_isr);
+    set_idt_gate(0xF5, (uint32_t)pci_isr);
+    set_idt_gate(0xF6, (uint32_t)pci_isr);
+    set_idt_gate(0xF7, (uint32_t)pci_isr);
+    // Reserved PCI range 0xF8-0xFE + APIC spurious vector 0xFF
+    for (int i = 0xF8; i < 0xFF; i++)
+        set_idt_gate(i, (uint32_t)pci_isr);
+    extern void spurious_apic_isr();
+    set_idt_gate(0xFF, (uint32_t)spurious_apic_isr);
 
     // System call gate (int 0x80) - ring3 accessible
     set_idt_gate(0x80, (uint32_t)syscall_isr);

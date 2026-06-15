@@ -7,6 +7,7 @@
 #include "sync.h"
 #include "devfs.h"
 #include "blkdev.h"
+#include "msi.h"
 
 typedef struct {
     const char* name;
@@ -28,13 +29,9 @@ static const ksym_entry_t ksym_table[] = {
     { "kfree_page",     (uint32_t)kfree_page },
     { "kmalloc",        (uint32_t)kmalloc },
     { "kmalloc_aligned",(uint32_t)kmalloc_aligned },
-    { "irq_register_handler",  (uint32_t)irq_register_handler },
-    { "irq_register_shared_handler", (uint32_t)irq_register_shared_handler },
-    { "irq_shared_handler_count",    (uint32_t)irq_shared_handler_count },
     { "irq_spinlock_init",     (uint32_t)irq_spinlock_init },
     { "irq_spinlock_acquire",  (uint32_t)irq_spinlock_acquire },
     { "irq_spinlock_release",  (uint32_t)irq_spinlock_release },
-    { "irq_unregister_shared_handler", (uint32_t)irq_unregister_shared_handler },
     { "sema_init",             (uint32_t)sema_init },
     { "sema_down",             (uint32_t)sema_down },
     { "sema_up",               (uint32_t)sema_up },
@@ -56,6 +53,14 @@ static const ksym_entry_t ksym_table[] = {
     { "active_nic",          (uint32_t)&active_nic },
     { "net_register_driver",   (uint32_t)net_register_driver },
     { "net_unregister_driver", (uint32_t)net_unregister_driver },
+    { "msix_alloc_vector",    (uint32_t)msix_alloc_vector },
+    { "msix_free_vector",     (uint32_t)msix_free_vector },
+    { "msix_register_handler", (uint32_t)msix_register_handler },
+    { "msix_unregister_handler", (uint32_t)msix_unregister_handler },
+    { "pci_msix_support",     (uint32_t)pci_msix_support },
+    { "pci_msix_table_map",   (uint32_t)pci_msix_table_map },
+    { "pci_msix_pba_map",     (uint32_t)pci_msix_pba_map },
+    { "pci_msix_enable",      (uint32_t)pci_msix_enable },
     { "pci_enable_bus_master", (uint32_t)pci_enable_bus_master },
     { "pci_read32",            (uint32_t)pci_read32 },
     { "pci_read_config_long",  (uint32_t)pci_read_config_long },

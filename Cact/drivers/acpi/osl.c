@@ -2,12 +2,12 @@
 #include "memory.h"
 #include "sync.h"
 #include "klib.h"
-#include "irq.h"
 #include "pci.h"
 #include "task.h"
 #include "proc/proc.h"
 #include "acpi.h"
 #include "cact_acpi.h"
+#include "idt.h"
 
 #define ACPI_OSL_MAX_MAPPINGS  64
 
@@ -300,7 +300,10 @@ ACPI_STATUS AcpiOsInstallInterruptHandler(
     void                    *Context)
 {
     (void)Context;
-    irq_register_handler(InterruptNumber, (void (*)(void))ServiceRoutine);
+    extern void (*acpi_sci_callback)(void);
+    extern void acpi_sci_isr();
+    acpi_sci_callback = (void (*)(void))ServiceRoutine;
+    set_idt_gate(0x20 + InterruptNumber, (uint32_t)acpi_sci_isr);
     return AE_OK;
 }
 

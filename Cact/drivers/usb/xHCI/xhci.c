@@ -7,6 +7,7 @@
 #include "memory.h"
 #include "klib.h"
 #include "sync.h"
+#include "msi.h"
 
 static usb_hc_t *xhci_hc_list = NULL;
 static irq_spinlock_t xhci_evt_lock;
@@ -850,19 +851,37 @@ static int xhci_pci_probe(pci_device_t *pdev) {
     uint32_t cmd = pci_read32(pdev->bus, pdev->dev, pdev->fn, 0x04);
     pci_write32(pdev->bus, pdev->dev, pdev->fn, 0x04, cmd | 0x06);
 
-    uint8_t cap_ptr = (uint8_t)(pci_read32(pdev->bus, pdev->dev, pdev->fn, 0x34) & 0xFF);
-    while (cap_ptr && cap_ptr != 0xFF) {
-        uint32_t cap    = pci_read32(pdev->bus, pdev->dev, pdev->fn, cap_ptr);
-        uint8_t  cap_id = (uint8_t)(cap & 0xFF);
-        if (cap_id == 0x05) {
-            uint32_t cap0 = pci_read32(pdev->bus, pdev->dev, pdev->fn, cap_ptr);
-            cap0 &= ~(1u << 16); 
-            pci_write32(pdev->bus, pdev->dev, pdev->fn, cap_ptr, cap0);
-            break;
+    // Try MSI-X first
+    {
+        volatile struct msix_table_entry *table = NULL;
+        uint32_t table_size = 0;
+        int cap_off = pci_msix_support(pdev);
+        if (cap_off) {
+            if (pci_msix_table_map(pdev, &table, &table_size) == 0 && table_size > 0) {
+                int vec = msix_alloc_vector();
+                if (vec > 0) {
+                    msix_register_handler(vec, xhci_irq_handler);
+                    pci_msix_enable(pdev, vec, table, 0);
+                    klog(LOG_OK, "xHCI MSI-X enabled");
+                    goto probe_done;
+                }
+            }
         }
-        cap_ptr = (uint8_t)((cap >> 8) & 0xFF);
+        // Fallback: INTx via IOAPIC PCI vector
+        extern int apic_pci_vector(uint8_t irq_pin);
+        extern void set_idt_gate(int n, uint32_t handler);
+        extern void xhci_isr();
+        int vec = apic_pci_vector(pdev->irq_pin);
+        if (vec > 0) {
+            set_idt_gate(vec, (uint32_t)xhci_isr);
+            klog(LOG_WARN, "xHCI MSI-X unavailable, using INTx");
+        } else {
+            klog(LOG_ERROR, "xHCI: no usable interrupt");
+            return -1;
+        }
     }
 
+probe_done:
     cmd = pci_read32(pdev->bus, pdev->dev, pdev->fn, 0x04);
     pci_write32(pdev->bus, pdev->dev, pdev->fn, 0x04, cmd & ~(1u << 10));
 
@@ -888,6 +907,7 @@ void xhci_pci_init(void) {
         if (d->prog_if == 0x30) {
             found++;
             xhci_pci_probe(d);
+            d->drv_probe_state = 2;
         }
         d = d->next;
         while (d && !(d->class_code == 0x0C && d->subclass == 0x03 && d->prog_if == 0x30))

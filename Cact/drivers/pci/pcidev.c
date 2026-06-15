@@ -253,6 +253,7 @@ void pcidev_probe_all(void)
     for (uint32_t i = 0; i < deferred_count; i++) {
         pci_device_t *dev = deferred_devs[i];
         if (!dev) continue;
+        if (dev->drv_probe_state >= 2) continue;
         int rc = pcidev_match_device(dev);
         if (rc == 1)       { dev->drv_probe_state = 2; ok++; }
         else if (rc == 0)  { dev->drv_probe_state = 3; none++; }

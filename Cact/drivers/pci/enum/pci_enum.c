@@ -49,12 +49,13 @@ static void decode_bars(pci_device_t *d) {
             d->bars[i].base  = orig & 0xFFFC;
             d->bars[i].size  = (~(mask & 0xFFFC) + 1) & 0xFFFF;
         } else {
-            // Memory BAR — 32-bit only; skip 64-bit BARs
+            // Memory BAR — support both 32-bit and 64-bit
             uint8_t type = (orig >> 1) & 0x3;
-            if (type != PCI_BAR_MEM_TYPE_32) { i++; continue; }
             d->bars[i].is_io = 0;
             d->bars[i].base  = orig & 0xFFFFFFF0;
             d->bars[i].size  = ~(mask & 0xFFFFFFF0) + 1;
+            if (type != PCI_BAR_MEM_TYPE_32)
+                i++; // skip next slot (upper 32 bits of 64-bit BAR)
         }
     }
 }

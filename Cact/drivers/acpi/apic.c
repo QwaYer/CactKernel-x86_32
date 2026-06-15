@@ -147,12 +147,13 @@ int apic_init(void)
         ioapic_set_redir(entry_idx, 0x20 + i, 0, 0);
     }
 
-    // Program IOAPIC entries for PCI IRQs (GSI 16+, level-triggered active-low)
+    // Program IOAPIC entries for PCI IRQs (GSI 16+, level-triggered active-low).
+    // Use vectors 0xF0+ to avoid conflicting with MSI-X (0x30–0xEF).
     for (unsigned int i = 0; i <= ioapic_max_redir; i++) {
         unsigned int gsi = global_irq_base + i;
         if (gsi < 16) continue;
         if (gsi > 23) continue;
-        ioapic_set_redir(i, 0x30 + (i & 0x0F), REDIR_LEVEL | REDIR_LOW_POL, 0);
+        ioapic_set_redir(i, 0xF0 + (i & 0x0F), REDIR_LEVEL | REDIR_LOW_POL, 0);
     }
 
     unsigned int timer_entry = irq_override[0] - global_irq_base;
@@ -193,5 +194,5 @@ int apic_pci_vector(uint8_t irq_pin)
     unsigned int entry_idx = gsi - ioapic_global_irq_base;
     if (entry_idx > ioapic_max_redir)
         return -1;
-    return 0x30 + (entry_idx & 0x0F);
+    return 0xF0 + (entry_idx & 0x0F);
 }
