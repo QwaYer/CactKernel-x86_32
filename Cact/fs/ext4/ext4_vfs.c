@@ -442,6 +442,30 @@ vfs_node_t* ext4_mount_disk(uint32_t dev) {
     }
     ctx->block_size = 1024u << ctx->sb.s_log_block_size;
 
+    if (ctx->sb.s_blocks_per_group == 0 ||
+        ctx->sb.s_blocks_per_group > ctx->block_size * 8) {
+        kprint("[ext4] ERROR: invalid s_blocks_per_group\n");
+        kfree_heap(ctx);
+        return 0;
+    }
+    if (ctx->sb.s_inodes_per_group == 0 ||
+        ctx->sb.s_inodes_per_group > ctx->block_size * 8) {
+        kprint("[ext4] ERROR: invalid s_inodes_per_group\n");
+        kfree_heap(ctx);
+        return 0;
+    }
+    uint32_t ds = ctx->sb.s_desc_size ? ctx->sb.s_desc_size : 32;
+    if (ds < 32 || ds > ctx->block_size) {
+        kprint("[ext4] ERROR: invalid s_desc_size\n");
+        kfree_heap(ctx);
+        return 0;
+    }
+    if (ctx->sb.s_inode_size < 128 || ctx->sb.s_inode_size > ctx->block_size) {
+        kprint("[ext4] ERROR: invalid s_inode_size\n");
+        kfree_heap(ctx);
+        return 0;
+    }
+
     // Allocate root VFS node (inode 2)
     vfs_node_t* root = (vfs_node_t*)kmalloc(sizeof(*root));
     if (!root) { kfree_heap(ctx); return 0; }
