@@ -8,6 +8,7 @@
 #include "pci_driver.h"
 #include "mouse.h"
 #include "fb.h"
+#include "validate.h"
 
 // Global devfs state
 static vfs_node_t    devfs_root;
@@ -264,7 +265,8 @@ static int _disk_write(void *p, uint32_t off, uint32_t size, char *buf) {
     return (int)written;
 }
 static int _disk_ctl(void *p, const char *cmd, uint32_t len) {
-    (void)p;(void)len;
+    (void)p;
+    if (len < 2) return -1;
     if(cmd[0]=='f'&&cmd[1]=='l') { kprint("[disk] flush (noop)\n"); return 0; }
     kprint("[disk] unknown ctl: "); kprint((char*)cmd); kprint("\n");
     return -1;
@@ -305,6 +307,7 @@ static int _tty_read(void *p, uint32_t off, uint32_t size, char *buf) {
 }
 static int _tty_write(void *p, uint32_t off, uint32_t size, char *buf) {
     (void)p;(void)off;
+    if (!buf || !validate_user_ptr(buf, size)) return -1;
     char tmp[256]; uint32_t i=0;
     while(i<size){
         uint32_t c=size-i; if(c>=sizeof(tmp))c=sizeof(tmp)-1;
@@ -383,8 +386,8 @@ static int _fb_write(void *p, uint32_t off, uint32_t size, char *buf) {
 static int _fb_ioctl(void *p, uint32_t cmd, void *arg) {
     (void)p;
     if(cmd==FBIOGET_VSCREENINFO) {
+        if(!validate_user_ptr(arg, sizeof(struct fb_var_screeninfo))) return -1;
         struct fb_var_screeninfo *info = (struct fb_var_screeninfo*)arg;
-        if(!info) return -1;
         info->xres          = fb_get_width();
         info->yres          = fb_get_height();
         info->xres_virtual  = fb_get_width();

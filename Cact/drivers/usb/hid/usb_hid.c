@@ -144,6 +144,7 @@ static void hid_irq_notify(usb_device_t *dev, void *buf,
     hid_priv_t *priv = (hid_priv_t *)priv_ptr;
 
     if (priv->removed) return;
+    __sync_synchronize();
 
     if (priv->type == HID_TYPE_KEYBOARD && len >= (uint16_t)sizeof(hid_kbd_report_t)) {
         hid_process_keyboard(priv, (hid_kbd_report_t *)buf);
@@ -274,6 +275,7 @@ static void hid_remove(usb_device_t *dev) {
     if (dev && dev->driver_priv) {
         hid_priv_t *priv = (hid_priv_t *)dev->driver_priv;
         priv->removed = 1;
+        __sync_synchronize();
         kfree_heap(priv);
         dev->driver_priv = NULL;
     }
