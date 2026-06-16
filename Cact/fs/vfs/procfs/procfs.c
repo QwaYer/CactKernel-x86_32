@@ -690,6 +690,8 @@ int procfs_unregister_file(const char *name) {
         if (streq((*pp)->name, name)) {
             proc_file_t *dead = *pp;
             *pp = dead->next;
+            dead->read_fn = NULL;
+            dead->node.priv = NULL;
             kfree_heap(dead);
             return 0;
         }
@@ -705,6 +707,7 @@ int procfs_unregister_cmd(const char *name) {
         if (streq((*pp)->name, name)) {
             proc_cmd_t *dead = *pp;
             *pp = dead->next;
+            dead->node.priv = NULL;
             kfree_heap(dead);
             return 0;
         }

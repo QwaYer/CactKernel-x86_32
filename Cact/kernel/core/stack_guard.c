@@ -3,9 +3,12 @@
 uintptr_t __stack_chk_guard;
 
 void stack_guard_init(void) {
-    uint32_t lo, hi;
+    uint32_t lo, hi, lo2, hi2;
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
-    __stack_chk_guard = lo ^ hi;
+    for (volatile int i = 0; i < 100; i++) __asm__ volatile("nop");
+    __asm__ volatile("rdtsc" : "=a"(lo2), "=d"(hi2));
+    __stack_chk_guard = lo ^ hi ^ lo2 ^ hi2;
+    __stack_chk_guard ^= (uintptr_t)&__stack_chk_guard;
     if (!__stack_chk_guard)
         __stack_chk_guard = 0xDEADBEEF;
 }

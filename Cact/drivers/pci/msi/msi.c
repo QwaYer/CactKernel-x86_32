@@ -78,7 +78,8 @@ void msix_dispatch(unsigned int vector)
 int pci_msix_support(pci_device_t *dev)
 {
     uint8_t cap_ptr = (uint8_t)(pci_read32(dev->bus, dev->dev, dev->fn, 0x34) & 0xFF);
-    while (cap_ptr && cap_ptr != 0xFF) {
+    int iter = 0;
+    while (cap_ptr && cap_ptr != 0xFF && iter++ < 48) {
         uint32_t cap = pci_read32(dev->bus, dev->dev, dev->fn, cap_ptr);
         uint8_t cap_id = (uint8_t)(cap & 0xFF);
         if (cap_id == PCI_CAP_ID_MSIX)
@@ -108,7 +109,10 @@ int pci_msix_table_map(pci_device_t *dev,
     if (bar->is_io || !bar->base) return -1;
 
     uint32_t table_addr = bar->base + table_offset;
-    uint32_t table_end  = table_addr + table_size * MSIX_TABLE_ENTRY_SIZE;
+    uint32_t table_end;
+    if (__builtin_uadd_overflow(table_addr, table_size * MSIX_TABLE_ENTRY_SIZE, &table_end)) {
+        klog(LOG_WARN, "MSI-X: table end overflow"); return -1;
+    }
 
     if (table_end > bar->base + bar->size) { klog(LOG_WARN, "MSI-X: table beyond BAR"); return -1; }
 
@@ -164,6 +168,8 @@ int pci_msix_enable(pci_device_t *dev, int vector,
     table[entry_idx].msg_addr_hi = 0;
     table[entry_idx].msg_data    = vector;
     table[entry_idx].vector_ctrl = 0;
+
+    __asm__ volatile("sfence" ::: "memory");
 
     pci_write32(dev->bus, dev->dev, dev->fn, cap_off + 2,
                 mc | (1u << 15));
