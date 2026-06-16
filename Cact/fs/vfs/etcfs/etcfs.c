@@ -309,7 +309,8 @@ int etcfs_delete(const char *name) {
         if (streq((*pp)->name, name)) {
             etc_entry_t *dead = *pp;
             *pp = dead->next;
-            if (dead->data) kfree_heap(dead->data);
+            dead->node.ops = NULL;
+            if (dead->data) { kfree_heap(dead->data); dead->data = NULL; }
             kfree_heap(dead);
 
             vfs_node_t *etc_dir = _ext4_etc_dir();

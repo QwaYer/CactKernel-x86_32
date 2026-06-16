@@ -312,11 +312,12 @@ void vfs_node_ref(vfs_node_t *node) {
 
 void vfs_node_unref(vfs_node_t *node) {
     if (!node) return;
-    if (__sync_fetch_and_sub(&node->refcount, 1) == 0) {
+    uint32_t old = __sync_fetch_and_sub(&node->refcount, 1);
+    if (old == 0) {
         __sync_fetch_and_add(&node->refcount, 1);
         return;
     }
-    if (node->type == VFS_SYMLINK) {
+    if (old == 1 && node->type == VFS_SYMLINK) {
         mutex_lock(&symlink_mutex);
         vfs_symlink_entry_t *entry = (vfs_symlink_entry_t *)node;
         if (entry >= symlink_pool &&
