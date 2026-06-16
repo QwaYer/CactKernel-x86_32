@@ -40,6 +40,7 @@ int  buf_append_int(char* buf, int pos, int max, int n);
 // string utilities
 int  streq  (const char *a, const char *b);
 void strlcpy(char *dst, const char *src, int n);
+void strlcat(char *dst, const char *src, int n);
 
 // hex output
 void kprint_hex(uint32_t n);

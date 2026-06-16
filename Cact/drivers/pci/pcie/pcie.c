@@ -160,7 +160,14 @@ bool pcie_init(void)
         uint8_t  end_bus   = entry->EndBusNumber;
 
         uint32_t bus_count   = end_bus - start_bus + 1;
-        uint32_t region_size = bus_count * 32 * 8 * 4096;
+        uint32_t region_size;
+        if (bus_count > 4095u) {
+            klog(LOG_WARN, "PCIe ECAM region_size overflow, skipping segment\n");
+            entry++;
+            offset += sizeof(ACPI_MCFG_ALLOCATION);
+            continue;
+        }
+        region_size = bus_count * 32 * 8 * 4096;
         uint32_t pages       = (region_size + 0xFFF) >> 12;
 
         uint32_t seg_shift = pcie_ecam_count * 0x10000000;

@@ -54,6 +54,7 @@ static void decode_bars(pci_device_t *d) {
             d->bars[i].is_io = 0;
             d->bars[i].base  = orig & 0xFFFFFFF0;
             d->bars[i].size  = ~(mask & 0xFFFFFFF0) + 1;
+            if (d->bars[i].size == 0) d->bars[i].size = 1;
             if (type != PCI_BAR_MEM_TYPE_32)
                 i++; // skip next slot (upper 32 bits of 64-bit BAR)
         }
