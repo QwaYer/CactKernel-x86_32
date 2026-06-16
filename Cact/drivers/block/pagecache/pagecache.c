@@ -219,6 +219,11 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
         kprint("[pc] pc_get_page: all pages pinned, cache full!\n");
         return 0;
     }
+    p->dev        = dev;
+    p->block_no   = block_no;
+    p->block_size = block_size;
+    p->flags      = PC_FLAG_USED;
+    p->pin_count  = 1;
     irq_spinlock_release(&pc_lock);
 
     // Lazy data allocation — pages start with NULL data until first use
@@ -233,12 +238,6 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
             return 0;
         }
     }
-
-    p->dev        = dev;
-    p->block_no   = block_no;
-    p->block_size = block_size;
-    p->flags      = PC_FLAG_USED;
-    p->pin_count  = 1;
 
     uint32_t lba = block_no * spb;
     memory_set(p->data, 0, block_size);

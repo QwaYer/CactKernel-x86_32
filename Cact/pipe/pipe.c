@@ -146,7 +146,7 @@ int pipe_read(pipe_t *p, uint32_t offset, uint32_t size, char *buffer) {
 
         mutex_unlock(&p->lock);
     }
-    return (int)copied;
+    return (copied > 0x7FFFFFFFu) ? 0x7FFFFFFF : (int)copied;
 }
 
 // Core write function: copies data from input buffer to circular buffer
@@ -203,7 +203,7 @@ int pipe_write(pipe_t *p, uint32_t offset, uint32_t size, char *buffer) {
 
         mutex_unlock(&p->lock);
     }
-    return (int)written;
+    return (written > 0x7FFFFFFFu) ? 0x7FFFFFFF : (int)written;
 }
 
 // Logical close helpers: decrement counters without freeing pipe_t
