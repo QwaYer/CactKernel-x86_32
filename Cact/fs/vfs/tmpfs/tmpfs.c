@@ -127,8 +127,7 @@ static void _tmp_open(vfs_node_t *node) {
 // Decrement vnode refcount and free pending nodes.
 static void _tmp_close(vfs_node_t *node) {
     if (!node || node->refcount == 0) return;
-    node->refcount--;
-    if (node->refcount == 0) {
+    if (__sync_fetch_and_sub(&node->refcount, 1) == 1) {
         tmpfs_node_t *n = (tmpfs_node_t*)node->priv;
         if (n && n->pending_free) _free_tmpfs_node(n);
     }
@@ -198,8 +197,7 @@ static int _tmp_delete(vfs_node_t *dir, const char *name) {
             *pp = dead->next;                    // detach from directory
             dead->next = 0;
             // Drop tree reference; defer free if still referenced.
-            if (dead->vnode.refcount > 0) dead->vnode.refcount--;
-            if (dead->vnode.refcount == 0) {
+            if (__sync_fetch_and_sub(&dead->vnode.refcount, 1) == 1) {
                 _free_tmpfs_node(dead);
             } else {
                 dead->pending_free = 1;

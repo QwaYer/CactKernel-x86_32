@@ -4,6 +4,7 @@
 
 void ext4_dir_iter(struct ext4_ctx* ctx, vfs_node_t* node,
                      void (*cb)(struct ext4_dir_entry_2*, void*), void* ud) {
+    if (!cb) return;
     struct ext4_inode inode;
     ext4_read_inode(ctx, node->inode, &inode);
     uint8_t* buf = (uint8_t*)kmalloc(ctx->block_size);
