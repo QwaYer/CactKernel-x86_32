@@ -8,22 +8,28 @@ static inline file_t *_get_file(int fd) {
 }
 
 int sys_create(char *name) {
-    if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
 
+    char *kname = copy_path_from_user(name);
+    if (!kname) return -1;
+
     char basename[128];
-    vfs_node_t *parent = _resolve_parent(name, basename, 128);
+    vfs_node_t *parent = _resolve_parent(kname, basename, 128);
+    kfree_heap(kname);
     if (!parent || !basename[0]) return -1;
 
     return create_vfs(parent, basename);
 }
 
 int sys_mkdir(char *pathname) {
-    if (!validate_user_str(pathname)) return -1;
     if (!current_task) return -1;
 
+    char *kpath = copy_path_from_user(pathname);
+    if (!kpath) return -1;
+
     char basename[128];
-    vfs_node_t *parent = _resolve_parent(pathname, basename, 128);
+    vfs_node_t *parent = _resolve_parent(kpath, basename, 128);
+    kfree_heap(kpath);
     if (!parent || !basename[0]) return -1;
 
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
@@ -35,20 +41,28 @@ int sys_rmdir(char *pathname) {
     if (!validate_user_str(pathname)) return -1;
     if (!current_task) return -1;
 
+    char *kpath = copy_path_from_user(pathname);
+    if (!kpath) return -1;
+
     char basename[128];
-    vfs_node_t *parent = _resolve_parent(pathname, basename, 128);
+    vfs_node_t *parent = _resolve_parent(kpath, basename, 128);
+    kfree_heap(kpath);
     if (!parent || !basename[0]) return -1;
+
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
     return rmdir_vfs(parent, basename);
 }
 
 int sys_delete(char *name) {
-    if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
 
+    char *kname = copy_path_from_user(name);
+    if (!kname) return -1;
+
     char basename[128];
-    vfs_node_t *parent = _resolve_parent(name, basename, 128);
+    vfs_node_t *parent = _resolve_parent(kname, basename, 128);
+    kfree_heap(kname);
     if (!parent || !basename[0]) return -1;
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
@@ -56,11 +70,14 @@ int sys_delete(char *name) {
 }
 
 int sys_unlink(char *path) {
-    if (!validate_user_str(path)) return -1;
     if (!current_task) return -1;
 
+    char *kpath = copy_path_from_user(path);
+    if (!kpath) return -1;
+
     char basename[128];
-    vfs_node_t *parent = _resolve_parent_follow(path, basename, 128);
+    vfs_node_t *parent = _resolve_parent_follow(kpath, basename, 128);
+    kfree_heap(kpath);
     if (!parent || !basename[0]) return -1;
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
@@ -68,13 +85,18 @@ int sys_unlink(char *path) {
 }
 
 int sys_rename(char *oldpath, char *newpath) {
-    if (!validate_user_str(oldpath)) return -1;
-    if (!validate_user_str(newpath)) return -1;
     if (!current_task) return -1;
 
+    char *kold = copy_path_from_user(oldpath);
+    if (!kold) return -1;
+    char *knew = copy_path_from_user(newpath);
+    if (!knew) { kfree_heap(kold); return -1; }
+
     char old_base[128], new_base[128];
-    vfs_node_t *old_parent = _resolve_parent(oldpath, old_base, 128);
-    vfs_node_t *new_parent = _resolve_parent(newpath, new_base, 128);
+    vfs_node_t *old_parent = _resolve_parent(kold, old_base, 128);
+    vfs_node_t *new_parent = _resolve_parent(knew, new_base, 128);
+    kfree_heap(kold);
+    kfree_heap(knew);
 
     if (!old_parent || !new_parent) return -1;
     if (!old_base[0] || !new_base[0]) return -1;
@@ -86,15 +108,20 @@ int sys_rename(char *oldpath, char *newpath) {
 int sys_link(struct syscall_frame *regs) {
     char *oldpath = (char *)regs->ebx;
     char *newpath = (char *)regs->ecx;
-    if (!validate_user_str(oldpath)) return -1;
-    if (!validate_user_str(newpath)) return -1;
     if (!current_task) return -1;
 
-    vfs_node_t *target_node = _resolve_path(oldpath);
-    if (!target_node) return -1;
+    char *kold = copy_path_from_user(oldpath);
+    if (!kold) return -1;
+    char *knew = copy_path_from_user(newpath);
+    if (!knew) { kfree_heap(kold); return -1; }
+
+    vfs_node_t *target_node = _resolve_path(kold);
+    if (!target_node) { kfree_heap(kold); kfree_heap(knew); return -1; }
 
     char basename[128];
-    vfs_node_t *new_parent = _resolve_parent_follow(newpath, basename, 128);
+    vfs_node_t *new_parent = _resolve_parent_follow(knew, basename, 128);
+    kfree_heap(kold);
+    kfree_heap(knew);
     if (!new_parent || !basename[0]) return -1;
 
     return vfs_link(new_parent, basename, target_node);
@@ -103,15 +130,20 @@ int sys_link(struct syscall_frame *regs) {
 int sys_symlink(struct syscall_frame *regs) {
     char *target   = (char *)regs->ebx;
     char *linkpath = (char *)regs->ecx;
-    if (!validate_user_str(target))   return -1;
-    if (!validate_user_str(linkpath)) return -1;
     if (!current_task) return -1;
 
+    char *ktarget = copy_path_from_user(target);
+    if (!ktarget) return -1;
+    char *klink   = copy_path_from_user(linkpath);
+    if (!klink) { kfree_heap(ktarget); return -1; }
+
     char basename[128];
-    vfs_node_t *parent = _resolve_parent_follow(linkpath, basename, 128);
+    vfs_node_t *parent = _resolve_parent_follow(klink, basename, 128);
+    kfree_heap(ktarget);
+    kfree_heap(klink);
     if (!parent || !basename[0]) return -1;
 
-    return vfs_symlink(parent, basename, target);
+    return vfs_symlink(parent, basename, ktarget);
 }
 
 int sys_readlink(struct syscall_frame *regs) {
@@ -153,16 +185,18 @@ int sys_getdents(struct syscall_frame *regs) {
     uint32_t written = 0;
     uint32_t index   = f->offset;
 
-    while (written + entry_size <= count) {
+    while (written + entry_size <= count && written + entry_size >= written) {
         struct vfs_dirent *de = readdir_vfs(f->node, index);
         if (!de) break;
 
-        struct cact_dirent *out = (struct cact_dirent *)(buf + written);
-        out->d_ino = de->inode;
+        struct cact_dirent local;
+        local.d_ino = de->inode;
 
         int i = 0;
-        while (de->name[i] && i < 123) { out->d_name[i] = de->name[i]; i++; }
-        out->d_name[i] = '\0';
+        while (de->name[i] && i < 123) { local.d_name[i] = de->name[i]; i++; }
+        local.d_name[i] = '\0';
+
+        if (copy_to_user(buf + written, &local, entry_size) != 0) break;
 
         written += entry_size;
         index++;
@@ -257,10 +291,14 @@ int sys_getcwd(struct syscall_frame *regs) {
 }
 
 int sys_chroot(char *path) {
-    if (!validate_user_str(path)) return -1;
     if (!current_task) return -1;
     if (current_task->proc->euid != 0) return -1;
-    vfs_node_t *node = _resolve_path(path);
+
+    char *kpath = copy_path_from_user(path);
+    if (!kpath) return -1;
+
+    vfs_node_t *node = _resolve_path(kpath);
+    kfree_heap(kpath);
     if (!node || node->type != VFS_DIRECTORY) return -1;
     current_task->proc->root = node;
     return 0;

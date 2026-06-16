@@ -1,5 +1,6 @@
 #include "validate.h"
 #include "klib.h"
+#include "memory.h"
 
 // Validate that a pointer range falls entirely within userspace.
 // Checks for NULL, address below USER_SPACE_START, address >= KERNEL_BASE,
@@ -41,4 +42,19 @@ int copy_from_user(void* dst, const void* src, uint32_t size) {
     if (!validate_user_ptr(src, size)) return -1;
     memcpy(dst, src, size);
     return 0;
+}
+
+// Validate a user string and copy it to a kernel heap buffer.
+// Returns a kmalloc'd buffer on success, NULL on failure.
+// Caller must kfree_heap() the returned buffer.
+char* copy_path_from_user(const char* user_str) {
+    if (!validate_user_str(user_str)) return 0;
+    int len = 0;
+    while (user_str[len] && len < USER_STR_MAX - 1) len++;
+    char* buf = (char*)kmalloc((uint32_t)len + 1);
+    if (!buf) return 0;
+    int i;
+    for (i = 0; i < len; i++) buf[i] = user_str[i];
+    buf[i] = '\0';
+    return buf;
 }

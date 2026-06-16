@@ -15,4 +15,6 @@ int validate_user_str(const char* str);
 int copy_to_user(void* dst, const void* src, uint32_t size);
 int copy_from_user(void* dst, const void* src, uint32_t size);
 
+char* copy_path_from_user(const char* user_str);
+
 #endif 

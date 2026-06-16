@@ -39,14 +39,13 @@ int sys_fork(struct syscall_frame* regs) {
 // exec() — replace the current process image with a new program
 int sys_exec(struct syscall_frame* regs) {
     char* path = (char*)regs->ebx;
-    if (!validate_user_str(path)) return -1;
 
     char** argv = (char**)regs->ecx;
     char** envp = (char**)regs->edx;
 
     // Validate argv array and each string pointer
     if (argv) {
-        if (!validate_user_ptr(argv, sizeof(char*))) return -1;
+        if (!validate_user_ptr(argv, EXEC_VALIDATE_MAX * sizeof(char*))) return -1;
         for (int i = 0; i < EXEC_VALIDATE_MAX; i++) {
             if ((uint32_t)&argv[i] < USER_SPACE_START || (uint32_t)&argv[i] >= KERNEL_BASE) return -1;
             if (!argv[i]) break;
@@ -56,7 +55,7 @@ int sys_exec(struct syscall_frame* regs) {
 
     // Validate envp array and each string pointer
     if (envp) {
-        if (!validate_user_ptr(envp, sizeof(char*))) return -1;
+        if (!validate_user_ptr(envp, EXEC_VALIDATE_MAX * sizeof(char*))) return -1;
         for (int i = 0; i < EXEC_VALIDATE_MAX; i++) {
             if ((uint32_t)&envp[i] < USER_SPACE_START || (uint32_t)&envp[i] >= KERNEL_BASE) return -1;
             if (!envp[i]) break;
@@ -64,11 +63,14 @@ int sys_exec(struct syscall_frame* regs) {
         }
     }
 
-    // Check execute permission on the file — resolves path once before task_exec
-    {
-        vfs_node_t* exec_node = _resolve_path(path);
-        if (!exec_node || vfs_check_perm(exec_node, VFS_PERM_EXEC) < 0)
-            return -1;
+    // Check execute permission on the file — uses kernel copy of path
+    char *kpath = copy_path_from_user(path);
+    if (!kpath) return -1;
+
+    vfs_node_t* exec_node = _resolve_path(kpath);
+    if (!exec_node || vfs_check_perm(exec_node, VFS_PERM_EXEC) < 0) {
+        kfree_heap(kpath);
+        return -1;
     }
 
     struct context_frame cf;
@@ -77,7 +79,9 @@ int sys_exec(struct syscall_frame* regs) {
     cf.eflags  = regs->eflags;
     cf.useresp = regs->useresp;
     cf.ss      = regs->ss;
-    return task_exec(path, argv, envp, &cf);   // never returns on success
+    int ret = task_exec(kpath, argv, envp, &cf);   // never returns on success
+    kfree_heap(kpath);
+    return ret;
 }
 
 // exit() — terminate the calling process
