@@ -172,6 +172,15 @@ void strlcpy(char *dst, const char *src, int n) {
     dst[i] = '\0';
 }
 
+// String append with length limit (safer version of strcat)
+void strlcat(char *dst, const char *src, int n) {
+    int i = 0;
+    while (dst[i] && i < n) i++;
+    int pos = i;
+    while (src[i - pos] && i < n - 1) { dst[i] = src[i - pos]; i++; }
+    dst[i] = '\0';
+}
+
 // Print 32-bit hex to kernel console
 void kprint_hex(uint32_t n) {
     char buf[12];

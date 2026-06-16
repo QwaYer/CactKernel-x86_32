@@ -143,8 +143,9 @@ int ext4_dir_remove(struct ext4_ctx* ctx, vfs_node_t* node, const char* name, ui
     struct ext4_extent_header* eh = (struct ext4_extent_header*)di.i_block;
     if (eh->eh_magic != 0xF30A) return -1;
 
-    uint8_t nl = 0;
+    int nl = 0;
     while (name[nl]) nl++;
+    if (nl > 255) return -1;
     uint8_t* buf = (uint8_t*)kmalloc(ctx->block_size);
     if (!buf) return -1;
 
@@ -163,7 +164,7 @@ int ext4_dir_remove(struct ext4_ctx* ctx, vfs_node_t* node, const char* name, ui
                 struct ext4_dir_entry_2* de = (struct ext4_dir_entry_2*)(buf + off);
                 if (!de->rec_len || de->rec_len < sizeof(struct ext4_dir_entry_2)) break;
                 if (off + de->rec_len > ctx->block_size) break;
-                if (de->inode && de->name_len == nl) {
+                if (de->inode && de->name_len == (uint8_t)nl) {
                     char en[256];
                     memory_copy(en, de->name, nl);
                     en[nl] = '\0';
