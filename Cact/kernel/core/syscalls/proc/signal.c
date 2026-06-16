@@ -162,7 +162,13 @@ static int sys_setitimer_impl(struct syscall_frame* regs) {
 
     if (!current_task) return -1;
     if (which != 0) return -1;   // only ITIMER_REAL supported
-    if (newval && !validate_user_ptr(newval, sizeof(struct itimerval_k))) return -1;
+
+    struct itimerval_k newval_buf;
+    if (newval) {
+        if (!validate_user_ptr(newval, sizeof(struct itimerval_k))) return -1;
+        if (copy_from_user(&newval_buf, newval, sizeof(newval_buf)) != 0) return -1;
+        newval = &newval_buf;
+    }
     if (oldval && !validate_user_ptr(oldval, sizeof(struct itimerval_k))) return -1;
 
     uint32_t now = timer_ticks_get();

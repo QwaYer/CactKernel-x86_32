@@ -296,8 +296,10 @@ int sys_getsockopt(struct syscall_frame *regs) {
 
     if (!optval || !optlen) return -1;
     if (!validate_user_ptr(optlen, sizeof(uint32_t))) return -1;
-    if (*optlen < sizeof(int)) return -1;
-    if (!validate_user_ptr(optval, *optlen)) return -1;
+    uint32_t optlen_val;
+    if (copy_from_user(&optlen_val, optlen, sizeof(optlen_val)) != 0) return -1;
+    if (optlen_val < sizeof(int)) return -1;
+    if (!validate_user_ptr(optval, optlen_val)) return -1;
 
     vfs_node_t *node = _get_node(fd);
     if (!node || node->type != VFS_SOCKET) return -1;
@@ -325,8 +327,9 @@ int sys_getsockopt(struct syscall_frame *regs) {
         return -1;
     }
 
-    *(int *)optval = ival;
-    *optlen = sizeof(int);
+    optlen_val = sizeof(int);
+    if (copy_to_user(optval, &ival, sizeof(int)) != 0) return -1;
+    if (copy_to_user(optlen, &optlen_val, sizeof(optlen_val)) != 0) return -1;
     return 0;
 }
 
