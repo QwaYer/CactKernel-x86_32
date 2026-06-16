@@ -174,3 +174,11 @@ int pci_msix_enable(pci_device_t *dev, int vector,
 
     return 0;
 }
+
+int msix_used_vectors(void)
+{
+    int count = 0;
+    for (unsigned int i = 0; i < MSIX_VECTOR_COUNT; i++)
+        if (msix_vector_alloc[i]) count++;
+    return count;
+}

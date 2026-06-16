@@ -44,6 +44,8 @@ int  pci_msix_table_map(pci_device_t *dev,
 int  pci_msix_pba_map(pci_device_t *dev,
                       volatile uint32_t **pba_out);
 
+int msix_used_vectors(void);
+
 extern uint32_t msix_stub_table[];
 
 #endif

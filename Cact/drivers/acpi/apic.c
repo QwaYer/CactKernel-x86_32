@@ -32,6 +32,10 @@ static volatile uint32_t *ioapic_win = NULL;
 static int apic_enabled = 0;
 static unsigned int ioapic_max_redir = 0;
 static unsigned int ioapic_global_irq_base = 0;
+static unsigned int ioapic_id = 0;
+static uint32_t lapic_base_addr = 0;
+static uint32_t ioapic_base_addr = 0;
+static uint32_t irq_override[16];
 
 static inline uint64_t rdmsr(uint32_t msr)
 {
@@ -95,11 +99,11 @@ int apic_init(void)
     }
 
     lapic_init(madt->Address);
+    lapic_base_addr = madt->Address;
 
     uint32_t ioapic_base = 0;
     uint32_t global_irq_base = 0;
-    uint8_t  ioapic_id = 0;
-    uint32_t irq_override[16];
+    uint8_t  ioapic_id_local = 0;
 
     for (int i = 0; i < 16; i++)
         irq_override[i] = i;
@@ -115,7 +119,7 @@ int apic_init(void)
             ACPI_MADT_IO_APIC *ioapic = (ACPI_MADT_IO_APIC *)entry;
             ioapic_base      = ioapic->Address;
             global_irq_base  = ioapic->GlobalIrqBase;
-            ioapic_id        = ioapic->Id;
+            ioapic_id_local  = ioapic->Id;
         } else if (type == 2) {
             ACPI_MADT_INTERRUPT_OVERRIDE *ovr =
                 (ACPI_MADT_INTERRUPT_OVERRIDE *)entry;
@@ -124,6 +128,9 @@ int apic_init(void)
         }
         entry += len;
     }
+
+    ioapic_base_addr = ioapic_base;
+    ioapic_id = ioapic_id_local;
 
     if (ioapic_base == 0) {
         klog(LOG_WARN, "IOAPIC: not found");
@@ -195,4 +202,29 @@ int apic_pci_vector(uint8_t irq_pin)
     if (entry_idx > ioapic_max_redir)
         return -1;
     return 0xF0 + (entry_idx & 0x0F);
+}
+
+uint32_t apic_lapic_base(void)       { return lapic_base_addr; }
+uint32_t apic_lapic_id(void)
+{
+    uint32_t ebx, eax, ecx, edx;
+    __asm__ __volatile__("cpuid"
+        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+        : "a"(1), "c"(0));
+    (void)eax; (void)ecx; (void)edx;
+    return (ebx >> 24) & 0xFF;
+}
+bool     apic_ioapic_info(uint32_t *base, uint32_t *id, uint32_t *max_redir, uint32_t *gsi_base)
+{
+    if (!apic_enabled) return false;
+    if (base)      *base      = ioapic_base_addr;
+    if (id)        *id        = ioapic_id;
+    if (max_redir) *max_redir = ioapic_max_redir;
+    if (gsi_base)  *gsi_base  = ioapic_global_irq_base;
+    return true;
+}
+int apic_irq_override(int isa_irq)
+{
+    if (!apic_enabled || isa_irq < 0 || isa_irq >= 16) return -1;
+    return (int)irq_override[isa_irq];
 }

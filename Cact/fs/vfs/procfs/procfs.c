@@ -6,6 +6,9 @@
 #include "task.h"
 #include "version.h"
 #include "pci_modblob.h"
+#include "cpudev.h"
+#include "apic.h"
+#include "msi.h"
 
 /* /proc/bin/mdls exposes cctkfs modules by basename. */
 #define MDLS_MAX_FILES  32
@@ -290,14 +293,6 @@ static vfs_ops_t root_ops = {
     .listdir = _root_listdir,
 };
 
-// cpuid wrapper (leaf only)
-static void _cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
-                   uint32_t *ecx, uint32_t *edx) {
-    __asm__ volatile("cpuid"
-        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
-        : "a"(leaf) : );
-}
-
 // Approximate CPU MHz via short TSC busy-wait.
 static uint32_t _tsc_mhz(void) {
     uint32_t lo1, hi1, lo2, hi2;
@@ -309,113 +304,130 @@ static uint32_t _tsc_mhz(void) {
     return delta / 10000u;
 }
 
-// /proc/cpuinfo generator
+// /proc/cpuinfo generator — uses cpudev.c cached data
 static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
-    char tmp[512];
+    char tmp[768];
     int  p = 0;
 
-    uint32_t eax, ebx, ecx, edx;
-    _cpuid(0, &eax, &ebx, &ecx, &edx);
-    uint32_t max_leaf = eax;
-    char vendor[13];
-    ((uint32_t*)vendor)[0] = ebx;
-    ((uint32_t*)vendor)[1] = edx;
-    ((uint32_t*)vendor)[2] = ecx;
-    vendor[12] = '\0';
-
-    char brand[49];
-    memset(brand, 0, sizeof(brand));
-    uint32_t max_ext;
-    _cpuid(0x80000000, &max_ext, &ebx, &ecx, &edx);
-    if (max_ext >= 0x80000004) {
-        uint32_t *bp = (uint32_t*)brand;
-        _cpuid(0x80000002, &bp[0],  &bp[1],  &bp[2],  &bp[3]);
-        _cpuid(0x80000003, &bp[4],  &bp[5],  &bp[6],  &bp[7]);
-        _cpuid(0x80000004, &bp[8],  &bp[9],  &bp[10], &bp[11]);
-    } else {
-        if (max_leaf >= 1) {
-            _cpuid(1, &eax, &ebx, &ecx, &edx);
-            uint32_t family = (eax >> 8) & 0xF;
-            uint32_t model  = (eax >> 4) & 0xF;
-            const char *s = "x86 family ";
-            int i = 0;
-            while (s[i]) {
-                brand[i] = s[i];
-                i++;
-            }
-            char nb[8]; itoa((int)family, nb);
-            int j = 0; while (nb[j]) brand[i++] = nb[j++];
-            brand[i++] = ' '; brand[i++] = 'm';
-            brand[i++] = 'o'; brand[i++] = 'd';
-            brand[i++] = 'e'; brand[i++] = 'l';
-            brand[i++] = ' ';
-            itoa((int)model, nb); j=0;
-            while (nb[j]) brand[i++] = nb[j++];
-        } else {
-            const char *fb = "x86 compatible";
-            int i = 0;
-            while (fb[i]) {
-                brand[i] = fb[i];
-                i++;
-            }
-        }
-    }
-
     uint32_t mhz = _tsc_mhz();
-
-    uint32_t flags_edx = 0, flags_ecx = 0;
-    if (max_leaf >= 1) {
-        _cpuid(1, &eax, &ebx, &flags_ecx, &flags_edx);
-    }
-
-    uint32_t cache_kb = 0;
-    if (max_ext >= 0x80000006) {
-        uint32_t c6;
-        _cpuid(0x80000006, &eax, &ebx, &c6, &edx);
-        cache_kb = (c6 >> 16) & 0xFFFF;
-    }
+    uint32_t apic_id = apic_lapic_id();
 
     #define _APP(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
     #define _APPN(n) { char _nb[16]; itoa((int)(n),_nb); _APP(_nb); }
 
-    _APP("processor   : 0\n");
-    _APP("vendor_id   : "); _APP(vendor); _APP("\n");
-    _APP("model name  : ");
-    { int bi=0; while(brand[bi]==' ') bi++;
-      const char *b=brand+bi; while(*b) tmp[p++]=*b++; }
-    _APP("\n");
-    _APP("cpu MHz     : "); _APPN(mhz); _APP("\n");
-    if (cache_kb > 0) {
-        _APP("cache size  : "); _APPN(cache_kb); _APP(" KB\n");
-    } else {
-        _APP("cache size  : unknown\n");
-    }
+    _APP("processor       : 0\n");
+    _APP("apicid          : "); _APPN(apic_id); _APP("\n");
+    _APP("vendor_id       : "); _APP(cpu_vendor_str(cpu_vendor())); _APP("\n");
+    _APP("model name      : "); _APP(cpu_brand_str()); _APP("\n");
+    _APP("cpu MHz         : "); _APPN(mhz); _APP("\n");
 
-    _APP("flags       :");
-    if (flags_edx & (1<<0))  _APP(" fpu");
-    if (flags_edx & (1<<1))  _APP(" vme");
-    if (flags_edx & (1<<2))  _APP(" de");
-    if (flags_edx & (1<<3))  _APP(" pse");
-    if (flags_edx & (1<<4))  _APP(" tsc");
-    if (flags_edx & (1<<5))  _APP(" msr");
-    if (flags_edx & (1<<6))  _APP(" pae");
-    if (flags_edx & (1<<8))  _APP(" cx8");
-    if (flags_edx & (1<<9))  _APP(" apic");
-    if (flags_edx & (1<<11)) _APP(" sep");
-    if (flags_edx & (1<<12)) _APP(" mtrr");
-    if (flags_edx & (1<<13)) _APP(" pge");
-    if (flags_edx & (1<<15)) _APP(" cmov");
-    if (flags_edx & (1<<19)) _APP(" clflush");
-    if (flags_edx & (1<<23)) _APP(" mmx");
-    if (flags_edx & (1<<25)) _APP(" sse");
-    if (flags_edx & (1<<26)) _APP(" sse2");
-    if (flags_edx & (1<<28)) _APP(" ht");
-    if (flags_ecx & (1<<0))  _APP(" sse3");
-    if (flags_ecx & (1<<9))  _APP(" ssse3");
-    if (flags_ecx & (1<<19)) _APP(" sse4_1");
-    if (flags_ecx & (1<<20)) _APP(" sse4_2");
-    if (flags_ecx & (1<<28)) _APP(" avx");
-    if (flags_ecx & (1<<30)) _APP(" rdrand");
+    _APP("flags           :");
+    uint32_t edx = cpu_features_edx();
+    uint32_t ecx = cpu_features_ecx();
+    uint32_t ext_edx = cpu_features_ext_edx();
+    uint32_t l7_ebx = cpu_features_leaf7_ebx();
+    uint32_t l7_ecx = cpu_features_leaf7_ecx();
+    uint32_t l7_edx = cpu_features_leaf7_edx();
+
+    if (edx & (1u<<0))  _APP(" fpu");
+    if (edx & (1u<<1))  _APP(" vme");
+    if (edx & (1u<<2))  _APP(" de");
+    if (edx & (1u<<3))  _APP(" pse");
+    if (edx & (1u<<4))  _APP(" tsc");
+    if (edx & (1u<<5))  _APP(" msr");
+    if (edx & (1u<<6))  _APP(" pae");
+    if (edx & (1u<<7))  _APP(" mce");
+    if (edx & (1u<<8))  _APP(" cx8");
+    if (edx & (1u<<9))  _APP(" apic");
+    if (edx & (1u<<11)) _APP(" sep");
+    if (edx & (1u<<12)) _APP(" mtrr");
+    if (edx & (1u<<13)) _APP(" pge");
+    if (edx & (1u<<14)) _APP(" mca");
+    if (edx & (1u<<15)) _APP(" cmov");
+    if (edx & (1u<<16)) _APP(" pat");
+    if (edx & (1u<<17)) _APP(" pse36");
+    if (edx & (1u<<19)) _APP(" clflush");
+    if (edx & (1u<<21)) _APP(" ds");
+    if (edx & (1u<<22)) _APP(" acpi");
+    if (edx & (1u<<23)) _APP(" mmx");
+    if (edx & (1u<<24)) _APP(" fxsr");
+    if (edx & (1u<<25)) _APP(" sse");
+    if (edx & (1u<<26)) _APP(" sse2");
+    if (edx & (1u<<28)) _APP(" ht");
+    if (edx & (1u<<29)) _APP(" tm1");
+    if (edx & (1u<<31)) _APP(" pbe");
+
+    if (ecx & (1u<<0))  _APP(" sse3");
+    if (ecx & (1u<<1))  _APP(" pclmulqdq");
+    if (ecx & (1u<<2))  _APP(" dtes64");
+    if (ecx & (1u<<3))  _APP(" monitor");
+    if (ecx & (1u<<4))  _APP(" dscpl");
+    if (ecx & (1u<<5))  _APP(" vmx");
+    if (ecx & (1u<<6))  _APP(" smx");
+    if (ecx & (1u<<7))  _APP(" est");
+    if (ecx & (1u<<8))  _APP(" tm2");
+    if (ecx & (1u<<9))  _APP(" ssse3");
+    if (ecx & (1u<<12)) _APP(" fma");
+    if (ecx & (1u<<13)) _APP(" cx16");
+    if (ecx & (1u<<14)) _APP(" xtpr");
+    if (ecx & (1u<<15)) _APP(" pdcm");
+    if (ecx & (1u<<17)) _APP(" pcid");
+    if (ecx & (1u<<19)) _APP(" sse4_1");
+    if (ecx & (1u<<20)) _APP(" sse4_2");
+    if (ecx & (1u<<21)) _APP(" x2apic");
+    if (ecx & (1u<<22)) _APP(" movbe");
+    if (ecx & (1u<<23)) _APP(" popcnt");
+    if (ecx & (1u<<24)) _APP(" tsc-deadline");
+    if (ecx & (1u<<25)) _APP(" aes");
+    if (ecx & (1u<<26)) _APP(" xsave");
+    if (ecx & (1u<<27)) _APP(" osxsave");
+    if (ecx & (1u<<28)) _APP(" avx");
+    if (ecx & (1u<<29)) _APP(" f16c");
+    if (ecx & (1u<<30)) _APP(" rdrand");
+    if (ecx & (1u<<31)) _APP(" hypervisor");
+
+    if (l7_ebx & (1u<<0))  _APP(" fsgsbase");
+    if (l7_ebx & (1u<<1))  _APP(" tsc-adjust");
+    if (l7_ebx & (1u<<2))  _APP(" sgx");
+    if (l7_ebx & (1u<<3))  _APP(" bmi1");
+    if (l7_ebx & (1u<<4))  _APP(" hle");
+    if (l7_ebx & (1u<<5))  _APP(" avx2");
+    if (l7_ebx & (1u<<7))  _APP(" smep");
+    if (l7_ebx & (1u<<8))  _APP(" bmi2");
+    if (l7_ebx & (1u<<9))  _APP(" erms");
+    if (l7_ebx & (1u<<10)) _APP(" invpcid");
+    if (l7_ebx & (1u<<11)) _APP(" rtm");
+    if (l7_ebx & (1u<<14)) _APP(" mpx");
+    if (l7_ebx & (1u<<18)) _APP(" rdseed");
+    if (l7_ebx & (1u<<19)) _APP(" adx");
+    if (l7_ebx & (1u<<20)) _APP(" smap");
+    if (l7_ebx & (1u<<23)) _APP(" clflushopt");
+    if (l7_ebx & (1u<<24)) _APP(" clwb");
+    if (l7_ebx & (1u<<29)) _APP(" sha");
+
+    if (l7_ecx & (1u<<2))  _APP(" umip");
+    if (l7_ecx & (1u<<3))  _APP(" pku");
+    if (l7_ecx & (1u<<4))  _APP(" ospke");
+    if (l7_ecx & (1u<<7))  _APP(" cet-ss");
+    if (l7_ecx & (1u<<9))  _APP(" vaes");
+    if (l7_ecx & (1u<<10)) _APP(" vpclmulqdq");
+    if (l7_ecx & (1u<<16)) _APP(" la57");
+
+    if (l7_edx & (1u<<10)) _APP(" md-clear");
+    if (l7_edx & (1u<<26)) _APP(" ibrs");
+    if (l7_edx & (1u<<27)) _APP(" stibp");
+    if (l7_edx & (1u<<28)) _APP(" l1d-flush");
+    if (l7_edx & (1u<<29)) _APP(" arch-cap");
+    if (l7_edx & (1u<<30)) _APP(" core-cap");
+    if (l7_edx & (1u<<31)) _APP(" ssbd");
+
+    if (ext_edx & (1u<<11)) _APP(" syscall");
+    if (ext_edx & (1u<<20)) _APP(" nx");
+    if (ext_edx & (1u<<22)) _APP(" mmxext");
+    if (ext_edx & (1u<<25)) _APP(" fxsr-opt");
+    if (ext_edx & (1u<<26)) _APP(" pdpe1gb");
+    if (ext_edx & (1u<<27)) _APP(" rdtscp");
+    if (ext_edx & (1u<<29)) _APP(" lm");
     _APP("\n");
 
     #undef _APP
@@ -437,6 +449,62 @@ void procfs_set_meminfo(uint32_t mem_total_kb) {
 
 static uint32_t _get_total_memory_kb(void) {
     return _mb_mem_total_kb;
+}
+
+// /proc/apic generator
+static int _apic_read(uint32_t off, uint32_t size, char *buf) {
+    char tmp[512]; int p = 0;
+
+    #define _A(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
+    #define _N(n) { char _b[16]; itoa((int)(n),_b); _A(_b); }
+
+    _A("APIC enabled    : ");
+    _A(apic_is_enabled() ? "yes" : "no"); _A("\n");
+
+    if (apic_is_enabled()) {
+        _A("LAPIC base      : 0x");
+        { char h[12]; hex_to_ascii(apic_lapic_base(), h); _A(h); }
+        _A("\n");
+        _A("LAPIC ID        : "); _N(apic_lapic_id()); _A("\n");
+
+        uint32_t io_base, io_id, io_max, io_gsi;
+        if (apic_ioapic_info(&io_base, &io_id, &io_max, &io_gsi)) {
+            _A("IOAPIC ID       : "); _N(io_id); _A("\n");
+            _A("IOAPIC base     : 0x");
+            { char h[12]; hex_to_ascii(io_base, h); _A(h); }
+            _A("\n");
+            _A("IOAPIC max entry: "); _N(io_max); _A("\n");
+            _A("IOAPIC GSI base : "); _N(io_gsi); _A("\n");
+
+            _A("ISA IRQ overrides:");
+            for (int i = 0; i < 16; i++) {
+                int gsi = apic_irq_override(i);
+                if (gsi != i) {
+                    _A(" "); _N(i); _A("->"); _N(gsi);
+                }
+            }
+            _A("\n");
+        }
+    }
+
+    _A("MSI-X vectors   : 0x");
+    { char h[12]; hex_to_ascii(MSIX_VECTOR_BASE, h); _A(h); }
+    _A("-0x");
+    { char h[12]; hex_to_ascii(MSIX_VECTOR_END - 1, h); _A(h); }
+    _A(" ("); _N(MSIX_VECTOR_COUNT); _A(" total)\n");
+
+    int used = msix_used_vectors();
+    _A("MSI-X used      : "); _N(used); _A("\n");
+    _A("MSI-X free      : "); _N(MSIX_VECTOR_COUNT - used); _A("\n");
+
+    #undef _A
+    #undef _N
+
+    uint32_t len = (uint32_t)p;
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, tmp + off, size);
+    return (int)size;
 }
 
 // /proc/meminfo generator
@@ -669,6 +737,7 @@ void procfs_init(void) {
     procfs_root.ops  = &root_ops;
 
     procfs_register_file("cpuinfo", _cpuinfo_read);
+    procfs_register_file("apic",    _apic_read);
     procfs_register_file("meminfo", _meminfo_read);
     procfs_register_file("uptime",  _uptime_read);
     procfs_register_file("version", _version_read);
