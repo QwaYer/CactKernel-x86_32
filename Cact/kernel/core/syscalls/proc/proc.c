@@ -79,7 +79,7 @@ int sys_exec(struct syscall_frame* regs) {
     cf.eflags  = regs->eflags;
     cf.useresp = regs->useresp;
     cf.ss      = regs->ss;
-    int ret = task_exec(path, argv, envp, &cf);   // never returns on success
+    int ret = task_exec(kpath, argv, envp, &cf);   // never returns on success
     kfree_heap(kpath);
     return ret;
 }
