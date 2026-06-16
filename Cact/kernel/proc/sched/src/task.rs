@@ -838,7 +838,7 @@ pub unsafe extern "C" fn task_exec(
 ) -> i32 {
     let _ = regs;
 
-    if path.is_null() || path as u32 >= KERNEL_BASE { return -1; }
+    if path.is_null() { return -1; }
 
     let t = current_task;
     if t.is_null() || (*t).is_kernel != 0 { return -1; }
