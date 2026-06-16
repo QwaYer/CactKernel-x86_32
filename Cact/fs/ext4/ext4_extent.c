@@ -30,6 +30,7 @@ uint32_t ext4_extent_pblock(struct ext4_inode* inode, uint32_t fb) {
 int ext4_extent_add(struct ext4_inode* inode, uint32_t fb, uint32_t pb, uint16_t len) {
     struct ext4_extent_header* eh = (struct ext4_extent_header*)inode->i_block;
     if (eh->eh_entries >= eh->eh_max) return -1;
+    if (len > 32768) return -1;
     struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)inode->i_block + sizeof(*eh));
     uint16_t idx         = eh->eh_entries;
     ee[idx].ee_block     = fb;
@@ -66,7 +67,8 @@ uint32_t ext4_legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32
     fb -= ppb;
 
     // Doubly-indirect
-    if (fb < ppb * ppb) {
+    uint64_t double_limit = (uint64_t)ppb * ppb;
+    if ((uint64_t)fb < double_limit) {
         uint32_t dind = inode->i_block[13];
         if (!dind) return 0;
         uint32_t* buf = (uint32_t*)kmalloc(ctx->block_size);
@@ -83,7 +85,8 @@ uint32_t ext4_legacy_bmap(struct ext4_ctx* ctx, struct ext4_inode* inode, uint32
     fb -= ppb * ppb;
 
     // Triply-indirect
-    if (fb < ppb * ppb * ppb) {
+    uint64_t triple_limit = (uint64_t)ppb * ppb * ppb;
+    if ((uint64_t)fb < triple_limit) {
         uint32_t tind = inode->i_block[14];
         if (!tind) return 0;
         uint32_t* buf = (uint32_t*)kmalloc(ctx->block_size);
