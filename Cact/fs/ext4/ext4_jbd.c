@@ -21,7 +21,8 @@ static uint32_t ext4_jbd_write_via_inode(struct ext4_ctx* ctx, uint32_t jblock, 
     if (eh->eh_magic == 0xF30A) {
         struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)ji.i_block + sizeof(*eh));
         for (uint16_t i = 0; i < eh->eh_entries; i++) {
-            if (jblock >= ee[i].ee_block && jblock < ee[i].ee_block + ee[i].ee_len) {
+            if (ee[i].ee_len == 0) continue;
+            if (jblock >= ee[i].ee_block && jblock - ee[i].ee_block < ee[i].ee_len) {
                 uint32_t phys = ee[i].ee_start_lo + (jblock - ee[i].ee_block);
                 ext4_jbd_write_phys(ctx, phys, buf);
                 return 1;
@@ -166,7 +167,8 @@ uint32_t ext4_jbd_read(struct ext4_ctx* ctx, uint32_t jblock, uint8_t* buf) {
     if (eh->eh_magic == 0xF30A) {
         struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)ji.i_block + sizeof(*eh));
         for (uint16_t i = 0; i < eh->eh_entries; i++) {
-            if (jblock >= ee[i].ee_block && jblock < ee[i].ee_block + ee[i].ee_len) {
+            if (ee[i].ee_len == 0) continue;
+            if (jblock >= ee[i].ee_block && jblock - ee[i].ee_block < ee[i].ee_len) {
                 ext4_read_block(ctx, ee[i].ee_start_lo + (jblock - ee[i].ee_block), buf);
                 return 1;
             }

@@ -18,9 +18,11 @@ uint32_t ext4_extent_pblock(struct ext4_inode* inode, uint32_t fb) {
     struct ext4_extent_header* eh = (struct ext4_extent_header*)inode->i_block;
     if (eh->eh_magic != 0xF30A || eh->eh_depth != 0) return 0;
     struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)inode->i_block + sizeof(*eh));
-    for (uint16_t i = 0; i < eh->eh_entries; i++)
-        if (fb >= ee[i].ee_block && fb < ee[i].ee_block + ee[i].ee_len)
+    for (uint16_t i = 0; i < eh->eh_entries; i++) {
+        if (ee[i].ee_len == 0) continue;
+        if (fb >= ee[i].ee_block && fb - ee[i].ee_block < ee[i].ee_len)
             return ee[i].ee_start_lo + (fb - ee[i].ee_block);
+    }
     return 0;
 }
 
