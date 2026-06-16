@@ -129,6 +129,8 @@ static void hub_irq_notify(usb_device_t *dev, void *buf,
                             uint16_t len, void *priv_ptr)
 {
     usb_hub_priv_t *priv = (usb_hub_priv_t *)priv_ptr;
+    __sync_synchronize();
+    if (priv->removed) return;
     uint8_t *mask = (uint8_t *)buf;
 
     for (uint8_t p = 1; p <= priv->num_ports; p++) {
@@ -192,7 +194,10 @@ static int hub_probe(usb_device_t *dev) {
 
 static void hub_remove(usb_device_t *dev) {
     if (dev && dev->driver_priv) {
-        kfree_heap(dev->driver_priv);
+        usb_hub_priv_t *priv = (usb_hub_priv_t *)dev->driver_priv;
+        priv->removed = 1;
+        __sync_synchronize();
+        kfree_heap(priv);
         dev->driver_priv = NULL;
     }
 }

@@ -46,6 +46,7 @@ typedef struct {
     uint8_t        num_ports;
     uint8_t        intr_ep;
     uint8_t        status_buf[8];
+    volatile int   removed;
 } usb_hub_priv_t;
 
 //Public api
