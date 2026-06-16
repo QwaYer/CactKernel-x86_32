@@ -128,7 +128,10 @@ int ext4_dir_add(struct ext4_ctx* ctx, vfs_node_t* node, uint32_t entry_ino, con
     kfree_heap(buf);
 
     uint32_t next_fb = 0;
-    for (uint16_t ei = 0; ei < nr; ei++) next_fb += ee[ei].ee_len;
+    for (uint16_t ei = 0; ei < nr; ei++) {
+        if (ee[ei].ee_len > 32768) ee[ei].ee_len = 32768;
+        next_fb += ee[ei].ee_len;
+    }
     if (ext4_extent_add(&di, next_fb, np, 1) < 0) {
         ext4_free_block(ctx, np);
         return -1;
