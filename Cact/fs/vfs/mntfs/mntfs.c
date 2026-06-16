@@ -430,58 +430,94 @@ void mntfs_init(void) {
     etcfs_init(ext4);
     char sys_etc[64];
     strlcpy(sys_etc, boot_devname, 64);
-    strlcpy(sys_etc + strlen(boot_devname), "/sys/etc", 64 - strlen(boot_devname));
-    mntfs_mount(sys_etc, "etcfs", etcfs_get_root(), 0);
+    if (strlen(boot_devname) + 9 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/etc\n");
+    } else {
+        strlcpy(sys_etc + strlen(boot_devname), "/sys/etc", 64 - strlen(boot_devname));
+        mntfs_mount(sys_etc, "etcfs", etcfs_get_root(), 0);
+    }
 
     _mounts_mount_all();
 
     devfs_init();
     char sys_dev[64];
     strlcpy(sys_dev, boot_devname, 64);
-    strlcpy(sys_dev + strlen(boot_devname), "/sys/dev", 64 - strlen(boot_devname));
-    mntfs_mount(sys_dev, "devfs", devfs_get_root(), 0);
+    if (strlen(boot_devname) + 9 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/dev\n");
+    } else {
+        strlcpy(sys_dev + strlen(boot_devname), "/sys/dev", 64 - strlen(boot_devname));
+        mntfs_mount(sys_dev, "devfs", devfs_get_root(), 0);
+    }
 
     procfs_init();
     char sys_proc[64];
     strlcpy(sys_proc, boot_devname, 64);
-    strlcpy(sys_proc + strlen(boot_devname), "/sys/proc", 64 - strlen(boot_devname));
-    mntfs_mount(sys_proc, "procfs", procfs_get_root(), 0);
+    if (strlen(boot_devname) + 10 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/proc\n");
+    } else {
+        strlcpy(sys_proc + strlen(boot_devname), "/sys/proc", 64 - strlen(boot_devname));
+        mntfs_mount(sys_proc, "procfs", procfs_get_root(), 0);
+    }
 
     tmpfs_init();
     char sys_tmp[64];
     strlcpy(sys_tmp, boot_devname, 64);
-    strlcpy(sys_tmp + strlen(boot_devname), "/sys/tmp", 64 - strlen(boot_devname));
-    mntfs_mount(sys_tmp, "tmpfs", tmpfs_get_root(), 0);
+    if (strlen(boot_devname) + 9 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/tmp\n");
+    } else {
+        strlcpy(sys_tmp + strlen(boot_devname), "/sys/tmp", 64 - strlen(boot_devname));
+        mntfs_mount(sys_tmp, "tmpfs", tmpfs_get_root(), 0);
+    }
 
     binfs_init(ext4);
     char sys_bin[64];
     strlcpy(sys_bin, boot_devname, 64);
-    strlcpy(sys_bin + strlen(boot_devname), "/sys/bin", 64 - strlen(boot_devname));
-    mntfs_mount(sys_bin, "binfs", binfs_get_root(), 0);
+    if (strlen(boot_devname) + 9 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/bin\n");
+    } else {
+        strlcpy(sys_bin + strlen(boot_devname), "/sys/bin", 64 - strlen(boot_devname));
+        mntfs_mount(sys_bin, "binfs", binfs_get_root(), 0);
+    }
 
     sbinfs_init(ext4);
     char sys_sbin[64];
     strlcpy(sys_sbin, boot_devname, 64);
-    strlcpy(sys_sbin + strlen(boot_devname), "/sys/sbin", 64 - strlen(boot_devname));
-    mntfs_mount(sys_sbin, "sbinfs", sbinfs_get_root(), 0);
+    if (strlen(boot_devname) + 10 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/sbin\n");
+    } else {
+        strlcpy(sys_sbin + strlen(boot_devname), "/sys/sbin", 64 - strlen(boot_devname));
+        mntfs_mount(sys_sbin, "sbinfs", sbinfs_get_root(), 0);
+    }
 
     libfs_init(ext4);
     char sys_lib[64];
     strlcpy(sys_lib, boot_devname, 64);
-    strlcpy(sys_lib + strlen(boot_devname), "/sys/lib", 64 - strlen(boot_devname));
-    mntfs_mount(sys_lib, "libfs", libfs_get_root(), 0);
+    if (strlen(boot_devname) + 9 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/lib\n");
+    } else {
+        strlcpy(sys_lib + strlen(boot_devname), "/sys/lib", 64 - strlen(boot_devname));
+        mntfs_mount(sys_lib, "libfs", libfs_get_root(), 0);
+    }
 
     varfs_init(ext4);
     char sys_var[64];
     strlcpy(sys_var, boot_devname, 64);
-    strlcpy(sys_var + strlen(boot_devname), "/sys/var", 64 - strlen(boot_devname));
-    mntfs_mount(sys_var, "varfs", varfs_get_root(), 0);
+    if (strlen(boot_devname) + 9 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/var\n");
+    } else {
+        strlcpy(sys_var + strlen(boot_devname), "/sys/var", 64 - strlen(boot_devname));
+        mntfs_mount(sys_var, "varfs", varfs_get_root(), 0);
+    }
 
     usrfs_init(ext4);
     char sys_usr[64];
     strlcpy(sys_usr, boot_devname, 64);
-    strlcpy(sys_usr + strlen(boot_devname), "/sys/usr", 64 - strlen(boot_devname));
-    mntfs_mount(sys_usr, "usrfs", usrfs_get_root(), 0);
+    if (strlen(boot_devname) + 9 > 63) {
+        kprint("[mntfs] boot_devname too long, skipping /sys/usr\n");
+    } else {
+        strlcpy(sys_usr + strlen(boot_devname), "/sys/usr", 64 - strlen(boot_devname));
+        mntfs_mount(sys_usr, "usrfs", usrfs_get_root(), 0);
+    }
 
     // Add standard VFS root aliases.
     extern int vfs_mount(vfs_node_t *host, const char *name, vfs_node_t *target);

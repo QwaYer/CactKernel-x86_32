@@ -28,7 +28,7 @@ int elf_is_dynamic(char* path) {
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
         if (read_vfs(file,
-                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
             return 0;
@@ -93,7 +93,7 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
         if (read_vfs(file,
-                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
             kprint("[ELF] ERR: cannot read phdr\n");
@@ -234,7 +234,7 @@ void* load_elf_dynamic(char*                path,
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
         if (read_vfs(file,
-                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
             kprint("[ELF-DYN] ERR: cannot read phdr (scan)\n");
@@ -258,7 +258,7 @@ void* load_elf_dynamic(char*                path,
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
         if (read_vfs(file,
-                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
             kprint("[ELF-DYN] ERR: cannot read phdr\n");
@@ -404,7 +404,7 @@ uint32_t elf_get_brk_start(struct vfs_node* file) {
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf32_Phdr ph;
         if (read_vfs(file,
-                     hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
+                     hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr), (char*)&ph) <= 0)
             break;
         if (ph.p_type != PT_LOAD) continue;
