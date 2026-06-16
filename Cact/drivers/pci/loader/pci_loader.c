@@ -179,27 +179,34 @@ static int read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t
         return -1;
 
     uint32_t fsz = node->size;
-    if (!fsz)
+    if (!fsz) {
+        vfs_node_unref(node);
         return -1;
+    }
 
     uint8_t *buf = (uint8_t *)kmalloc(fsz);
-    if (!buf)
+    if (!buf) {
+        vfs_node_unref(node);
         return -1;
+    }
 
     int br = read_vfs(node, 0, fsz, (char *)buf);
     if (br <= 0) {
         kfree_heap(buf);
+        vfs_node_unref(node);
         return -1;
     }
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)buf;
     if (eh->e_magic != ELF_MAGIC || eh->e_type != ET_REL || eh->e_machine != EM_386) {
         kfree_heap(buf);
+        vfs_node_unref(node);
         return -2;
     }
 
     *elf_data   = buf;
     *file_size  = fsz;
+    vfs_node_unref(node);
     return 0;
 }
 

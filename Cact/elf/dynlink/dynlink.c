@@ -90,11 +90,13 @@ static int _elf_map_file(struct vfs_node*     file,
             void* phys = kalloc();
             if (!phys) {
                 kprint("[DL] out of memory mapping segment\n");
+                proc_free_pages(tracker);
                 return -1;
             }
             if (proc_tracker_add(tracker, phys) < 0) {
                 kfree_page(phys);
                 kprint("[DL] tracker overflow\n");
+                proc_free_pages(tracker);
                 return -1;
             }
 
@@ -127,6 +129,7 @@ static int _elf_map_file(struct vfs_node*     file,
                          hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                          sizeof(ph), (char*)&ph) <= 0) {
                 kprint("[DL] failed to read program header\n");
+                proc_free_pages(tracker);
                 return -1;
             }
             if (ph.p_type == PT_DYNAMIC) {

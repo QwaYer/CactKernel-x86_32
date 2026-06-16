@@ -677,27 +677,27 @@ static int xhci_init_one(uint32_t phys_base) {
     xhci_op_write32(priv, XHCI_OP_DCBAAP + 4, 0);
 
     priv->dev_ctx_pool = (uint8_t *)kmalloc_aligned((priv->max_slots + 1) * 2048, 64);
-    if (!priv->dev_ctx_pool) { kfree_heap(priv); return -1; }
+    if (!priv->dev_ctx_pool) { kfree_aligned(priv->dcbaa); kfree_heap(priv); return -1; }
     memset(priv->dev_ctx_pool, 0, (priv->max_slots + 1) * 2048);
 
     priv->input_ctx_pool = (uint8_t *)kmalloc_aligned(2048, 64);
-    if (!priv->input_ctx_pool) { kfree_heap(priv); return -1; }
+    if (!priv->input_ctx_pool) { kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree_heap(priv); return -1; }
 
     xhci_trb_t *cmd_mem = (xhci_trb_t *)kmalloc_aligned(XHCI_CMD_RING_SIZE * sizeof(xhci_trb_t), 64);
-    if (!cmd_mem) { kfree_heap(priv); return -1; }
+    if (!cmd_mem) { kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree_heap(priv); return -1; }
     xhci_ring_init(&priv->cmd_ring, cmd_mem, XHCI_CMD_RING_SIZE);
 
     xhci_op_write32(priv, XHCI_OP_CRCR, xhci_va_to_pa(cmd_mem) | 1);
     xhci_op_write32(priv, XHCI_OP_CRCR + 4, 0);
 
     priv->evt_ring = (xhci_trb_t *)kmalloc_aligned(XHCI_EVT_RING_SIZE * sizeof(xhci_trb_t), 64);
-    if (!priv->evt_ring) { kfree_heap(priv); return -1; }
+    if (!priv->evt_ring) { kfree_aligned(cmd_mem); kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree_heap(priv); return -1; }
     memset(priv->evt_ring, 0, XHCI_EVT_RING_SIZE * sizeof(xhci_trb_t));
     priv->evt_dequeue = 0;
     priv->evt_cycle   = 1;
 
     priv->erst = (xhci_erst_entry_t *)kmalloc_aligned(sizeof(xhci_erst_entry_t) * XHCI_ERST_SIZE, 64);
-    if (!priv->erst) { kfree_heap(priv); return -1; }
+    if (!priv->erst) { kfree_aligned(priv->evt_ring); kfree_aligned(cmd_mem); kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree_heap(priv); return -1; }
     memset(priv->erst, 0, sizeof(xhci_erst_entry_t) * XHCI_ERST_SIZE);
     priv->erst[0].seg_addr_lo = xhci_va_to_pa(priv->evt_ring);
     priv->erst[0].seg_addr_hi = 0;
@@ -722,12 +722,14 @@ static int xhci_init_one(uint32_t phys_base) {
 
     if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) {
         klog(LOG_WARN, "xHCI host controller did not start");
-        kfree_heap(priv);
+        kfree_aligned(priv->erst); kfree_aligned(priv->evt_ring); kfree_aligned(cmd_mem);
+        kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool);
+        kfree_aligned(priv->dcbaa); kfree_heap(priv);
         return -1;
     }
 
     usb_hc_t *hc = (usb_hc_t *)kmalloc(sizeof(usb_hc_t));
-    if (!hc) { kfree_heap(priv); return -1; }
+    if (!hc) { kfree_aligned(priv->erst); kfree_aligned(priv->evt_ring); kfree_aligned(cmd_mem); kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree_heap(priv); return -1; }
     memset(hc, 0, sizeof(usb_hc_t));
 
     hc->name               = "XHCI";

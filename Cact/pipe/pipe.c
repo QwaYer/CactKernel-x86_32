@@ -289,7 +289,10 @@ static void _vfs_pipe_close(vfs_node_t *node) {
     mutex_unlock(&p->lock);
 
     // Free pipe_t outside lock (after confirming ref_count == 0)
-    if (should_free) kfree_heap(p);
+    if (should_free) {
+        kfree_heap(p);
+        node->priv = NULL;
+    }
 
     // Release the vfs_node_t wrapper
     if (node->refcount <= 1)

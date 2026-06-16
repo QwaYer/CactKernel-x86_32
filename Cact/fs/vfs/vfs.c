@@ -375,7 +375,6 @@ int vfs_unlink(vfs_node_t *dir, const char *name) {
 
     if (mounted && mounted->type == VFS_SYMLINK) {
         int ret = vfs_umount(dir, name);
-        if (ret == 0) vfs_node_unref(mounted);
         vfs_node_unref(mounted);
         return ret;
     }
