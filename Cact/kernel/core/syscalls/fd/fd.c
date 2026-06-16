@@ -164,6 +164,7 @@ int sys_ioctl(struct syscall_frame *regs) {
 
     if (!f || !f->node) return -1;
 
+    if (arg && !validate_user_ptr(arg, 1)) return -1;
     return ioctl_vfs(f->node, cmd, arg);
 }
 
@@ -347,14 +348,22 @@ int sys_select(struct syscall_frame *regs) {
 }
 
 int sys_poll(struct syscall_frame *regs) {
-    struct pollfd *fds        = (struct pollfd *)regs->ebx;
+    struct pollfd *fds_user   = (struct pollfd *)regs->ebx;
     int            nfds       = (int)regs->ecx;
     int            timeout_ms = (int)regs->edx;
 
     if (!current_task) return -1;
     if (nfds <= 0)     return 0;
     if ((uint32_t)nfds > UINT32_MAX / sizeof(struct pollfd)) return -1;
-    if (!validate_user_ptr(fds, (uint32_t)nfds * sizeof(struct pollfd))) return -1;
+    if (!validate_user_ptr(fds_user, (uint32_t)nfds * sizeof(struct pollfd))) return -1;
+
+    // Copy fds from user to kernel buffer for safe access across schedule()
+    struct pollfd *fds = (struct pollfd *)kmalloc((uint32_t)nfds * sizeof(struct pollfd));
+    if (!fds) return -1;
+    if (copy_from_user(fds, fds_user, (uint32_t)nfds * sizeof(struct pollfd)) != 0) {
+        kfree_heap(fds);
+        return -1;
+    }
 
 #define TIMER_HZ_POLL 100
     int      infinite    = (timeout_ms < 0);
@@ -397,8 +406,11 @@ int sys_poll(struct syscall_frame *regs) {
         }
 
         if (ready > 0 || nonblocking ||
-                (!infinite && (int32_t)(timer_ticks_get() - deadline) >= 0))
+                (!infinite && (int32_t)(timer_ticks_get() - deadline) >= 0)) {
+            copy_to_user(fds_user, fds, (uint32_t)nfds * sizeof(struct pollfd));
+            kfree_heap(fds);
             return ready;
+        }
 
         schedule();
     }

@@ -253,7 +253,7 @@ int sys_getcwd(struct syscall_frame *regs) {
     for (uint32_t i = 0; i < len; i++)
         buf[i] = current_task->proc->cwd[i];
 
-    return (int)buf;
+    return (int)len;
 }
 
 int sys_chroot(char *path) {
