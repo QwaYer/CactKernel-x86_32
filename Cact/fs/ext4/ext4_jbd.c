@@ -48,6 +48,11 @@ static void ext4_journal_commit(struct ext4_ctx* ctx) {
     // Build descriptor block
     uint8_t* dbuf = (uint8_t*)kmalloc(ctx->block_size);
     if (!dbuf) return;
+
+    // Commit block — allocate before writing anything to disk
+    uint8_t* cbuf = (uint8_t*)kmalloc(ctx->block_size);
+    if (!cbuf) { kfree_heap(dbuf); return; }
+
     memory_set(dbuf, 0, ctx->block_size);
 
     struct jbd2_header* hdr = (struct jbd2_header*)dbuf;
@@ -65,7 +70,7 @@ static void ext4_journal_commit(struct ext4_ctx* ctx) {
     uint32_t tc = 0;
     while (b && tc < max_tags) {
         tag->t_blocknr = b->b_blocknr;
-        tag->t_flags   = (!b->b_next || tc + 1 >= max_tags) ? 8 : 0;  // last tag flag
+        tag->t_flags   = (!b->b_next || tc + 1 >= max_tags) ? 8 : 0;
         ext4_jbd_write_via_inode(ctx, cur, b->b_data);
         cur++;
         if (cur >= j->j_maxlen) cur = j->j_first;
@@ -75,9 +80,6 @@ static void ext4_journal_commit(struct ext4_ctx* ctx) {
     ext4_jbd_write_via_inode(ctx, start, dbuf);
     kfree_heap(dbuf);
 
-    // Commit block
-    uint8_t* cbuf = (uint8_t*)kmalloc(ctx->block_size);
-    if (!cbuf) return;
     memory_set(cbuf, 0, ctx->block_size);
     hdr = (struct jbd2_header*)cbuf;
     hdr->h_magic     = JBD2_MAGIC_NUMBER;

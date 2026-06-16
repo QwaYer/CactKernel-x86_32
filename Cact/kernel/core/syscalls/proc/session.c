@@ -1,5 +1,8 @@
 #include "session.h"
 
+#define EPERM 1
+#define ESRCH 3
+
 // setsid() — create a new session; the calling process becomes session leader
 int sys_setsid(void) {
     if (!current_task) return -1;
@@ -17,13 +20,15 @@ int sys_setpgid(uint32_t pid, uint32_t pgid) {
     if (pid == 0 || pid == current_task->pid) {
         t = current_task;
     } else {
+        // Only allow setting pgid of own child (simplified: same session)
+        if (current_task->proc->euid != 0) return -EPERM;
         t = 0;
         struct task_struct* cur = task_list_head;
         while (cur) {
             if (cur->pid == pid) { t = cur; break; }
             cur = cur->next;
         }
-        if (!t) return -1;   // target process not found
+        if (!t) return -ESRCH;
     }
 
     // pgid == 0 means use the target's own PID
