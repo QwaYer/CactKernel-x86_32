@@ -346,7 +346,8 @@ int ext4_delete(vfs_node_t* node, char* name) {
             struct ext4_extent* ee = (struct ext4_extent*)((uint8_t*)inode.i_block + sizeof(*eh));
             for (uint16_t i = 0; i < nr; i++) {
                 uint16_t elen = ee[i].ee_len;
-                if (elen > 32768) elen = 32768; // cap against corruption
+                if (elen == 0) continue;
+                if (elen > 32768) elen = 32768;
                 for (uint32_t b = 0; b < elen; b++)
                     ext4_free_block(ctx, ee[i].ee_start_lo + b);
             }
