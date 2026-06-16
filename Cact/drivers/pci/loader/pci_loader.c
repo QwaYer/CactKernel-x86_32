@@ -223,6 +223,7 @@ static Elf32_Sym *elf_find_named_sym(Elf32_Ehdr *eh, Elf32_Sym *syms, uint32_t s
         if (!sym_is_data_global(&syms[s]))
             continue;
         const char *nm = get_str(eh, strtab_idx, syms[s].st_name);
+        if (!nm) continue;
         if (strcmp((char *)nm, (char *)want) != 0)
             continue;
         return &syms[s];
@@ -308,6 +309,16 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
 
+    // Validate section header table fits in file
+    uint32_t sh_tab_end;
+    if (__builtin_umul_overflow(eh->e_shnum, eh->e_shentsize, &sh_tab_end) ||
+        __builtin_uadd_overflow(eh->e_shoff, sh_tab_end, &sh_tab_end) ||
+        eh->e_shentsize < sizeof(Elf32_Shdr) || sh_tab_end > file_size) {
+        kprint("[LDR] manifest: corrupted section header table\n");
+        kfree_heap(elf_data);
+        return -3;
+    }
+
     Elf32_Shdr *symtab_sh = NULL;
     uint16_t    strtab_idx = 0;
     for (uint16_t i = 0; i < eh->e_shnum; i++) {
@@ -320,6 +331,19 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     }
     if (!symtab_sh) {
         kprint("[LDR] manifest: no .symtab\n");
+        kfree_heap(elf_data);
+        return -3;
+    }
+
+    // Validate symtab and its string table section data fit in file
+    if (symtab_sh->sh_offset + symtab_sh->sh_size > file_size) {
+        kprint("[LDR] manifest: symtab exceeds file\n");
+        kfree_heap(elf_data);
+        return -3;
+    }
+    Elf32_Shdr *strtab_sh = get_shdr(eh, strtab_idx);
+    if (!strtab_sh || strtab_sh->sh_offset + strtab_sh->sh_size > file_size) {
+        kprint("[LDR] manifest: strtab exceeds file\n");
         kfree_heap(elf_data);
         return -3;
     }
@@ -401,6 +425,16 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
 
+    // Validate section header table fits in file
+    uint32_t sh_tab_end;
+    if (__builtin_umul_overflow(eh->e_shnum, eh->e_shentsize, &sh_tab_end) ||
+        __builtin_uadd_overflow(eh->e_shoff, sh_tab_end, &sh_tab_end) ||
+        eh->e_shentsize < sizeof(Elf32_Shdr) || sh_tab_end > file_size) {
+        kprint("[LDR] corrupted module ELF\n");
+        kfree_heap(elf_data);
+        return -8;
+    }
+
     // First pass: calculate total image size and assign section addresses
     uint32_t total = 0;
     for (uint16_t i = 0; i < eh->e_shnum; i++) {
@@ -421,8 +455,13 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     // Copy PROGBITS sections into image
     for (uint16_t i = 0; i < eh->e_shnum; i++) {
         Elf32_Shdr *sh = get_shdr(eh, i);
-        if ((sh->sh_flags & SHF_ALLOC) && sh->sh_type == SHT_PROGBITS)
-            memcpy(image + sh->sh_addr, elf_data + sh->sh_offset, sh->sh_size);
+        if (!(sh->sh_flags & SHF_ALLOC) || sh->sh_type != SHT_PROGBITS) continue;
+        if (sh->sh_offset + sh->sh_size > file_size) {
+            kprint("[LDR] section offset exceeds file\n");
+            kfree_heap(image); kfree_heap(elf_data);
+            return -8;
+        }
+        memcpy(image + sh->sh_addr, elf_data + sh->sh_offset, sh->sh_size);
     }
 
     // Locate symbol table and its string table
@@ -440,6 +479,18 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         kprint("[LDR] No .symtab found\n");
         kfree_heap(image); kfree_heap(elf_data);
         return -4;
+    }
+
+    if (symtab_sh->sh_offset + symtab_sh->sh_size > file_size) {
+        kprint("[LDR] symtab exceeds file\n");
+        kfree_heap(image); kfree_heap(elf_data);
+        return -8;
+    }
+    Elf32_Shdr *strtab_sh = get_shdr(eh, strtab_idx);
+    if (!strtab_sh || strtab_sh->sh_offset + strtab_sh->sh_size > file_size) {
+        kprint("[LDR] strtab exceeds file\n");
+        kfree_heap(image); kfree_heap(elf_data);
+        return -8;
     }
 
     Elf32_Sym *syms    = (Elf32_Sym *)(elf_data + symtab_sh->sh_offset);

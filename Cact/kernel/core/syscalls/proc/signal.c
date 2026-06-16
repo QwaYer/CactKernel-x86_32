@@ -119,8 +119,9 @@ static int sys_sigsuspend_impl(struct syscall_frame* regs) {
     if (!current_task || current_task->is_kernel) return -1;
     if (!validate_user_ptr(mask, sizeof(uint32_t))) return -1;
 
+    uint32_t sigmask = *mask;
     current_task->proc->saved_signal_mask = current_task->proc->signal_mask;
-    current_task->proc->signal_mask = *mask & ~SIG_UNCATCHABLE;
+    current_task->proc->signal_mask = sigmask & ~SIG_UNCATCHABLE;
     current_task->proc->in_sigsuspend = 1;
     current_task->state = TASK_SLEEPING;
 
