@@ -43,15 +43,19 @@ int sys_mmap(struct syscall_frame* regs) {
     mmap_args_t* args = (mmap_args_t*)regs->ebx;
     if (!validate_user_ptr(args, sizeof(mmap_args_t))) return (int)MAP_FAILED;
     if (!current_task) return (int)MAP_FAILED;
+
+    mmap_args_t args_buf;
+    if (copy_from_user(&args_buf, args, sizeof(args_buf)) != 0) return (int)MAP_FAILED;
+
     void* result = do_mmap(
         current_task->page_directory,
         current_task->proc->mmap_table,
-        args->addr,
-        args->length,
-        args->prot,
-        args->flags,
-        args->fd,
-        args->offset
+        args_buf.addr,
+        args_buf.length,
+        args_buf.prot,
+        args_buf.flags,
+        args_buf.fd,
+        args_buf.offset
     );
     return (int)result;
 }

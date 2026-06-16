@@ -1,43 +1,39 @@
 #include "sys.h"
 #include "validate.h"
 #include "helper.h"
+#include "memory.h"
 
 // print() — print a message to the kernel console (debug)
 int sys_print(char* msg) {
     if (!validate_user_str(msg)) return -1;
-    char buf[USER_STR_MAX];
+    char *buf = (char*)kmalloc(USER_STR_MAX);
+    if (!buf) return -1;
     int len = 0;
     while (msg[len] && len < USER_STR_MAX - 1) { buf[len] = msg[len]; len++; }
     buf[len] = '\0';
     kprint(buf);
+    kfree_heap(buf);
     return 0;
 }
 
 // mount() — mount a filesystem on a directory (root only)
 int sys_mount(char* src, char* target, char* fstype) {
     (void)fstype;
-    if (!validate_user_str(src))    return -1;
-    if (!validate_user_str(target)) return -1;
     if (!current_task) return -1;
     if (current_task->proc->euid != 0) return -1;
 
-    char src_buf[USER_STR_MAX];
-    int slen = 0;
-    while (src[slen] && slen < USER_STR_MAX - 1) { src_buf[slen] = src[slen]; slen++; }
-    src_buf[slen] = '\0';
-    if (slen == 0) return -1;
+    char *ksrc = copy_path_from_user(src);
+    if (!ksrc) return -1;
+    char *ktgt = copy_path_from_user(target);
+    if (!ktgt) { kfree_heap(ksrc); return -1; }
 
-    char tgt_buf[USER_STR_MAX];
-    int tlen = 0;
-    while (target[tlen] && tlen < USER_STR_MAX - 1) { tgt_buf[tlen] = target[tlen]; tlen++; }
-    tgt_buf[tlen] = '\0';
-    if (tlen == 0) return -1;
-
-    vfs_node_t* src_node = _resolve_path(src_buf);
-    if (!src_node) return -1;
+    vfs_node_t* src_node = _resolve_path(ksrc);
+    kfree_heap(ksrc);
+    if (!src_node) { kfree_heap(ktgt); return -1; }
 
     char basename[128];
-    vfs_node_t* parent = _resolve_parent(tgt_buf, basename, 128);
+    vfs_node_t* parent = _resolve_parent(ktgt, basename, 128);
+    kfree_heap(ktgt);
     if (!parent || !basename[0]) return -1;
 
     return vfs_mount(parent, basename, src_node);
@@ -45,18 +41,15 @@ int sys_mount(char* src, char* target, char* fstype) {
 
 // umount() — unmount a filesystem from a directory (root only)
 int sys_umount(char* target) {
-    if (!validate_user_str(target)) return -1;
     if (!current_task) return -1;
     if (current_task->proc->euid != 0) return -1;
 
-    char tgt_buf[USER_STR_MAX];
-    int tlen = 0;
-    while (target[tlen] && tlen < USER_STR_MAX - 1) { tgt_buf[tlen] = target[tlen]; tlen++; }
-    tgt_buf[tlen] = '\0';
-    if (tlen == 0) return -1;
+    char *ktgt = copy_path_from_user(target);
+    if (!ktgt) return -1;
 
     char basename[128];
-    vfs_node_t* parent = _resolve_parent(tgt_buf, basename, 128);
+    vfs_node_t* parent = _resolve_parent(ktgt, basename, 128);
+    kfree_heap(ktgt);
     if (!parent || !basename[0]) return -1;
 
     return vfs_umount(parent, basename);

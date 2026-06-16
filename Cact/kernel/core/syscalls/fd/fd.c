@@ -20,32 +20,34 @@ static inline file_t *_get_file(int fd) {
 }
 
 int sys_open(char *name, int flags) {
-    if (!validate_user_str(name)) return -1;
     if (!current_task) return -1;
 
-    vfs_node_t *node = _resolve_path(name);
+    char *kname = copy_path_from_user(name);
+    if (!kname) return -1;
+
+    vfs_node_t *node = _resolve_path(kname);
     if (!node) {
-        if (!(flags & OPEN_CREAT)) return -1;
+        if (!(flags & OPEN_CREAT)) { kfree_heap(kname); return -1; }
 
         char basename[128];
-        vfs_node_t *parent = _resolve_parent(name, basename, 128);
-        if (!parent || !basename[0]) return -1;
+        vfs_node_t *parent = _resolve_parent(kname, basename, 128);
+        if (!parent || !basename[0]) { kfree_heap(kname); return -1; }
 
-        if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
+        if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) { kfree_heap(kname); return -1; }
 
-        if (create_vfs(parent, basename) != 0) return -1;
-        node = _resolve_path(name);
-        if (!node) return -1;
+        if (create_vfs(parent, basename) != 0) { kfree_heap(kname); return -1; }
+        node = _resolve_path(kname);
+        if (!node) { kfree_heap(kname); return -1; }
     }
 
     uint32_t need = 0;
     uint32_t acc  = (uint32_t)flags & OPEN_ACCMODE;
     if (acc == 0 || acc == 2) need |= VFS_PERM_READ;
     if (acc == 1 || acc == 2) need |= VFS_PERM_WRITE;
-    if (vfs_check_perm(node, need) < 0) return -1;
+    if (vfs_check_perm(node, need) < 0) { kfree_heap(kname); return -1; }
 
     file_t *f = file_alloc(node);
-    if (!f) return -1;
+    if (!f) { kfree_heap(kname); return -1; }
     f->flags = (uint32_t)flags;
 
     for (int i = 3; i < MAX_FD; i++) {
@@ -58,14 +60,17 @@ int sys_open(char *name, int flags) {
                 if (truncate_vfs(node, 0) != 0) {
                     current_task->proc->fds->files[i] = 0;
                     file_unref(f);
+                    kfree_heap(kname);
                     return -1;
                 }
             }
+            kfree_heap(kname);
             return i;
         }
     }
 
     file_unref(f);
+    kfree_heap(kname);
     return -1;
 }
 
@@ -145,19 +150,21 @@ int sys_ioctl(struct syscall_frame *regs) {
 
     if (cmd == TIOCGWINSZ || cmd == TIOCSWINSZ) {
         if (!arg || !validate_user_ptr(arg, sizeof(struct winsize))) return -1;
-        struct winsize *ws = (struct winsize *)arg;
-        if (cmd == TIOCGWINSZ) {
-            ws->ws_row    = terminal_winsize.ws_row;
-            ws->ws_col    = terminal_winsize.ws_col;
-            ws->ws_xpixel = terminal_winsize.ws_xpixel;
-            ws->ws_ypixel = terminal_winsize.ws_ypixel;
-        } else {
-            terminal_winsize.ws_row    = ws->ws_row;
-            terminal_winsize.ws_col    = ws->ws_col;
-            terminal_winsize.ws_xpixel = ws->ws_xpixel;
-            terminal_winsize.ws_ypixel = ws->ws_ypixel;
+        struct winsize ws_buf;
+        if (cmd == TIOCSWINSZ) {
+            if (copy_from_user(&ws_buf, arg, sizeof(ws_buf)) != 0) return -1;
+            terminal_winsize.ws_row    = ws_buf.ws_row;
+            terminal_winsize.ws_col    = ws_buf.ws_col;
+            terminal_winsize.ws_xpixel = ws_buf.ws_xpixel;
+            terminal_winsize.ws_ypixel = ws_buf.ws_ypixel;
             if (terminal_fg_pid)
                 task_signal(terminal_fg_pid, SIGWINCH);
+        } else {
+            ws_buf.ws_row    = terminal_winsize.ws_row;
+            ws_buf.ws_col    = terminal_winsize.ws_col;
+            ws_buf.ws_xpixel = terminal_winsize.ws_xpixel;
+            ws_buf.ws_ypixel = terminal_winsize.ws_ypixel;
+            if (copy_to_user(arg, &ws_buf, sizeof(ws_buf)) != 0) return -1;
         }
         return 0;
     }
