@@ -72,31 +72,43 @@ static int sys_sigreturn_impl(struct syscall_frame* regs) {
     uint32_t user_esp = regs->useresp;
     if (user_esp < USER_SPACE_START || user_esp >= KERNEL_BASE) return -1;
 
-    // Walk the user page tables to find the signal frame (identity-mapped)
-    uint32_t* pd  = current_task->page_directory;
-    uint32_t  pdi = PD_INDEX(user_esp);
-    uint32_t  pti = PT_INDEX(user_esp);
-    if (!pd || !(pd[pdi] & PAGE_PRESENT)) return -1;
-    uint32_t* pt = (uint32_t*)(pd[pdi] & ~0xFFFu);
-    if (!(pt[pti] & PAGE_PRESENT)) return -1;
-
-    uint32_t phys_page = pt[pti] & ~0xFFFu;
-    uint32_t page_off  = user_esp & 0xFFFu;
+    uint32_t page_off = user_esp & 0xFFFu;
     if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) return -1;
 
-    signal_frame_t* frame = (signal_frame_t*)(phys_page + page_off);
+    signal_frame_t frame_buf;
 
-    // Restore all registers from the frame
-    regs->eax     = frame->eax;
-    regs->ecx     = frame->ecx;
-    regs->edx     = frame->edx;
-    regs->ebx     = frame->ebx;
-    regs->ebp     = frame->ebp;
-    regs->esi     = frame->esi;
-    regs->edi     = frame->edi;
-    regs->eip     = frame->eip;
-    regs->eflags  = frame->eflags;
-    regs->useresp = frame->esp;
+    // Read frame with double-check of page tables to prevent TOCTOU
+    for (int attempt = 0; attempt < 2; attempt++) {
+        uint32_t* pd = current_task->page_directory;
+        if (!pd) return -1;
+        uint32_t pdi = PD_INDEX(user_esp);
+        uint32_t pti = PT_INDEX(user_esp);
+        if (!(pd[pdi] & PAGE_PRESENT)) return -1;
+
+        uint32_t* pt = (uint32_t*)(pd[pdi] & ~0xFFFu);
+        if (!(pt[pti] & PAGE_PRESENT)) return -1;
+
+        uint32_t phys = pt[pti] & ~0xFFFu;
+
+        memory_copy(&frame_buf, (signal_frame_t*)(phys + page_off), sizeof(frame_buf));
+
+        // Re-validate: PTE must still point to the same physical page
+        if ((pt[pti] & ~0xFFFu) == phys && (pt[pti] & PAGE_PRESENT))
+            break;
+
+        if (attempt == 1) return -1;
+    }
+
+    regs->eax     = frame_buf.eax;
+    regs->ecx     = frame_buf.ecx;
+    regs->edx     = frame_buf.edx;
+    regs->ebx     = frame_buf.ebx;
+    regs->ebp     = frame_buf.ebp;
+    regs->esi     = frame_buf.esi;
+    regs->edi     = frame_buf.edi;
+    regs->eip     = frame_buf.eip;
+    regs->eflags  = frame_buf.eflags;
+    regs->useresp = frame_buf.esp;
 
     return 0;
 }

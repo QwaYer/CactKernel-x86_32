@@ -2,6 +2,7 @@
 #include "memory.h"
 #include "task.h"
 #include "klib.h"
+#include "validate.h"
 
 // Helper macros for buffer state checks
 #define PIPE_FULL(p)   ((p)->len == PIPE_BUF_SIZE)   // 1 if buffer has no free space
@@ -124,6 +125,7 @@ int pipe_read(pipe_t *p, uint32_t offset, uint32_t size, char *buffer) {
                                       return copied ? (int)copied : -EAGAIN; }
             mutex_unlock(&p->lock);
             schedule();              // Block waiting for data
+            if (!validate_user_ptr(buffer + copied, 1)) return copied ? (int)copied : -1;
             continue;
         }
 
@@ -181,6 +183,7 @@ int pipe_write(pipe_t *p, uint32_t offset, uint32_t size, char *buffer) {
                             return written ? (int)written : -EAGAIN; }
             mutex_unlock(&p->lock);
             schedule();              // Block waiting for space
+            if (!validate_user_ptr(buffer + written, 1)) return written ? (int)written : -1;
             continue;
         }
 
