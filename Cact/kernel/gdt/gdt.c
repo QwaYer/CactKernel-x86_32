@@ -2,10 +2,11 @@
 #include "klib.h"
 #include "kernel.h"
 
-// GDT with 6 entries: null, kernel code, kernel data, user code, user data, TSS
+// GDT with 6 entries: null, kernel code, data, user code, data, TSS
 struct gdt_entry gdt[6];
 struct gdt_ptr   gp;
 struct tss_entry_struct tss_entry;
+uint8_t early_kernel_stack[4096] __attribute__((aligned(16)));
 
 // Set GDT entry at index 'num' with base, limit, access flags, and granularity
 void set_gdt_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
@@ -48,7 +49,7 @@ void init_gdt() {
     // User Data segment: base=0, 4GB limit, present, ring3, data, writable
     set_gdt_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF);
 
-    write_tss(5, 0x10, 0);  // TSS entry at index 5 → selector 0x28
+    write_tss(5, 0x10, (uint32_t)early_kernel_stack + sizeof(early_kernel_stack));
 
     // Load GDT into GDTR and reload segment registers
     gdt_flush((uint32_t)&gp);

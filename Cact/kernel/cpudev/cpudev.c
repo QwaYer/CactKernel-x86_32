@@ -2,6 +2,7 @@
 #include "kernel.h"
 
 #define IA32_SYSENTER_CS    0x174
+#define IA32_SYSENTER_ESP   0x175
 #define IA32_SYSENTER_EIP   0x176
 
 static cpu_vendor_t   g_vendor             = CPU_VENDOR_UNKNOWN;
@@ -218,10 +219,12 @@ int cpudev_init(void) {
 int cpu_syscall_commit(void) {
     if (g_syscall_mech == SYSCALL_MECH_SYSENTER) {
         extern void sysenter_entry(void);
+        extern uint8_t early_kernel_stack[4096];
         wrmsr(IA32_SYSENTER_CS,  0x08);
         wrmsr(IA32_SYSENTER_EIP, (uint64_t)(uintptr_t)sysenter_entry);
-        klog(LOG_OK, "CPUDEV: IA32_SYSENTER_CS/EIP programmed");
-        klog(LOG_OK, "CPUDEV: IA32_SYSENTER_ESP must be set per-task by scheduler");
+        wrmsr(IA32_SYSENTER_ESP, (uint64_t)(uintptr_t)
+              (early_kernel_stack + sizeof(early_kernel_stack)));
+        klog(LOG_OK, "CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed");
         return 0;
     }
 
