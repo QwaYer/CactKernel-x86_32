@@ -150,7 +150,9 @@ int apic_init(void)
     for (unsigned int i = 0; i < 16; i++) {
         if (i == 2) continue;
         unsigned int gsi = irq_override[i];
+        if (gsi < global_irq_base) continue;
         unsigned int entry_idx = gsi - global_irq_base;
+        if (entry_idx > ioapic_max_redir) continue;
         ioapic_set_redir(entry_idx, 0x20 + i, 0, 0);
     }
 
@@ -163,7 +165,10 @@ int apic_init(void)
         ioapic_set_redir(i, 0xF0 + (i & 0x0F), REDIR_LEVEL | REDIR_LOW_POL, 0);
     }
 
-    unsigned int timer_entry = irq_override[0] - global_irq_base;
+    unsigned int timer_entry = irq_override[0];
+    if (timer_entry < global_irq_base) timer_entry = 0;
+    else timer_entry -= global_irq_base;
+    if (timer_entry > ioapic_max_redir) timer_entry = 0;
     uint64_t period = hpet_get_freq() / 100;
     int hpet_ok = (period > 0 && hpet_start_periodic(timer_entry, period) == 0);
 

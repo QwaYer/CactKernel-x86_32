@@ -56,7 +56,12 @@ int hpet_init(void)
         return -1;
     }
 
-    uint32_t hpet_phys = (uint32_t)hpet_table->Address.Address;
+    uint64_t hpet_phys64 = hpet_table->Address.Address;
+    if (hpet_phys64 > 0xFFFFFFFFull) {
+        klog(LOG_WARN, "HPET: address above 4GB not supported");
+        return -1;
+    }
+    uint32_t hpet_phys = (uint32_t)hpet_phys64;
     hpet_map_mmio(hpet_phys);
 
     uint64_t cap_id = hpet_read64(HPET_REG_GCAP_ID);
