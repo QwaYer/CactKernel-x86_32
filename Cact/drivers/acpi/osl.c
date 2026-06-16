@@ -78,10 +78,13 @@ static void acpi_temp_unmap(void *virt, UINT32 size)
 static void udelay(UINT32 us)
 {
     if (us == 0) return;
-    UINT32 total = us * 1193;
-    if (total == 0) total = 1;
-    for (UINT32 i = 0; i < total; i++) {
-        __asm__ __volatile__("pause" ::: "memory");
+    while (us > 0) {
+        UINT32 chunk = (us > 3598975u) ? 3598975u : us;
+        UINT32 total = chunk * 1193;
+        for (UINT32 i = 0; i < total; i++) {
+            __asm__ __volatile__("pause" ::: "memory");
+        }
+        us -= chunk;
     }
 }
 

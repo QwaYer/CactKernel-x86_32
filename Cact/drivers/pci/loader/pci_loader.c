@@ -407,6 +407,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         Elf32_Shdr *sh = get_shdr(eh, i);
         if (!(sh->sh_flags & SHF_ALLOC)) continue;
         uint32_t align = sh->sh_addralign ? sh->sh_addralign : 1;
+        if (align & (align - 1)) align = 1;
         total = (total + align - 1) & ~(align - 1);
         sh->sh_addr = total;
         total += sh->sh_size;
