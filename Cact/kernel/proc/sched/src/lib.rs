@@ -75,5 +75,9 @@ const _ABI_CHECK: () = {
     assert!(offset_of!(ProcMeta, sid)                 == 568, "sid offset mismatch");
     assert!(offset_of!(ProcMeta, umask)               == 572, "umask offset mismatch");
     assert!(offset_of!(ProcMeta, root)                == 576, "root offset mismatch");
-    assert!(core::mem::size_of::<ProcMeta>() == 580, "ProcMeta size mismatch");
+    assert!(offset_of!(ProcMeta, exec_base)            == 580, "exec_base offset mismatch");
+    assert!(offset_of!(ProcMeta, exec_symtab)          == 584, "exec_symtab offset mismatch");
+    assert!(offset_of!(ProcMeta, exec_strtab)          == 588, "exec_strtab offset mismatch");
+    assert!(offset_of!(ProcMeta, exec_symtab_count)    == 592, "exec_symtab_count offset mismatch");
+    assert!(core::mem::size_of::<ProcMeta>() == 596, "ProcMeta size mismatch");
 };

@@ -398,6 +398,8 @@ unsafe extern "C" {
     pub fn task_signal(pid: u32, signal: u32);
     pub fn schedule();
     pub fn task_reap();
+
+    pub fn dump_context_frame(regs: *const ContextFrame, fault_addr: u32, signal: u32);
 }
 
 // ---------------------------------------------------------------------------

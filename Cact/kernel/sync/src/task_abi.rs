@@ -80,6 +80,11 @@ pub struct ProcMeta {
     pub sid:                u32,
     pub umask:              u32,
     pub root:               *mut VfsNode,
+    // Cached symbol table from the main executable (for crash traces)
+    pub exec_base:          u32,
+    pub exec_symtab:        *mut u8,
+    pub exec_strtab:        *mut u8,
+    pub exec_symtab_count:  i32,
 }
 
 unsafe impl Send for TaskStruct {}

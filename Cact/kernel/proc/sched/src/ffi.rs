@@ -109,6 +109,9 @@ unsafe extern "C" {
     pub static vfs_root: SyncUnsafeCell<*mut VfsNode>;
     pub static terminal_fg_pid: SyncUnsafeCell<u32>;
     pub static sys_sigreturn_num: u32;
+    
+    pub fn cpu_syscall_mech() -> u32;
+    pub fn elf_load_exec_symtab(path: *const u8, proc: *mut c_void);
 }
 
 #[repr(C)]
@@ -127,6 +130,10 @@ pub const LOG_OK:    i32 = 0;
 pub const LOG_WARN:  i32 = 1;
 pub const LOG_ERROR: i32 = 2;
 pub const LOG_FAIL:  i32 = 3;
+
+pub const SYSCALL_MECH_INT80:    u32 = 0;
+pub const SYSCALL_MECH_SYSENTER: u32 = 1;
+pub const SYSCALL_MECH_SYSCALL:  u32 = 2;
 
 pub const KERNEL_BASE: u32 = 0xC000_0000;
 
