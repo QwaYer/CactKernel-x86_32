@@ -415,3 +415,81 @@ uint32_t elf_get_brk_start(struct vfs_node* file) {
  
     return (highest + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 }
+
+#include "task.h"
+#include "klib.h"
+
+void elf_load_exec_symtab(const char* path, struct proc_metadata* proc) {
+    if (!path || !proc) return;
+    proc->exec_symtab = 0;
+    proc->exec_strtab = 0;
+    proc->exec_symtab_count = 0;
+
+    vfs_node_t* base = (path[0] == '/') ? vfs_root : vfs_root;
+    struct vfs_node* file = vfs_walk_path(base, (char*)path);
+    if (!file) return;
+
+    Elf32_Ehdr hdr;
+    if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) return;
+    if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) return;
+    if (hdr.e_shentsize < sizeof(Elf32_Shdr)) return;
+    if ((uint32_t)hdr.e_shnum > 256) return;
+
+    // Find the PT_LOAD segment with the lowest vaddr to determine base
+    uint32_t load_base = 0xFFFFFFFF;
+    for (int i = 0; i < hdr.e_phnum && hdr.e_phentsize >= sizeof(Elf32_Phdr); i++) {
+        Elf32_Phdr ph;
+        if (read_vfs(file, hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
+                     sizeof(Elf32_Phdr), (char*)&ph) <= 0) break;
+        if (ph.p_type == PT_LOAD && ph.p_vaddr < load_base)
+            load_base = ph.p_vaddr;
+    }
+    proc->exec_base = (load_base == 0xFFFFFFFF) ? 0 : load_base;
+
+    // Read section headers
+    Elf32_Shdr* shdrs = kmalloc(hdr.e_shnum * sizeof(Elf32_Shdr));
+    if (!shdrs) return;
+    if (read_vfs(file, hdr.e_shoff, hdr.e_shnum * sizeof(Elf32_Shdr),
+                 (char*)shdrs) <= 0) {
+        kfree_heap(shdrs);
+        return;
+    }
+
+    // Read section header string table
+    char* shstrtab = 0;
+    if (hdr.e_shstrndx < hdr.e_shnum && shdrs[hdr.e_shstrndx].sh_size > 0) {
+        shstrtab = kmalloc(shdrs[hdr.e_shstrndx].sh_size);
+        if (shstrtab) {
+            read_vfs(file, shdrs[hdr.e_shstrndx].sh_offset,
+                     shdrs[hdr.e_shstrndx].sh_size, shstrtab);
+        }
+    }
+
+    // Find SHT_SYMTAB and its linked SHT_STRTAB
+    Elf32_Shdr* sym_sh = 0;
+    Elf32_Shdr* str_sh = 0;
+    for (int i = 0; i < hdr.e_shnum; i++) {
+        if (shdrs[i].sh_type == SHT_SYMTAB && !sym_sh) sym_sh = &shdrs[i];
+        if (shdrs[i].sh_type == SHT_STRTAB && shdrs[i].sh_entsize == 0) str_sh = &shdrs[i];
+    }
+
+    // Use the linked strtab from the symtab section
+    if (sym_sh && sym_sh->sh_link < hdr.e_shnum)
+        str_sh = &shdrs[sym_sh->sh_link];
+
+    if (sym_sh && str_sh && sym_sh->sh_size > 0) {
+        proc->exec_symtab = kmalloc(sym_sh->sh_size);
+        proc->exec_strtab = kmalloc(str_sh->sh_size);
+        if (proc->exec_symtab && proc->exec_strtab) {
+            read_vfs(file, sym_sh->sh_offset, sym_sh->sh_size, (char*)proc->exec_symtab);
+            read_vfs(file, str_sh->sh_offset, str_sh->sh_size, proc->exec_strtab);
+            proc->exec_symtab_count = sym_sh->sh_size / sizeof(Elf32_Sym);
+        } else {
+            if (proc->exec_symtab) { kfree_heap(proc->exec_symtab); proc->exec_symtab = 0; }
+            if (proc->exec_strtab) { kfree_heap(proc->exec_strtab); proc->exec_strtab = 0; }
+        }
+    }
+
+    if (shstrtab) kfree_heap(shstrtab);
+    kfree_heap(shdrs);
+}

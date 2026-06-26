@@ -98,33 +98,18 @@ fn pte_get(pd: *mut u32, vaddr: u32) -> *mut u32 {
     unsafe { pt.add(pt_index(vaddr) as usize) }
 }
 
-fn kill_current(fault_addr: u32, err: u32, eip: u32, cr3: &mut Cr3Guard) {
+fn kill_current(fault_addr: u32, err: u32, eip: u32, regs: *mut ContextFrame, cr3: &mut Cr3Guard) {
+    cr3.dismiss();
+
+    // SAFETY: regs is provided by the interrupt frame.
+    unsafe {
+        dump_context_frame(regs, fault_addr, SIGSEGV);
+    }
+
     let t = unsafe { *current_task.get() };
-
-    // SAFETY: kprint_color is a C function that takes valid strings.
-    unsafe { kprint_color(b"\n[PF] SEGFAULT pid=\0".as_ptr(), COLOR_LIGHT_RED); }
-    let mut buf = [0u8; 12];
-    let pid = if !t.is_null() { unsafe { (*t).pid as i32 } } else { -1 };
-    unsafe {
-        itoa(pid, buf.as_mut_ptr());
-        kprint_color(buf.as_ptr(), COLOR_LIGHT_RED);
-    }
-
-    unsafe {
-        kprint_color(b" addr=0x\0".as_ptr(), COLOR_LIGHT_RED);
-        kprint_hex(fault_addr);
-        kprint_color(b" err=0x\0".as_ptr(), COLOR_LIGHT_RED);
-        kprint_hex(err);
-        kprint_color(b" eip=0x\0".as_ptr(), COLOR_LIGHT_RED);
-        kprint_hex(eip);
-    }
-    kprint_str(b"\n\0".as_ptr());
-
-    G_STATS.get_mut().protection_faults += 1;
-
     if !t.is_null() && unsafe { (*t).is_kernel } == 0 {
         let pid = unsafe { (*t).pid };
-        cr3.dismiss();
+        G_STATS.get_mut().protection_faults += 1;
         unsafe {
             task_signal(pid, SIGSEGV);
             schedule();
@@ -132,7 +117,7 @@ fn kill_current(fault_addr: u32, err: u32, eip: u32, cr3: &mut Cr3Guard) {
         return;
     }
 
-    cr3.dismiss();
+    G_STATS.get_mut().protection_faults += 1;
     unsafe {
         kprint_color(
             b"[PF] KERNEL PAGE FAULT \xe2\x80\x94 SYSTEM HALTED\n\0".as_ptr(),
@@ -197,7 +182,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 phys = kalloc();
             }
             if phys.is_null() {
-                kill_current(fault_addr, err, eip, &mut cr3_guard);
+                kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
                 return;
             }
             zero_page(phys);
@@ -207,7 +192,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
             return;
         }
 
-        kill_current(fault_addr, err, eip, &mut cr3_guard);
+        kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
         return;
     }
 
@@ -227,7 +212,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 phys = kalloc();
             }
             if phys.is_null() {
-                kill_current(fault_addr, err, eip, &mut cr3_guard);
+                kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
                 return;
             }
             zero_page(phys);
@@ -247,7 +232,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 G_STATS.get_mut().swap_ins += 1;
                 return;
             }
-            kill_current(fault_addr, err, eip, &mut cr3_guard);
+            kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
             return;
         }
 
@@ -257,7 +242,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 phys = kalloc();
             }
             if phys.is_null() {
-                kill_current(fault_addr, err, eip, &mut cr3_guard);
+                kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
                 return;
             }
 
@@ -301,7 +286,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                 phys = kalloc();
             }
             if phys.is_null() {
-                kill_current(fault_addr, err, eip, &mut cr3_guard);
+                kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
                 return;
             }
 
@@ -332,7 +317,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
                     phys = kalloc();
                 }
                 if phys.is_null() {
-                    kill_current(fault_addr, err, eip, &mut cr3_guard);
+                    kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
                     return;
                 }
                 zero_page(phys);
@@ -349,10 +334,10 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
         }
 
         G_STATS.get_mut().invalid_access += 1;
-        kill_current(fault_addr, err, eip, &mut cr3_guard);
+        kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
         return;
     }
-    kill_current(fault_addr, err, eip, &mut cr3_guard);
+    kill_current(fault_addr, err, eip, regs, &mut cr3_guard);
 }
 
 #[unsafe(no_mangle)]

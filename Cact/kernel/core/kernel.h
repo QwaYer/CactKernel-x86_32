@@ -7,8 +7,9 @@
 #include "multiboot2.h"
 #include "cpudev.h"
 
-// Forward declaration for exception frame
+// Forward declarations for exception frame and process metadata
 struct context_frame;
+struct proc_metadata;
 
 /*
  * Parsed multiboot2 information.
@@ -125,6 +126,7 @@ void hex_to_ascii  (uint32_t n, char str[]);
 
 // CPU exception dispatcher
 void exception_handler(struct context_frame* regs);
+void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_t signal);
 
 // EOI dispatcher — always APIC (PIC is not used)
 void timer_eoi(void);
@@ -181,6 +183,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap);
 struct proc_page_tracker_t;
 struct vfs_node;
 void* load_elf(char* path, uint32_t* pd, struct proc_page_tracker_t* tracker);
+void  elf_load_exec_symtab(const char* path, struct proc_metadata* proc);
 uint32_t elf_get_brk_start(struct vfs_node* file);
 
 // Networking stack

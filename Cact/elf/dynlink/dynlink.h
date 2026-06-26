@@ -16,15 +16,6 @@ typedef struct {
 } Elf32_Dyn;
 
 typedef struct {
-    Elf32_Word st_name;
-    Elf32_Addr st_value;
-    Elf32_Word st_size;
-    uint8_t    st_info;
-    uint8_t    st_other;
-    Elf32_Half st_shndx;
-} Elf32_Sym;
-
-typedef struct {
     Elf32_Addr r_offset;
     Elf32_Word r_info;
 } Elf32_Rel;
@@ -58,20 +49,6 @@ typedef struct {
 #define DT_JMPREL   23
 #define DT_GNU_HASH 0x6ffffef5
 
-#define STB_LOCAL   0
-#define STB_GLOBAL  1
-#define STB_WEAK    2
-
-#define STT_NOTYPE  0
-#define STT_OBJECT  1
-#define STT_FUNC    2
-
-#define SHN_UNDEF   0
-#define SHN_ABS     0xFFF1
-#define SHN_COMMON  0xFFF2
-
-#define ELF32_ST_BIND(i)    ((i) >> 4)
-#define ELF32_ST_TYPE(i)    ((i) & 0xF)
 #define ELF32_R_SYM(i)      ((i) >> 8)
 #define ELF32_R_TYPE(i)     ((uint8_t)(i))
 

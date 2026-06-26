@@ -474,6 +474,9 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     (*t).page_directory = pd;
     (*p).dyn_ctx        = new_dyn_ctx;
 
+    // Load symbol table for crash traces
+    ffi::elf_load_exec_symtab(path, p as *mut c_void);
+
     let stk = (*t).esp as *mut u32;
     *stk.add(5) = entry as u32;
 
@@ -925,6 +928,9 @@ pub unsafe extern "C" fn task_exec(
         }
         return -1;
     }
+
+    // Load symbol table for crash traces
+    ffi::elf_load_exec_symtab(path, p as *mut c_void);
 
     if TRACE_PROC_LOGS {
         let mut hbuf = [0u8; 12];
@@ -1558,10 +1564,10 @@ fn map_sigreturn_trampoline_on_pd(t: *mut TaskStruct, pd: *mut u32) {
         for i in 0..(PAGE_SIZE as usize) {
             *phys.add(i) = 0;
         }
+        let sigret_num: u32 = ffi::sys_sigreturn_num;
         *phys.add(0) = 0x83;
         *phys.add(1) = 0xEC;
         *phys.add(2) = 0x04;
-        let sigret_num: u32 = ffi::sys_sigreturn_num;
         *phys.add(3) = 0xB8;
         *phys.add(4) = (sigret_num & 0xFF) as u8;
         *phys.add(5) = ((sigret_num >> 8) & 0xFF) as u8;

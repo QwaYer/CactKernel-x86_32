@@ -197,6 +197,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/klib.o \
       $(BUILD_DIR)/ksym.o \
+      $(BUILD_DIR)/sym.o \
       $(BUILD_DIR)/vfs.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
@@ -476,6 +477,10 @@ $(BUILD_DIR)/klib.o: $(KERN_CORE_DIR)/klib.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ksym.o: $(KERN_ELF_DIR)/ksym.c
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/sym.o: $(KERN_ELF_DIR)/sym.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

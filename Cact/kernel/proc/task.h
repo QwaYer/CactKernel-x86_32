@@ -125,6 +125,12 @@ typedef struct proc_metadata {
     uint32_t sid;
     uint32_t umask;
     vfs_node_t *root;
+
+    // Cached symbol table from the main executable (for crash traces)
+    uint32_t   exec_base;
+    Elf32_Sym* exec_symtab;
+    char*      exec_strtab;
+    int        exec_symtab_count;
 } proc_metadata_t;
 
 struct task_struct {
