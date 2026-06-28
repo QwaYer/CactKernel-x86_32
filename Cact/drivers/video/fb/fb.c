@@ -17,6 +17,9 @@ static uint32_t         fb_pitch       = 0;
 static uint8_t          fb_bpp         = 0;
 static fb_init_result_t fb_last_status = FB_INIT_OK;
 
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
 /* ------------------------------------------------------------------------ *
  *  Shadow buffer (optional back buffer in WB kernel RAM)
  *
@@ -39,32 +42,37 @@ static int              fb_shadow_armed = 0;
  * is armed, all writes go to WB RAM (cache-speed); otherwise they fall
  * through to the real (possibly WC) framebuffer at MMIO. */
 static inline uint32_t* fb_render_buf(void) {
-    return fb_shadow_armed ? fb_shadow : fb_buffer;
+    return likely(fb_shadow_armed) ? fb_shadow : fb_buffer;
 }
 
 static inline void fb_mark_dirty_row(uint32_t y) {
-    if (!fb_shadow_armed) return;
-    if (y >= fb_height)   return;
+    if (unlikely(!fb_shadow_armed)) return;
+    if (unlikely(y >= fb_height))   return;
     fb_dirty_row[y] = 1;
     if (y < fb_dirty_y_min) fb_dirty_y_min = y;
     if (y > fb_dirty_y_max) fb_dirty_y_max = y;
 }
 
 static inline void fb_mark_dirty_rows(uint32_t y0, uint32_t y1) {
-    if (!fb_shadow_armed) return;
-    if (y0 >= fb_height)  return;
+    if (unlikely(!fb_shadow_armed)) return;
+    if (unlikely(y0 >= fb_height))  return;
     if (y1 > fb_height)   y1 = fb_height;
     if (y1 <= y0)         return;
-    for (uint32_t y = y0; y < y1; y++) fb_dirty_row[y] = 1;
+    {
+        uint32_t n = y1 - y0;
+        uint8_t* p = fb_dirty_row + y0;
+        __asm__ __volatile__ ("rep stosb" : "+D"(p), "+c"(n) : "a"(1) : "memory");
+    }
     if (y0     < fb_dirty_y_min) fb_dirty_y_min = y0;
     if (y1 - 1 > fb_dirty_y_max) fb_dirty_y_max = y1 - 1;
 }
 
-/* Fast 32-bit-aligned forward copy via REP MOVSD. The framebuffer (and
- * its shadow) are always 4-byte aligned and have a 4-byte-multiple pitch,
- * so this is strictly faster than the kernel's byte-wise libc memcpy()
- * fallback. Safe for the dst < src overlap case used by scroll(). */
+/* Fast 32-bit-aligned forward copy via REP MOVSD with prefetch.
+ * Prefetch the first cache line of source so the CPU can start the
+ * read transaction while the rep movsl microcode is still warming up.
+ * Safe for the dst < src overlap case used by scroll(). */
 static inline void fb_copy32(uint32_t* dst, const uint32_t* src, uint32_t n_words) {
+    __builtin_prefetch(src, 0, 3);
     __asm__ __volatile__ ("rep movsl"
         : "+D"(dst), "+S"(src), "+c"(n_words)
         :
@@ -76,54 +84,67 @@ static inline void fb_copy32(uint32_t* dst, const uint32_t* src, uint32_t n_word
  * in a small stack buffer and stamps it down `scale` times per source
  * row — eliminates the FONT_HEIGHT*FONT_WIDTH*scale^2 per-pixel function
  * calls the previous implementation paid (~256 calls per 16x16 glyph),
- * each of which re-did the bounds check and the dirty-bitmap update. */
+ * each of which re-did the bounds check and the dirty-bitmap update.
+ *
+ * The scanline builder is fully unrolled — all loop counters are
+ * compile-time constants — so GCC emits straight-line code with zero
+ * branch mispredicts for the pixel-expansion phase. */
 static void fb_draw_char_scaled(char c, int px, int py, uint32_t color) {
     if ((unsigned char)c >= 128) return;
 
-    const uint32_t out_w = (uint32_t)FB_CONSOLE_CHAR_WIDTH;   /* 8*scale */
+    const uint32_t out_w = (uint32_t)FB_CONSOLE_CHAR_WIDTH;
     const uint32_t out_h = (uint32_t)FB_CONSOLE_CHAR_HEIGHT;
 
-    /* The console code never asks us to draw partially off-screen, so a
-     * single envelope check at entry is enough — drop the per-pixel
-     * bounds check entirely from the inner loop. */
-    if (px < 0 || py < 0)                    return;
-    if ((uint32_t)px + out_w > fb_width)     return;
-    if ((uint32_t)py + out_h > fb_height)    return;
+    if (unlikely(px < 0 || py < 0))              return;
+    if (unlikely((uint32_t)px + out_w > fb_width))  return;
+    if (unlikely((uint32_t)py + out_h > fb_height)) return;
 
     uint32_t wpr = fb_pitch / 4u;
-    if (wpr == 0) return;
+    if (unlikely(wpr == 0)) return;
 
     uint32_t* buf = fb_render_buf();
-    if (!buf) return;
+    if (unlikely(!buf)) return;
 
     const uint8_t* glyph = font8x8_basic[(unsigned char)c];
 
-    /* One scaled output scanline, materialised on the stack. 8 source
-     * pixels * 2 (scale) = 16 u32 = 64 bytes — fits in a cache line. */
+    uint32_t* const base_row = buf + (size_t)py * (size_t)wpr + (size_t)px;
+    uint32_t  const row_stride = (uint32_t)FB_CONSOLE_FONT_SCALE * (uint32_t)wpr;
+
     uint32_t scanline[FB_CONSOLE_CHAR_WIDTH];
 
     for (int row = 0; row < FONT_HEIGHT; row++) {
         uint8_t bits = glyph[row];
 
-        /* Build the scaled scanline once per source row. */
-        uint32_t* p = scanline;
-        for (int col = 0; col < FONT_WIDTH; col++) {
-            uint32_t pix = (bits & (1u << col)) ? color : COLOR_BLACK;
-            for (int sx = 0; sx < FB_CONSOLE_FONT_SCALE; sx++)
-                *p++ = pix;
-        }
+        uint32_t p0  = (bits & (1u << 0)) ? color : COLOR_BLACK;
+        uint32_t p1  = (bits & (1u << 1)) ? color : COLOR_BLACK;
+        uint32_t p2  = (bits & (1u << 2)) ? color : COLOR_BLACK;
+        uint32_t p3  = (bits & (1u << 3)) ? color : COLOR_BLACK;
+        uint32_t p4  = (bits & (1u << 4)) ? color : COLOR_BLACK;
+        uint32_t p5  = (bits & (1u << 5)) ? color : COLOR_BLACK;
+        uint32_t p6  = (bits & (1u << 6)) ? color : COLOR_BLACK;
+        uint32_t p7  = (bits & (1u << 7)) ? color : COLOR_BLACK;
 
-        /* Stamp the scanline `scale` times to expand it vertically. */
-        for (int sy = 0; sy < FB_CONSOLE_FONT_SCALE; sy++) {
-            uint32_t* dst = buf
-                + (size_t)((uint32_t)py + (uint32_t)row * FB_CONSOLE_FONT_SCALE
-                           + (uint32_t)sy) * (size_t)wpr
-                + (size_t)px;
-            fb_copy32(dst, scanline, out_w);
-        }
+        scanline[0]  = scanline[1]  = p0;
+        scanline[2]  = scanline[3]  = p1;
+        scanline[4]  = scanline[5]  = p2;
+        scanline[6]  = scanline[7]  = p3;
+        scanline[8]  = scanline[9]  = p4;
+        scanline[10] = scanline[11] = p5;
+        scanline[12] = scanline[13] = p6;
+        scanline[14] = scanline[15] = p7;
+
+        /* Inline REP MOVSD — no prefetch needed, source is stack (L1). */
+        uint32_t* dst0 = base_row + (size_t)row * (size_t)row_stride;
+        uint32_t* dst1 = dst0 + (size_t)wpr;
+        uint32_t  cnt  = out_w;
+        uint32_t* s    = scanline;
+        __asm__ __volatile__ ("rep movsl"
+            : "+D"(dst0), "+S"(s), "+c"(cnt) : : "memory");
+        cnt = out_w;  s = scanline;
+        __asm__ __volatile__ ("rep movsl"
+            : "+D"(dst1), "+S"(s), "+c"(cnt) : : "memory");
     }
 
-    /* One dirty-bitmap update per glyph instead of one per micro-pixel. */
     fb_mark_dirty_rows((uint32_t)py, (uint32_t)py + out_h);
 }
 
@@ -136,33 +157,23 @@ void clear_screen(void) {
 void scroll(void) {
     uint32_t w = fb_width;
     uint32_t h = fb_height;
-    /* Pick the shadow if armed: an FB->FB copy on WC memory pays the
-     * uncached-read penalty for every source byte. Shadow->shadow runs
-     * out of L1/L2 at cache speed and only the final flush hits MMIO. */
     uint32_t* buf = fb_render_buf();
-    if (!buf || w == 0 || h == 0)
+    if (unlikely(!buf || w == 0 || h == 0))
         return;
 
     uint32_t wpr = fb_pitch / 4u;
-    if (wpr == 0)
+    if (unlikely(wpr == 0))
         return;
 
     uint32_t shift = FB_CONSOLE_CHAR_HEIGHT;
-    if (shift >= h)
+    if (unlikely(shift >= h))
         return;
 
-    /* One bulk REP MOVSD over (h - shift) full scanlines worth of words,
-     * instead of (h - shift) separate byte-wise memcpy() calls. Forward
-     * copy is correct because dst (row 0) is strictly below src (row
-     * shift) — the standard REP MOVSD overlap rule for ascending copy. */
     uint32_t words = (h - shift) * wpr;
     fb_copy32(buf, buf + (size_t)shift * (size_t)wpr, words);
 
-    /* Black out the freshly exposed bottom band. */
     fb_fill_rect(0, h - FB_CONSOLE_CHAR_HEIGHT, w, FB_CONSOLE_CHAR_HEIGHT, COLOR_BLACK);
 
-    /* Every scanline of the screen changed (the shift moved rows 0..h-shift,
-     * the fill_rect wrote rows h-shift..h). Single envelope update. */
     fb_mark_dirty_rows(0, h);
 
     cursor_y -= (int)FB_CONSOLE_CHAR_HEIGHT;
@@ -170,27 +181,12 @@ void scroll(void) {
         cursor_y = 0;
 }
 
-static uint32_t ansi_to_fb(int c) {
-    switch (c) {
-        case 0:  return COLOR_BLACK;
-        case 1:  return COLOR_RED;
-        case 2:  return COLOR_GREEN;
-        case 3:  return 0xAAAA00u;     /* brown/yellow */
-        case 4:  return COLOR_BLUE;
-        case 5:  return COLOR_MAGENTA;
-        case 6:  return COLOR_CYAN;
-        case 7:  return COLOR_LIGHT_GREY;
-        case 8:  return COLOR_DARK_GREY;
-        case 9:  return COLOR_LIGHT_RED;
-        case 10: return COLOR_LIGHT_GREEN;
-        case 11: return COLOR_LIGHT_BROWN;
-        case 12: return COLOR_LIGHT_BLUE;
-        case 13: return COLOR_LIGHT_MAGENTA;
-        case 14: return COLOR_LIGHT_CYAN;
-        case 15: return COLOR_WHITE;
-        default: return COLOR_WHITE;
-    }
-}
+static const uint32_t ansi_colors[16] = {
+    COLOR_BLACK, COLOR_RED, COLOR_GREEN, 0xAAAA00,
+    COLOR_BLUE, COLOR_MAGENTA, COLOR_CYAN, COLOR_LIGHT_GREY,
+    COLOR_DARK_GREY, COLOR_LIGHT_RED, COLOR_LIGHT_GREEN, COLOR_LIGHT_BROWN,
+    COLOR_LIGHT_BLUE, COLOR_LIGHT_MAGENTA, COLOR_LIGHT_CYAN, COLOR_WHITE,
+};
 
 void kprint_color(char* message, uint32_t color) {
     uint32_t w = fb_get_width();
@@ -198,6 +194,17 @@ void kprint_color(char* message, uint32_t color) {
     int have_fb = (w != 0 && h != 0);
 
     current_fb_color = color;
+
+    if (unlikely(!have_fb)) {
+        for (int i = 0; message[i] != '\0'; i++) {
+            char c = message[i];
+            serial_putc(c);
+        }
+        return;
+    }
+
+    uint32_t max_x = w - FB_CONSOLE_CHAR_WIDTH;
+    uint32_t max_y = h - FB_CONSOLE_CHAR_HEIGHT;
 
     for (int i = 0; message[i] != '\0'; i++) {
         char c = message[i];
@@ -217,9 +224,9 @@ void kprint_color(char* message, uint32_t color) {
                     i++;
                 }
                 if (param >= 30 && param <= 37)
-                    current_fb_color = ansi_to_fb(param - 30);
+                    current_fb_color = ansi_colors[param - 30];
                 else if (param >= 90 && param <= 97)
-                    current_fb_color = ansi_to_fb(8 + param - 90);
+                    current_fb_color = ansi_colors[8 + param - 90];
                 else if (param == 0)
                     current_fb_color = color;
                 if (message[i] == ';') {
@@ -233,7 +240,6 @@ void kprint_color(char* message, uint32_t color) {
         }
 
         serial_putc(c);
-        if (!have_fb) continue;
 
         if (c == '\n') {
             cursor_x = 0;
@@ -248,12 +254,12 @@ void kprint_color(char* message, uint32_t color) {
             cursor_x += FB_CONSOLE_CHAR_WIDTH;
         }
 
-        if (cursor_x + FB_CONSOLE_CHAR_WIDTH > (int)w) {
+        if ((uint32_t)cursor_x > max_x) {
             cursor_x = 0;
             cursor_y += FB_CONSOLE_CHAR_HEIGHT;
         }
 
-        if (cursor_y + FB_CONSOLE_CHAR_HEIGHT > (int)h) {
+        if ((uint32_t)cursor_y > max_y) {
             scroll();
         }
     }
@@ -343,51 +349,60 @@ fb_init_result_t fb_get_init_status(void) {
 }
 
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
-    if (!fb_buffer || x >= fb_width || y >= fb_height)
+    if (unlikely(!fb_buffer || x >= fb_width || y >= fb_height))
         return;
 
     uint32_t wpr = fb_pitch / 4u;
-    if (wpr == 0)
+    if (unlikely(wpr == 0))
         return;
 
-    uint64_t offset = (uint64_t)y * (uint64_t)wpr + (uint64_t)x;
-    uint64_t max_words = (uint64_t)fb_height * (uint64_t)wpr;
-    if (offset >= max_words)
-        return;
-
-    fb_render_buf()[(size_t)offset] = color;
+    fb_render_buf()[(size_t)y * (size_t)wpr + (size_t)x] = color;
     fb_mark_dirty_row(y);
 }
 
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
-    if (x >= fb_width || y >= fb_height)
+    if (unlikely(x >= fb_width || y >= fb_height))
         return;
     if ((uint64_t)x + (uint64_t)width > (uint64_t)fb_width)
         width = fb_width - x;
     if ((uint64_t)y + (uint64_t)height > (uint64_t)fb_height)
         height = fb_height - y;
 
-    uint32_t words_per_row = fb_pitch / 4u;
-    if (words_per_row == 0)
+    uint32_t wpr = fb_pitch / 4u;
+    if (unlikely(wpr == 0 || width == 0 || height == 0))
         return;
 
     uint32_t* buf = fb_render_buf();
-    for (uint32_t row = 0; row < height; row++) {
-        uint64_t off = (uint64_t)(y + row) * (uint64_t)words_per_row + (uint64_t)x;
-        uint64_t maxw = (uint64_t)fb_height * (uint64_t)words_per_row;
-        if (off >= maxw)
-            return;
-        uint32_t* line = buf + (size_t)off;
-        for (uint32_t col = 0; col < width; col++)
-            line[col] = color;
+
+    /* Full‑width rect: rows are contiguous — single REP STOSD over all
+     * scanlines instead of one per row.  This is the common case for
+     * scroll() (clear bottom band) and fb_clear(). */
+    if (likely(x == 0 && width == wpr)) {
+        uint32_t* start  = buf + (size_t)y * (size_t)wpr;
+        uint32_t  total  = height * wpr;
+        __asm__ __volatile__ ("rep stosl" : "+D"(start), "+c"(total) : "a"(color) : "memory");
+    } else {
+        uint32_t* row_ptr = buf + (size_t)y * (size_t)wpr + (size_t)x;
+        uint32_t  full_w  = width;
+        for (uint32_t row = 0; row < height; row++) {
+            uint32_t* line = row_ptr;
+            uint32_t  n    = full_w;
+            __asm__ __volatile__ ("rep stosl" : "+D"(line), "+c"(n) : "a"(color) : "memory");
+            row_ptr += wpr;
+        }
     }
     fb_mark_dirty_rows(y, y + height);
 }
 
 void fb_clear(uint32_t color) {
-    if (!fb_buffer || fb_width == 0 || fb_height == 0)
+    if (unlikely(!fb_buffer || fb_width == 0 || fb_height == 0))
         return;
-    fb_fill_rect(0, 0, fb_width, fb_height, color);
+    uint32_t* buf = fb_render_buf();
+    uint32_t count = (fb_pitch / 4u) * fb_height;
+    if (unlikely(count == 0)) return;
+    uint32_t* dst = buf;
+    __asm__ __volatile__ ("rep stosl" : "+D"(dst), "+c"(count) : "a"(color) : "memory");
+    fb_mark_dirty_rows(0, fb_height);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -436,9 +451,9 @@ void fb_enable_shadow(void) {
 }
 
 void fb_flush(void) {
-    if (!fb_shadow_armed)                     return;
-    if (!fb_buffer || !fb_shadow || !fb_dirty_row) return;
-    if (fb_dirty_y_min > fb_dirty_y_max)      return;   /* nothing dirty */
+    if (unlikely(!fb_shadow_armed))                     return;
+    if (unlikely(!fb_buffer || !fb_shadow || !fb_dirty_row)) return;
+    if (fb_dirty_y_min > fb_dirty_y_max)      return;
 
     uint32_t wpr = fb_pitch / 4u;
     if (wpr == 0) return;
@@ -447,11 +462,6 @@ void fb_flush(void) {
     uint32_t y_hi = fb_dirty_y_max;
     if (y_hi >= fb_height) y_hi = fb_height - 1;
 
-    /* Coalesce consecutive dirty scanlines into single REP MOVSD bursts.
-     * Worst case (every other row dirty) degenerates to one MOVSD per
-     * row; best case (e.g. after scroll() marked the whole screen) becomes
-     * one giant blit straight into the WC framebuffer — exactly the
-     * write pattern WC was designed to coalesce on the bus. */
     uint32_t y = y_lo;
     while (y <= y_hi) {
         if (!fb_dirty_row[y]) { y++; continue; }
@@ -461,12 +471,16 @@ void fb_flush(void) {
             y++;
         }
         uint32_t run_len = y - run_start;
+        uint32_t words   = run_len * wpr;
+        /* Prefetch the shadow rows ahead so the CPU can start the
+         * WB→L1 transfer while the current MOVSD is in flight. */
+        __builtin_prefetch(fb_shadow + (size_t)(run_start + 4) * (size_t)wpr, 0, 2);
         uint32_t* dst = fb_buffer + (size_t)run_start * (size_t)wpr;
         uint32_t* src = fb_shadow + (size_t)run_start * (size_t)wpr;
-        /* `wpr` words per row * run_len rows. Even if pitch has stride
-         * padding, copying it through is harmless — those bytes aren't
-         * displayed and the source is just shadow garbage anyway. */
-        fb_copy32(dst, src, run_len * wpr);
+        __asm__ __volatile__ ("rep movsl"
+            : "+D"(dst), "+S"(src), "+c"(words)
+            :
+            : "memory");
     }
     fb_dirty_y_min = fb_height;
     fb_dirty_y_max = 0;
