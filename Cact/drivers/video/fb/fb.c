@@ -2,10 +2,13 @@
 #include "klib.h"
 #include "memory.h"
 #include "serial.h"
+#include "kernel.h"
 #include <stddef.h>
 
 static int cursor_x = 0;
 static int cursor_y = 0;
+
+static uint32_t current_fb_color = COLOR_WHITE;
 
 static uint32_t*        fb_buffer      = 0;
 static uint32_t         fb_width       = 0;
@@ -167,16 +170,70 @@ void scroll(void) {
         cursor_y = 0;
 }
 
+static uint32_t ansi_to_fb(int c) {
+    switch (c) {
+        case 0:  return COLOR_BLACK;
+        case 1:  return COLOR_RED;
+        case 2:  return COLOR_GREEN;
+        case 3:  return 0xAAAA00u;     /* brown/yellow */
+        case 4:  return COLOR_BLUE;
+        case 5:  return COLOR_MAGENTA;
+        case 6:  return COLOR_CYAN;
+        case 7:  return COLOR_LIGHT_GREY;
+        case 8:  return COLOR_DARK_GREY;
+        case 9:  return COLOR_LIGHT_RED;
+        case 10: return COLOR_LIGHT_GREEN;
+        case 11: return COLOR_LIGHT_BROWN;
+        case 12: return COLOR_LIGHT_BLUE;
+        case 13: return COLOR_LIGHT_MAGENTA;
+        case 14: return COLOR_LIGHT_CYAN;
+        case 15: return COLOR_WHITE;
+        default: return COLOR_WHITE;
+    }
+}
+
 void kprint_color(char* message, uint32_t color) {
     uint32_t w = fb_get_width();
     uint32_t h = fb_get_height();
     int have_fb = (w != 0 && h != 0);
 
+    current_fb_color = color;
+
     for (int i = 0; message[i] != '\0'; i++) {
         char c = message[i];
-        serial_putc(c);
-        if (!have_fb)
+
+        if (c == '\033') {
+            serial_putc(c);
+            i++;
+            if (!message[i]) break;
+            serial_putc(message[i]);
+            if (message[i] != '[') continue;
+            i++;
+            while (message[i] && message[i] != 'm') {
+                serial_putc(message[i]);
+                int param = 0;
+                while (message[i] >= '0' && message[i] <= '9') {
+                    param = param * 10 + (message[i] - '0');
+                    i++;
+                }
+                if (param >= 30 && param <= 37)
+                    current_fb_color = ansi_to_fb(param - 30);
+                else if (param >= 90 && param <= 97)
+                    current_fb_color = ansi_to_fb(8 + param - 90);
+                else if (param == 0)
+                    current_fb_color = color;
+                if (message[i] == ';') {
+                    serial_putc(';');
+                    i++;
+                }
+            }
+            if (message[i] == 'm')
+                serial_putc('m');
             continue;
+        }
+
+        serial_putc(c);
+        if (!have_fb) continue;
 
         if (c == '\n') {
             cursor_x = 0;
@@ -187,7 +244,7 @@ void kprint_color(char* message, uint32_t color) {
             int tab_w = FB_CONSOLE_CHAR_WIDTH * 4;
             cursor_x = (cursor_x / tab_w + 1) * tab_w;
         } else {
-            fb_draw_char_scaled(c, cursor_x, cursor_y, color);
+            fb_draw_char_scaled(c, cursor_x, cursor_y, current_fb_color);
             cursor_x += FB_CONSOLE_CHAR_WIDTH;
         }
 
@@ -201,8 +258,6 @@ void kprint_color(char* message, uint32_t color) {
         }
     }
 
-    /* Ship the accumulated changes to the real framebuffer in one pass.
-     * No-op when the shadow is not armed. */
     fb_flush();
 }
 

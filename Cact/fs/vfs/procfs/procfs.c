@@ -10,7 +10,6 @@
 #include "apic.h"
 #include "msi.h"
 
-/* /proc/bin/mdls exposes cctkfs modules by basename. */
 #define MDLS_MAX_FILES  32
 
 // A read-only virtual file (e.g. cpuinfo, meminfo)

@@ -196,7 +196,7 @@ static int name_eq(const char *want, const char *blob, uint32_t off,
 
 /* basename helpers: cctkfs entries are stored as canonical paths like
  * "/lib/foo.cctk", but callers may use any equivalent location, e.g.
- * "/proc/bin/mdls/foo.cctk" (the user-visible mountpoint) or just "foo.cctk".
+ * "/lib/mdls/foo.cctk" (the user-visible mountpoint) or just "foo.cctk".
  * Fall back to a basename match so all of those resolve to the same module. */
 static const char *basename_of(const char *path) {
     const char *last = path;
