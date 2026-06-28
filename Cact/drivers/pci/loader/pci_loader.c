@@ -541,6 +541,12 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
                     kfree_heap(elf_data);
                     return -7;
                 }
+                if (!(sym_sh->sh_flags & SHF_ALLOC)) {
+                    kprint("[LDR] Symbol in non-ALLOC section\n");
+                    kfree_heap(image);
+                    kfree_heap(elf_data);
+                    return -7;
+                }
                 S = (uint32_t)(image + sym_sh->sh_addr + sym->st_value);
             }
             if (rels[r].r_offset + sizeof(uint32_t) > target_sh->sh_size) {

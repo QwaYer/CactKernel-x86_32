@@ -105,7 +105,9 @@ void multiboot2_parse(uint32_t mb2_info_addr,
             uint64_t total_avail = 0;
 
             for (uint32_t i = 0; i < count; i++) {
-                uint32_t entry_off = 16u + i * t->entry_size;
+                uint64_t entry_off64 = 16ull + (uint64_t)i * t->entry_size;
+                if (entry_off64 > 0xFFFFFFFFu) break;
+                uint32_t entry_off = (uint32_t)entry_off64;
                 if (entry_off + sizeof(struct mb2_mmap_entry) > tag->size) break;
 
                 struct mb2_mmap_entry* e =
@@ -141,7 +143,7 @@ void multiboot2_parse(uint32_t mb2_info_addr,
         }
 
         case MB2_TAG_MODULE: {
-            if (tag->size < sizeof(struct mb2_tag_module)) break;
+            if (tag->size <= sizeof(struct mb2_tag_module)) break;
             struct mb2_tag_module* t =
                 (struct mb2_tag_module*)(uintptr_t)cursor;
             if (t->mod_end <= t->mod_start) break;
