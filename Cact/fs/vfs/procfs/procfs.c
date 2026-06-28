@@ -20,22 +20,9 @@ typedef struct proc_file {
     struct proc_file *next;
 } proc_file_t;
 
-// A read/write command node under /proc/cmd/
-typedef struct proc_cmd {
-    char            name[64];
-    procfs_read_fn  help_fn;      // read returns help text (NULL → default)
-    procfs_cmd_fn   cmd_fn;       // write invokes the command
-    vfs_node_t      node;
-    struct proc_cmd *next;
-} proc_cmd_t;
-
-// Global lists
 static proc_file_t *file_list = 0;
-static proc_cmd_t  *cmd_list  = 0;
 
 static vfs_node_t procfs_root;
-static vfs_node_t cmd_dir;
-static vfs_node_t bin_dir;
 static vfs_node_t mdls_dir;
 static int        procfs_ready = 0;
 
@@ -47,109 +34,6 @@ static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 }
 
 static vfs_ops_t file_ops = { .read = _file_read };
-
-// Command read: return help text (or default "cmd: <name>")
-static int _cmd_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
-    proc_cmd_t *c = (proc_cmd_t *)node->priv;
-    if (!c) return 0;
-
-    char tmp[256];
-    int  n;
-    if (c->help_fn) {
-        n = c->help_fn(0, sizeof(tmp) - 1, tmp);
-    } else {
-        int p = 0;
-        const char *pfx = "cmd: ";
-        for (int i = 0; pfx[i]; i++) tmp[p++] = pfx[i];
-        for (int i = 0; c->name[i]; i++) tmp[p++] = c->name[i];
-        tmp[p++] = '\n'; tmp[p] = '\0';
-        n = p;
-    }
-
-    if (n <= 0) return 0;
-    if (off >= (uint32_t)n) return 0;
-    uint32_t avail = (uint32_t)n - off;
-    if (size > avail) size = avail;
-    memcpy(buf, tmp + off, size);
-    return (int)size;
-}
-
-// Command write: invoke the registered cmd_fn
-static int _cmd_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
-    (void)off;
-    proc_cmd_t *c = (proc_cmd_t *)node->priv;
-    if (!c || !c->cmd_fn) return -1;
-    c->cmd_fn(buf);
-    return (int)size;
-}
-
-static vfs_ops_t cmd_ops = { .read = _cmd_read, .write = _cmd_write };
-
-// cmd/ directory ops
-static vfs_node_t *_cmd_dir_walk(vfs_node_t *dir, const char *name) {
-    (void)dir;
-    for (proc_cmd_t *c = cmd_list; c; c = c->next)
-        if (streq(c->name, name)) return &c->node;
-    return 0;
-}
-
-static vfs_dirent_t _cmd_de;
-
-static vfs_dirent_t *_cmd_dir_readdir(vfs_node_t *dir, uint32_t index) {
-    (void)dir;
-    uint32_t i = 0;
-    for (proc_cmd_t *c = cmd_list; c; c = c->next) {
-        if (i++ == index) {
-            strlcpy(_cmd_de.name, c->name, 128);
-            _cmd_de.inode = i;
-            return &_cmd_de;
-        }
-    }
-    return 0;
-}
-
-static void _cmd_dir_listdir(vfs_node_t *dir) {
-    (void)dir;
-    for (proc_cmd_t *c = cmd_list; c; c = c->next) {
-        kprint("  "); kprint(c->name); kprint("\n");
-    }
-}
-
-static vfs_ops_t cmd_dir_ops = {
-    .walk    = _cmd_dir_walk,
-    .readdir = _cmd_dir_readdir,
-    .listdir = _cmd_dir_listdir,
-};
-
-// bin/ contains mdls/.
-static vfs_node_t *_bin_dir_walk(vfs_node_t *dir, const char *name) {
-    (void)dir;
-    if (streq(name, "mdls")) return &mdls_dir;
-    return 0;
-}
-
-static vfs_dirent_t _bin_de;
-
-static vfs_dirent_t *_bin_dir_readdir(vfs_node_t *dir, uint32_t index) {
-    (void)dir;
-    if (index == 0) {
-        strlcpy(_bin_de.name, "mdls", 128);
-        _bin_de.inode = 0;
-        return &_bin_de;
-    }
-    return 0;
-}
-
-static void _bin_dir_listdir(vfs_node_t *dir) {
-    (void)dir;
-    kprint("  mdls/\n");
-}
-
-static vfs_ops_t bin_dir_ops = {
-    .walk    = _bin_dir_walk,
-    .readdir = _bin_dir_readdir,
-    .listdir = _bin_dir_listdir,
-};
 
 // mdls/ is a read-only view of bundled modules.
 static vfs_node_t   mdls_files[MDLS_MAX_FILES];
@@ -241,11 +125,10 @@ static vfs_ops_t mdls_dir_ops = {
     .listdir = _mdls_dir_listdir,
 };
 
-// procfs root directory ops (cmd/ + bin/mdls/ + virtual files)
+// procfs root directory ops (mdls/ + virtual files)
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
-    if (streq(name, "cmd")) return &cmd_dir;
-    if (streq(name, "bin")) return &bin_dir;
+    if (streq(name, "mdls")) return &mdls_dir;
 
     for (proc_file_t *f = file_list; f; f = f->next)
         if (streq(f->name, name)) return &f->node;
@@ -257,16 +140,11 @@ static vfs_dirent_t _root_de;
 static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     (void)dir;
     if (index == 0) {
-        strlcpy(_root_de.name, "cmd", 128);
+        strlcpy(_root_de.name, "mdls", 128);
         _root_de.inode = 0;
         return &_root_de;
     }
-    if (index == 1) {
-        strlcpy(_root_de.name, "bin", 128);
-        _root_de.inode = 1;
-        return &_root_de;
-    }
-    uint32_t i = 2;
+    uint32_t i = 1;
     for (proc_file_t *f = file_list; f; f = f->next) {
         if (i++ == index) {
             strlcpy(_root_de.name, f->name, 128);
@@ -279,8 +157,7 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
-    kprint("  cmd/\n");
-    kprint("  bin/\n");
+    kprint("  mdls/\n");
     for (proc_file_t *f = file_list; f; f = f->next) {
         kprint("  "); kprint(f->name); kprint("\n");
     }
@@ -655,33 +532,6 @@ int procfs_register_file(const char *name, procfs_read_fn read_fn) {
     return 0;
 }
 
-// Register a read/write command node under /proc/cmd
-int procfs_register_cmd(const char *name,
-                         procfs_read_fn read_fn,
-                         procfs_cmd_fn  cmd_fn) {
-    if (!name || !cmd_fn) return -1;
-    for (proc_cmd_t *c = cmd_list; c; c = c->next)
-        if (streq(c->name, name)) return -1;
-
-    proc_cmd_t *c = (proc_cmd_t *)kmalloc(sizeof(proc_cmd_t));
-    if (!c) return -1;
-    memset(c, 0, sizeof(proc_cmd_t));
-
-    strlcpy(c->name, name, 64);
-    c->help_fn = read_fn;
-    c->cmd_fn  = cmd_fn;
-
-    memset(&c->node, 0, sizeof(vfs_node_t));
-    strlcpy(c->node.name, name, 128);
-    c->node.type = VFS_FILE;
-    c->node.ops  = &cmd_ops;
-    c->node.priv = c;
-
-    c->next  = cmd_list;
-    cmd_list = c;
-    return 0;
-}
-
 // Unregister a virtual file
 int procfs_unregister_file(const char *name) {
     proc_file_t **pp = &file_list;
@@ -699,35 +549,9 @@ int procfs_unregister_file(const char *name) {
     return -1;
 }
 
-// Unregister a command node
-int procfs_unregister_cmd(const char *name) {
-    proc_cmd_t **pp = &cmd_list;
-    while (*pp) {
-        if (streq((*pp)->name, name)) {
-            proc_cmd_t *dead = *pp;
-            *pp = dead->next;
-            dead->node.priv = NULL;
-            kfree_heap(dead);
-            return 0;
-        }
-        pp = &(*pp)->next;
-    }
-    return -1;
-}
-
 // Initialize procfs root, subdirs, and default files.
 void procfs_init(void) {
     if (procfs_ready) return;
-    memset(&cmd_dir, 0, sizeof(vfs_node_t));
-    strlcpy(cmd_dir.name, "cmd", 128);
-    cmd_dir.type = VFS_DIRECTORY;
-    cmd_dir.ops  = &cmd_dir_ops;
-
-    memset(&bin_dir, 0, sizeof(vfs_node_t));
-    strlcpy(bin_dir.name, "bin", 128);
-    bin_dir.type = VFS_DIRECTORY;
-    bin_dir.ops  = &bin_dir_ops;
-
     memset(&mdls_dir, 0, sizeof(vfs_node_t));
     strlcpy(mdls_dir.name, "mdls", 128);
     mdls_dir.type = VFS_DIRECTORY;
