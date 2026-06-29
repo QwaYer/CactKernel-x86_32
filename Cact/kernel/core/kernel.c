@@ -217,7 +217,7 @@ void timer_eoi(void) {
     apic_eoi();
 }
 
-void irq_master_slave_eoi(void) {
+void irq_apic_eoi(void) {
     apic_eoi();
 }
 
@@ -351,10 +351,12 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     else
         klog(LOG_WARN, "ACPI PM timer unavailable — timekeeping degraded");
 
-    if (hpet_init() == 0)
-        klog(LOG_OK, "HPET ready — replacing PIT for timekeeping");
-    else
-        klog(LOG_WARN, "HPET not available — PIT stays for timekeeping");
+    if (hpet_init() != 0) {
+        klog(LOG_FAIL, "HPET init failed — no system timer");
+        while(1) __asm__ __volatile__("hlt");
+    }
+
+    klog(LOG_OK, "HPET ready");
 
     if (apic_init() == 0)
         klog(LOG_OK, "APIC operational");

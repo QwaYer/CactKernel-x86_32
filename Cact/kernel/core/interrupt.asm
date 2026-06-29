@@ -47,7 +47,7 @@ extern schedule
 extern on_timer_tick       
 extern acpi_pm_timer_tick
 extern timer_eoi
-extern irq_master_slave_eoi
+extern irq_apic_eoi
 extern page_fault_handler
 extern xhci_irq_handler
 extern tss_entry
@@ -267,7 +267,7 @@ xhci_isr:
     mov ds, ax
     mov es, ax
     call xhci_irq_handler
-    call irq_master_slave_eoi
+    call irq_apic_eoi
     pop es
     pop ds
     popa
@@ -299,7 +299,7 @@ acpi_sci_isr:
     mov ds, ax
     mov es, ax
     call acpi_sci_callback
-    call irq_master_slave_eoi
+    call irq_apic_eoi
     pop es
     pop ds
     popa
@@ -316,7 +316,7 @@ pci_isr:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    call irq_master_slave_eoi
+    call irq_apic_eoi
     pop es
     pop ds
     popa
@@ -352,7 +352,7 @@ msix_common_dispatch:
     push esi
     call msix_dispatch
     add esp, 4
-    call irq_master_slave_eoi
+    call irq_apic_eoi
     pop es
     pop ds
     popa

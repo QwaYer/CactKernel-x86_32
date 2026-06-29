@@ -128,9 +128,9 @@ void hex_to_ascii  (uint32_t n, char str[]);
 void exception_handler(struct context_frame* regs);
 void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_t signal);
 
-// EOI dispatcher — always APIC (PIC is not used)
+// EOI dispatcher — always APIC
 void timer_eoi(void);
-void irq_master_slave_eoi(void);
+void irq_apic_eoi(void);
 
 // Read CR2 (page fault linear address)
 static inline uint32_t read_cr2(void) {
