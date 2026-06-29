@@ -12,7 +12,7 @@
 
 <p align="center">
   A <strong>hybrid monolithic kernel</strong> for <strong>i686</strong> (32-bit x86 protected mode).<br>
-  Low-level code in <strong>C</strong> and <strong>NASM</strong>; the <strong>physical/virtual memory manager</strong>, <strong>MLFQ scheduler</strong>, <strong>synchronization primitives</strong>, <strong>TLS 1.3 (Rustls)</strong>, and the <strong>TCP/UDP/DHCP/DNS stack (smoltcp)</strong> live in <strong>Rust</strong> crates <code>cact_mm</code>, <code>sched</code>, <code>sync</code>, <code>rustls</code>, and <code>cact_net</code>.
+  Low-level code in <strong>C</strong> and <strong>NASM</strong>; the <strong>physical/virtual memory manager</strong>, <strong>MLFQ scheduler</strong>, <strong>synchronization primitives</strong>, <strong>TLS 1.3 (Rustls)</strong>, <strong>HMAC-SHA256 module signing</strong>, and the <strong>TCP/UDP/DHCP/DNS stack (smoltcp)</strong> live in <strong>Rust</strong> crates <code>cact_mm</code>, <code>sched</code>, <code>sync</code>, <code>rustls</code>, <code>cact_crypto</code>, and <code>cact_net</code>.
 </p>
 
 ---
@@ -80,23 +80,24 @@ Use sibling **[CactOS-x86_32](https://github.com/QwaYer/CactOS-x86_32)**: from t
 **Common targets**
 
 ```sh
-make -j"$(nproc)"     # kernel + default ISO (kernel-only multiboot layout)
+make -j"$(nproc)"     # kernel + default ISO (kernel-only GRUB, grub.cfg.kernelonly)
 make sched            # Rust scheduler crate only
 make clean            # wipe build/ and Rust artifacts used by the Makefile
+make iso-full         # full ISO with cctkfs.img (auto-detects ../LocalRepoCactOS)
 ./build_disk.sh       # create empty ext4 nvme.img for ./run_qemu.sh
 ```
 
 **ISO with bundled `cctkfs.img` (`iso-full`)**
 
 ```sh
-make iso-full   # auto-detects ../LocalRepoCactOS
+make iso-full   # auto-detects ../LocalRepoCactOS; signs cctkfs.img via tools/cact_sign_cctkfs.py
 ```
 
 Override if needed: `make iso-full LOCAL_REPO=/path/to/LocalRepoCactOS`.
 
 **QEMU:** set **`CACT_ISO`** to your **`cact.iso`**, or drop **`cact.iso`** into **`build/`**, then [`./run_qemu.sh`](./run_qemu.sh).
 
-> 🧩 **`python3`** is only needed in **LocalRepoCactOS** to pack **`cctkfs.img`** — not for the default kernel **`make`**.
+> 🧩 **`python3`** is only needed in **LocalRepoCactOS** to pack **`cctkfs.img`** and for **`tools/cact_sign_cctkfs.py`** — not for the default kernel **`make`** (`grub.cfg.kernelonly`).
 
 **Successful build footer** (version from [`VERSION`](VERSION), commit from `git`):
 
@@ -119,7 +120,7 @@ VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
                -DCACT_BUILD_TIME="$(CACT_BUILD_TIME)"
 ```
 
-**Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, DHCP, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3). Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
+**Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, DHCP, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3) + **`libcact_hmac_ffi.a`** (HMAC-SHA256 module signing). Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
 
 Optional: `KERN_DEBUG=1 make` for richer symbols; QEMU GDB: see [`run_qemu.sh`](run_qemu.sh).
 
@@ -133,7 +134,7 @@ CactKernel-x86_32/
 │   ├── kernel/
 │   │   ├── core/        kernel entry, Multiboot2, syscall dispatch (sysenter), IRQ, klib
 │   │   ├── memory/      rust_mm/ — PMM, VMM, page faults, mmap, swap, slab, SHM
-│   │   ├── proc/        task_struct, context switch, sched/ (Rust MLFQ), lazy FPU
+│   │   ├── proc/        task_struct, context switch, sched/ (Rust MLFQ), lazy FPU, stack canary
 │   │   ├── sync/        locks, semaphores (Rust + C FFI)
 │   │   ├── elf/         static ELF loader, dynlink/ for relocatable objects
 │   │   ├── gdt/ idt/
@@ -150,7 +151,7 @@ CactKernel-x86_32/
 │   │   └── video/       framebuffer console, font, PAT WC + shadow blit
 │   ├── fs/
 │   │   ├── vfs/         core VFS, struct file, devfs, procfs, mntfs, etcfs, tmpfs,
-│   │   │                binfs, sbinfs, libfs, varfs
+│   │   │                binfs, sbinfs, libfs, usrfs, varfs
 │   │   ├── ext4/
 │   │   └── btrfs/ exFAT/ ramfs/   ← tiny stubs
 │   └── pipe/
@@ -158,8 +159,10 @@ CactKernel-x86_32/
 ├── VERSION
 ├── linker.ld
 ├── grub.cfg              # multiboot2 kernel + cctkfs module
+├── grub.cfg.kernelonly   # kernel-only multiboot (default make target)
 ├── grub.cfg.ramroot      # RAM-first userland variant
 ├── build_disk.sh         # raw ext4 image for QEMU AHCI/NVMe
+├── tools/                # utility scripts (gen_hmac_key.py, cact_sign_cctkfs.py, …)
 └── run_qemu.sh           # launches QEMU; runs build_disk.sh if nvme.img missing
 ```
 
@@ -191,8 +194,8 @@ Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register; **HPET** be
 | 2 | **Slab allocator** + **page fault** handler (COW, demand zero, swap markers) |
 | 3 | **I/O APIC** + **IDT** + **COM1 serial** (mirrors part of `kprint` / `klog` to host) |
 | 4 | **ACPI** — parse RSDP, MADT, HPET tables via ACPICA |
-| 5 | **HPET @ 100 Hz** — system timer (PIT removed in 2.0) |
-| 6 | **Linear framebuffer** console, **PAT** write-combining for VRAM (MTRR removed in 2.0), optional **shadow buffer** (WC + batched blit) |
+| 5 | **HPET @ 100 Hz** — system timer |
+| 6 | **Linear framebuffer** console, **PAT** write-combining for VRAM, optional **shadow buffer** (WB RAM + batched blit) |
 | 7 | **USB** HID only (PS/2 removed in 2.0) |
 | 8 | **`blkdev_init`** → **PCI bus scan** + **enumeration** (PCIe support) → **MSI-X allocation** → **`usb_init`** (xHCI) |
 | 9 | **Page cache** + **swap** (optional swap partition; failure logs a warning) |
@@ -218,174 +221,6 @@ Kernel is ready. Launching init…
 
 ---
 
-## 🧠 What's new in 2.0.0
-
-### ACPI + ACPICA — полноценный AML-движок
-
-Ядро получило поддержку **ACPI** через встроенный движок **ACPICA** — полноценный интерпретатор **AML** (ACPI Machine Language). На этапе загрузки ядро парсит **RSDP** (Root System Description Pointer), находит **MADT** (Multiple APIC Description Table) и **HPET** (High Precision Event Timer) таблицы. Это позволило:
-- Определить наличие и конфигурацию **I/O APIC** и **local APIC** на целевой машине
-- Получить информацию о **HPET** таймере из ACPI-таблиц вместо хардкода
-- Отказаться от устаревшего **PIC** (8259A) и устаревшего **PIT** (8254)
-- Заложить основу для будущего управления питанием и ACPI- устройств
-
-ACPICA — это портированная в ядро C-реализация интерпретатора AML от Intel, адаптированная под 32-битное защищённое окружение без MMU-зависимостей.
-
-### I/O APIC + MSI-X — замена PIC
-
-**PIC (8259A)** полностью удалён из ядра. Вместо него:
-
-- **I/O APIC** — маршрутизация внешних прерываний от устройств через APIC, с возможностью привязки IRQ к конкретным CPU
-- **Local APIC** — обработка межпроцессорных прерываний (IPI) и приём прерываний от I/O APIC
-- **MSI-X** — Message Signalled Interrupts для PCI Express устройств. Каждый PCI-функционал может иметь до 2048 независимых векторов прерываний. Каждый вектор настраивается на конкретный обработчик без разделения линии IRQ
-
-Все out-of-tree драйверы (`AHCI-for-Cact`, `NVMe-for-Cact`, `Virtio-net-for-Cact`, `Yukon-for-Cact`) были переведены с PIC на MSI-X. PIC-маскировка через порты `0x21`/`0xA1` удалена из модулей.
-
-Преимущества: устранение race-conditions на разделяемых линиях IRQ, масштабирование на многоядерные системы, уменьшение латентности обработки прерываний.
-
-### HPET — основной таймер (PIT как fallback)
-
-Системный таймер по умолчанию — **HPET** (High Precision Event Timer) с частотой **100 Hz**, подключаемый через ACPI-таблицы и работающий через I/O APIC. Однако **PIT (8254) не удалён** — если `hpet_init()` не находит HPET в ACPI-таблицах или не может его запустить, ядро падает на PIT (`kernel.c:233-236`):
-```
-if (hpet_init() == 0)
-    klog(KLOG_OK, "HPET ready — replacing PIT for timekeeping");
-else
-    klog(KLOG_WARN, "HPET not found — PIT stays for timekeeping");
-```
-
-HPET даёт:
-- Более высокую точность (микросекунды)
-- Нет зависимости от устаревшей шины ISA
-- Более стабильный тик для планировщика и таймерных систем (sleep, alarm, setitimer)
-
-### `sysenter` — быстрый путь системных вызовов (`int 0x80` сохранён)
-
-Добавлен быстрый механизм системных вызовов через **`sysenter`** — инструкцию процессора Intel, которая:
-- Не тратит циклы на проход через IDT
-- Аппаратно переключает селекторы сегментов на ring 0
-- Использует **MSR** `IA32_SYSENTER_EIP`/`IA32_SYSENTER_ESP` для точки входа и стека ядра (`cpudev.c:219-232`)
-- Быстрее `int 0x80` (десятки циклов вместо сотен)
-
-**Важно:** `int 0x80` не удалён, а сохранён как fallback. IDT gate на `0x80` по-прежнему установлен (`idt.c:102-104`). Системный вызов `sigreturn` генерирует `int 0x80` через trampoline-страницу (`task.rs:1570-1571`). Если CPU не поддерживает SYSENTER (флаг SEP в CPUID), используется `int 0x80`.
-
-Структура вызова сохранена: EAX = номер системного вызова, EBX/ECX/EDX = аргументы, возврат через EAX. Выход из sysenter-обработчика — через `iretd` (прямой `sysexit` пока не реализован — нужна реорганизация GDT, `interrupt.asm:384`).
-
-### PCIe — поддержка Express
-
-В ядро добавлена поддержка **PCI Express** (PCIe) через **ECAM** (Enhanced Configuration Access Mechanism). Раньше конфигурационное пространство читалось только через порты `0xCF8`/`0xCFC` (legacy PCI Mechanism #1). В версии 2.0:
-- Ядро детектирует наличие PCIe через ACPI MCFG таблицу
-- При наличии PCIe используется отображённый в память конфигурационный доступ (MMIO)
-- При отсутствии — fallback на legacy PCI механизм
-- Динамическая загрузка драйверов через GDD работает с обоими механизмами
-- Все out-of-tree модули используют обновлённые PCI-функции
-
-### PAT — замена MTRR для управления кэшированием видеопамяти
-
-**MTRR** (Memory Type Range Registers) заменён на **PAT** (Page Attribute Table) во framebuffer-пути. PAT:
-- Позволяет задавать тип памяти на уровне отдельных страниц (4 KiB), а не на уровне диапазонов
-- Использует биты **PCD** (Page Cache Disable) и **PWT** (Page Write-Through) + **PAT** в PTE для выбора типа: WC (Write-Combining), UC (Uncacheable), WB (Write-Back)
-- Инициализируется через `pat_init()` (`Cact/kernel/memory/pat.c:25`), framebuffer включает WC через `pat_enable_wc_for_framebuffer()` (`pat.c:41`)
-- `cpu_has_mtrr()` определён в `cpudev.c:125` но не используется в fb-коде
-
-MTRR-код сохранён для обратной совместимости, но framebuffer использует PAT.
-
-### Rustls + TLS 1.3 — криптография в ядре
-
-В ядро добавлен **Rustls** — встраиваемая Rust-реализация **TLS 1.3**. Репозиторий `vendor/rustls-*` под деревом `Cact/crypto/`. Ядро теперь может:
-- Выполнять TLS 1.3 рукопожатие — `SYS_ACCEPT` + `SYS_RECV`/`SYS_SEND` поверх защищённого сокета
-- Проверять сертификаты (корневое доверие пока статическое)
-- Использовать шифрование для безопасного канала между процессами
-- В перспективе — HTTPS и защищённый удалённый доступ
-
-Rustls слинкован с `kernel.bin` через `cargo +nightly` с теми же флагами `-Z build-std=core,compiler_builtins`, что и другие Rust-крейты (`cact_mm`, `sched`, `cact_net`).
-
-### HMAC-SHA256 подпись модулей
-
-Все `.cctk` модули (динамически загружаемые драйверы) подписываются **HMAC-SHA256** с использованием статического ключа, вшитого в ядро во время сборки. Процесс загрузки модуля (`Cact/drivers/pci/loader/pci_loader.c`):
-1. **`module_load`** находит модуль в cctkfs или по прямому пути
-2. Ядро читает последние **32 байта** образа модуля — это HMAC-тег
-3. Основная часть образа проверяется через `hmac_verify_module()` → `cact_hmac_verify()` (Rust крейт `cact_crypto`, HMAC-SHA256)
-4. При несовпадении подписи — загрузка модуля отклоняется
-
-Это защищает систему от загрузки модифицированных или подменённых драйверов в ring 0.
-
-### PS/2 — код сохранён, исключён из сборки
-
-Поддержка **PS/2** клавиатуры и мыши исключена из активной сборки. Директории `Cact/drivers/input/ps_2/` с исходным кодом сохранены в репозитории, но **не включены в Makefile**. Подсистема ввода работает через **USB HID** (Human Interface Device) поверх xHCI (`usb_hid.c:44`). Файлы `keyboard.c` и `mouse.c` — буферы символов/событий без аппаратной инициализации PS/2.
-
-### Task struct: 600 → 48 байт — экстремальная оптимизация
-
-Структура задачи (`task_struct`) была оптимизирована с **600 байт** до **48 байт** — **12,5×** сокращение. Достигнуто за счёт:
-- Вынос контекста FPU в лениво выделяемую структуру (см. ниже)
-- Вынос сигнальных обработчиков и стеков в динамические структуры
-- Упаковка битовых полей и флагов
-- Компактное хранение ссылок на VFS-узлы
-
-Это позволило увеличить максимальное количество одновременных процессов в системе при неизменном размере памяти.
-
-### Lazy FPU context (инфраструктура готова)
-
-Контекст **FPU** (x87 + SSE) не сохраняется/восстанавливается при переключении контекста. Инфраструктура готова:
-- IDT gate на вектор **#NM** (vector 7) установлен (`idt.c:53`) — обработчик `isr7_nm_stub` → `handle_lazy_fpu()`
-- `handle_lazy_fpu()` (`fpu_hd.c:31`) вызывает `clts`, сохраняет/восстанавливает FPU через `fxsave`/`fxrstor`
-- Контекст FPU каждой задачи хранится в `task_struct.fpu_context_ptr` — лениво выделяемая память
-
-**Известное ограничение:** флаг **TS** (Task Switched) в CR0 никогда не устанавливается — ни в `switch_to()` (`task.asm`), ни в `schedule()` (`mlfq.rs:314`). Без TS переключение задачи не вызывает #NM, и `handle_lazy_fpu()` не вызывается автоматически. Таким образом, FPU контекст всегда сохраняется/восстанавливается принудительно, механизм ленивости не активирован.
-
-### VFS rework — struct file и fd table
-
-В версии 2.0 проведена фундаментальная переработка **VFS** (Virtual File System):
-
-**Новый `struct file` (file description):**
-- Раньше системные вызовы (`read`, `write`, `truncate`, `chmod`, etc.) напрямую мутировали поля `inode`/`node` (`node->size`, `node->mode`, `node->uid`)
-- Теперь у каждого открытого файлового дескриптора есть свой `struct file`, который содержит указатель на inode, позицию (offset), флаги, и реализацию операций через `file_ops`
-- При вызове `fork` новый процесс получает копию fd таблицы, где каждый дескриптор разделяет тот же `struct file` (с refcount), что и родитель
-
-**7 новых VFS операций (`vfs_ops_t`):**
-- `truncate` — усечение файла до заданного размера
-- `chmod` — изменение прав доступа
-- `chown` — изменение владельца
-- `mknod` — создание специального файла устройства
-- `stat` — получение метаданных
-- `poll` — проверка готовности на чтение/запись
-- `lseek` — перемещение позиции
-
-**Переработка pipe и socket:**
-- `pipe()` и `socket()` теперь реализуют `.poll` и `.lseek` через свои собственные `file_ops`, а не через общие функции в helper.c
-- `fd_read_ready()` и `fd_write_ready()` удалены из helper.c
-- `select`/`poll` работают через `.poll` каждого `struct file`
-
-### Exec TOCTOU fix
-
-**TOCTOU** (Time-Of-Check-Time-Of-Use) уязвимость в exec была полностью закрыта. Суть: раньше была гонка между проверкой аргументов (check) и их копированием (use) — злоумышленный процесс мог изменить аргументы между проверкой и использованием. В 2.0:
-- Проверка аргументов выполняется в **context копирования** — на ring 0, после блокировки задачи
-- После валидации аргументы копируются немедленно, без возможности прерывания
-- Структура exec arguments проверяется на корректность: валидные указатели, корректные размеры, отсутствие переполнений
-
-### Валидация во всех подсистемах
-
-Проведена масштабная работа по добавлению **валидации пользовательских указателей** и **санитизации аргументов** во все подсистемы ядра:
-
-| Подсистема | Что добавлено |
-|------------|---------------|
-| **ELF загрузчик** | Проверка заголовков, программных заголовков, адресов загрузки, размера сегментов |
-| **Динамическая линковка** | Валидация релокаций, проверка адресов символов, защита от переполнения |
-| **Динамическая загрузка драйверов** | Проверка ELF-заголовков модулей, адресов секций, релокаций |
-| **ext4 драйвер** | Валидация инодов, блоков, суперблока, путей |
-| **VFS** | Проверка границ буферов, указателей, аргументов операций |
-| **Page cache** | Увеличены константы, валидация страниц |
-| **PCI** | Валидация конфигурационного пространства, адресов BAR |
-| **USB/xHCI** | Проверка дескрипторов, буферов передач |
-| **Framebuffer** | Валидация размеров и режимов |
-| **Сетевой стек** | Проверка skb, заголовков, размеров пакетов |
-| **Системные вызовы** | Валидация пользовательских указателей, проверка прав доступа |
-| **fork** | Валидация fd таблицы, PID, контекста |
-
-### PCI_HOLE_START lowered: 0xE0000000 → 0xC0000000
-
-**PCI_HOLE_START** — граница, выше которой PMM не распределяет физические фреймы (пространство зарезервировано для MMIO PCI-устройств). В 2.0 значение изменено с `0xE000_0000` (3584 MiB) на `0xC000_0000` (3072 MiB). Это даёт:
-- Уменьшение битовой карты фреймов (917504 → 786432 страницы)
-- Освобождение ~128 KiB памяти под bitmap
-- Более консервативное распределение для систем с объёмом RAM ≤ 3 GiB, что покрывает подавляющее большинство i686-совместимых машин
 
 ---
 
@@ -462,7 +297,7 @@ The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as
 | **Block** | AHCI, NVMe, blkdev, page cache | In-tree drivers; additional storage stacks can ship as **`.cctk`** in **`cctkfs.img`** |
 | **USB** | xHCI, HID, hub | ~32 KiB host code path — PS/2 removed in 2.0 |
 | **Input** | USB HID keyboard & mouse | |
-| **Video** | Linear FB 32 bpp, 8×8 font (×2 scale), PAT WC + shadow | MTRR removed in 2.0 |
+| **Video** | Linear FB 32 bpp, 8×8 font (×2 scale), PAT WC + shadow | |
 | **PCI** | Config scan, driver table, **GDD** (generic device declarations), **modblob** loader, HMAC-SHA256 signature verification | Loads ET_REL modules from **cctkfs** or path |
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
 | **ACPI** | ACPICA — RSDP, MADT, HPET, APIC table parsing | New in 2.0 |
@@ -485,6 +320,7 @@ All out-of-tree PCI drivers now use **MSI-X** instead of PIC IRQ lines. Extra PC
 | **binfs** | Active | **`/bin`** with **cctkfs** overlay (user ELF) |
 | **sbinfs** | Active | **`/sbin`** + cctkfs |
 | **libfs** | Active | **`/lib`** + **`libc.so`** from cctkfs |
+| **usrfs** | Active | **`/usr`** layout |
 | **varfs** | Active | **`/var`** layout |
 | **pipes** | Active | `pipe()` integrated with the fd table |
 | **btrfs / exFAT / ramfs** | Stub | Placeholder headers only |
@@ -521,14 +357,20 @@ Full socket syscall API: `socket`, `bind`, `connect`, `listen`, `accept`, `send`
 
 ## 💥 Kernel panic & ring-3 faults
 
-**Ring 0** — full register dump, message, **`cli; hlt`**:
+**Ring 0** — full register dump, call trace with symbol resolution (kernel + userspace ELF symtab), instruction bytes at EIP, **`cli; hlt`**:
 
 ```
 === KERNEL PANIC ===
-Exception: 14 (#PF)   Error code: 0x00000003
-EIP: 0xC010A3F2   CS: 0x00000008
+Exception: 14 (#PF)   Error code: 0x00000003  [NP R S]
+Fault address: 0xDEADBEEF
+EIP: 0xC010A3F2   CS: 0x00000008   EFLAGS: 0x00010046
 EAX: 0x00000000   EBX: 0xDEADBEEF   ECX: 0x00000001   EDX: 0x00000000
-ESP: 0xC01FF9E0   EBP: 0xC01FFA10
+ESI: 0x00000000   EDI: 0x00000000   EBP: 0xC01FFA10   ESP: 0xC01FF9E0
+ DS: 0x00000010   ES: 0x00000010   SS: 0x00000010
+Call trace:
+  [0] 0xC010A3F2 (kernel_function+0x1E)
+  [1] 0xC01055A1 (init+0x41)
+Code: 90 90 <8B> 45 08 89 04 24 E8 ...
 System halted.
 ```
 
@@ -539,7 +381,10 @@ System halted.
 | #DE (vector 0) | `SIGFPE` | Integer divide by zero |
 | #MF (vector 16) | `SIGFPE` | x87 FPU fault |
 | #GP (vector 13) | `SIGSEGV` | General protection fault |
+| #PF (vector 14) | `SIGSEGV` | Page fault (invalid address / protection) |
 | *others* | `SIGKILL` | Unmapped / unsupported fault path |
+
+The call trace walks the EBP chain and resolves addresses via the per-task ELF symbol table (both main binary and dynamically loaded shared objects), using `sym_resolve_addr()` from `Cact/elf/sym.c`.
 
 ---
 
@@ -547,7 +392,7 @@ System halted.
 
 Authoritative list: [`Cact/kernel/core/syscalls/syscalls.h`](Cact/kernel/core/syscalls/syscalls.h) — must stay byte-for-byte in sync with **[CactLib `syscall.h`](https://github.com/QwaYer/CactLib-x86_32/blob/main/include/syscall.h)**.
 
-Syscall dispatch uses the **`sysenter`** CPU instruction (legacy `int 0x80` removed in 2.0). Many syscalls take a **`struct syscall_frame*`** (full register snapshot) in the dispatcher — see [`mod.c`](Cact/kernel/core/syscalls/mod.c) `_needs_frame()`.
+Syscall dispatch uses the **`sysenter`** CPU instruction (legacy `int 0x80` gate preserved as ring-3 fallback for `sigreturn` and CPUs without SEP — see [`idt.c`](Cact/kernel/idt/idt.c):102-104, [`cpudev.c`](Cact/kernel/cpudev/cpudev.c):208-210). Many syscalls take a **`struct syscall_frame*`** (full register snapshot) in the dispatcher — see [`mod.c`](Cact/kernel/core/syscalls/mod.c) `_needs_frame()`.
 
 | Group | Calls |
 |-------|-------|

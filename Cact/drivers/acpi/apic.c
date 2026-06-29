@@ -170,21 +170,18 @@ int apic_init(void)
     else timer_entry -= global_irq_base;
     if (timer_entry > ioapic_max_redir) timer_entry = 0;
     uint64_t period = hpet_get_freq() / 100;
-    int hpet_ok = (period > 0 && hpet_start_periodic(timer_entry, period) == 0);
+    if (period == 0 || hpet_start_periodic(timer_entry, period) != 0) {
+        klog(LOG_FAIL, "HPET periodic timer failed to start");
+        while(1) __asm__ __volatile__("hlt");
+    }
 
     apic_enabled = 1;
 
     {
         char buf[64]; char num[32];
-        if (hpet_ok) {
-            strcpy(buf, "APIC: HPET timer0 → IOAPIC entry ");
-            itoa((int)timer_entry, num); strcat(buf, num);
-            klog(LOG_OK, buf);
-        } else {
-            strcpy(buf, "APIC: PIT via IOAPIC entry ");
-            itoa((int)timer_entry, num); strcat(buf, num);
-            klog(LOG_WARN, buf);
-        }
+        strcpy(buf, "APIC: HPET timer0 → IOAPIC entry ");
+        itoa((int)timer_entry, num); strcat(buf, num);
+        klog(LOG_OK, buf);
     }
 
     return 0;
