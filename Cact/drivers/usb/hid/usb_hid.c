@@ -62,19 +62,27 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
             if (priv->prev_kbd.keycode[j] == kc) { already = 1; break; }
         if (already) continue;
 
-        /* TTY-level signal generation: Ctrl-C → SIGINT, Ctrl-\ → SIGQUIT */
-        if (ctrl) {
+        /* Ctrl+letter → control characters 0x01-0x1A, plus SIGINT/SIGQUIT */
+        if (ctrl && kc >= 0x04 && kc <= 0x1D) {
             uint32_t fg = terminal_fg_pid;
-            if (fg) {
-                if (kc == HID_KEY_C) {
-                    task_signal(fg, SIGINT);
-                    continue;
-                }
-                if (kc == HID_KEY_BSLASH) {
-                    task_signal(fg, SIGQUIT);
-                    continue;
-                }
+            if (kc == HID_KEY_C && fg) {
+                task_signal(fg, SIGINT);
+                continue;
             }
+            char ctrl_char = kc - 0x04 + 1;  /* HID 0x04='a' → 0x01 SOH */
+            keyboard_post_key(ctrl_char);
+            usb_last_char = ctrl_char;
+            usb_key_event = 1;
+            last_char     = ctrl_char;
+            key_event_happened = 1;
+            continue;
+        }
+
+        /* Ctrl-\ → SIGQUIT (any keycode, not just letter) */
+        if (ctrl && kc == HID_KEY_BSLASH) {
+            uint32_t fg = terminal_fg_pid;
+            if (fg) task_signal(fg, SIGQUIT);
+            continue;
         }
 
         int use_shift = shift;

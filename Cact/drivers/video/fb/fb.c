@@ -216,26 +216,66 @@ void kprint_color(char* message, uint32_t color) {
             serial_putc(message[i]);
             if (message[i] != '[') continue;
             i++;
-            while (message[i] && message[i] != 'm') {
-                serial_putc(message[i]);
-                int param = 0;
-                while (message[i] >= '0' && message[i] <= '9') {
-                    param = param * 10 + (message[i] - '0');
+
+            int params[4], np = 0, val = 0, has_val = 0;
+            while (message[i]) {
+                if (message[i] >= '0' && message[i] <= '9') {
+                    val = val * 10 + (message[i] - '0');
+                    has_val = 1;
                     i++;
-                }
-                if (param >= 30 && param <= 37)
-                    current_fb_color = ansi_colors[param - 30];
-                else if (param >= 90 && param <= 97)
-                    current_fb_color = ansi_colors[8 + param - 90];
-                else if (param == 0)
-                    current_fb_color = color;
-                if (message[i] == ';') {
+                } else if (message[i] == ';') {
+                    if (has_val) params[np++] = val;
+                    else params[np++] = 0;
+                    val = 0; has_val = 0;
                     serial_putc(';');
                     i++;
+                } else {
+                    if (has_val) params[np++] = val;
+                    serial_putc(message[i]);
+
+                    if (message[i] == 'm') {
+                        for (int p = 0; p < np; p++) {
+                            if (params[p] >= 30 && params[p] <= 37)
+                                current_fb_color = ansi_colors[params[p] - 30];
+                            else if (params[p] >= 90 && params[p] <= 97)
+                                current_fb_color = ansi_colors[8 + params[p] - 90];
+                            else if (params[p] == 0)
+                                current_fb_color = color;
+                        }
+                    } else if (message[i] == 'H') {
+                        int row = (np > 0) ? params[0] : 1;
+                        int col = (np > 1) ? params[1] : 1;
+                        cursor_y = (row - 1) * FB_CONSOLE_CHAR_HEIGHT;
+                        cursor_x = (col - 1) * FB_CONSOLE_CHAR_WIDTH;
+                        if (cursor_y < 0) cursor_y = 0;
+                        if (cursor_x < 0) cursor_x = 0;
+                    } else if (message[i] == 'J') {
+                        int mode = (np > 0) ? params[0] : 0;
+                        if (mode == 2) {
+                            clear_screen();
+                        } else if (mode == 0) {
+                            uint32_t fy = (uint32_t)cursor_y;
+                            uint32_t fx = (uint32_t)cursor_x;
+                            while ((int)fy <= (int)max_y) {
+                                uint32_t sx = (fy == (uint32_t)cursor_y) ? fx : 0;
+                                fb_fill_rect(sx, fy, w - sx, FB_CONSOLE_CHAR_HEIGHT, COLOR_BLACK);
+                                fy += FB_CONSOLE_CHAR_HEIGHT;
+                            }
+                            fb_mark_dirty_rows((uint32_t)cursor_y / FB_CONSOLE_CHAR_HEIGHT,
+                                               max_y / FB_CONSOLE_CHAR_HEIGHT);
+                        }
+                    } else if (message[i] == 'K') {
+                        int mode = (np > 0) ? params[0] : 0;
+                        if (mode == 0) {
+                            uint32_t sx = (uint32_t)cursor_x;
+                            fb_fill_rect(sx, (uint32_t)cursor_y, w - sx, FB_CONSOLE_CHAR_HEIGHT, COLOR_BLACK);
+                            fb_mark_dirty_rows((uint32_t)cursor_y / FB_CONSOLE_CHAR_HEIGHT,
+                                               (uint32_t)cursor_y / FB_CONSOLE_CHAR_HEIGHT);
+                        }
+                    }
+                    break;
                 }
             }
-            if (message[i] == 'm')
-                serial_putc('m');
             continue;
         }
 

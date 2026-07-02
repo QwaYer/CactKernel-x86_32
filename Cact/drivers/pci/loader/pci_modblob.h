@@ -5,7 +5,7 @@
 
 /* Maximum supported size of the cctkfs image staged in .bss.
  * Packed userland (bin/sbin/lib + drivers) can exceed 256 KiB. */
-#define PCI_MODBLOB_MAX_IMAGE  (1024u * 1024u)
+#define PCI_MODBLOB_MAX_IMAGE  (4096u * 4096u)
 
 /* Initialise the in-memory module table from a cctkfs image previously
  * loaded by GRUB as a multiboot2 module.  Must be called BEFORE the
