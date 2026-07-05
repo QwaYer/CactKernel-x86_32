@@ -231,7 +231,7 @@ static int _needs_frame(uint32_t n) {
     }
 }
 
-// Entry point from interrupt.asm (int 0x80)
+// Entry point from interrupt.asm (sysenter)
 void syscall_handler(struct syscall_frame* regs) {
     uint32_t num = regs->eax;
     if (num >= SYSCALL_COUNT || !syscall_table[num]) {

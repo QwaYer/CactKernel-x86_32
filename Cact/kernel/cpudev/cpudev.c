@@ -15,6 +15,11 @@ static uint32_t       g_features_leaf7_ecx = 0;
 static uint32_t       g_features_leaf7_edx = 0;
 static char           g_brand[49]          = {0};
 
+// Return-path selector for sysenter_entry: 1 = SYSEXIT, 0 = IRET.
+// Read by interrupt.asm on every syscall return so the two paths can be
+// compared at runtime.
+uint8_t g_syscall_use_sysexit = 1;
+
 static inline void cpuid_raw(uint32_t leaf, uint32_t *eax, uint32_t *ebx,
                               uint32_t *ecx, uint32_t *edx) {
     __asm__ __volatile__("cpuid"
@@ -40,6 +45,16 @@ static inline void wrmsr(uint32_t msr, uint64_t val) {
     uint32_t lo = (uint32_t)val, hi = (uint32_t)(val >> 32);
     __asm__ __volatile__("wrmsr" :: "c"(msr), "a"(lo), "d"(hi));
 }
+
+// Per-task update of IA32_SYSENTER_ESP. The sysenter instruction loads ESP
+// from this MSR (NOT the TSS), so the scheduler must keep it in sync with the
+// current task's kernel stack on every context switch — just like tss_entry.esp0.
+void syscall_set_esp0(uint32_t esp) {
+    wrmsr(IA32_SYSENTER_ESP, (uint64_t)esp);
+}
+
+uint8_t cpu_syscall_use_sysexit(void) { return g_syscall_use_sysexit; }
+void   cpu_syscall_set_use_sysexit(uint8_t v) { g_syscall_use_sysexit = v ? 1 : 0; }
 
 static int vendor_match(uint32_t ebx, uint32_t ecx, uint32_t edx,
                          const char* s) {
@@ -205,9 +220,12 @@ int cpudev_init(void) {
     }
     kprint("\n");
 
-    g_syscall_mech = SYSCALL_MECH_INT80;
-    if (cpu_has_sep())
-        g_syscall_mech = SYSCALL_MECH_SYSENTER;
+    // Syscalls use SYSENTER/SYSEXIT exclusively; the legacy int 0x80 path has
+    // been removed, so SEP support is now mandatory.
+    g_syscall_mech = SYSCALL_MECH_SYSENTER;
+    if (!cpu_has_sep()) {
+        klog(LOG_FAIL, "CPUDEV: CPU lacks SEP — syscalls will NOT work (int 0x80 removed)");
+    }
 
     kprint("        [  OK  ] CPUDEV: syscall = ");
     kprint((char*)cpu_syscall_mech_str(g_syscall_mech));
@@ -217,17 +235,18 @@ int cpudev_init(void) {
 }
 
 int cpu_syscall_commit(void) {
-    if (g_syscall_mech == SYSCALL_MECH_SYSENTER) {
-        extern void sysenter_entry(void);
-        extern uint8_t early_kernel_stack[4096];
-        wrmsr(IA32_SYSENTER_CS,  0x08);
-        wrmsr(IA32_SYSENTER_EIP, (uint64_t)(uintptr_t)sysenter_entry);
-        wrmsr(IA32_SYSENTER_ESP, (uint64_t)(uintptr_t)
-              (early_kernel_stack + sizeof(early_kernel_stack)));
-        klog(LOG_OK, "CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed");
-        return 0;
-    }
+    extern void sysenter_entry(void);
 
-    klog(LOG_OK, "CPUDEV: no fast-syscall mechanism — using int 0x80");
+    wrmsr(IA32_SYSENTER_CS,  0x08);
+    wrmsr(IA32_SYSENTER_EIP, (uint64_t)(uintptr_t)sysenter_entry);
+    // Boot-time ESP — the scheduler overrides this per task on every switch.
+    extern uint8_t early_kernel_stack[4096];
+    wrmsr(IA32_SYSENTER_ESP, (uint64_t)(uintptr_t)
+          (early_kernel_stack + sizeof(early_kernel_stack)));
+
+    if (g_syscall_use_sysexit)
+        klog(LOG_OK, "CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: SYSEXIT)");
+    else
+        klog(LOG_OK, "CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: IRET)");
     return 0;
 }

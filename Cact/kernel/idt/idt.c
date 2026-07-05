@@ -18,7 +18,6 @@ extern void isr30(); extern void isr31();
 
 // IRQ handlers
 extern void timer_isr();
-extern void syscall_isr();
 extern void usb_isr();
 extern void uhci_isr();
 extern void ohci_isr();
@@ -98,10 +97,6 @@ int init_idt(void) {
         set_idt_gate(i, (uint32_t)pci_isr);
     extern void spurious_apic_isr();
     set_idt_gate(0xFF, (uint32_t)spurious_apic_isr);
-
-    // System call gate (int 0x80) - ring3 accessible
-    set_idt_gate(0x80, (uint32_t)syscall_isr);
-    idt[0x80].flags = 0xEE;  // Present, ring3, 32-bit interrupt gate
 
     // Load IDT into IDTR
     __asm__ __volatile__("lidt (%0)" : : "r"(&idtp));

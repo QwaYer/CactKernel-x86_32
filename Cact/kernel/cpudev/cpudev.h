@@ -212,4 +212,12 @@ const char* cpu_brand_str(void);
 
 int cpu_syscall_commit(void);
 
+// Syscall return-path selector (1 = SYSEXIT, 0 = IRET). Read by sysenter_entry.
+uint8_t cpu_syscall_use_sysexit(void);
+void    cpu_syscall_set_use_sysexit(uint8_t v);
+
+// Update IA32_SYSENTER_ESP to the current task's kernel-stack top. Called by
+// the scheduler on every context switch (mirrors tss_entry.esp0).
+void syscall_set_esp0(uint32_t esp);
+
 #endif

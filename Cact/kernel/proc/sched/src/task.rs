@@ -997,7 +997,9 @@ pub unsafe extern "C" fn task_exec(
     map_sigreturn_trampoline_on_pd(t, new_pd);
     ffi::vmm_sync_kernel_mmio_mappings(new_pd);
 
-    unsafe { (*ffi::tss_entry.get()).esp0 = (*p).stack_base as u32 + KERNEL_STACK_SIZE as u32; }
+    let esp0 = (*p).stack_base as u32 + KERNEL_STACK_SIZE as u32;
+    unsafe { (*ffi::tss_entry.get()).esp0 = esp0; }
+    ffi::syscall_set_esp0(esp0);
 
     let ustack_top = (*p).ustack_virt + USER_STACK_BYTES;
     let mut sp     = ustack_top - 4;
@@ -1565,17 +1567,34 @@ fn map_sigreturn_trampoline_on_pd(t: *mut TaskStruct, pd: *mut u32) {
             *phys.add(i) = 0;
         }
         let sigret_num: u32 = ffi::sys_sigreturn_num;
+        // sub esp, 4          — undo the `ret` that popped ret_addr
         *phys.add(0) = 0x83;
         *phys.add(1) = 0xEC;
         *phys.add(2) = 0x04;
+        // mov eax, SYS_SIGRETURN
         *phys.add(3) = 0xB8;
         *phys.add(4) = (sigret_num & 0xFF) as u8;
         *phys.add(5) = ((sigret_num >> 8) & 0xFF) as u8;
         *phys.add(6) = ((sigret_num >> 16) & 0xFF) as u8;
         *phys.add(7) = ((sigret_num >> 24) & 0xFF) as u8;
-        *phys.add(8) = 0xCD;
-        *phys.add(9) = 0x80;
-        *phys.add(10) = 0xF4;
+        // mov ecx, esp        — ECX = return ESP (CPU steals ECX on sysenter)
+        *phys.add(8) = 0x89;
+        *phys.add(9) = 0xE1;
+        // mov edx, imm32      — EDX = absolute address of hlt (return EIP)
+        // 32-bit has no RIP-relative; must use absolute address.
+        // Layout: sub(3)+mov eax(5)+mov ecx(2)+mov edx(5)+sysenter(2)+hlt(1) = 18
+        // hlt is at offset 17 → abs addr = tramp_vaddr + 17
+        *phys.add(10) = 0xBA;
+        let hlt_addr = tramp_vaddr + 17;
+        *phys.add(11) = (hlt_addr & 0xFF) as u8;
+        *phys.add(12) = ((hlt_addr >> 8) & 0xFF) as u8;
+        *phys.add(13) = ((hlt_addr >> 16) & 0xFF) as u8;
+        *phys.add(14) = ((hlt_addr >> 24) & 0xFF) as u8;
+        // sysenter
+        *phys.add(15) = 0x0F;
+        *phys.add(16) = 0x34;
+        // hlt (return label — should never be reached)
+        *phys.add(17) = 0xF4;
 
         let vmm_flags = if (*t).is_kernel != 0 {
             PAGE_PRESENT | PAGE_RW

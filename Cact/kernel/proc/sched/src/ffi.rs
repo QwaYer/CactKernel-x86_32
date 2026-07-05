@@ -111,6 +111,7 @@ unsafe extern "C" {
     pub static sys_sigreturn_num: u32;
     
     pub fn cpu_syscall_mech() -> u32;
+    pub fn syscall_set_esp0(esp: u32);
     pub fn elf_load_exec_symtab(path: *const u8, proc: *mut c_void);
 }
 

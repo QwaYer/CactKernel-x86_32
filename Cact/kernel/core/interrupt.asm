@@ -1,7 +1,6 @@
 [bits 32]
 
 global timer_isr
-global syscall_isr
 global pci_isr
 global acpi_sci_isr
 global spurious_apic_isr
@@ -52,6 +51,7 @@ extern page_fault_handler
 extern xhci_irq_handler
 extern tss_entry
 extern page_directory
+extern g_syscall_use_sysexit
 
 section .text
 
@@ -273,24 +273,6 @@ xhci_isr:
     popa
     iretd
 
-syscall_isr:
-    pusha
-    push ds
-    push es
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-
-    push esp
-    call syscall_handler
-    add esp, 4
-
-.sc_no_switch:
-    pop es
-    pop ds
-    popa
-    iretd
-
 acpi_sci_isr:
     pusha
     push ds
@@ -369,62 +351,101 @@ spurious_apic_isr:
 
 ; ---------------------------------------------------------------------------
 ; Fast syscall entry point (SYSENTER / IA32_SYSENTER_EIP).
-; On entry:
-;   EAX = system call number
-;   EBX = arg1
-;   ECX = user ESP         (saved here by CPU, original arg2 lost)
-;   EDX = return EIP       (saved here by CPU, original arg3 lost)
-;   ESI = arg4
-;   EDI = arg5
 ;
-; Stack must use iretd for now (sysexit needs GDT reorganisation:
-; user code at IA32_SYSENTER_CS+16 = 0x18, user data at +24 = 0x20).
+; User convention (set by CactLib stubs):
+;   EAX = syscall number
+;   EBX = arg1
+;   ESI = arg2          (stub remaps ecx→esi because CPU steals ECX)
+;   EDI = arg3          (stub remaps edx→edi because CPU steals EDX)
+;   ECX = return ESP    (CPU-saved — user stack pointer)
+;   EDX = return EIP    (CPU-saved — instruction after sysenter)
+;
+; We remap ESI→frame.ecx and EDI→frame.edx so the existing C dispatcher
+; and all 95 sys_* handlers see the exact same (ebx,ecx,edx) ABI as the
+; old int 0x80 path — no C changes required.
+;
+; Return is either IRET (atomic EFLAGS restore) or SYSEXIT (faster, manual
+; EFLAGS restore), selected at runtime by g_syscall_use_sysexit.
+;
+; GDT is already SYSEXIT-compatible: user CS=0x18=SYSENTER_CS+0x10,
+; user DS=0x20=SYSENTER_CS+0x18, so no GDT reorganisation is needed.
 ; ---------------------------------------------------------------------------
 global sysenter_entry
 sysenter_entry:
-    push edx                          ; [orig_esp - 4] = return EIP
-    push ecx                          ; [orig_esp - 8] = user ESP
-    sub esp, 52                       ; ESP = orig_esp - 60
+    push edx                         ; save return_eip  → frame[56]
+    push ecx                         ; save user_esp    → frame[52]
+    push eax                         ; save syscall_num → frame[48]
+    sub esp, 48                      ; 60-byte syscall_frame total
 
-    mov ecx, [esp + 52]               ; saved user ESP  (2nd push)
-    mov edx, [esp + 56]               ; saved return EIP (1st push)
+    ; --- pusha area (offsets 0–36) ---
+    ; frame.es/ds = user data (0x23), NOT kernel data — fork copies these into
+    ; the child's context_frame and fork_task_trampoline restores them via
+    ; pop es/pop ds.  0x10 here would give the child a DPL-0 segment → #GP in ring3.
+    mov [esp + 0],  dword 0x23       ; es  (user data — saved for fork/iret)
+    mov [esp + 4],  dword 0x23       ; ds  (user data — saved for fork/iret)
+    mov [esp + 8],  edi              ; edi  = arg3
+    mov [esp + 12], esi              ; esi  = arg2
+    mov [esp + 16], ebp              ; ebp
+    mov [esp + 20], dword 0          ; esp_dummy
+    mov [esp + 24], ebx              ; ebx  = arg1
+    mov [esp + 28], edi              ; edx  ← arg3 (remapped from EDI)
+    mov [esp + 32], esi              ; ecx  ← arg2 (remapped from ESI)
 
-    mov [esp + 56], dword 0x23        ; ss
-    mov [esp + 52], ecx               ; useresp
+    ; --- copy saved values into frame slots ---
+    mov eax, [esp + 48]              ; syscall number
+    mov [esp + 36], eax              ; eax
+    mov ecx, [esp + 52]              ; user_esp
+    mov edx, [esp + 56]              ; return_eip
+    mov [esp + 40], edx              ; eip
+    mov [esp + 52], ecx              ; useresp
+
+    ; --- iretd frame ---
+    mov [esp + 44], dword 0x1B       ; cs  (user code | RPL3)
+    mov [esp + 56], dword 0x23       ; ss  (user data | RPL3)
     pushfd
     pop eax
-    mov [esp + 48], eax               ; eflags
-    mov [esp + 44], dword 0x1B        ; cs (user code)
-    mov [esp + 40], edx               ; eip
-    mov [esp + 36], eax               ; syscall number → eax in frame
-    mov [esp + 32], ecx               ; ecx in frame (= user ESP, arg2 lost)
-    mov [esp + 28], edx               ; edx in frame (= ret EIP,  arg3 lost)
-    mov [esp + 24], ebx               ; arg1
-    mov [esp + 20], ecx               ; esp_dummy
-    mov [esp + 16], ebp               ; ebp
-    mov [esp + 12], esi               ; arg4
-    mov [esp +  8], edi               ; arg5
-    mov [esp +  4], dword 0x10        ; ds (kernel data)
-    mov [esp +  0], dword 0x10        ; es (kernel data)
+    or eax, 0x200                    ; IF=1 — user code runs with interrupts on
+    mov [esp + 48], eax              ; eflags
 
+    ; kernel data segments
     mov ax, 0x10
     mov ds, ax
     mov es, ax
 
+    ; dispatch
     push esp
     call syscall_handler
     add esp, 4
 
-    mov eax, [esp + 36]               ; return value
-    mov ecx, [esp + 52]               ; user ESP
-    mov edx, [esp + 40]               ; return EIP
+    ; ===== return path selection =====
+    cmp byte [g_syscall_use_sysexit], 0
+    jne .do_sysexit
+
+    ; --- IRET return (pop es/ds/popa restores user DS/ES from frame) ---
+.do_iret:
+    pop es                           ; ES = frame.es = 0x23
+    pop ds                           ; DS = frame.ds = 0x23
+    popa                             ; edi,esi,ebp,skip,ebx,edx,ecx,eax(incl. ret val)
+    iretd                            ; pops eip,cs,eflags,useresp,ss
+
+    ; --- SYSEXIT return ---
+.do_sysexit:
+    push dword [esp + 48]            ; restore EFLAGS (IF etc.) before sysexit
+    popfd
+
     mov esi, [esp + 12]
-    mov edi, [esp +  8]
+    mov edi, [esp + 8]
     mov ebx, [esp + 24]
     mov ebp, [esp + 16]
 
-    add esp, 40
-    iretd
+    mov eax, 0x23                    ; user data segment (sysexit sets SS, not DS/ES)
+    mov ds, ax
+    mov es, ax
+
+    mov ecx, [esp + 52]              ; user_esp    → ECX (load before edx)
+    mov edx, [esp + 40]              ; return EIP  → EDX
+    mov eax, [esp + 36]              ; return value → EAX (last)
+    sysexit
 
 section .rodata
 global msix_stub_table
