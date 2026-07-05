@@ -296,7 +296,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     klog(LOG_OK, "IDT loaded");
 
     // Program fast-syscall MSRs now that GDT and IDT are ready.
-    // IA32_SYSENTER_ESP must be set per-task by the scheduler later.
+    // IA32_SYSENTER_ESP is updated per-task by the scheduler on every switch.
     cpu_syscall_commit();
 
     serial_init();                  // COM1 — kprint/klog also go here (QEMU: -serial stdio)

@@ -13,7 +13,7 @@ struct syscall_frame {
 // SYS_SIGRETURN number — exported to the Rust trampoline via FFI
 extern const uint32_t sys_sigreturn_num;
 
-// Called from interrupt.asm on int 0x80
+// Called from interrupt.asm on sysenter
 void syscall_handler(struct syscall_frame* regs);
 
 #endif 

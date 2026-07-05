@@ -306,7 +306,9 @@ pub unsafe extern "C" fn schedule() {
     }
 
     if !(*next).proc.is_null() && !(*(*next).proc).stack_base.is_null() {
-        unsafe { (*ffi::tss_entry.get()).esp0 = (*(*next).proc).stack_base as u32 + crate::task::KERNEL_STACK_SIZE as u32; }
+        let esp0 = (*(*next).proc).stack_base as u32 + crate::task::KERNEL_STACK_SIZE as u32;
+        unsafe { (*ffi::tss_entry.get()).esp0 = esp0; }
+        ffi::syscall_set_esp0(esp0);
     }
 
     ffi::cli();
