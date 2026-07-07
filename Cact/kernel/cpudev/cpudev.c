@@ -5,6 +5,16 @@
 #define IA32_SYSENTER_ESP   0x175
 #define IA32_SYSENTER_EIP   0x176
 
+// AMD SYSCALL/SYSRET MSRs (extended — 0xC000_xxxx).
+// On AMD-family CPUs these enable the legacy-mode fast syscall path that
+// parallels SYSENTER/SYSEXIT on Intel.  Intel only supports SYSCALL in
+// IA-32e (64-bit) mode, so the SYSCALL mechanism is selected only for
+// AMD-family vendors (see cpu_vendor_is_amd_family()).
+#define AMD_EFER            0xC0000080u
+#define AMD_EFER_SCE        (1u << 0)   // SYSCALL/SYSRET enable
+#define AMD_STAR            0xC0000081u
+#define AMD_FMASK           0xC0000084u
+
 static cpu_vendor_t   g_vendor             = CPU_VENDOR_UNKNOWN;
 static syscall_mech_t g_syscall_mech       = SYSCALL_MECH_INT80;
 static uint32_t       g_features_edx       = 0;
@@ -100,7 +110,24 @@ const char* cpu_vendor_str(cpu_vendor_t vendor) {
 const char* cpu_syscall_mech_str(syscall_mech_t mech) {
     switch (mech) {
     case SYSCALL_MECH_SYSENTER: return "SYSENTER/SYSEXIT";
+    case SYSCALL_MECH_SYSCALL:  return "SYSCALL/SYSRET";
     default:                    return "int 0x80";
+    }
+}
+
+// SYSCALL/SYSRET in 32-bit legacy mode is an AMD-defined feature: AMD, Hygon,
+// VIA/Centaur and Zhaoxin implement it; Intel only supports SYSCALL inside
+// IA-32e (64-bit) mode and raises #UD for it in legacy mode.  So the SYSCALL
+// mechanism is only eligible on AMD-family vendors.
+static int cpu_vendor_is_amd_family(void) {
+    switch (g_vendor) {
+    case CPU_VENDOR_AMD:
+    case CPU_VENDOR_HYGON:
+    case CPU_VENDOR_VIA:
+    case CPU_VENDOR_ZHAOXIN:
+        return 1;
+    default:
+        return 0;
     }
 }
 
@@ -220,11 +247,17 @@ int cpudev_init(void) {
     }
     kprint("\n");
 
-    // Syscalls use SYSENTER/SYSEXIT exclusively; the legacy int 0x80 path has
-    // been removed, so SEP support is now mandatory.
-    g_syscall_mech = SYSCALL_MECH_SYSENTER;
-    if (!cpu_has_sep()) {
-        klog(LOG_FAIL, "CPUDEV: CPU lacks SEP — syscalls will NOT work (int 0x80 removed)");
+    // Choose the fastest syscall mechanism this CPU can do in 32-bit mode.
+    // AMD-family CPUs with the SYSCALL bit use SYSCALL/SYSRET (native AMD fast
+    // path).  Everything else with SEP falls back to SYSENTER/SYSEXIT.  The
+    // legacy int 0x80 path has been removed, so one of the two is mandatory.
+    if (cpu_vendor_is_amd_family() && cpu_has_syscall()) {
+        g_syscall_mech = SYSCALL_MECH_SYSCALL;
+    } else if (cpu_has_sep()) {
+        g_syscall_mech = SYSCALL_MECH_SYSENTER;
+    } else {
+        g_syscall_mech = SYSCALL_MECH_SYSENTER;  // placeholder
+        klog(LOG_FAIL, "CPUDEV: CPU supports neither SYSCALL nor SEP — syscalls will NOT work");
     }
 
     kprint("        [  OK  ] CPUDEV: syscall = ");
@@ -236,17 +269,42 @@ int cpudev_init(void) {
 
 int cpu_syscall_commit(void) {
     extern void sysenter_entry(void);
-
-    wrmsr(IA32_SYSENTER_CS,  0x08);
-    wrmsr(IA32_SYSENTER_EIP, (uint64_t)(uintptr_t)sysenter_entry);
-    // Boot-time ESP — the scheduler overrides this per task on every switch.
+    extern void syscall_entry(void);
     extern uint8_t early_kernel_stack[4096];
-    wrmsr(IA32_SYSENTER_ESP, (uint64_t)(uintptr_t)
-          (early_kernel_stack + sizeof(early_kernel_stack)));
+    uint32_t boot_esp = (uint32_t)(uintptr_t)
+        (early_kernel_stack + sizeof(early_kernel_stack));
 
-    if (g_syscall_use_sysexit)
-        klog(LOG_OK, "CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: SYSEXIT)");
-    else
-        klog(LOG_OK, "CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: IRET)");
+    // SYSENTER/SYSEXIT is always wired when the CPU has SEP, even on AMD, so
+    // both entry paths stay functional.  The scheduler keeps
+    // IA32_SYSENTER_ESP and tss_entry.esp0 in sync per context switch.
+    if (cpu_has_sep()) {
+        wrmsr(IA32_SYSENTER_CS,  0x08);
+        wrmsr(IA32_SYSENTER_EIP, (uint64_t)(uintptr_t)sysenter_entry);
+        wrmsr(IA32_SYSENTER_ESP, (uint64_t)boot_esp);
+    }
+
+    // AMD SYSCALL/SYSRET: enable via EFER.SCE, then point STAR at syscall_entry.
+    //   STAR[31:0]   = legacy-mode SYSCALL target EIP
+    //   STAR[47:32]  = SYSCALL CS base (kernel code 0x08; SS = +8 = 0x10)
+    //   STAR[63:48]  = SYSRET  CS base (user   code 0x18; SS = +8 = 0x20→0x23)
+    // FMASK = 0x200 clears IF on entry (the stub switches stacks off the user
+    // stack, so interrupts must stay masked until the kernel stack is loaded).
+    if (g_syscall_mech == SYSCALL_MECH_SYSCALL) {
+        uint64_t efer = rdmsr(AMD_EFER);
+        wrmsr(AMD_EFER, efer | AMD_EFER_SCE);
+
+        uint64_t star = ((uint64_t)0x18 << 48) |
+                        ((uint64_t)0x08 << 32) |
+                        ((uint32_t)(uintptr_t)syscall_entry);
+        wrmsr(AMD_STAR,  star);
+        wrmsr(AMD_FMASK, 0x200);
+    }
+
+    if (g_syscall_mech == SYSCALL_MECH_SYSCALL)
+        klog(g_syscall_use_sysexit ? LOG_OK : LOG_WARN,
+             "CPUDEV: EFER.SCE+STAR+FMASK programmed (return: SYSRET/IRET)");
+    else if (cpu_has_sep())
+        klog(g_syscall_use_sysexit ? LOG_OK : LOG_WARN,
+             "CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: SYSEXIT/IRET)");
     return 0;
 }
