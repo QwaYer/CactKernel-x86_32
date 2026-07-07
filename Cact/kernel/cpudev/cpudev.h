@@ -150,6 +150,7 @@ typedef enum {
 typedef enum {
     SYSCALL_MECH_INT80 = 0,
     SYSCALL_MECH_SYSENTER,
+    SYSCALL_MECH_SYSCALL,
 } syscall_mech_t;
 
 // ============================================================================

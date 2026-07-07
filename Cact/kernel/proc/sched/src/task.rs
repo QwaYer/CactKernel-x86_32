@@ -1577,24 +1577,35 @@ fn map_sigreturn_trampoline_on_pd(t: *mut TaskStruct, pd: *mut u32) {
         *phys.add(5) = ((sigret_num >> 8) & 0xFF) as u8;
         *phys.add(6) = ((sigret_num >> 16) & 0xFF) as u8;
         *phys.add(7) = ((sigret_num >> 24) & 0xFF) as u8;
-        // mov ecx, esp        — ECX = return ESP (CPU steals ECX on sysenter)
-        *phys.add(8) = 0x89;
-        *phys.add(9) = 0xE1;
-        // mov edx, imm32      — EDX = absolute address of hlt (return EIP)
-        // 32-bit has no RIP-relative; must use absolute address.
-        // Layout: sub(3)+mov eax(5)+mov ecx(2)+mov edx(5)+sysenter(2)+hlt(1) = 18
-        // hlt is at offset 17 → abs addr = tramp_vaddr + 17
-        *phys.add(10) = 0xBA;
-        let hlt_addr = tramp_vaddr + 17;
-        *phys.add(11) = (hlt_addr & 0xFF) as u8;
-        *phys.add(12) = ((hlt_addr >> 8) & 0xFF) as u8;
-        *phys.add(13) = ((hlt_addr >> 16) & 0xFF) as u8;
-        *phys.add(14) = ((hlt_addr >> 24) & 0xFF) as u8;
-        // sysenter
-        *phys.add(15) = 0x0F;
-        *phys.add(16) = 0x34;
-        // hlt (return label — should never be reached)
-        *phys.add(17) = 0xF4;
+
+        if ffi::cpu_syscall_mech() == ffi::SYSCALL_MECH_SYSCALL {
+            // SYSCALL saves the return EIP into ECX itself and leaves ESP as
+            // the live user stack — the kernel entry grabs both.  No register
+            // setup is needed; a bare `syscall` is the whole stub.
+            // Layout: sub(3)+mov eax(5)+syscall(2)+hlt(1) = 11
+            *phys.add(8) = 0x0F;   // syscall
+            *phys.add(9) = 0x05;
+            *phys.add(10) = 0xF4;  // hlt (return label — never reached)
+        } else {
+            // mov ecx, esp        — ECX = return ESP (CPU steals ECX on sysenter)
+            *phys.add(8) = 0x89;
+            *phys.add(9) = 0xE1;
+            // mov edx, imm32      — EDX = absolute address of hlt (return EIP)
+            // 32-bit has no RIP-relative; must use absolute address.
+            // Layout: sub(3)+mov eax(5)+mov ecx(2)+mov edx(5)+sysenter(2)+hlt(1) = 18
+            // hlt is at offset 17 → abs addr = tramp_vaddr + 17
+            *phys.add(10) = 0xBA;
+            let hlt_addr = tramp_vaddr + 17;
+            *phys.add(11) = (hlt_addr & 0xFF) as u8;
+            *phys.add(12) = ((hlt_addr >> 8) & 0xFF) as u8;
+            *phys.add(13) = ((hlt_addr >> 16) & 0xFF) as u8;
+            *phys.add(14) = ((hlt_addr >> 24) & 0xFF) as u8;
+            // sysenter
+            *phys.add(15) = 0x0F;
+            *phys.add(16) = 0x34;
+            // hlt (return label — should never be reached)
+            *phys.add(17) = 0xF4;
+        }
 
         let vmm_flags = if (*t).is_kernel != 0 {
             PAGE_PRESENT | PAGE_RW
