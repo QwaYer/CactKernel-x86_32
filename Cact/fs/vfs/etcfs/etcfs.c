@@ -90,7 +90,7 @@ static int _ensure_cap(etc_entry_t *e, uint32_t needed) {
     memset(nb, 0, newcap);
     if (e->data) {
         memcpy(nb, e->data, e->size);
-        kfree_heap(e->data);
+        kfree(e->data);
     }
     e->data = nb;
     e->cap  = newcap;
@@ -153,10 +153,10 @@ static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     int any = 0;
     for (etc_entry_t *e = etc_list; e; e = e->next) {
-        kprint("  "); kprint(e->name); kprint("\n");
+        printk("  "); printk(e->name); printk("\n");
         any = 1;
     }
-    if (!any) kprint("  (empty)\n");
+    if (!any) printk("  (empty)\n");
 }
 
 static int _root_create(vfs_node_t *dir, const char *name) {
@@ -184,7 +184,7 @@ static void _load_all(void) {
         if (!ext4_root || !ext4_root->ops || !ext4_root->ops->mkdir) return;
         ext4_root->ops->mkdir(ext4_root, "etc");
         etc_dir = _ext4_etc_dir();
-        if (!etc_dir) { kprint("[etcfs] mkdir /etc failed\n"); return; }
+        if (!etc_dir) { printk("[etcfs] mkdir /etc failed\n"); return; }
     }
 
     if (!etc_dir->ops || !etc_dir->ops->readdir) return;
@@ -196,11 +196,11 @@ static void _load_all(void) {
         if (_find(de->name)) continue;   // already loaded
 
         etc_entry_t *slot = (etc_entry_t *)kmalloc(sizeof(etc_entry_t));
-        if (!slot) { kprint("[etcfs] kmalloc failed\n"); break; }
+        if (!slot) { printk("[etcfs] kmalloc failed\n"); break; }
         memset(slot, 0, sizeof(etc_entry_t));
 
         slot->data = (char *)kmalloc(ETCFS_INIT_SIZE);
-        if (!slot->data) { kfree_heap(slot); continue; }
+        if (!slot->data) { kfree(slot); continue; }
         memset(slot->data, 0, ETCFS_INIT_SIZE);
         slot->cap = ETCFS_INIT_SIZE;
 
@@ -281,7 +281,7 @@ int etcfs_create(const char *name) {
     memset(e, 0, sizeof(etc_entry_t));
 
     e->data = (char *)kmalloc(ETCFS_INIT_SIZE);
-    if (!e->data) { kfree_heap(e); return -1; }
+    if (!e->data) { kfree(e); return -1; }
     memset(e->data, 0, ETCFS_INIT_SIZE);
     e->cap = ETCFS_INIT_SIZE;
 
@@ -310,8 +310,8 @@ int etcfs_delete(const char *name) {
             etc_entry_t *dead = *pp;
             *pp = dead->next;
             dead->node.ops = NULL;
-            if (dead->data) { kfree_heap(dead->data); dead->data = NULL; }
-            kfree_heap(dead);
+            if (dead->data) { kfree(dead->data); dead->data = NULL; }
+            kfree(dead);
 
             vfs_node_t *etc_dir = _ext4_etc_dir();
             if (etc_dir && etc_dir->ops && etc_dir->ops->delete)

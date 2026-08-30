@@ -77,10 +77,10 @@ void msix_dispatch(unsigned int vector)
 
 int pci_msix_support(pci_device_t *dev)
 {
-    uint8_t cap_ptr = (uint8_t)(pci_read32(dev->bus, dev->dev, dev->fn, 0x34) & 0xFF);
+    uint8_t cap_ptr = (uint8_t)(pci_read_config_dword(dev->bus, dev->dev, dev->fn, 0x34) & 0xFF);
     int iter = 0;
     while (cap_ptr && cap_ptr != 0xFF && iter++ < 48) {
-        uint32_t cap = pci_read32(dev->bus, dev->dev, dev->fn, cap_ptr);
+        uint32_t cap = pci_read_config_dword(dev->bus, dev->dev, dev->fn, cap_ptr);
         uint8_t cap_id = (uint8_t)(cap & 0xFF);
         if (cap_id == PCI_CAP_ID_MSIX)
             return (int)cap_ptr;
@@ -96,8 +96,8 @@ int pci_msix_table_map(pci_device_t *dev,
     int cap_off = pci_msix_support(dev);
     if (!cap_off) return -1;
 
-    uint32_t mc   = pci_read32(dev->bus, dev->dev, dev->fn, cap_off + 2);
-    uint32_t t_off = pci_read32(dev->bus, dev->dev, dev->fn, cap_off + 4);
+    uint32_t mc   = pci_read_config_dword(dev->bus, dev->dev, dev->fn, cap_off + 2);
+    uint32_t t_off = pci_read_config_dword(dev->bus, dev->dev, dev->fn, cap_off + 4);
 
     unsigned int table_bir = t_off & 0x7;
     uint32_t table_offset  = t_off & ~0x7;
@@ -133,7 +133,7 @@ int pci_msix_pba_map(pci_device_t *dev,
     int cap_off = pci_msix_support(dev);
     if (!cap_off) return -1;
 
-    uint32_t p_off = pci_read32(dev->bus, dev->dev, dev->fn, cap_off + 8);
+    uint32_t p_off = pci_read_config_dword(dev->bus, dev->dev, dev->fn, cap_off + 8);
 
     unsigned int pba_bir    = p_off & 0x7;
     uint32_t     pba_offset = p_off & ~0x7;
@@ -160,7 +160,7 @@ int pci_msix_enable(pci_device_t *dev, int vector,
     int cap_off = pci_msix_support(dev);
     if (!cap_off) return -1;
 
-    uint32_t mc = pci_read32(dev->bus, dev->dev, dev->fn, cap_off + 2);
+    uint32_t mc = pci_read_config_dword(dev->bus, dev->dev, dev->fn, cap_off + 2);
     unsigned int table_size = ((mc >> 16) & 0x7FF) + 1;
     if (entry_idx >= table_size) return -1;
 
@@ -171,12 +171,12 @@ int pci_msix_enable(pci_device_t *dev, int vector,
 
     __asm__ volatile("sfence" ::: "memory");
 
-    pci_write32(dev->bus, dev->dev, dev->fn, cap_off + 2,
+    pci_write_config_dword(dev->bus, dev->dev, dev->fn, cap_off + 2,
                 mc | (1u << 15));
 
-    uint32_t cmd = pci_read32(dev->bus, dev->dev, dev->fn, 0x04);
+    uint32_t cmd = pci_read_config_dword(dev->bus, dev->dev, dev->fn, 0x04);
     cmd &= ~(1u << 10);
-    pci_write32(dev->bus, dev->dev, dev->fn, 0x04, cmd);
+    pci_write_config_dword(dev->bus, dev->dev, dev->fn, 0x04, cmd);
 
     return 0;
 }

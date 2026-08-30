@@ -1,4 +1,4 @@
-//! Physical memory manager: bitmap of free frames, per-page refcounts, and `kalloc`/`kfree_page`.
+//! Physical memory manager: bitmap of free frames, per-page refcounts, and `kalloc`/`free_page`.
 
 use crate::ffi::*;
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, klog_msg};
@@ -190,7 +190,7 @@ pub extern "C" fn kalloc() -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kfree_page(ptr: *mut u8) {
+pub extern "C" fn free_page(ptr: *mut u8) {
     if ptr.is_null() { return; }
 
     let addr = ptr as u32;
@@ -245,7 +245,7 @@ pub fn page_ref_inc(phys: *const u8) {
 /// Read the reference count of a physical page under `PAGE_LOCK`.
 ///
 /// The lock guarantees that the value is not stale: `page_ref_inc` and
-/// `kfree_page` both modify the count under the same lock, so holding it
+/// `free_page` both modify the count under the same lock, so holding it
 /// here provides a sequentially-consistent view of the refcount.
 pub fn page_ref_get(phys: *const u8) -> u16 {
     let addr = phys as u32;

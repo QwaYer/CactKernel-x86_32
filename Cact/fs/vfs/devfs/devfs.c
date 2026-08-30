@@ -115,9 +115,9 @@ static vfs_dirent_t *_dev_dir_readdir(vfs_node_t *dir, uint32_t index) {
 static void _dev_dir_listdir(vfs_node_t *dir) {
     devfs_entry_t *e = (devfs_entry_t *)dir->priv;
     if (!e) return;
-    kprint("  data\n");
-    if (e->drv && e->drv->ctl)    kprint("  ctl\n");
-    if (e->drv && e->drv->status) kprint("  status\n");
+    printk("  data\n");
+    if (e->drv && e->drv->ctl)    printk("  ctl\n");
+    if (e->drv && e->drv->status) printk("  status\n");
 }
 
 static vfs_ops_t dev_dir_ops = {
@@ -158,12 +158,12 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
-    kprint("  modinfo\n");
+    printk("  modinfo\n");
     for (devfs_entry_t *e = dev_list; e; e = e->next) {
-        kprint("  ");
-        kprint(e->name);
-        if (!(e->flags & DEVFS_F_SIMPLE)) kprint("/");
-        kprint("\n");
+        printk("  ");
+        printk(e->name);
+        if (!(e->flags & DEVFS_F_SIMPLE)) printk("/");
+        printk("\n");
     }
 }
 
@@ -267,8 +267,8 @@ static int _disk_write(void *p, uint32_t off, uint32_t size, char *buf) {
 static int _disk_ctl(void *p, const char *cmd, uint32_t len) {
     (void)p;
     if (len < 2) return -1;
-    if(cmd[0]=='f'&&cmd[1]=='l') { kprint("[disk] flush (noop)\n"); return 0; }
-    kprint("[disk] unknown ctl: "); kprint((char*)cmd); kprint("\n");
+    if(cmd[0]=='f'&&cmd[1]=='l') { printk("[disk] flush (noop)\n"); return 0; }
+    printk("[disk] unknown ctl: "); printk((char*)cmd); printk("\n");
     return -1;
 }
 static int _disk_status(void *p, char *buf, uint32_t size) {
@@ -312,7 +312,7 @@ static int _tty_write(void *p, uint32_t off, uint32_t size, char *buf) {
     while(i<size){
         uint32_t c=size-i; if(c>=sizeof(tmp))c=sizeof(tmp)-1;
         memcpy(tmp,buf+i,c); tmp[c]='\0';
-        kprint(tmp); i+=c;
+        printk(tmp); i+=c;
     }
     return (int)size;
 }
@@ -419,12 +419,12 @@ devfs_entry_t *devfs_register(const char *name, uint32_t flags,
                                devfs_driver_t *drv, void *drv_priv) {
     if (!name || !drv) return 0;
     if (devfs_find(name)) {
-        kprint("[devfs] already registered: "); kprint((char*)name); kprint("\n");
+        printk("[devfs] already registered: "); printk((char*)name); printk("\n");
         return 0;
     }
 
     devfs_entry_t *e = (devfs_entry_t *)kmalloc(sizeof(devfs_entry_t));
-    if (!e) { kprint("[devfs] kmalloc failed\n"); return 0; }
+    if (!e) { printk("[devfs] kmalloc failed\n"); return 0; }
     memset(e, 0, sizeof(devfs_entry_t));
 
     strlcpy(e->name, name, 64);
@@ -445,7 +445,7 @@ int devfs_unregister(const char *name) {
         if (streq((*pp)->name, name)) {
             devfs_entry_t *dead = *pp;
             *pp = dead->next;
-            kfree_heap(dead);
+            kfree(dead);
             return 0;
         }
         pp = &(*pp)->next;

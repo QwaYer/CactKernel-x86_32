@@ -118,14 +118,14 @@ static void module_proc_name(const char *path, char *out, int out_sz) {
 
 static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
     if (*file_size <= CACT_HMAC_TAG_SIZE) {
-        kprint("[FSMOD] HMAC: unsigned module (no signature) — rejected\n");
+        printk("[FSMOD] HMAC: unsigned module (no signature) — rejected\n");
         return -1;
     }
     uint32_t  data_len = *file_size - CACT_HMAC_TAG_SIZE;
     uint8_t  *tag      = elf_data + data_len;
     int       rc       = cact_hmac_verify(elf_data, data_len, tag, CACT_HMAC_TAG_SIZE);
     if (rc != 0) {
-        kprint("[FSMOD] HMAC: signature mismatch — rejected\n");
+        printk("[FSMOD] HMAC: signature mismatch — rejected\n");
         return -1;
     }
     *file_size = data_len;
@@ -137,14 +137,14 @@ static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
 int fs_mod_load(const char *path) {
     if (!path) return -1;
     if (fs_image) {
-        kprint("[FSMOD] a filesystem module is already loaded\n");
+        printk("[FSMOD] a filesystem module is already loaded\n");
         return -1;
     }
 
     const uint8_t *blob_data = NULL;
     uint32_t       blob_size = 0;
     if (pci_modblob_get(path, &blob_data, &blob_size) != 0 || !blob_size) {
-        kprint("[FSMOD] module not found: "); kprint((char *)path); kprint("\n");
+        printk("[FSMOD] module not found: "); printk((char *)path); printk("\n");
         return -1;
     }
 
@@ -154,14 +154,14 @@ int fs_mod_load(const char *path) {
     uint32_t file_size = blob_size;
 
     if (hmac_verify_module(elf_data, &file_size) != 0) {
-        kfree_heap(elf_data);
+        kfree(elf_data);
         return -8;
     }
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
     if (eh->e_magic != ELF_MAGIC || eh->e_type != ET_REL || eh->e_machine != EM_386) {
-        kprint("[FSMOD] not a valid ELF32 relocatable\n");
-        kfree_heap(elf_data);
+        printk("[FSMOD] not a valid ELF32 relocatable\n");
+        kfree(elf_data);
         return -2;
     }
 
@@ -169,8 +169,8 @@ int fs_mod_load(const char *path) {
     if (__builtin_umul_overflow(eh->e_shnum, eh->e_shentsize, &sh_tab_end) ||
         __builtin_uadd_overflow(eh->e_shoff, sh_tab_end, &sh_tab_end) ||
         eh->e_shentsize < sizeof(Elf32_Shdr) || sh_tab_end > file_size) {
-        kprint("[FSMOD] corrupted section header table\n");
-        kfree_heap(elf_data);
+        printk("[FSMOD] corrupted section header table\n");
+        kfree(elf_data);
         return -3;
     }
 
@@ -187,7 +187,7 @@ int fs_mod_load(const char *path) {
     }
 
     uint8_t *image = (uint8_t *)kmalloc(total);
-    if (!image) { kfree_heap(elf_data); return -3; }
+    if (!image) { kfree(elf_data); return -3; }
     memset(image, 0, total);
 
     // Copy PROGBITS sections into image
@@ -195,8 +195,8 @@ int fs_mod_load(const char *path) {
         Elf32_Shdr *sh = get_shdr(eh, i);
         if (!sh || !(sh->sh_flags & SHF_ALLOC) || sh->sh_type != SHT_PROGBITS) continue;
         if (sh->sh_offset + sh->sh_size > file_size) {
-            kprint("[FSMOD] section offset exceeds file\n");
-            kfree_heap(image); kfree_heap(elf_data);
+            printk("[FSMOD] section offset exceeds file\n");
+            kfree(image); kfree(elf_data);
             return -8;
         }
         memcpy(image + sh->sh_addr, elf_data + sh->sh_offset, sh->sh_size);
@@ -214,17 +214,17 @@ int fs_mod_load(const char *path) {
         }
     }
     if (!symtab_sh) {
-        kprint("[FSMOD] no .symtab found\n");
-        kfree_heap(image); kfree_heap(elf_data);
+        printk("[FSMOD] no .symtab found\n");
+        kfree(image); kfree(elf_data);
         return -4;
     }
     if (symtab_sh->sh_offset + symtab_sh->sh_size > file_size) {
-        kfree_heap(image); kfree_heap(elf_data);
+        kfree(image); kfree(elf_data);
         return -8;
     }
     Elf32_Shdr *strtab_sh = get_shdr(eh, strtab_idx);
     if (!strtab_sh || strtab_sh->sh_offset + strtab_sh->sh_size > file_size) {
-        kfree_heap(image); kfree_heap(elf_data);
+        kfree(image); kfree(elf_data);
         return -8;
     }
     Elf32_Sym *syms    = (Elf32_Sym *)(elf_data + symtab_sh->sh_offset);
@@ -241,8 +241,8 @@ int fs_mod_load(const char *path) {
         for (uint32_t r = 0; r < rel_cnt; r++) {
             uint32_t   sym_idx = ELF32_R_SYM(rels[r].r_info);
             if (sym_idx >= sym_cnt) {
-                kprint("[FSMOD] relocation symbol index out of bounds\n");
-                kfree_heap(image); kfree_heap(elf_data);
+                printk("[FSMOD] relocation symbol index out of bounds\n");
+                kfree(image); kfree(elf_data);
                 return -7;
             }
             uint8_t    type    = ELF32_R_TYPE(rels[r].r_info);
@@ -250,25 +250,25 @@ int fs_mod_load(const char *path) {
             uint32_t   S;
             if (sym->st_shndx == SHN_UNDEF) {
                 const char *sym_name = get_str(eh, strtab_idx, sym->st_name);
-                if (!sym_name) { kfree_heap(image); kfree_heap(elf_data); return -7; }
+                if (!sym_name) { kfree(image); kfree(elf_data); return -7; }
                 S = ksym_resolve(sym_name);
                 if (S == 0 && ELF32_ST_BIND(sym->st_info) != STB_WEAK) {
-                    kprint("[FSMOD] unresolved symbol: "); kprint((char *)sym_name); kprint("\n");
-                    kfree_heap(image); kfree_heap(elf_data);
+                    printk("[FSMOD] unresolved symbol: "); printk((char *)sym_name); printk("\n");
+                    kfree(image); kfree(elf_data);
                     return -7;
                 }
             } else {
                 Elf32_Shdr *sym_sh = get_shdr(eh, sym->st_shndx);
                 if (!sym_sh || !(sym_sh->sh_flags & SHF_ALLOC)) {
-                    kprint("[FSMOD] bad symbol section\n");
-                    kfree_heap(image); kfree_heap(elf_data);
+                    printk("[FSMOD] bad symbol section\n");
+                    kfree(image); kfree(elf_data);
                     return -7;
                 }
                 S = (uint32_t)(image + sym_sh->sh_addr + sym->st_value);
             }
             if (rels[r].r_offset + sizeof(uint32_t) > target_sh->sh_size) {
-                kprint("[FSMOD] relocation offset out of bounds\n");
-                kfree_heap(image); kfree_heap(elf_data);
+                printk("[FSMOD] relocation offset out of bounds\n");
+                kfree(image); kfree(elf_data);
                 return -7;
             }
             uint32_t *patch = (uint32_t *)(image + target_sh->sh_addr + rels[r].r_offset);
@@ -291,8 +291,8 @@ int fs_mod_load(const char *path) {
         break;
     }
     if (!fs_mount_fn) {
-        kprint("[FSMOD] symbol 'fs_mount' not found\n");
-        kfree_heap(image); kfree_heap(elf_data);
+        printk("[FSMOD] symbol 'fs_mount' not found\n");
+        kfree(image); kfree(elf_data);
         return -5;
     }
 
@@ -300,19 +300,19 @@ int fs_mod_load(const char *path) {
     fs_image_size = total;
     module_proc_name(path, fs_instance_name, sizeof(fs_instance_name));
 
-    kfree_heap(elf_data);
-    kprint("[FSMOD] module ready: "); kprint(fs_instance_name); kprint("\n");
+    kfree(elf_data);
+    printk("[FSMOD] module ready: "); printk(fs_instance_name); printk("\n");
     return 0;
 }
 
 void fs_mod_unload(void) {
     if (!fs_image) return;
-    kfree_heap(fs_image);
+    kfree(fs_image);
     fs_image      = NULL;
     fs_image_size = 0;
     fs_mount_fn   = NULL;
     fs_instance_name[0] = '\0';
-    kprint("[FSMOD] module unloaded\n");
+    printk("[FSMOD] module unloaded\n");
 }
 
 vfs_node_t *fs_mod_mount(uint32_t dev) {

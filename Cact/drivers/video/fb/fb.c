@@ -188,7 +188,7 @@ static const uint32_t ansi_colors[16] = {
     COLOR_LIGHT_BLUE, COLOR_LIGHT_MAGENTA, COLOR_LIGHT_CYAN, COLOR_WHITE,
 };
 
-void kprint_color(char* message, uint32_t color) {
+void printk_color(char* message, uint32_t color) {
     uint32_t w = fb_get_width();
     uint32_t h = fb_get_height();
     int have_fb = (w != 0 && h != 0);
@@ -307,14 +307,14 @@ void kprint_color(char* message, uint32_t color) {
     fb_flush();
 }
 
-void kprint(char* message) {
-    kprint_color(message, COLOR_WHITE);
+void printk(char* message) {
+    printk_color(message, COLOR_WHITE);
 }
 
-void kprint_at(char* message, int x, int y) {
+void printk_at(char* message, int x, int y) {
     cursor_x = x;
     cursor_y = y;
-    kprint(message);
+    printk(message);
 }
 
 void init_framebuffer(void) {

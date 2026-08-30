@@ -9,9 +9,9 @@ typedef struct {
     volatile uint32_t locked;
 } spinlock_t;
 
-void spinlock_init   (spinlock_t* lock);
-void spinlock_acquire(spinlock_t* lock);
-void spinlock_release(spinlock_t* lock);
+void spin_lock_init   (spinlock_t* lock);
+void spin_lock(spinlock_t* lock);
+void spin_unlock(spinlock_t* lock);
 
 typedef struct {
     spinlock_t spin;
@@ -46,7 +46,7 @@ typedef struct {
 } semaphore_t;
 
 void sema_init(semaphore_t* s, int val);
-void sema_down(semaphore_t* s);
-void sema_up(semaphore_t* s);
+void down(semaphore_t* s);
+void up(semaphore_t* s);
 
 #endif

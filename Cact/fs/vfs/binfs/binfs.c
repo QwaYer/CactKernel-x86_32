@@ -146,14 +146,14 @@ static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     vfs_node_t *bin = _bin_dir();
     if (!bin || !bin->ops || !bin->ops->readdir) {
-        kprint("  (empty)\n");
+        printk("  (empty)\n");
         return;
     }
     vfs_dirent_t *de;
     int any = 0;
     for (uint32_t i = 0; (de = bin->ops->readdir(bin, i)); i++) {
         if (de->name[0] == '.') continue;
-        kprint("  "); kprint(de->name); kprint("\n");
+        printk("  "); printk(de->name); printk("\n");
         any = 1;
     }
     for (bin_blob_t *b = bin_blobs; b; b = b->next) {
@@ -163,10 +163,10 @@ static void _root_listdir(vfs_node_t *dir) {
             if (streq(de->name, b->node.name)) { dup = 1; break; }
         }
         if (dup) continue;
-        kprint("  "); kprint(b->node.name); kprint("  [cctkfs]\n");
+        printk("  "); printk(b->node.name); printk("  [cctkfs]\n");
         any = 1;
     }
-    if (!any) kprint("  (empty)\n");
+    if (!any) printk("  (empty)\n");
 }
 
 // Forward create/delete/mkdir/rmdir to ext4 /bin

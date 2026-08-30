@@ -30,19 +30,19 @@ static int _elf_map_file(struct vfs_node*     file,
 {
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(hdr), (char*)&hdr) <= 0) {
-        kprint("[DL] cannot read ELF header\n");
+        printk("[DL] cannot read ELF header\n");
         return -1;
     }
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
-        kprint("[DL] bad ELF magic\n");
+        printk("[DL] bad ELF magic\n");
         return -1;
     }
     if (hdr.e_machine != 3) { // EM_386 
-        kprint("[DL] not i386\n");
+        printk("[DL] not i386\n");
         return -1;
     }
     if ((uint32_t)hdr.e_phnum > 65535u) {
-        kprint("[DL] too many program headers\n");
+        printk("[DL] too many program headers\n");
         return -1;
     }
 
@@ -54,7 +54,7 @@ static int _elf_map_file(struct vfs_node*     file,
         if (read_vfs(file,
                      hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                      sizeof(ph), (char*)&ph) <= 0) {
-            kprint("[DL] failed to read program header\n");
+            printk("[DL] failed to read program header\n");
             return -1;
         }
         if (ph.p_type == PT_LOAD && ph.p_memsz > 0) {
@@ -65,7 +65,7 @@ static int _elf_map_file(struct vfs_node*     file,
     }
 
     if (load_base == 0xFFFFFFFF) {
-        kprint("[DL] no PT_LOAD segments\n");
+        printk("[DL] no PT_LOAD segments\n");
         return -1;
     }
 
@@ -76,7 +76,7 @@ static int _elf_map_file(struct vfs_node*     file,
         if (read_vfs(file,
                      hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                      sizeof(ph), (char*)&ph) <= 0) {
-            kprint("[DL] failed to read program header\n");
+            printk("[DL] failed to read program header\n");
             return -1;
         }
 
@@ -89,13 +89,13 @@ static int _elf_map_file(struct vfs_node*     file,
         for (uint32_t va = page_vaddr; va < page_end; va += PAGE_SIZE) {
             void* phys = kalloc();
             if (!phys) {
-                kprint("[DL] out of memory mapping segment\n");
+                printk("[DL] out of memory mapping segment\n");
                 proc_free_pages(tracker);
                 return -1;
             }
             if (proc_tracker_add(tracker, phys) < 0) {
-                kfree_page(phys);
-                kprint("[DL] tracker overflow\n");
+                free_page(phys);
+                printk("[DL] tracker overflow\n");
                 proc_free_pages(tracker);
                 return -1;
             }
@@ -128,7 +128,7 @@ static int _elf_map_file(struct vfs_node*     file,
             if (read_vfs(file,
                          hdr.e_phoff + (uint32_t)i * hdr.e_phentsize,
                          sizeof(ph), (char*)&ph) <= 0) {
-                kprint("[DL] failed to read program header\n");
+                printk("[DL] failed to read program header\n");
                 proc_free_pages(tracker);
                 return -1;
             }
@@ -186,7 +186,7 @@ static loaded_so_t* _find_loaded_by_symtab(dyn_ctx_t* ctx, Elf32_Sym* sym) {
 
 static loaded_so_t* _alloc_so_slot(dyn_ctx_t* ctx) {
     if (ctx->count >= SO_TABLE_MAX) {
-        kprint("[DL] so table full\n");
+        printk("[DL] so table full\n");
         return 0;
     }
     loaded_so_t* e = &ctx->table[ctx->count++];
@@ -299,9 +299,9 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
     }
 
     if (!file) {
-        kprint("[DL] shared object not found: ");
-        kprint((char*)name);
-        kprint("\n");
+        printk("[DL] shared object not found: ");
+        printk((char*)name);
+        printk("\n");
         return 0;
     }
 
@@ -317,9 +317,9 @@ loaded_so_t* dynlink_load_so(dyn_ctx_t* ctx, const char* name) {
     uint32_t bias = 0;
     if (_elf_map_file(file, ctx->pd, ctx->tracker, &bias,
                       &entry, &dyn_seg, &dyn_size) != 0) {
-        kprint("[DL] failed to map: ");
-        kprint((char*)name);
-        kprint("\n");
+        printk("[DL] failed to map: ");
+        printk((char*)name);
+        printk("\n");
         ctx->count--;
         return 0;
     }
@@ -376,7 +376,7 @@ static void _apply_rel(dyn_ctx_t*  ctx,
 
     if (!vmm_is_user_address(rel->r_offset) ||
         !vmm_get_phys(ctx->pd, rel->r_offset)) {
-        kprint("[DL] _apply_rel: invalid r_offset 0x"); kprint_hex(rel->r_offset); kprint("\n");
+        printk("[DL] _apply_rel: invalid r_offset 0x"); printk_hex(rel->r_offset); printk("\n");
         return;
     }
 
@@ -389,7 +389,7 @@ static void _apply_rel(dyn_ctx_t*  ctx,
         Elf32_Sym* sym = &symtab[sym_idx];
         if (sym->st_shndx == SHN_UNDEF) {
             if (sym->st_name >= strtab_size) {
-                kprint("[DL] _apply_rel: strtab offset out of bounds\n");
+                printk("[DL] _apply_rel: strtab offset out of bounds\n");
                 return;
             }
             const char* sname = strtab + sym->st_name;
@@ -397,9 +397,9 @@ static void _apply_rel(dyn_ctx_t*  ctx,
             if (S == 0) {
                 int bind = ELF32_ST_BIND(sym->st_info);
                 if (bind != STB_WEAK) {
-                    kprint("[DL] unresolved symbol: ");
-                    kprint((char*)sname);
-                    kprint("\n");
+                    printk("[DL] unresolved symbol: ");
+                    printk((char*)sname);
+                    printk("\n");
                 }
             }
         } else {
@@ -441,7 +441,7 @@ static void _apply_rel(dyn_ctx_t*  ctx,
             if (sym->st_size > 0 && sym->st_size <= 65536) {
                 if (!vmm_is_user_address(S) ||
                     !vmm_get_phys(ctx->pd, S)) {
-                    kprint("[DL] R_386_COPY: invalid source 0x"); kprint_hex(S); kprint("\n");
+                    printk("[DL] R_386_COPY: invalid source 0x"); printk_hex(S); printk("\n");
                     break;
                 }
                 memcpy(target, (void*)S, sym->st_size);
@@ -468,7 +468,7 @@ static void _apply_rela(dyn_ctx_t*  ctx,
 
     if (!vmm_is_user_address(rela->r_offset) ||
         !vmm_get_phys(ctx->pd, rela->r_offset)) {
-        kprint("[DL] _apply_rela: invalid r_offset 0x"); kprint_hex(rela->r_offset); kprint("\n");
+        printk("[DL] _apply_rela: invalid r_offset 0x"); printk_hex(rela->r_offset); printk("\n");
         return;
     }
 
@@ -481,7 +481,7 @@ static void _apply_rela(dyn_ctx_t*  ctx,
         Elf32_Sym* sym = &symtab[sym_idx];
         if (sym->st_shndx == SHN_UNDEF) {
             if (sym->st_name >= strtab_size) {
-                kprint("[DL] _apply_rela: strtab offset out of bounds\n");
+                printk("[DL] _apply_rela: strtab offset out of bounds\n");
                 return;
             }
             const char* sname = strtab + sym->st_name;
@@ -489,9 +489,9 @@ static void _apply_rela(dyn_ctx_t*  ctx,
             if (S == 0) {
                 int bind = ELF32_ST_BIND(sym->st_info);
                 if (bind != STB_WEAK) {
-                    kprint("[DL] unresolved symbol: ");
-                    kprint((char*)sname);
-                    kprint("\n");
+                    printk("[DL] unresolved symbol: ");
+                    printk((char*)sname);
+                    printk("\n");
                 }
             }
         } else {
@@ -521,7 +521,7 @@ static void _apply_rela(dyn_ctx_t*  ctx,
             if (sym->st_size > 0 && sym->st_size <= 65536) {
                 if (!vmm_is_user_address(S) ||
                     !vmm_get_phys(ctx->pd, S)) {
-                    kprint("[DL] R_386_COPY: invalid source 0x"); kprint_hex(S); kprint("\n");
+                    printk("[DL] R_386_COPY: invalid source 0x"); printk_hex(S); printk("\n");
                     break;
                 }
                 memcpy(target, (void*)S, sym->st_size);
@@ -614,11 +614,11 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
         if (d->d_tag == DT_NULL) break;
         if (d->d_tag == DT_NEEDED) {
             if (!strtab) {
-                kprint("[DL] DT_NEEDED but no strtab\n");
+                printk("[DL] DT_NEEDED but no strtab\n");
                 continue;
             }
             if (d->d_un.d_val >= strtab_size) {
-                kprint("[DL] DT_NEEDED: strtab offset out of bounds\n");
+                printk("[DL] DT_NEEDED: strtab offset out of bounds\n");
                 continue;
             }
             const char* soname = strtab + d->d_un.d_val;
@@ -629,7 +629,7 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
 
     if (rel && rel_sz > 0 && rel_ent > 0) {
         if (rel_ent != sizeof(Elf32_Rel)) {
-            kprint("[DL] DT_RELENT != sizeof(Elf32_Rel)\n");
+            printk("[DL] DT_RELENT != sizeof(Elf32_Rel)\n");
             return -1;
         }
         uint32_t n = rel_sz / rel_ent;
@@ -641,7 +641,7 @@ int dynlink_process_dynamic(dyn_ctx_t* ctx, uint32_t image_start, uint32_t sym_b
 
     if (rela && rela_sz > 0 && rela_ent > 0) {
         if (rela_ent != sizeof(Elf32_Rela)) {
-            kprint("[DL] DT_RELAENT != sizeof(Elf32_Rela)\n");
+            printk("[DL] DT_RELAENT != sizeof(Elf32_Rela)\n");
             return -1;
         }
         uint32_t n = rela_sz / rela_ent;
@@ -693,5 +693,5 @@ void dynlink_ctx_destroy(dyn_ctx_t* ctx) {
     dynlink_unload_all(ctx);
     if (ctx->tracker)
         proc_free_pages(ctx->tracker);
-    kfree_heap(ctx);
+    kfree(ctx);
 }

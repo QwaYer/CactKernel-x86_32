@@ -18,7 +18,7 @@ int sys_stat(struct syscall_frame *regs) {
     if (!kpath) return -1;
 
     vfs_node_t *node = _resolve_path(kpath);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!node) return -1;
 
     return stat_vfs(node, ubuf);
@@ -30,7 +30,7 @@ int sys_access(char *path, int mode) {
     if (!kpath) return -1;
 
     vfs_node_t *node = _resolve_path(kpath);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!node) return -1;
     if (mode == 0) return 0;
     uint32_t perm = 0;
@@ -46,7 +46,7 @@ int sys_chmod(char *path, uint32_t mode) {
     if (!kpath) return -1;
 
     vfs_node_t *node = _resolve_path(kpath);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!node) return -1;
 
     if (current_task->proc->euid != 0 && current_task->proc->euid != node->uid)
@@ -61,7 +61,7 @@ int sys_chown(char *path, uint32_t new_uid, uint32_t new_gid) {
     if (!kpath) return -1;
 
     vfs_node_t *node = _resolve_path(kpath);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!node) return -1;
 
     if (current_task->proc->euid != 0) return -1;
@@ -75,7 +75,7 @@ int sys_truncate(char *path, uint32_t length) {
     if (!kpath) return -1;
 
     vfs_node_t *node = _resolve_path(kpath);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!node || node->type != VFS_FILE) return -1;
     if (vfs_check_perm(node, VFS_PERM_WRITE) < 0) return -1;
     return truncate_vfs(node, length);
@@ -88,7 +88,7 @@ int sys_mknod(char *path, uint32_t mode, uint32_t dev) {
 
     char basename[128];
     vfs_node_t *parent = _resolve_parent(kpath, basename, 128);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!parent || !basename[0]) return -1;
     return mknod_vfs(parent, basename, mode, dev);
 }

@@ -225,7 +225,7 @@ static int hid_probe(usb_device_t *dev) {
     }
     if (!priv->intr_ep) {
         klog(LOG_WARN, "USB HID: interrupt IN endpoint not found");
-        kfree_heap(priv);
+        kfree(priv);
         return -1;
     }
 
@@ -270,7 +270,7 @@ static int hid_probe(usb_device_t *dev) {
 
     if (rc != 0) {
         klog(LOG_WARN, "USB HID: interrupt transfer registration failed");
-        kfree_heap(priv);
+        kfree(priv);
         dev->driver_priv = NULL;
         return -1;
     }
@@ -284,7 +284,7 @@ static void hid_remove(usb_device_t *dev) {
         hid_priv_t *priv = (hid_priv_t *)dev->driver_priv;
         priv->removed = 1;
         __sync_synchronize();
-        kfree_heap(priv);
+        kfree(priv);
         dev->driver_priv = NULL;
     }
 }

@@ -137,12 +137,12 @@ static int validate_header(uint32_t size) {
     if (h->checksum != 0) {
         uint32_t expected = compute_image_crc32(cctkfs_stage, size);
         if (h->checksum != expected) {
-            kprint("[MODBLOB] cctkfs checksum mismatch: got 0x");
+            printk("[MODBLOB] cctkfs checksum mismatch: got 0x");
             char nb[12];
-            hex_to_ascii(h->checksum, nb); kprint(nb);
-            kprint(", expected 0x");
-            hex_to_ascii(expected, nb); kprint(nb);
-            kprint("\n");
+            hex_to_ascii(h->checksum, nb); printk(nb);
+            printk(", expected 0x");
+            hex_to_ascii(expected, nb); printk(nb);
+            printk("\n");
             return -8;
         }
     }
@@ -152,11 +152,11 @@ static int validate_header(uint32_t size) {
 
 int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
     if (!phys_addr || !size) {
-        kprint("[MODBLOB] no cctkfs module supplied by bootloader\n");
+        printk("[MODBLOB] no cctkfs module supplied by bootloader\n");
         return -1;
     }
     if (size > PCI_MODBLOB_MAX_IMAGE) {
-        kprint("[MODBLOB] cctkfs image too large for stage buffer\n");
+        printk("[MODBLOB] cctkfs image too large for stage buffer\n");
         return -2;
     }
 
@@ -167,9 +167,9 @@ int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
 
     int rc = validate_header(size);
     if (rc != 0) {
-        kprint("[MODBLOB] cctkfs header invalid (rc=");
-        char nb[8]; itoa(rc, nb); kprint(nb);
-        kprint(")\n");
+        printk("[MODBLOB] cctkfs header invalid (rc=");
+        char nb[8]; itoa(rc, nb); printk(nb);
+        printk(")\n");
         cctkfs_size = 0;
         return rc;
     }
@@ -178,10 +178,10 @@ int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
 
     char nb[16];
     itoa((int)hdr_ptr()->count, nb);
-    kprint("[MODBLOB] ready: ");
-    kprint(nb);
-    kprint(" mods, ");
-    itoa((int)size, nb); kprint(nb); kprint(" B\n");
+    printk("[MODBLOB] ready: ");
+    printk(nb);
+    printk(" mods, ");
+    itoa((int)size, nb); printk(nb); printk(" B\n");
     return 0;
 }
 

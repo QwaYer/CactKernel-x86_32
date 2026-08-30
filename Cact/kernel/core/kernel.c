@@ -36,10 +36,10 @@ uint32_t       terminal_fg_pid = 0;
 
 // Read extended memory size from CMOS (regs 0x17/0x18), return 0 if valid
 int detect_memory() {
-    port_byte_out(0x70, 0x17);
-    unsigned char low = port_byte_in(0x71);
-    port_byte_out(0x70, 0x18);
-    unsigned char high = port_byte_in(0x71);
+    outb(0x70, 0x17);
+    unsigned char low = inb(0x71);
+    outb(0x70, 0x18);
+    unsigned char high = inb(0x71);
     return ((high << 8) | low) > 0 ? 0 : 1;
 }
 
@@ -56,84 +56,84 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
         "??", "??", "??", "??", "??", "??", "??", "??"
     };
 
-    kprint_color("\n=== ", COLOR_LIGHT_RED);
+    printk_color("\n=== ", COLOR_LIGHT_RED);
     if (signal && current_task && !current_task->is_kernel) {
-        kprint_color("SIGNAL ", COLOR_LIGHT_RED);
-        hex_to_ascii(signal, buf); kprint_color(buf, COLOR_LIGHT_RED);
-        kprint_color(" (pid=", COLOR_LIGHT_RED);
-        itoa((int)current_task->pid, buf); kprint_color(buf, COLOR_LIGHT_RED);
-        kprint_color(")", COLOR_LIGHT_RED);
+        printk_color("SIGNAL ", COLOR_LIGHT_RED);
+        hex_to_ascii(signal, buf); printk_color(buf, COLOR_LIGHT_RED);
+        printk_color(" (pid=", COLOR_LIGHT_RED);
+        itoa((int)current_task->pid, buf); printk_color(buf, COLOR_LIGHT_RED);
+        printk_color(")", COLOR_LIGHT_RED);
     } else {
-        kprint_color("PANIC", COLOR_LIGHT_RED);
+        printk_color("PANIC", COLOR_LIGHT_RED);
     }
-    kprint_color(" ===\n", COLOR_LIGHT_RED);
+    printk_color(" ===\n", COLOR_LIGHT_RED);
 
-    kprint_color("Exception: ", COLOR_LIGHT_RED);
-    itoa((int)regs->int_no, buf); kprint(buf);
-    kprint(" ("); kprint((char*)exc_names[regs->int_no < 32 ? regs->int_no : 31]);
-    kprint(")\n");
+    printk_color("Exception: ", COLOR_LIGHT_RED);
+    itoa((int)regs->int_no, buf); printk(buf);
+    printk(" ("); printk((char*)exc_names[regs->int_no < 32 ? regs->int_no : 31]);
+    printk(")\n");
 
     if (regs->int_no == 14) {
-        kprint_color("Fault address: 0x", COLOR_LIGHT_RED);
-        hex_to_ascii(fault_addr, buf); kprint_color(buf, COLOR_LIGHT_RED);
+        printk_color("Fault address: 0x", COLOR_LIGHT_RED);
+        hex_to_ascii(fault_addr, buf); printk_color(buf, COLOR_LIGHT_RED);
 
         uint32_t err = regs->err_code;
-        kprint_color("  Error code: 0x", COLOR_LIGHT_RED);
-        hex_to_ascii(err, buf); kprint_color(buf, COLOR_LIGHT_RED);
-        kprint_color(" [", COLOR_LIGHT_RED);
-        if (err & 1) kprint_color("PROT", COLOR_LIGHT_RED);
-        else         kprint_color("NP ", COLOR_LIGHT_RED);
-        if (err & 2) kprint_color(" W", COLOR_LIGHT_RED);
-        else         kprint_color(" R", COLOR_LIGHT_RED);
-        if (err & 4) kprint_color(" U", COLOR_LIGHT_RED);
-        else         kprint_color(" S", COLOR_LIGHT_RED);
-        if (err & 8) kprint(" RSVD");
-        if (err & 16) kprint(" IF");
-        kprint_color(" ]\n", COLOR_LIGHT_RED);
+        printk_color("  Error code: 0x", COLOR_LIGHT_RED);
+        hex_to_ascii(err, buf); printk_color(buf, COLOR_LIGHT_RED);
+        printk_color(" [", COLOR_LIGHT_RED);
+        if (err & 1) printk_color("PROT", COLOR_LIGHT_RED);
+        else         printk_color("NP ", COLOR_LIGHT_RED);
+        if (err & 2) printk_color(" W", COLOR_LIGHT_RED);
+        else         printk_color(" R", COLOR_LIGHT_RED);
+        if (err & 4) printk_color(" U", COLOR_LIGHT_RED);
+        else         printk_color(" S", COLOR_LIGHT_RED);
+        if (err & 8) printk(" RSVD");
+        if (err & 16) printk(" IF");
+        printk_color(" ]\n", COLOR_LIGHT_RED);
     } else {
-        kprint_color("Error code: 0x", COLOR_LIGHT_RED);
-        hex_to_ascii(regs->err_code, buf); kprint_color(buf, COLOR_LIGHT_RED);
-        kprint("\n");
+        printk_color("Error code: 0x", COLOR_LIGHT_RED);
+        hex_to_ascii(regs->err_code, buf); printk_color(buf, COLOR_LIGHT_RED);
+        printk("\n");
     }
 
-    kprint_color(" EIP: 0x", COLOR_LIGHT_RED);
-    hex_to_ascii(regs->eip, buf); kprint_color(buf, COLOR_LIGHT_RED);
-    kprint_color("  CS: 0x", COLOR_LIGHT_RED);
-    hex_to_ascii(regs->cs, buf); kprint_color(buf, COLOR_LIGHT_RED);
-    kprint_color(" EFLAGS: 0x", COLOR_LIGHT_RED);
-    hex_to_ascii(regs->eflags, buf); kprint_color(buf, COLOR_LIGHT_RED);
-    kprint("\n");
+    printk_color(" EIP: 0x", COLOR_LIGHT_RED);
+    hex_to_ascii(regs->eip, buf); printk_color(buf, COLOR_LIGHT_RED);
+    printk_color("  CS: 0x", COLOR_LIGHT_RED);
+    hex_to_ascii(regs->cs, buf); printk_color(buf, COLOR_LIGHT_RED);
+    printk_color(" EFLAGS: 0x", COLOR_LIGHT_RED);
+    hex_to_ascii(regs->eflags, buf); printk_color(buf, COLOR_LIGHT_RED);
+    printk("\n");
 
-    kprint_color("EAX: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->eax, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint_color(" EBX: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ebx, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint_color(" ECX: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ecx, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint_color(" EDX: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->edx, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint("\n");
+    printk_color("EAX: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->eax, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color(" EBX: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->ebx, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color(" ECX: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->ecx, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color(" EDX: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->edx, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk("\n");
 
-    kprint_color("ESI: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->esi, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint_color(" EDI: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->edi, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint_color(" EBP: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ebp, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint_color(" ESP: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->useresp, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint("\n");
+    printk_color("ESI: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->esi, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color(" EDI: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->edi, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color(" EBP: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->ebp, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color(" ESP: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->useresp, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk("\n");
 
-    kprint_color(" DS: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ds, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint_color(" ES: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->es, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint_color(" SS: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ss, buf); kprint_color(buf, COLOR_LIGHT_GREEN);
-    kprint("\n");
+    printk_color(" DS: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->ds, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color(" ES: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->es, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color(" SS: 0x", COLOR_LIGHT_GREEN);
+    hex_to_ascii(regs->ss, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk("\n");
 
     // Stack trace — walk EBP chain
-    kprint_color("Call trace:\n", COLOR_LIGHT_BROWN);
+    printk_color("Call trace:\n", COLOR_LIGHT_BROWN);
     int frames = 0;
     uint32_t ebp = regs->ebp;
     int is_kernel_fault = (regs->cs == 0x08);
@@ -142,54 +142,54 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
         while (ebp >= 0xC0000000 && ebp < 0xC0100000 && frames < 16) {
             uint32_t ret_eip = ((uint32_t*)ebp)[1];
             uint32_t next_ebp = ((uint32_t*)ebp)[0];
-            kprint_color("  [", COLOR_LIGHT_BROWN);
-            itoa(frames, buf); kprint_color(buf, COLOR_LIGHT_BROWN);
-            kprint_color("] 0x", COLOR_LIGHT_BROWN);
-            hex_to_ascii(ret_eip, buf); kprint_color(buf, COLOR_LIGHT_BROWN);
+            printk_color("  [", COLOR_LIGHT_BROWN);
+            itoa(frames, buf); printk_color(buf, COLOR_LIGHT_BROWN);
+            printk_color("] 0x", COLOR_LIGHT_BROWN);
+            hex_to_ascii(ret_eip, buf); printk_color(buf, COLOR_LIGHT_BROWN);
             {
                 uint32_t sym_off;
                 const char* sym = sym_resolve_addr(ret_eip, &sym_off);
                 if (sym) {
-                    kprint_color(" (", COLOR_DARK_GREY);
-                    kprint((char*)sym);
-                    kprint_color("+", COLOR_DARK_GREY);
-                    hex_to_ascii(sym_off, buf); kprint_color(buf, COLOR_DARK_GREY);
-                    kprint_color(")", COLOR_DARK_GREY);
+                    printk_color(" (", COLOR_DARK_GREY);
+                    printk((char*)sym);
+                    printk_color("+", COLOR_DARK_GREY);
+                    hex_to_ascii(sym_off, buf); printk_color(buf, COLOR_DARK_GREY);
+                    printk_color(")", COLOR_DARK_GREY);
                 }
             }
-            kprint_color("\n", COLOR_LIGHT_BROWN);
+            printk_color("\n", COLOR_LIGHT_BROWN);
             if (next_ebp <= ebp) break;
             ebp = next_ebp;
             frames++;
         }
     }
     if (frames == 0) {
-        kprint_color("  (no trace)\n", COLOR_DARK_GREY);
+        printk_color("  (no trace)\n", COLOR_DARK_GREY);
     }
 
     // Print EIP instruction bytes
-    kprint_color("Code: ", COLOR_LIGHT_BROWN);
+    printk_color("Code: ", COLOR_LIGHT_BROWN);
     if (is_kernel_fault) {
         uint32_t* pd = is_kernel_fault ? get_current_pd() : current_task->page_directory;
         // Read instruction bytes at EIP
         for (int i = -4; i < 8; i++) {
             uint32_t addr = regs->eip + i;
-            if (addr < 0x1000 || addr >= 0xC0000000) { kprint("?? "); continue; }
+            if (addr < 0x1000 || addr >= 0xC0000000) { printk("?? "); continue; }
             uint32_t pdi = PD_INDEX(addr);
             uint32_t pti = PT_INDEX(addr);
-            if (!(pd[pdi] & PAGE_PRESENT)) { kprint("?? "); continue; }
+            if (!(pd[pdi] & PAGE_PRESENT)) { printk("?? "); continue; }
             uint32_t* pt = (uint32_t*)(pd[pdi] & ~0xFFFu);
-            if (!(pt[pti] & PAGE_PRESENT)) { kprint("?? "); continue; }
+            if (!(pt[pti] & PAGE_PRESENT)) { printk("?? "); continue; }
             uint32_t phys = (pt[pti] & ~0xFFFu) + (addr & 0xFFFu);
             uint8_t byte = *(volatile uint8_t*)(uintptr_t)phys;
             hex_to_ascii(byte, buf);
-            if (i == 0) kprint_color("<", COLOR_LIGHT_GREEN);
-            kprint(buf);
-            if (i == 0) kprint_color(">", COLOR_LIGHT_GREEN);
-            kprint(" ");
+            if (i == 0) printk_color("<", COLOR_LIGHT_GREEN);
+            printk(buf);
+            if (i == 0) printk_color(">", COLOR_LIGHT_GREEN);
+            printk(" ");
         }
     }
-    kprint("\n");
+    printk("\n");
 }
 
 // CPU exception handler — signals for user tasks, panic for kernel
@@ -210,7 +210,7 @@ void exception_handler(struct context_frame* regs) {
         return;
     }
 
-    kprint_color("System halted.", COLOR_LIGHT_RED);
+    printk_color("System halted.", COLOR_LIGHT_RED);
     while(1);
 }
 
@@ -224,23 +224,23 @@ void irq_apic_eoi(void) {
 
 // Kernel logging with color-coded levels
 void klog(log_level_t level, const char* message) {
-    kprint("        ");
+    printk("        ");
     switch (level) {
     case LOG_OK:
-        kprint_color("[  OK  ] ", COLOR_LIGHT_GREEN);
+        printk_color("[  OK  ] ", COLOR_LIGHT_GREEN);
         break;
     case LOG_WARN:
-        kprint_color("[ WARN ] ", COLOR_LIGHT_BROWN);
+        printk_color("[ WARN ] ", COLOR_LIGHT_BROWN);
         break;
     case LOG_ERROR:
-        kprint_color("[ERROR ] ", COLOR_LIGHT_RED);
+        printk_color("[ERROR ] ", COLOR_LIGHT_RED);
         break;
     case LOG_FAIL:
-        kprint_color("[ FAIL ] ", COLOR_LIGHT_RED);
+        printk_color("[ FAIL ] ", COLOR_LIGHT_RED);
         break;
     }
-    kprint((char*)message);
-    kprint("\n");
+    printk((char*)message);
+    printk("\n");
 }
 
 // Swap I/O callbacks — read from block device (LBA addressing)
@@ -310,7 +310,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // IA32_SYSENTER_ESP is updated per-task by the scheduler on every switch.
     cpu_syscall_commit();
 
-    serial_init();                  // COM1 — kprint/klog also go here (QEMU: -serial stdio)
+    serial_init();                  // COM1 — printk/klog also go here (QEMU: -serial stdio)
     klog(LOG_OK, "Serial console (COM1) ready");
 
     // Display
@@ -328,7 +328,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
                                        fb_get_height());
         // Back-buffer in WB RAM: kills the FB->FB read penalty in scroll() and
         // coalesces all per-character writes into one rectangular blit per
-        // kprint(). Must run AFTER PAT enables WC (the seeding memcpy reads
+        // printk(). Must run AFTER PAT enables WC (the seeding memcpy reads
         // the FB once; under UC this would stall, under WC it's bearable).
         fb_enable_shadow();
         klog(LOG_OK, "Framebuffer WC + shadow buffer configured");
@@ -377,7 +377,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     msix_init();
 
     // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
-    // kmods can blkdev_register(); otherwise mntfs sees no boot disk.
+    // kmods can register_blkdev(); otherwise mntfs sees no boot disk.
     blkdev_init();
 
     // PCI Express ECAM init (needs ACPI tables, before PCI enumeration)
@@ -452,20 +452,20 @@ static void kernel_bootstrap_main(void) {
         procfs_set_meminfo(total_kb);
     }
 
-    kprint("\n");
-    kprint_color("Cact Kernel ", COLOR_LIGHT_BROWN);
-    kprint_color((char*)kernel_version, COLOR_LIGHT_BROWN);
-    kprint_color("\n", COLOR_LIGHT_BROWN);
-    kprint_color("--------------------------\n", COLOR_DARK_GREY);
-    kprint("[VER] commit="); kprint((char*)kernel_commit_hash);
-    kprint("  built=");      kprint((char*)kernel_build_time);
-    kprint("\n");
+    printk("\n");
+    printk_color("Cact Kernel ", COLOR_LIGHT_BROWN);
+    printk_color((char*)kernel_version, COLOR_LIGHT_BROWN);
+    printk_color("\n", COLOR_LIGHT_BROWN);
+    printk_color("--------------------------\n", COLOR_DARK_GREY);
+    printk("[VER] commit="); printk((char*)kernel_commit_hash);
+    printk("  built=");      printk((char*)kernel_build_time);
+    printk("\n");
 
-    kprint_color("Kernel is ready. Launching init...\n", COLOR_LIGHT_GREEN);
+    printk_color("Kernel is ready. Launching init...\n", COLOR_LIGHT_GREEN);
 
     struct task_struct* init = create_elf_task("bin/init");
     if (!init) {
-        kprint_color("[FAIL] create_elf_task: /bin/init not found\n", COLOR_LIGHT_RED);
+        printk_color("[FAIL] create_elf_task: /bin/init not found\n", COLOR_LIGHT_RED);
     }
 
     /* Bootstrap thread is done. Yield forever so scheduler keeps running. */
@@ -505,7 +505,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     kernel_setup_hardware(mbi, &mmap_storage);
 
     /* Spawn the bootstrap kernel thread. It will run mntfs_init, mount ext4
-     * (which sleeps on NVMe IRQ via sema_down — only legal from a real task,
+     * (which sleeps on NVMe IRQ via down — only legal from a real task,
      * not from the boot context that was claimed by idle), then start
      * /bin/init. The boot context becomes the idle task (HLT loop below),
      * so the scheduler always has something to fall back to. */

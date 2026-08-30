@@ -182,8 +182,8 @@ void strlcat(char *dst, const char *src, int n) {
 }
 
 // Print 32-bit hex to kernel console
-void kprint_hex(uint32_t n) {
+void printk_hex(uint32_t n) {
     char buf[12];
     hex_to_ascii(n, buf);
-    kprint(buf);
+    printk(buf);
 }

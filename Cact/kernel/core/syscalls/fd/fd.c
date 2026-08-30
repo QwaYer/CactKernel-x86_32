@@ -27,27 +27,27 @@ int sys_open(char *name, int flags) {
 
     vfs_node_t *node = _resolve_path(kname);
     if (!node) {
-        if (!(flags & OPEN_CREAT)) { kfree_heap(kname); return -1; }
+        if (!(flags & OPEN_CREAT)) { kfree(kname); return -1; }
 
         char basename[128];
         vfs_node_t *parent = _resolve_parent(kname, basename, 128);
-        if (!parent || !basename[0]) { kfree_heap(kname); return -1; }
+        if (!parent || !basename[0]) { kfree(kname); return -1; }
 
-        if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) { kfree_heap(kname); return -1; }
+        if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) { kfree(kname); return -1; }
 
-        if (create_vfs(parent, basename) != 0) { kfree_heap(kname); return -1; }
+        if (create_vfs(parent, basename) != 0) { kfree(kname); return -1; }
         node = _resolve_path(kname);
-        if (!node) { kfree_heap(kname); return -1; }
+        if (!node) { kfree(kname); return -1; }
     }
 
     uint32_t need = 0;
     uint32_t acc  = (uint32_t)flags & OPEN_ACCMODE;
     if (acc == 0 || acc == 2) need |= VFS_PERM_READ;
     if (acc == 1 || acc == 2) need |= VFS_PERM_WRITE;
-    if (vfs_check_perm(node, need) < 0) { kfree_heap(kname); return -1; }
+    if (vfs_check_perm(node, need) < 0) { kfree(kname); return -1; }
 
     file_t *f = file_alloc(node);
-    if (!f) { kfree_heap(kname); return -1; }
+    if (!f) { kfree(kname); return -1; }
     f->flags = (uint32_t)flags;
 
     for (int i = 3; i < MAX_FD; i++) {
@@ -60,17 +60,17 @@ int sys_open(char *name, int flags) {
                 if (truncate_vfs(node, 0) != 0) {
                     current_task->proc->fds->files[i] = 0;
                     file_unref(f);
-                    kfree_heap(kname);
+                    kfree(kname);
                     return -1;
                 }
             }
-            kfree_heap(kname);
+            kfree(kname);
             return i;
         }
     }
 
     file_unref(f);
-    kfree_heap(kname);
+    kfree(kname);
     return -1;
 }
 
@@ -368,7 +368,7 @@ int sys_poll(struct syscall_frame *regs) {
     struct pollfd *fds = (struct pollfd *)kmalloc((uint32_t)nfds * sizeof(struct pollfd));
     if (!fds) return -1;
     if (copy_from_user(fds, fds_user, (uint32_t)nfds * sizeof(struct pollfd)) != 0) {
-        kfree_heap(fds);
+        kfree(fds);
         return -1;
     }
 
@@ -415,7 +415,7 @@ int sys_poll(struct syscall_frame *regs) {
         if (ready > 0 || nonblocking ||
                 (!infinite && (int32_t)(timer_ticks_get() - deadline) >= 0)) {
             copy_to_user(fds_user, fds, (uint32_t)nfds * sizeof(struct pollfd));
-            kfree_heap(fds);
+            kfree(fds);
             return ready;
         }
 

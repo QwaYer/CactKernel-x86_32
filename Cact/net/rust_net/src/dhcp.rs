@@ -39,7 +39,7 @@ extern "C" fn dhcp_wakeup_daemon() {
     loop {
         unsafe {
             if crate::stack::STACK_READY {
-                ffi_kernel::sema_up(core::ptr::addr_of_mut!(crate::runtime::net_sema));
+                ffi_kernel::up(core::ptr::addr_of_mut!(crate::runtime::net_sema));
             }
             ffi_kernel::sched_sleep_ticks(50);
         }

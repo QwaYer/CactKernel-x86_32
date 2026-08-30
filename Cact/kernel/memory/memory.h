@@ -42,13 +42,13 @@
 void      pmm_init_from_mmap(const mb2_mmap_table_t* mmap);
 void      init_memory_manager(void);
 void*     kalloc(void);
-void      kfree_page(void* ptr);
+void      free_page(void* ptr);
 void      init_paging(void);
 void      init_heap(void);
 void*     kmalloc(uint32_t size);
 void*     kmalloc_aligned(uint32_t size, uint32_t align);
 void      kfree_aligned(void* ptr);
-void      kfree_heap(void* ptr);
+void      kfree(void* ptr);
 uint32_t  get_free_heap_memory(void);
 void      vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int flags);
 uint32_t  vmm_get_phys(uint32_t* pd, uint32_t virtual_addr);

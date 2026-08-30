@@ -1,7 +1,7 @@
 //! x86 `#PF` handler logic: COW, demand zero, swap-in, guard `CR3` during PTE walks.
 
 use crate::ffi::*;
-use crate::pmm::{kalloc, kfree_page, page_ref_get_locked, PAGE_LOCK};
+use crate::pmm::{kalloc, free_page, page_ref_get_locked, PAGE_LOCK};
 use crate::vmm::paging::{get_kernel_pd, vmm_map, PD_KERNEL_ENTRIES};
 use crate::fault::swap::{swap_pte_is_swapped, swap_handle_fault};
 use crate::fault::oom::oom_kill;
@@ -119,7 +119,7 @@ fn kill_current(fault_addr: u32, err: u32, eip: u32, regs: *mut ContextFrame, cr
 
     G_STATS.get_mut().protection_faults += 1;
     unsafe {
-        kprint_color(
+        printk_color(
             b"[PF] KERNEL PAGE FAULT \xe2\x80\x94 SYSTEM HALTED\n\0".as_ptr(),
             COLOR_LIGHT_RED,
         );
@@ -297,7 +297,7 @@ pub extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
             let pte_val = unsafe { *pte };
             let flags = ((pte_val & 0xFFF) & !PAGE_COW) | PAGE_PRESENT | PAGE_RW;
             unsafe { *pte = (phys as u32 & !0xFFF) | flags; }
-            kfree_page(old_phys);
+            free_page(old_phys);
             flush_tlb(page_va);
 
             G_STATS.get_mut().cow_copies += 1;
@@ -470,7 +470,7 @@ pub extern "C" fn vmm_handle_cow(pd: *mut u32, virtual_addr: u32) -> i32 {
     }
 
     // Release our reference to the shared frame.
-    kfree_page(old_phys);
+    free_page(old_phys);
 
     flush_tlb(virtual_addr & !0xFFF);
     0
@@ -523,7 +523,7 @@ pub extern "C" fn pf_print_stats() {
             kprint_str($label.as_ptr());
             unsafe {
                 itoa($field as i32, buf.as_mut_ptr());
-                kprint(buf.as_ptr());
+                printk(buf.as_ptr());
             }
             kprint_str(b"\n\0".as_ptr());
         };

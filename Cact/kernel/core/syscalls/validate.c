@@ -46,7 +46,7 @@ int copy_from_user(void* dst, const void* src, uint32_t size) {
 
 // Validate a user string and copy it to a kernel heap buffer.
 // Returns a kmalloc'd buffer on success, NULL on failure.
-// Caller must kfree_heap() the returned buffer.
+// Caller must kfree() the returned buffer.
 char* copy_path_from_user(const char* user_str) {
     if (!validate_user_str(user_str)) return 0;
     int len = 0;

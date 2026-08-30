@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 // kernel console output
-void kprint(char* message);
+void printk(char* message);
 
 // string operations
 int strcmp(const char* s1, const char* s2);
@@ -43,6 +43,6 @@ void strlcpy(char *dst, const char *src, int n);
 void strlcat(char *dst, const char *src, int n);
 
 // hex output
-void kprint_hex(uint32_t n);
+void printk_hex(uint32_t n);
 
 #endif

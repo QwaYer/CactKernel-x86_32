@@ -39,7 +39,7 @@ static void* acpi_temp_map(UINT32 phys, UINT32 size)
     UINT32 phys_page = phys & ~0xFFF;
     UINT32 pages     = ((offset + size + 0xFFF) >> 12);
 
-    spinlock_acquire(&acpi_mappings_lock);
+    spin_lock(&acpi_mappings_lock);
 
     /* Reuse an existing mapping of the SAME physical page (keeps the VA stable). */
     struct acpi_mapping *m = NULL;
@@ -56,7 +56,7 @@ static void* acpi_temp_map(UINT32 phys, UINT32 size)
             m->pages = pages;
         }
         m->refs++;
-        spinlock_release(&acpi_mappings_lock);
+        spin_unlock(&acpi_mappings_lock);
         return (void*)(UINT32)((UINT32)m->virt + offset);
     }
 
@@ -78,7 +78,7 @@ static void* acpi_temp_map(UINT32 phys, UINT32 size)
         m->pages = pages;
         m->refs  = 1;
     }
-    spinlock_release(&acpi_mappings_lock);
+    spin_unlock(&acpi_mappings_lock);
     return (void*)(UINT32)(virt + offset);
 }
 
@@ -87,7 +87,7 @@ static void acpi_temp_unmap(void *virt, UINT32 size)
     UINT32 va      = (UINT32)(UINT32)virt & ~0xFFF;
     UINT32 *pd     = get_current_pd();
 
-    spinlock_acquire(&acpi_mappings_lock);
+    spin_lock(&acpi_mappings_lock);
 
     struct acpi_mapping *m = NULL;
     for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
@@ -114,7 +114,7 @@ static void acpi_temp_unmap(void *virt, UINT32 size)
         }
     }
 
-    spinlock_release(&acpi_mappings_lock);
+    spin_unlock(&acpi_mappings_lock);
 }
 
 static void udelay(UINT32 us)
@@ -132,7 +132,7 @@ static void udelay(UINT32 us)
 
 ACPI_STATUS AcpiOsInitialize(void)
 {
-    spinlock_init(&acpi_mappings_lock);
+    spin_lock_init(&acpi_mappings_lock);
     acpi_mapping_next_va = ACPI_TEMP_MAP_BASE;
     for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
         acpi_mappings[i].virt  = NULL;
@@ -249,26 +249,26 @@ ACPI_STATUS AcpiOsCreateLock(ACPI_SPINLOCK *OutHandle)
 {
     spinlock_t *lock = (spinlock_t*)kmalloc(sizeof(spinlock_t));
     if (!lock) return AE_NO_MEMORY;
-    spinlock_init(lock);
+    spin_lock_init(lock);
     *OutHandle = lock;
     return AE_OK;
 }
 
 void AcpiOsDeleteLock(ACPI_SPINLOCK Handle)
 {
-    kfree_heap(Handle);
+    kfree(Handle);
 }
 
 ACPI_CPU_FLAGS AcpiOsAcquireLock(ACPI_SPINLOCK Handle)
 {
-    spinlock_acquire((spinlock_t*)Handle);
+    spin_lock((spinlock_t*)Handle);
     return 0;
 }
 
 void AcpiOsReleaseLock(ACPI_SPINLOCK Handle, ACPI_CPU_FLAGS Flags)
 {
     (void)Flags;
-    spinlock_release((spinlock_t*)Handle);
+    spin_unlock((spinlock_t*)Handle);
 }
 
 ACPI_STATUS AcpiOsCreateSemaphore(
@@ -286,7 +286,7 @@ ACPI_STATUS AcpiOsCreateSemaphore(
 
 ACPI_STATUS AcpiOsDeleteSemaphore(ACPI_SEMAPHORE Handle)
 {
-    kfree_heap(Handle);
+    kfree(Handle);
     return AE_OK;
 }
 
@@ -297,7 +297,7 @@ ACPI_STATUS AcpiOsWaitSemaphore(
 {
     (void)Units;
     (void)Timeout;
-    sema_down((semaphore_t*)Handle);
+    down((semaphore_t*)Handle);
     return AE_OK;
 }
 
@@ -306,7 +306,7 @@ ACPI_STATUS AcpiOsSignalSemaphore(
     UINT32                  Units)
 {
     for (UINT32 i = 0; i < Units; i++)
-        sema_up((semaphore_t*)Handle);
+        up((semaphore_t*)Handle);
     return AE_OK;
 }
 
@@ -324,7 +324,7 @@ ACPI_STATUS AcpiOsCreateMutex(
 
 void AcpiOsDeleteMutex(ACPI_MUTEX Handle)
 {
-    kfree_heap(Handle);
+    kfree(Handle);
 }
 
 ACPI_STATUS AcpiOsAcquireMutex(
@@ -403,8 +403,8 @@ ACPI_STATUS AcpiOsReadPort(
     UINT32                  Width)
 {
     switch (Width) {
-    case 8:  *Value = port_byte_in((UINT16)Address); break;
-    case 16: *Value = port_word_in((UINT16)Address); break;
+    case 8:  *Value = inb((UINT16)Address); break;
+    case 16: *Value = inw((UINT16)Address); break;
     case 32: *Value = port_dword_in((UINT16)Address); break;
     default: return AE_BAD_PARAMETER;
     }
@@ -417,8 +417,8 @@ ACPI_STATUS AcpiOsWritePort(
     UINT32                  Width)
 {
     switch (Width) {
-    case 8:  port_byte_out((UINT16)Address, (UINT8)Value); break;
-    case 16: port_word_out((UINT16)Address, (UINT16)Value); break;
+    case 8:  outb((UINT16)Address, (UINT8)Value); break;
+    case 16: outw((UINT16)Address, (UINT16)Value); break;
     case 32: port_dword_out((UINT16)Address, Value); break;
     default: return AE_BAD_PARAMETER;
     }
@@ -467,7 +467,7 @@ ACPI_STATUS AcpiOsReadPciConfiguration(
     UINT64                  *Value,
     UINT32                  Width)
 {
-    UINT32 val = pci_read32(PciId->Bus, PciId->Device, PciId->Function,
+    UINT32 val = pci_read_config_dword(PciId->Bus, PciId->Device, PciId->Function,
                               (UINT8)(Reg & 0xFC));
     switch (Width) {
     case 8:  *Value = (UINT8)(val >> ((Reg & 3) * 8)); break;
@@ -484,7 +484,7 @@ ACPI_STATUS AcpiOsWritePciConfiguration(
     UINT64                  Value,
     UINT32                  Width)
 {
-    UINT32 val = pci_read32(PciId->Bus, PciId->Device, PciId->Function,
+    UINT32 val = pci_read_config_dword(PciId->Bus, PciId->Device, PciId->Function,
                               (UINT8)(Reg & 0xFC));
     switch (Width) {
     case 8: {
@@ -502,7 +502,7 @@ ACPI_STATUS AcpiOsWritePciConfiguration(
     case 32: val = (UINT32)Value; break;
     default: return AE_BAD_PARAMETER;
     }
-    pci_write32(PciId->Bus, PciId->Device, PciId->Function, (UINT8)(Reg & 0xFC), val);
+    pci_write_config_dword(PciId->Bus, PciId->Device, PciId->Function, (UINT8)(Reg & 0xFC), val);
     return AE_OK;
 }
 
@@ -513,7 +513,7 @@ void *AcpiOsAllocate(ACPI_SIZE Size)
 
 void AcpiOsFree(void *Memory)
 {
-    if (Memory) kfree_heap(Memory);
+    if (Memory) kfree(Memory);
 }
 
 struct acpi_osl_cache {
@@ -539,7 +539,7 @@ ACPI_STATUS AcpiOsCreateCache(
 
 ACPI_STATUS AcpiOsDeleteCache(ACPI_CACHE_T *Cache)
 {
-    if (Cache) kfree_heap(Cache);
+    if (Cache) kfree(Cache);
     return AE_OK;
 }
 
@@ -561,7 +561,7 @@ void *AcpiOsAcquireObject(ACPI_CACHE_T *Cache)
 ACPI_STATUS AcpiOsReleaseObject(ACPI_CACHE_T *Cache, void *Object)
 {
     (void)Cache;
-    if (Object) kfree_heap(Object);
+    if (Object) kfree(Object);
     return AE_OK;
 }
 
@@ -599,15 +599,15 @@ void AcpiOsVprintf(const char *Format, va_list Args)
     char buf[256];
     extern int vsnprintf(char *String, unsigned int Size, const char *Format, va_list Args);
     vsnprintf(buf, sizeof(buf), Format, Args);
-    kprint(buf);
+    printk(buf);
 }
 
 void AcpiOsPuts(const char *String)
 {
     if (String) {
-        kprint((char*)"[ACPI] ");
-        kprint((char*)String);
-        kprint("\n");
+        printk((char*)"[ACPI] ");
+        printk((char*)String);
+        printk("\n");
     }
 }
 

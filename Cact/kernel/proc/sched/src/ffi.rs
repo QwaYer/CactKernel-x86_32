@@ -37,9 +37,9 @@ pub struct ContextFrame {
 // hold the appropriate lock (or be in a single-threaded context).
 unsafe extern "C" {
     pub fn kmalloc(size: usize) -> *mut c_void;
-    pub fn kfree_heap(ptr: *mut c_void);
+    pub fn kfree(ptr: *mut c_void);
     pub fn kalloc() -> *mut c_void;       
-    pub fn kfree_page(ptr: *mut c_void);
+    pub fn free_page(ptr: *mut c_void);
 
     pub fn memory_copy(dst: *mut c_void, src: *const c_void, size: usize);
     pub fn memory_set(dst: *mut c_void, val: u8, size: usize);
@@ -98,8 +98,8 @@ unsafe extern "C" {
     pub fn user_task_trampoline();
     pub fn fork_task_trampoline();
 
-    pub fn kprint(s: *const u8);
-    pub fn kprint_color(s: *const u8, color: u32);
+    pub fn printk(s: *const u8);
+    pub fn printk_color(s: *const u8, color: u32);
     pub fn itoa(n: i32, buf: *mut u8);
     pub fn hex_to_ascii(n: u32, buf: *mut u8);
     pub fn klog(level: i32, s: *const u8);
@@ -139,9 +139,9 @@ pub const SYSCALL_MECH_SYSCALL:  u32 = 2;
 pub const KERNEL_BASE: u32 = 0xC000_0000;
 
 #[macro_export]
-macro_rules! kprint {
+macro_rules! printk {
     ($s:literal) => {
-        unsafe { $crate::ffi::kprint(concat!($s, "\0").as_ptr()) }
+        unsafe { $crate::ffi::printk(concat!($s, "\0").as_ptr()) }
     };
 }
 

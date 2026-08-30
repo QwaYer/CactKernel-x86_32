@@ -26,7 +26,7 @@ void pat_init(void) {
     uint32_t a, b, c, d;
     cpuid_raw(1, &a, &b, &c, &d);
     if (!(d & (1u << PAT_CPUID_EDX_BIT))) {
-        kprint("[PAT] CPU does not advertise PAT (CPUID.01H:EDX.PAT=0)\n");
+        printk("[PAT] CPU does not advertise PAT (CPUID.01H:EDX.PAT=0)\n");
         klog(LOG_WARN, "PAT unavailable — framebuffer stays UC");
         return;
     }

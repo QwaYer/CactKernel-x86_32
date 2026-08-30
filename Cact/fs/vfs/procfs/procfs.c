@@ -115,7 +115,7 @@ static void _mdls_dir_listdir(vfs_node_t *dir) {
     _mdls_init_lazy();
     int n = _mdls_count();
     for (int i = 0; i < n; i++) {
-        kprint("  "); kprint(mdls_files[i].name); kprint("\n");
+        printk("  "); printk(mdls_files[i].name); printk("\n");
     }
 }
 
@@ -157,9 +157,9 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
-    kprint("  mdls/\n");
+    printk("  mdls/\n");
     for (proc_file_t *f = file_list; f; f = f->next) {
-        kprint("  "); kprint(f->name); kprint("\n");
+        printk("  "); printk(f->name); printk("\n");
     }
 }
 
@@ -541,7 +541,7 @@ int procfs_unregister_file(const char *name) {
             *pp = dead->next;
             dead->read_fn = NULL;
             dead->node.priv = NULL;
-            kfree_heap(dead);
+            kfree(dead);
             return 0;
         }
         pp = &(*pp)->next;

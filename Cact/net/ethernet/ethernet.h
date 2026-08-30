@@ -19,7 +19,7 @@ typedef struct eth_header {
 #define ETH_MIN_PAYLOAD 46
 #define ETH_MAX_PAYLOAD 1500
 
-/* RX: called by net_receive() */
+/* RX: called by netif_rx() */
 void ethernet_input(skb_t* skb);
 
 /* TX: wrap skb with Ethernet header and send via active NIC */

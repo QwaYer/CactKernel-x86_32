@@ -10,18 +10,18 @@ use crate::types::{MacAddr, Semaphore, Skb, VfsNode};
 unsafe extern "C" {
     pub fn kmalloc(size: usize) -> *mut c_void;
     pub fn kmalloc_aligned(size: usize, align: u32) -> *mut c_void;
-    pub fn kfree_heap(ptr: *mut c_void);
+    pub fn kfree(ptr: *mut c_void);
 
-    pub fn kprint(s: *mut c_char);
-    pub fn kprint_color(s: *mut c_char, color: u32);
-    pub fn kprint_hex(v: u32);
+    pub fn printk(s: *mut c_char);
+    pub fn printk_color(s: *mut c_char, color: u32);
+    pub fn printk_hex(v: u32);
     pub fn klog(level: c_int, s: *const c_char);
 
     pub fn itoa(v: c_int, out: *mut c_char);
 
     pub fn sema_init(s: *mut Semaphore, val: c_int);
-    pub fn sema_down(s: *mut Semaphore);
-    pub fn sema_up(s: *mut Semaphore);
+    pub fn down(s: *mut Semaphore);
+    pub fn up(s: *mut Semaphore);
 
     pub fn create_task(entry: extern "C" fn()) -> *mut c_void;
     pub fn timer_ticks_get() -> u32;
@@ -32,8 +32,8 @@ unsafe extern "C" {
     pub fn open_vfs(node: *mut VfsNode);
     pub fn close_vfs(node: *mut VfsNode);
 
-    pub fn port_byte_in(port: u16) -> u8;
-    pub fn port_word_out(port: u16, data: u16);
+    pub fn inb(port: u16) -> u8;
+    pub fn outw(port: u16, data: u16);
 
     pub static terminal_fg_pid: SyncUnsafeCell<u32>;
 }

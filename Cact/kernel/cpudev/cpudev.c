@@ -239,13 +239,13 @@ int cpudev_init(void) {
 
     detect_leaf7();
 
-    kprint("        [  OK  ] CPUDEV: ");
-    kprint((char*)cpu_vendor_str(g_vendor));
+    printk("        [  OK  ] CPUDEV: ");
+    printk((char*)cpu_vendor_str(g_vendor));
     if (g_brand[0]) {
-        kprint(" ");
-        kprint((char*)cpu_brand_str());
+        printk(" ");
+        printk((char*)cpu_brand_str());
     }
-    kprint("\n");
+    printk("\n");
 
     // Choose the fastest syscall mechanism this CPU can do in 32-bit mode.
     // AMD-family CPUs with the SYSCALL bit use SYSCALL/SYSRET (native AMD fast
@@ -260,9 +260,9 @@ int cpudev_init(void) {
         klog(LOG_FAIL, "CPUDEV: CPU supports neither SYSCALL nor SEP — syscalls will NOT work");
     }
 
-    kprint("        [  OK  ] CPUDEV: syscall = ");
-    kprint((char*)cpu_syscall_mech_str(g_syscall_mech));
-    kprint("\n");
+    printk("        [  OK  ] CPUDEV: syscall = ");
+    printk((char*)cpu_syscall_mech_str(g_syscall_mech));
+    printk("\n");
 
     return 0;
 }

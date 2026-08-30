@@ -15,7 +15,7 @@ int sys_create(char *name) {
 
     char basename[128];
     vfs_node_t *parent = _resolve_parent(kname, basename, 128);
-    kfree_heap(kname);
+    kfree(kname);
     if (!parent || !basename[0]) return -1;
 
     return create_vfs(parent, basename);
@@ -29,7 +29,7 @@ int sys_mkdir(char *pathname) {
 
     char basename[128];
     vfs_node_t *parent = _resolve_parent(kpath, basename, 128);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!parent || !basename[0]) return -1;
 
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
@@ -46,7 +46,7 @@ int sys_rmdir(char *pathname) {
 
     char basename[128];
     vfs_node_t *parent = _resolve_parent(kpath, basename, 128);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!parent || !basename[0]) return -1;
 
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
@@ -62,7 +62,7 @@ int sys_delete(char *name) {
 
     char basename[128];
     vfs_node_t *parent = _resolve_parent(kname, basename, 128);
-    kfree_heap(kname);
+    kfree(kname);
     if (!parent || !basename[0]) return -1;
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
@@ -77,7 +77,7 @@ int sys_unlink(char *path) {
 
     char basename[128];
     vfs_node_t *parent = _resolve_parent_follow(kpath, basename, 128);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!parent || !basename[0]) return -1;
     if (vfs_check_perm(parent, VFS_PERM_WRITE | VFS_PERM_EXEC) < 0) return -1;
 
@@ -90,13 +90,13 @@ int sys_rename(char *oldpath, char *newpath) {
     char *kold = copy_path_from_user(oldpath);
     if (!kold) return -1;
     char *knew = copy_path_from_user(newpath);
-    if (!knew) { kfree_heap(kold); return -1; }
+    if (!knew) { kfree(kold); return -1; }
 
     char old_base[128], new_base[128];
     vfs_node_t *old_parent = _resolve_parent(kold, old_base, 128);
     vfs_node_t *new_parent = _resolve_parent(knew, new_base, 128);
-    kfree_heap(kold);
-    kfree_heap(knew);
+    kfree(kold);
+    kfree(knew);
 
     if (!old_parent || !new_parent) return -1;
     if (!old_base[0] || !new_base[0]) return -1;
@@ -113,15 +113,15 @@ int sys_link(struct syscall_frame *regs) {
     char *kold = copy_path_from_user(oldpath);
     if (!kold) return -1;
     char *knew = copy_path_from_user(newpath);
-    if (!knew) { kfree_heap(kold); return -1; }
+    if (!knew) { kfree(kold); return -1; }
 
     vfs_node_t *target_node = _resolve_path(kold);
-    if (!target_node) { kfree_heap(kold); kfree_heap(knew); return -1; }
+    if (!target_node) { kfree(kold); kfree(knew); return -1; }
 
     char basename[128];
     vfs_node_t *new_parent = _resolve_parent_follow(knew, basename, 128);
-    kfree_heap(kold);
-    kfree_heap(knew);
+    kfree(kold);
+    kfree(knew);
     if (!new_parent || !basename[0]) return -1;
 
     return vfs_link(new_parent, basename, target_node);
@@ -135,12 +135,12 @@ int sys_symlink(struct syscall_frame *regs) {
     char *ktarget = copy_path_from_user(target);
     if (!ktarget) return -1;
     char *klink   = copy_path_from_user(linkpath);
-    if (!klink) { kfree_heap(ktarget); return -1; }
+    if (!klink) { kfree(ktarget); return -1; }
 
     char basename[128];
     vfs_node_t *parent = _resolve_parent_follow(klink, basename, 128);
-    kfree_heap(ktarget);
-    kfree_heap(klink);
+    kfree(ktarget);
+    kfree(klink);
     if (!parent || !basename[0]) return -1;
 
     return vfs_symlink(parent, basename, ktarget);
@@ -298,7 +298,7 @@ int sys_chroot(char *path) {
     if (!kpath) return -1;
 
     vfs_node_t *node = _resolve_path(kpath);
-    kfree_heap(kpath);
+    kfree(kpath);
     if (!node || node->type != VFS_DIRECTORY) return -1;
     current_task->proc->root = node;
     return 0;

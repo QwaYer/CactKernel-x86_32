@@ -75,17 +75,17 @@ impl irq_spinlock_t {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn spinlock_init(lock: *mut spinlock_t) {
+pub unsafe extern "C" fn spin_lock_init(lock: *mut spinlock_t) {
     (*lock).init();
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn spinlock_acquire(lock: *mut spinlock_t) {
+pub unsafe extern "C" fn spin_lock(lock: *mut spinlock_t) {
     (*lock).acquire();
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn spinlock_release(lock: *mut spinlock_t) {
+pub unsafe extern "C" fn spin_unlock(lock: *mut spinlock_t) {
     (*lock).release();
 }
 

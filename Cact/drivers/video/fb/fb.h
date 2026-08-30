@@ -36,7 +36,7 @@ uint32_t  fb_get_height(void);
 uint32_t  fb_get_pitch(void);
 uint32_t* fb_get_buffer(void);
 
-/* Post-paging verification / diagnostics (calls kprint/klog). */
+/* Post-paging verification / diagnostics (calls printk/klog). */
 void init_framebuffer(void);
 
 /*
@@ -65,7 +65,7 @@ void fb_enable_shadow(void);
 /*
  * Flush the dirty range of the shadow buffer to the real framebuffer.
  * No-op when the shadow is not armed. Idempotent. Called automatically at
- * the end of every kprint_color(); drivers that draw outside the console
+ * the end of every printk_color(); drivers that draw outside the console
  * path (cursor overlays, splash screens, …) should call it themselves.
  */
 void fb_flush(void);

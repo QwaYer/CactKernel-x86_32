@@ -86,7 +86,7 @@ void pcie_write16(uint8_t bus, uint8_t dev, uint8_t fn, uint16_t reg, uint16_t v
 
 int pcie_find_cap(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t cap_id)
 {
-    uint8_t cap_ptr = (uint8_t)(pci_read32(bus, dev, fn, 0x34) & 0xFF);
+    uint8_t cap_ptr = (uint8_t)(pci_read_config_dword(bus, dev, fn, 0x34) & 0xFF);
     while (cap_ptr && cap_ptr != 0xFF) {
         uint32_t cap = pcie_read32(bus, dev, fn, cap_ptr);
         if ((uint8_t)(cap & 0xFF) == cap_id)

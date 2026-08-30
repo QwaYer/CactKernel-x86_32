@@ -12,7 +12,7 @@ static void blkdev_pick_boot(void) {
     boot_dev = dev_count > 0 ? &devices[0] : 0;
 }
 
-int blkdev_register(const char *name, uint32_t max_lba,
+int register_blkdev(const char *name, uint32_t max_lba,
                     void (*read_sector)(uint32_t lba, uint8_t *buf),
                     void (*write_sector)(uint32_t lba, uint8_t *buf)) {
     if (!name || !name[0] || !read_sector || !write_sector)
@@ -34,20 +34,20 @@ int blkdev_register(const char *name, uint32_t max_lba,
     if (!boot_dev)
         boot_dev = d;
 
-    kprint("[BLKDEV] registered ");
-    kprint(d->name);
-    kprint(" max_lba=");
+    printk("[BLKDEV] registered ");
+    printk(d->name);
+    printk(" max_lba=");
     char buf[16];
     hex_to_ascii(max_lba, buf);
-    kprint(buf);
+    printk(buf);
     if (boot_dev == d)
-        kprint(" *boot*\n");
+        printk(" *boot*\n");
     else
-        kprint("\n");
+        printk("\n");
     return 0;
 }
 
-void blkdev_unregister(const char *name) {
+void unregister_blkdev(const char *name) {
     if (!name)
         return;
     int idx = -1;
@@ -67,12 +67,12 @@ void blkdev_unregister(const char *name) {
 
     blkdev_pick_boot();
 
-    kprint("[BLKDEV] unregistered ");
-    kprint((char *)name);
-    kprint("\n");
+    printk("[BLKDEV] unregistered ");
+    printk((char *)name);
+    printk("\n");
 }
 
-// Storage drivers call blkdev_register() during PCI probe (NVMe/AHCI kmods).
+// Storage drivers call register_blkdev() during PCI probe (NVMe/AHCI kmods).
 void blkdev_init(void) {
     dev_count = 0;
     boot_dev  = 0;
@@ -101,24 +101,24 @@ int blkdev_count(void) {
 
 // Print all registered devices with LBA and boot flag
 void blkdev_dump(void) {
-    kprint("[blkdev] Devices:\n");
+    printk("[blkdev] Devices:\n");
     char b[16];
     for (int i = 0; i < dev_count; i++) {
-        kprint("  "); kprint(devices[i].name);
-        kprint(" lba="); hex_to_ascii(devices[i].max_lba, b); kprint(b);
-        if (&devices[i] == boot_dev) kprint(" *boot*");
-        kprint("\n");
+        printk("  "); printk(devices[i].name);
+        printk(" lba="); hex_to_ascii(devices[i].max_lba, b); printk(b);
+        if (&devices[i] == boot_dev) printk(" *boot*");
+        printk("\n");
     }
 }
 
 // Returns true if lba is out of range; prints diagnostic
 static int blkdev_lba_oob(const char *op, uint32_t lba, uint32_t max_lba) {
     if (lba < max_lba) return 0;
-    kprint("[blkdev] "); kprint(op); kprint(" out of range: lba=");
-    char _b[16]; hex_to_ascii(lba, _b); kprint(_b);
-    kprint(" >= max_lba=");
-    hex_to_ascii(max_lba, _b); kprint(_b);
-    kprint("\n");
+    printk("[blkdev] "); printk(op); printk(" out of range: lba=");
+    char _b[16]; hex_to_ascii(lba, _b); printk(_b);
+    printk(" >= max_lba=");
+    hex_to_ascii(max_lba, _b); printk(_b);
+    printk("\n");
     return 1;
 }
 
@@ -126,7 +126,7 @@ static int blkdev_lba_oob(const char *op, uint32_t lba, uint32_t max_lba) {
 void blkdev_read_sector(uint32_t lba, uint8_t *buf) {
     struct blkdev *dev = boot_dev;
     if (!dev) {
-        kprint("[blkdev] no boot device for read\n");
+        printk("[blkdev] no boot device for read\n");
         memset(buf, 0, 512);
         return;
     }
@@ -141,7 +141,7 @@ void blkdev_read_sector(uint32_t lba, uint8_t *buf) {
 void blkdev_write_sector(uint32_t lba, uint8_t *buf) {
     struct blkdev *dev = boot_dev;
     if (!dev) {
-        kprint("[blkdev] no boot device for write\n");
+        printk("[blkdev] no boot device for write\n");
         return;
     }
     if (blkdev_lba_oob("write", lba, dev->max_lba))

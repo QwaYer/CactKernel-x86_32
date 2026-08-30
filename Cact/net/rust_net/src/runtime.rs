@@ -22,14 +22,14 @@ extern "C" fn net_poll_task() {
     loop {
         // SAFETY: semaphore lives for kernel lifetime.
         unsafe {
-            ffi_kernel::sema_down(core::ptr::addr_of_mut!(net_sema));
+            ffi_kernel::down(core::ptr::addr_of_mut!(net_sema));
         }
         net_poll();
     }
 }
 
 #[no_mangle]
-pub extern "C" fn net_register_driver(drv: *mut NetDriver) {
+pub extern "C" fn register_netdev(drv: *mut NetDriver) {
     if drv.is_null() {
         return;
     }
@@ -50,7 +50,7 @@ pub extern "C" fn net_register_driver(drv: *mut NetDriver) {
 
 /// Clear `active_nic` only if it still points at `drv` (symmetric to registration).
 #[no_mangle]
-pub extern "C" fn net_unregister_driver(drv: *mut NetDriver) {
+pub extern "C" fn unregister_netdev(drv: *mut NetDriver) {
     if drv.is_null() {
         return;
     }
@@ -78,7 +78,7 @@ pub extern "C" fn net_init() {
 }
 
 #[no_mangle]
-pub extern "C" fn net_receive(skb: *mut Skb) {
+pub extern "C" fn netif_rx(skb: *mut Skb) {
     stack::stack_enqueue_rx(skb);
 }
 

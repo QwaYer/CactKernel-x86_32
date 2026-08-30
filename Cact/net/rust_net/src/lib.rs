@@ -17,8 +17,8 @@ unsafe impl GlobalAlloc for CactAllocator {
         kmalloc_aligned(layout.size(), layout.align() as u32) as *mut u8
     }
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-        unsafe extern "C" { fn kfree_heap(ptr: *mut core::ffi::c_void); }
-        kfree_heap(ptr as *mut core::ffi::c_void);
+        unsafe extern "C" { fn kfree(ptr: *mut core::ffi::c_void); }
+        kfree(ptr as *mut core::ffi::c_void);
     }
 }
 

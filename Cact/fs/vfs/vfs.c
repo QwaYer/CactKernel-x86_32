@@ -167,9 +167,9 @@ void listdir_vfs(vfs_node_t *dir) {
     mutex_lock(&vfs_mutex);
     for (int i = 0; i < mount_count; i++) {
         if (mount_table[i].host == dir) {
-            kprint("  ");
-            kprint(mount_table[i].name);
-            kprint("/\n");
+            printk("  ");
+            printk(mount_table[i].name);
+            printk("/\n");
         }
     }
     mutex_unlock(&vfs_mutex);
@@ -445,7 +445,7 @@ file_t *file_alloc(vfs_node_t *node) {
 void file_free(file_t *f) {
     if (!f) return;
     close_vfs(f->node);
-    kfree_heap(f);
+    kfree(f);
 }
 
 file_t *file_ref(file_t *f) {

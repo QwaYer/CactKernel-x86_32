@@ -73,15 +73,15 @@ typedef enum {
 #define PT_INDEX(vaddr) ((vaddr >> 12) & 0x3FF)
 
 // I/O port operations (inline assembly)
-extern void     port_byte_out(uint16_t port, uint8_t data);
-extern uint8_t  port_byte_in (uint16_t port);
-extern void     port_word_out(uint16_t port, uint16_t data);
-extern uint16_t port_word_in (uint16_t port);
-extern void     port_long_out(uint16_t port, uint32_t data);
-extern uint32_t port_long_in (uint16_t port);
+extern void     outb(uint16_t port, uint8_t data);
+extern uint8_t  inb (uint16_t port);
+extern void     outw(uint16_t port, uint16_t data);
+extern uint16_t inw (uint16_t port);
+extern void     outl(uint16_t port, uint32_t data);
+extern uint32_t inl (uint16_t port);
 
-#define port_dword_out port_long_out
-#define port_dword_in  port_long_in
+#define port_dword_out outl
+#define port_dword_in  inl
 
 // Interrupt Service Routine stubs (defined in isr.S)
 extern void timer_isr();
@@ -108,9 +108,9 @@ typedef enum {
 } log_level_t;
 
 // Framebuffer console I/O
-void kprint      (char* message);
-void kprint_color(char* message, uint32_t color);
-void kprint_at   (char* message, int x, int y);
+void printk      (char* message);
+void printk_color(char* message, uint32_t color);
+void printk_at   (char* message, int x, int y);
 void clear_screen(void);
 void scroll      (void);
 void klog        (log_level_t level, const char* message);

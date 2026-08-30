@@ -28,10 +28,10 @@ void blkdev_write_sector(uint32_t lba, uint8_t *buf);
 
 /* Register a boot-capable block device (typically from a storage kmod).
  * First successful registration becomes blkdev_get_boot(). */
-int blkdev_register(const char *name, uint32_t max_lba,
+int register_blkdev(const char *name, uint32_t max_lba,
                     void (*read_sector)(uint32_t lba, uint8_t *buf),
                     void (*write_sector)(uint32_t lba, uint8_t *buf));
 
-void blkdev_unregister(const char *name);
+void unregister_blkdev(const char *name);
 
 #endif
