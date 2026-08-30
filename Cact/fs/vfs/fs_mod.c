@@ -325,8 +325,8 @@ int fs_mod_loaded(void) {
 }
 
 // Non-destructive probe: scan the ELF symbol table of the module at 'path'
-// for an exported global FUNC named 'fs_mount'. Used by GDD to discover
-// filesystem modules generically rather than hardcoding a specific FS.
+// for an exported global FUNC named 'fs_mount'. Used to discover filesystem
+// modules generically rather than hardcoding a specific FS.
 int fs_mod_detect(const char *path) {
     if (!path) return -1;
 

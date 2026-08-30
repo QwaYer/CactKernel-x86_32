@@ -1,7 +1,6 @@
 #include "pcidev.h"
 #include "kernel.h"
 #include "klib.h"
-#include "pci_gdd.h"
 
 
 pci_device_t *pci_device_list  = NULL;

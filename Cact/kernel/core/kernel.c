@@ -4,7 +4,6 @@
 #include "pcidev.h"
 #include "pci_enum.h"
 #include "pci_driver.h"
-#include "pci_gdd.h"
 #include "memory.h"
 #include "gdt.h"
 #include "idt.h"
@@ -193,9 +192,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // USB xHCI stack
     extern void usb_init(void);
     usb_init();
-
-    // GDD prompts — after USB init so USB HID keyboard works
-    pci_gdd_prompt_devices();
 
     // Process control block cache
     pc_init();

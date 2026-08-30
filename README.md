@@ -142,7 +142,7 @@ CactKernel-x86_32/
 │   │   ├── acpi/        ACPICA engine — AML interpreter, MADT/HPET/APIC tables
 │   │   ├── block/       blkdev, page cache (increased constant limits)
 │   │   ├── input/       USB HID only (PS/2 removed in 2.0)
-│   │   ├── pci/         enumerator, GDD, PCIe, ELF module loader, cctkfs staging,
+│   │   ├── pci/         enumerator, PCIe, ELF module loader, cctkfs staging,
 │   │   │                HMAC-SHA256 module signature verification
 │   │   ├── usb/         xhci + HID + hub
 │   │   └── video/       framebuffer console, font, PAT WC + shadow blit
@@ -183,7 +183,7 @@ Boot is split into **three phases**: early `init()` (identity map, no user IRQs 
 
 ### Phase B — `kernel_setup_hardware()`
 
-Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register; **HPET** before PCI enumeration for GDD timeouts while IRQs are still masked globally).
+Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register).
 
 | # | Subsystem |
 |---|-----------|
@@ -295,7 +295,7 @@ The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as
 | **USB** | xHCI, HID, hub | ~32 KiB host code path — PS/2 removed in 2.0 |
 | **Input** | USB HID keyboard & mouse | |
 | **Video** | Linear FB 32 bpp, 8×8 font (×2 scale), PAT WC + shadow | |
-| **PCI** | Config scan, driver table, **GDD** (generic device declarations), **modblob** loader, HMAC-SHA256 signature verification | Loads ET_REL modules from **cctkfs** or path |
+| **PCI** | Config scan, driver table, **modblob** loader, HMAC-SHA256 signature verification | Loads ET_REL modules from **cctkfs** or path (user-driven via kmod syscalls) |
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
 | **ACPI** | ACPICA — RSDP, MADT, HPET, APIC table parsing | New in 2.0 |
 
