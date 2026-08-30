@@ -57,9 +57,9 @@ int search_pci(void) {
     port_dword_out(PCI_CONFIG_ADDRESS, 0x80000000);
     uint32_t readback = port_dword_in(PCI_CONFIG_ADDRESS);
     if (readback == 0x80000000) {
-        klog(LOG_OK, "PCI configuration mechanism #1 (IO ports 0xCF8/0xCFC) available");
+        pr_info("PCI configuration mechanism #1 (IO ports 0xCF8/0xCFC) available");
         return 0;
     }
-    klog(LOG_WARN, "PCI config space not responding — no PCI bus?");
+    pr_warn("PCI config space not responding — no PCI bus?");
     return 1;
 }

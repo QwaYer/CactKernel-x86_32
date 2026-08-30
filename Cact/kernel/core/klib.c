@@ -1,5 +1,4 @@
 #include "klib.h"
-
 // Compare strings until mismatch or '\0'
 int compare_string(const char* s1, const char* s2) {
     int i;
@@ -64,9 +63,7 @@ void itoa(int n, char str[]) {
         str[j] = str[k];
         str[k] = temp;
     }
-}
-
-// Convert ASCII string to integer, handle optional minus
+}// Convert ASCII string to integer, handle optional minus
 int atoi(char* str) {
     int res = 0, sign = 1, i = 0;
     if (str[0] == '-') { sign = -1; i++; }
@@ -77,7 +74,7 @@ int atoi(char* str) {
     return sign * res;
 }
 
-// Convert 32-bit hex to "0xXXXXXXXX" format
+// Convert 32-bit hex to "0xXXXXXXXX" format (helper for snprintf %x)
 void hex_to_ascii(unsigned int n, char str[]) {
     str[0] = '0';
     str[1] = 'x';
@@ -90,6 +87,168 @@ void hex_to_ascii(unsigned int n, char str[]) {
             str[9 - i] = nibble - 10 + 'A';
     }
     str[10] = '\0';
+}
+
+// Linux-style vsnprintf.  Supports %d %u %x %X %o %s %c %p %% plus
+// width / zero-padding and l/ll/zu/zx length modifiers.
+int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
+    char* dst = buf;
+    unsigned int remaining = size;
+    va_list ap;
+    va_copy(ap, args);
+
+    for (; *fmt; fmt++) {
+        if (*fmt != '%') {
+            if (remaining > 1) { *dst++ = *fmt; remaining--; }
+            continue;
+        }
+        fmt++;
+        if (*fmt == '%') {
+            if (remaining > 1) { *dst++ = '%'; remaining--; }
+            continue;
+        }
+
+        int left = 0;
+        int plus = 0;
+        int space = 0;
+        int zero = 0;
+        int alt = 0;
+        for (;;) {
+            if (*fmt == '-') left = 1;
+            else if (*fmt == '+') plus = 1;
+            else if (*fmt == ' ') space = 1;
+            else if (*fmt == '0') zero = 1;
+            else if (*fmt == '#') alt = 1;
+            else break;
+            fmt++;
+        }
+
+        int width = 0;
+        while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
+        if (*fmt == '*') { width = va_arg(ap, int); fmt++; }
+
+        int prec = -1;
+        if (*fmt == '.') {
+            fmt++;
+            prec = 0;
+            while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); fmt++; }
+        }
+
+        int lng = 0;
+        for (;;) {
+            if (*fmt == 'l') lng++;
+            else if (*fmt == 'z' || *fmt == 't') lng = 1;
+            else break;
+            fmt++;
+        }
+
+        char tmp[32];
+        int tmp_len = 0;
+        char fill = zero ? '0' : ' ';
+        char sign = 0;
+
+        switch (*fmt) {
+        case 'd':
+        case 'i': {
+            long long v = (lng >= 2) ? va_arg(ap, long long) :
+                          (lng >= 1) ? va_arg(ap, long) : va_arg(ap, int);
+            if (v < 0) { sign = '-'; v = -v; }
+            else if (plus) sign = '+';
+            else if (space) sign = ' ';
+            unsigned long long uv = (unsigned long long)v;
+            do { tmp[tmp_len++] = (uv % 10) + '0'; uv /= 10; } while (uv);
+            break;
+        }
+        case 'u': {
+            unsigned long long v = (lng >= 2) ? va_arg(ap, unsigned long long) :
+                                   (lng >= 1) ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+            do { tmp[tmp_len++] = (v % 10) + '0'; v /= 10; } while (v);
+            break;
+        }
+        case 'o': {
+            unsigned long long v = (lng >= 2) ? va_arg(ap, unsigned long long) :
+                                   (lng >= 1) ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+            do { tmp[tmp_len++] = (v & 7) + '0'; v >>= 3; } while (v);
+            if (alt && tmp[tmp_len - 1] != '0') tmp[tmp_len++] = '0';
+            break;
+        }
+        case 'x':
+        case 'X': {
+            unsigned long long v = (lng >= 2) ? va_arg(ap, unsigned long long) :
+                                   (lng >= 1) ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+            do {
+                int d = (v & 0xF);
+                tmp[tmp_len++] = (d < 10) ? (d + '0') : (d - 10 + ((*fmt == 'x') ? 'a' : 'A'));
+                v >>= 4;
+            } while (v);
+            if (alt && width <= 0 && tmp_len >= 1) { /* prefix handled by caller */ }
+            break;
+        }
+        case 'p': {
+            unsigned long v = (unsigned long)va_arg(ap, void*);
+            tmp[tmp_len++] = 'x';
+            tmp[tmp_len++] = '0';
+            do {
+                int d = (v & 0xF);
+                tmp[tmp_len++] = (d < 10) ? (d + '0') : (d - 10 + 'a');
+                v >>= 4;
+            } while (v);
+            fill = ' ';
+            break;
+        }
+        case 's': {
+            const char* s = va_arg(ap, const char*);
+            if (!s) s = "(null)";
+            int len = 0;
+            while (s[len] && (prec < 0 || len < prec)) len++;
+            if (left) {
+                for (int i = 0; i < len && remaining > 1; i++) { *dst++ = s[i]; remaining--; }
+                for (int i = len; i < width && remaining > 1; i++) { *dst++ = ' '; remaining--; }
+            } else {
+                for (int i = len; i < width && remaining > 1; i++) { *dst++ = ' '; remaining--; }
+                for (int i = 0; i < len && remaining > 1; i++) { *dst++ = s[i]; remaining--; }
+            }
+            continue;
+        }
+        case 'c': {
+            char c = (char)va_arg(ap, int);
+            if (remaining > 1) { *dst++ = c; remaining--; }
+            continue;
+        }
+        default:
+            continue;
+        }
+
+        // reverse tmp and emit with width/sign/zero handling
+        int digits = tmp_len;
+        int pad = width - digits;
+        if (sign && fill == '0') pad--;
+
+        if (!left) {
+            if (sign && fill == '0' && remaining > 1) { *dst++ = sign; remaining--; }
+            for (int i = 0; i < pad && remaining > 1; i++) { *dst++ = fill; remaining--; }
+            if (sign && fill == ' ' && remaining > 1) { *dst++ = sign; remaining--; }
+        } else {
+            if (sign && remaining > 1) { *dst++ = sign; remaining--; }
+        }
+        for (int i = digits - 1; i >= 0 && remaining > 1; i--) { *dst++ = tmp[i]; remaining--; }
+        if (left) {
+            for (int i = 0; i < pad && remaining > 1; i++) { *dst++ = ' '; remaining--; }
+        }
+    }
+
+    if (remaining > 0) *dst = '\0';
+    else if (size > 0) buf[size - 1] = '\0';
+    va_end(ap);
+    return (int)(dst - buf);
+}
+
+int snprintf(char* buf, unsigned int size, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(buf, size, fmt, args);
+    va_end(args);
+    return n;
 }
 
 // Fill memory with byte value, return dest

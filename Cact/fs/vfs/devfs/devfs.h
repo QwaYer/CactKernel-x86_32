@@ -42,9 +42,9 @@ void           devfs_init     (void);
 vfs_node_t    *devfs_get_root (void);
 
 // register/unregister a device driver by name
-devfs_entry_t *devfs_register  (const char *name, uint32_t flags,
+devfs_entry_t *register_chrdev  (const char *name, uint32_t flags,
                                  devfs_driver_t *drv, void *drv_priv);
-int            devfs_unregister(const char *name);
+int            unregister_chrdev(const char *name);
 
 // find a device entry by name (returns NULL if not found)
 devfs_entry_t *devfs_find      (const char *name);

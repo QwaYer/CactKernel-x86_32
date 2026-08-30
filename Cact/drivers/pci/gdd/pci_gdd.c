@@ -172,7 +172,7 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
 
     memset(drv, 0, sizeof *drv);
     int pos = buf_append(drv->name, 0, PCI_DRIVER_NAME_MAX, "gdd");
-    itoa((int)gdd_drv_seq++, seqbuf);
+    snprintf(seqbuf, sizeof(seqbuf), "%d", (int)((int)gdd_drv_seq++));
     buf_append(drv->name, pos, PCI_DRIVER_NAME_MAX, seqbuf);
 
     drv->vendor_id   = ent->vendor_id;

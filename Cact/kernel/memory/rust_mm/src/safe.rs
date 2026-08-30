@@ -70,7 +70,7 @@ pub fn zero_page(ptr: *mut u8) {
 // ---------------------------------------------------------------------------
 
 use crate::ffi::{
-    irq_spinlock_acquire, irq_spinlock_release, itoa, printk, klog,
+    irq_spinlock_acquire, irq_spinlock_release, itoa, printk,
     read_cr2, tlb_flush, tlb_flush_all, get_current_pd,
 };
 
@@ -111,11 +111,28 @@ pub fn kprint_int(n: i32) {
     }
 }
 
-/// Log a message at the given level.
+/// Log a message at the given level (KERN_SOH + level prefix).
 pub fn klog_msg(level: u32, msg: *const u8) {
     if !msg.is_null() {
-        // SAFETY: caller guarantees `msg` is a valid null-terminated string.
-        unsafe { klog(level, msg) };
+        let mut buf = [0u8; 1024];
+        let lvl = match level {
+            0 => b'6',          // LOG_OK  -> KERN_INFO
+            1 => b'4',          // LOG_WARN -> KERN_WARNING
+            _ => b'3',          // LOG_ERROR/LOG_FAIL -> KERN_ERR
+        };
+        buf[0] = 0x01;          // KERN_SOH
+        buf[1] = lvl;
+        let mut n = 2;
+        unsafe {
+            while *msg.add(n - 2) != 0 && n < buf.len() - 2 {
+                buf[n] = *msg.add(n - 2);
+                n += 1;
+            }
+        }
+        buf[n] = b'\n';
+        buf[n + 1] = 0;
+        // SAFETY: `buf` is a valid null-terminated string.
+        unsafe { printk(buf.as_ptr()) };
     }
 }
 

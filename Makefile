@@ -280,6 +280,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
 
 ACPICA_C_SRCS = $(shell find $(ACPICA_COMP_DIRS) -type f -name '*.c' 2>/dev/null \
     | grep -v '/utclib\.c$$' | grep -v '/hwxfsleep\.c$$' \
+    | grep -v '/utprint\.c$$' \
     | grep -v '/rsdump\.c$$' | grep -v '/rsdumpinfo\.c$$' \
     | LC_ALL=C sort)
 ACPICA_C_OBJS = $(patsubst $(ACPICA_SRC_DIR)/%.c,$(BUILD_DIR)/acpica_%.o,$(ACPICA_C_SRCS))

@@ -1,6 +1,6 @@
 use core::ptr;
 use core::ffi::c_void;
-use crate::ffi::{self, ContextFrame, ProcPageTracker, DynCtx, MmapTable, PAGE_PRESENT, PAGE_RW, PAGE_USER, PAGE_SIZE, LOG_FAIL, LOG_OK};
+use crate::ffi::{self, ContextFrame, ProcPageTracker, DynCtx, MmapTable, PAGE_PRESENT, PAGE_RW, PAGE_USER, PAGE_SIZE};
 use crate::sync::irq_spinlock_t;
 use crate::mlfq;
 use crate::timer_wheel;
@@ -215,17 +215,14 @@ pub unsafe extern "C" fn task_init() {
     crate::sync::irq_spinlock_init(&raw mut SCHEDULER_LOCK);
     mlfq::mlfq_init();
     timer_wheel::timer_wheel_global_init();
-    ffi::klog(
-        LOG_OK,
-        b"Task subsystem initialized (MLFQ, timer wheel, scheduler lock)\0".as_ptr(),
-    );
+    ffi::printk(b"\x01\x36Task subsystem initialized (MLFQ, timer wheel, scheduler lock)\n\0".as_ptr());
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn init_scheduler() -> i32 {
     let idle = ffi::kmalloc(core::mem::size_of::<TaskStruct>()) as *mut TaskStruct;
     if idle.is_null() {
-        ffi::klog(LOG_FAIL, b"cannot allocate idle task\0".as_ptr());
+        ffi::printk(b"\x01\x33cannot allocate idle task\n\0".as_ptr());
         return -1;
     }
     ffi::memory_set(idle as *mut c_void, 0, core::mem::size_of::<TaskStruct>());
@@ -243,10 +240,7 @@ pub unsafe extern "C" fn init_scheduler() -> i32 {
     task_list_head  = idle;
     task_list_tail  = idle;
 
-    ffi::klog(
-        LOG_OK,
-        b"Scheduler initialized (idle task pid 0, circular run queue)\0".as_ptr(),
-    );
+    ffi::printk(b"\x01\x36Scheduler initialized (idle task pid 0, circular run queue)\n\0".as_ptr());
     0
 }
 

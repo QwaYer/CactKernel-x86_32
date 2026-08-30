@@ -138,11 +138,8 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 
                     int rd = read_vfs(file, file_offset, copy_sz, (char*)phys + page_offset);
                     if (rd <= 0) {
-                        printk("[ELF] ERR: read_vfs failed at off=");
-                        char _b[12]; itoa(file_offset, _b); printk(_b);
-                        printk(" sz="); itoa(copy_sz, _b); printk(_b);
-                        printk(" ret="); itoa(rd, _b); printk(_b);
-                        printk("\n");
+                        printk("[ELF] ERR: read_vfs failed at off=%d sz=%d ret=%d\n",
+                               (int)file_offset, (int)copy_sz, (int)rd);
                         proc_free_pages(tracker);
                         return 0;
                     }

@@ -4,6 +4,7 @@
 #include "serial.h"
 #include "kernel.h"
 #include <stddef.h>
+#include <stdarg.h>
 
 static int cursor_x = 0;
 static int cursor_y = 0;
@@ -307,8 +308,31 @@ void printk_color(char* message, uint32_t color) {
     fb_flush();
 }
 
-void printk(char* message) {
-    printk_color(message, COLOR_WHITE);
+// Linux-style printk: format string with optional KERN_<level> prefix.
+// Level prefixes (KERN_SOH + digit) set the console colour.
+void printk(const char* fmt, ...) {
+    char buf[1024];
+    va_list args;
+    va_start(args, fmt);
+
+    uint32_t color = COLOR_WHITE;
+    if (fmt[0] == '\x01' && fmt[1] >= '0' && fmt[1] <= '7') {
+        switch (fmt[1]) {
+        case '0': color = COLOR_LIGHT_RED;    break; // KERN_EMERG
+        case '1': color = COLOR_LIGHT_RED;    break; // KERN_ALERT
+        case '2': color = COLOR_LIGHT_RED;    break; // KERN_CRIT
+        case '3': color = COLOR_LIGHT_RED;    break; // KERN_ERR
+        case '4': color = COLOR_LIGHT_BROWN;  break; // KERN_WARNING
+        case '5': color = COLOR_WHITE;        break; // KERN_NOTICE
+        case '6': color = COLOR_LIGHT_GREY;   break; // KERN_INFO
+        case '7': color = COLOR_DARK_GREY;    break; // KERN_DEBUG
+        }
+        fmt += 2;
+    }
+
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    printk_color(buf, color);
 }
 
 void printk_at(char* message, int x, int y) {
@@ -328,11 +352,11 @@ void init_framebuffer(void) {
             [FB_INIT_BAD_BPP]    = "bpp != 32 (only 32-bit color supported)",
             [FB_INIT_NULL_PARAM] = "null address or zero width/height",
         };
-        klog(LOG_ERROR, fb_errors[status]);
-        klog(LOG_FAIL,  "Framebuffer — cannot continue without display");
+        pr_err("%s", fb_errors[status]);
+        pr_crit("Framebuffer — cannot continue without display");
         return;
     }
-    klog(LOG_OK, "Framebuffer verified for kernel console (post-paging)");
+    pr_info("Framebuffer verified for kernel console (post-paging)");
 }
 
 int get_cursor_x(void) {
@@ -458,20 +482,20 @@ void fb_enable_shadow(void) {
     size_t fb_pitch_s = (size_t)fb_pitch;
     size_t fb_height_s = (size_t)fb_height;
     if (fb_pitch_s > 0 && fb_height_s > SIZE_MAX / fb_pitch_s) {
-        klog(LOG_WARN, "FB shadow: pitch*height overflow; staying in direct mode");
+        pr_warn("FB shadow: pitch*height overflow; staying in direct mode");
         return;
     }
     size_t shadow_bytes = fb_pitch_s * fb_height_s;
     uint32_t* shadow = (uint32_t*)kmalloc_aligned((uint32_t)shadow_bytes, 4096);
     if (!shadow) {
-        klog(LOG_WARN, "FB shadow: kmalloc_aligned failed; staying in direct mode");
+        pr_warn("FB shadow: kmalloc_aligned failed; staying in direct mode");
         return;
     }
 
     uint8_t* dirty = (uint8_t*)kmalloc(fb_height);
     if (!dirty) {
-        kfree_aligned(shadow);
-        klog(LOG_WARN, "FB shadow: dirty bitmap alloc failed");
+        kfree(shadow);
+        pr_warn("FB shadow: dirty bitmap alloc failed");
         return;
     }
     memset(dirty, 0, fb_height);
@@ -487,7 +511,7 @@ void fb_enable_shadow(void) {
     fb_dirty_y_min  = fb_height;   /* sentinel meaning "clean"               */
     fb_dirty_y_max  = 0;
     fb_shadow_armed = 1;
-    klog(LOG_OK, "Framebuffer shadow buffer armed (WB RAM back-buffer)");
+    pr_info("Framebuffer shadow buffer armed (WB RAM back-buffer)");
 }
 
 void fb_flush(void) {

@@ -103,3 +103,24 @@ pub unsafe extern "C" fn irq_spinlock_acquire(lock: *mut irq_spinlock_t) {
 pub unsafe extern "C" fn irq_spinlock_release(lock: *mut irq_spinlock_t) {
     (*lock).release();
 }
+
+// Linux-style IRQ-safe spinlocks: flags live in a caller-local variable.
+//   unsigned long flags; spin_lock_irqsave(&lock, &flags);
+//   ... spin_unlock_irqrestore(&lock, flags);
+#[no_mangle]
+pub unsafe extern "C" fn spin_lock_irqsave(lock: *mut spinlock_t, flags: *mut u32) {
+    let saved = hal::eflags_read();
+    hal::interrupts_disable();
+    (*lock).acquire();
+    if !flags.is_null() {
+        *flags = saved;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn spin_unlock_irqrestore(lock: *mut spinlock_t, flags: u32) {
+    (*lock).release();
+    if flags & (1 << 9) != 0 {
+        hal::interrupts_enable();
+    }
+}

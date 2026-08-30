@@ -1,10 +1,10 @@
 #include "kernel.h"
+#include "klib.h"
 #include "memory.h"
 #include "acpi.h"
 #include "apic.h"
 #include "cact_acpi.h"
 #include "acpi_hpet.h"
-#include <string.h>
 
 #define IA32_APIC_BASE      0x1B
 #define APIC_ENABLE         (1u << 11)
@@ -95,7 +95,7 @@ int apic_init(void)
     ACPI_STATUS status = AcpiGetTable("APIC", 1, (ACPI_TABLE_HEADER **)&madt);
 
     if (ACPI_FAILURE(status) || !madt) {
-        klog(LOG_WARN, "APIC: MADT not found");
+        pr_warn("APIC: MADT not found");
         return -1;
     }
 
@@ -134,7 +134,7 @@ int apic_init(void)
     ioapic_id = ioapic_id_local;
 
     if (ioapic_base == 0) {
-        klog(LOG_WARN, "IOAPIC: not found");
+        pr_warn("IOAPIC: not found");
         return -1;
     }
 
@@ -172,7 +172,7 @@ int apic_init(void)
     if (timer_entry > ioapic_max_redir) timer_entry = 0;
     uint64_t period = hpet_get_freq() / 100;
     if (period == 0 || hpet_start_periodic(timer_entry, period) != 0) {
-        klog(LOG_FAIL, "HPET periodic timer failed to start");
+        pr_crit("HPET periodic timer failed to start");
         while(1) __asm__ __volatile__("hlt");
     }
 
@@ -181,8 +181,8 @@ int apic_init(void)
     {
         char buf[64]; char num[32];
         strcpy(buf, "APIC: HPET timer0 → IOAPIC entry ");
-        itoa((int)timer_entry, num); strcat(buf, num);
-        klog(LOG_OK, buf);
+        snprintf(num, sizeof(num), "%d", (int)((int)timer_entry)); strcat(buf, num);
+        pr_info("%s", buf);
     }
 
     return 0;

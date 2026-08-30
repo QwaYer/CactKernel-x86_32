@@ -139,9 +139,9 @@ static int validate_header(uint32_t size) {
         if (h->checksum != expected) {
             printk("[MODBLOB] cctkfs checksum mismatch: got 0x");
             char nb[12];
-            hex_to_ascii(h->checksum, nb); printk(nb);
+            printk("0x%x", (unsigned)(h->checksum));
             printk(", expected 0x");
-            hex_to_ascii(expected, nb); printk(nb);
+            printk("0x%x", (unsigned)(expected));
             printk("\n");
             return -8;
         }
@@ -168,7 +168,7 @@ int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
     int rc = validate_header(size);
     if (rc != 0) {
         printk("[MODBLOB] cctkfs header invalid (rc=");
-        char nb[8]; itoa(rc, nb); printk(nb);
+        char nb[8]; printk("%d", (int)(rc));
         printk(")\n");
         cctkfs_size = 0;
         return rc;
@@ -177,11 +177,11 @@ int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
     cctkfs_ready = 1;
 
     char nb[16];
-    itoa((int)hdr_ptr()->count, nb);
+    snprintf(nb, sizeof(nb), "%d", (int)((int)hdr_ptr()->count));
     printk("[MODBLOB] ready: ");
     printk(nb);
     printk(" mods, ");
-    itoa((int)size, nb); printk(nb); printk(" B\n");
+    printk("%d", (int)((int)size)); printk(" B\n");
     return 0;
 }
 

@@ -1,9 +1,9 @@
 #include "kernel.h"
+#include "klib.h"
 #include "memory.h"
 #include "acpi.h"
 #include "acpi_hpet.h"
 #include "cact_acpi.h"
-#include <string.h>
 
 #define HPET_MMIO_VADDR    0xFE002000u
 
@@ -48,17 +48,17 @@ int hpet_init(void)
 
     status = AcpiGetTable("HPET", 1, (ACPI_TABLE_HEADER **)&hpet_table);
     if (ACPI_FAILURE(status) || !hpet_table) {
-        klog(LOG_WARN, "HPET: table not found");
+        pr_warn("HPET: table not found");
         return -1;
     }
     if (hpet_table->Address.SpaceId != ACPI_ADR_SPACE_SYSTEM_MEMORY) {
-        klog(LOG_WARN, "HPET: unsupported address space");
+        pr_warn("HPET: unsupported address space");
         return -1;
     }
 
     uint64_t hpet_phys64 = hpet_table->Address.Address;
     if (hpet_phys64 > 0xFFFFFFFFull) {
-        klog(LOG_WARN, "HPET: address above 4GB not supported");
+        pr_warn("HPET: address above 4GB not supported");
         return -1;
     }
     uint32_t hpet_phys = (uint32_t)hpet_phys64;
@@ -67,7 +67,7 @@ int hpet_init(void)
     uint64_t cap_id = hpet_read64(HPET_REG_GCAP_ID);
     hpet_fs_per_tick = cap_id >> 32;
     if (hpet_fs_per_tick == 0) {
-        klog(LOG_WARN, "HPET: invalid counter clock period");
+        pr_warn("HPET: invalid counter clock period");
         return -1;
     }
 
@@ -81,11 +81,11 @@ int hpet_init(void)
 
     {
         char buf[96]; char num[32];
-        strcpy(buf, "HPET: base 0x"); hex_to_ascii(hpet_phys, num); strcat(buf, num);
-        strcat(buf, ", "); itoa((int)(hpet_freq / 1000000), num); strcat(buf, num);
-        strcat(buf, " MHz, "); itoa((int)num_timers, num); strcat(buf, num);
+        strcpy(buf, "HPET: base 0x"); snprintf(num, sizeof(num), "0x%x", (unsigned)(hpet_phys)); strcat(buf, num);
+        strcat(buf, ", "); snprintf(num, sizeof(num), "%d", (int)((int)(hpet_freq / 1000000))); strcat(buf, num);
+        strcat(buf, " MHz, "); snprintf(num, sizeof(num), "%d", (int)((int)num_timers)); strcat(buf, num);
         strcat(buf, " timers");
-        klog(LOG_OK, buf);
+        pr_info("%s", buf);
     }
     return 0;
 }

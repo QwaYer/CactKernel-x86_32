@@ -107,13 +107,33 @@ typedef enum {
     LOG_FAIL  = 3,
 } log_level_t;
 
+// Linux-style KERN_* level prefixes (fed to printk)
+#define KERN_SOH     "\x01"
+#define KERN_EMERG   KERN_SOH "0"
+#define KERN_ALERT   KERN_SOH "1"
+#define KERN_CRIT    KERN_SOH "2"
+#define KERN_ERR     KERN_SOH "3"
+#define KERN_WARNING KERN_SOH "4"
+#define KERN_NOTICE  KERN_SOH "5"
+#define KERN_INFO    KERN_SOH "6"
+#define KERN_DEBUG   KERN_SOH "7"
+
+#define pr_emerg(fmt, ...)  printk(KERN_EMERG   fmt, ##__VA_ARGS__)
+#define pr_alert(fmt, ...)  printk(KERN_ALERT   fmt, ##__VA_ARGS__)
+#define pr_crit(fmt, ...)   printk(KERN_CRIT    fmt, ##__VA_ARGS__)
+#define pr_err(fmt, ...)    printk(KERN_ERR     fmt, ##__VA_ARGS__)
+#define pr_warning(fmt, ...) printk(KERN_WARNING fmt, ##__VA_ARGS__)
+#define pr_warn(fmt, ...)   printk(KERN_WARNING fmt, ##__VA_ARGS__)
+#define pr_notice(fmt, ...) printk(KERN_NOTICE  fmt, ##__VA_ARGS__)
+#define pr_info(fmt, ...)   printk(KERN_INFO    fmt, ##__VA_ARGS__)
+#define pr_debug(fmt, ...)  printk(KERN_DEBUG   fmt, ##__VA_ARGS__)
+
 // Framebuffer console I/O
-void printk      (char* message);
+void printk      (const char* fmt, ...);
 void printk_color(char* message, uint32_t color);
 void printk_at   (char* message, int x, int y);
 void clear_screen(void);
 void scroll      (void);
-void klog        (log_level_t level, const char* message);
 int  get_cursor_x(void);
 int  get_cursor_y(void);
 

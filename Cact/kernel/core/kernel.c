@@ -59,9 +59,9 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
     printk_color("\n=== ", COLOR_LIGHT_RED);
     if (signal && current_task && !current_task->is_kernel) {
         printk_color("SIGNAL ", COLOR_LIGHT_RED);
-        hex_to_ascii(signal, buf); printk_color(buf, COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(signal)); printk_color(buf, COLOR_LIGHT_RED);
         printk_color(" (pid=", COLOR_LIGHT_RED);
-        itoa((int)current_task->pid, buf); printk_color(buf, COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "%d", (int)((int)current_task->pid)); printk_color(buf, COLOR_LIGHT_RED);
         printk_color(")", COLOR_LIGHT_RED);
     } else {
         printk_color("PANIC", COLOR_LIGHT_RED);
@@ -69,17 +69,17 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
     printk_color(" ===\n", COLOR_LIGHT_RED);
 
     printk_color("Exception: ", COLOR_LIGHT_RED);
-    itoa((int)regs->int_no, buf); printk(buf);
+    snprintf(buf, sizeof(buf), "%d", (int)((int)regs->int_no)); printk(buf);
     printk(" ("); printk((char*)exc_names[regs->int_no < 32 ? regs->int_no : 31]);
     printk(")\n");
 
     if (regs->int_no == 14) {
         printk_color("Fault address: 0x", COLOR_LIGHT_RED);
-        hex_to_ascii(fault_addr, buf); printk_color(buf, COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(fault_addr)); printk_color(buf, COLOR_LIGHT_RED);
 
         uint32_t err = regs->err_code;
         printk_color("  Error code: 0x", COLOR_LIGHT_RED);
-        hex_to_ascii(err, buf); printk_color(buf, COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(err)); printk_color(buf, COLOR_LIGHT_RED);
         printk_color(" [", COLOR_LIGHT_RED);
         if (err & 1) printk_color("PROT", COLOR_LIGHT_RED);
         else         printk_color("NP ", COLOR_LIGHT_RED);
@@ -92,44 +92,44 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
         printk_color(" ]\n", COLOR_LIGHT_RED);
     } else {
         printk_color("Error code: 0x", COLOR_LIGHT_RED);
-        hex_to_ascii(regs->err_code, buf); printk_color(buf, COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->err_code)); printk_color(buf, COLOR_LIGHT_RED);
         printk("\n");
     }
 
     printk_color(" EIP: 0x", COLOR_LIGHT_RED);
-    hex_to_ascii(regs->eip, buf); printk_color(buf, COLOR_LIGHT_RED);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eip)); printk_color(buf, COLOR_LIGHT_RED);
     printk_color("  CS: 0x", COLOR_LIGHT_RED);
-    hex_to_ascii(regs->cs, buf); printk_color(buf, COLOR_LIGHT_RED);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->cs)); printk_color(buf, COLOR_LIGHT_RED);
     printk_color(" EFLAGS: 0x", COLOR_LIGHT_RED);
-    hex_to_ascii(regs->eflags, buf); printk_color(buf, COLOR_LIGHT_RED);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eflags)); printk_color(buf, COLOR_LIGHT_RED);
     printk("\n");
 
     printk_color("EAX: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->eax, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eax)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk_color(" EBX: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ebx, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ebx)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk_color(" ECX: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ecx, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ecx)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk_color(" EDX: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->edx, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->edx)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk("\n");
 
     printk_color("ESI: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->esi, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->esi)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk_color(" EDI: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->edi, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->edi)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk_color(" EBP: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ebp, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ebp)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk_color(" ESP: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->useresp, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->useresp)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk("\n");
 
     printk_color(" DS: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ds, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ds)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk_color(" ES: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->es, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->es)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk_color(" SS: 0x", COLOR_LIGHT_GREEN);
-    hex_to_ascii(regs->ss, buf); printk_color(buf, COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ss)); printk_color(buf, COLOR_LIGHT_GREEN);
     printk("\n");
 
     // Stack trace — walk EBP chain
@@ -143,9 +143,9 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
             uint32_t ret_eip = ((uint32_t*)ebp)[1];
             uint32_t next_ebp = ((uint32_t*)ebp)[0];
             printk_color("  [", COLOR_LIGHT_BROWN);
-            itoa(frames, buf); printk_color(buf, COLOR_LIGHT_BROWN);
+            snprintf(buf, sizeof(buf), "%d", (int)(frames)); printk_color(buf, COLOR_LIGHT_BROWN);
             printk_color("] 0x", COLOR_LIGHT_BROWN);
-            hex_to_ascii(ret_eip, buf); printk_color(buf, COLOR_LIGHT_BROWN);
+            snprintf(buf, sizeof(buf), "0x%x", (unsigned)(ret_eip)); printk_color(buf, COLOR_LIGHT_BROWN);
             {
                 uint32_t sym_off;
                 const char* sym = sym_resolve_addr(ret_eip, &sym_off);
@@ -153,7 +153,7 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
                     printk_color(" (", COLOR_DARK_GREY);
                     printk((char*)sym);
                     printk_color("+", COLOR_DARK_GREY);
-                    hex_to_ascii(sym_off, buf); printk_color(buf, COLOR_DARK_GREY);
+                    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(sym_off)); printk_color(buf, COLOR_DARK_GREY);
                     printk_color(")", COLOR_DARK_GREY);
                 }
             }
@@ -182,7 +182,7 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
             if (!(pt[pti] & PAGE_PRESENT)) { printk("?? "); continue; }
             uint32_t phys = (pt[pti] & ~0xFFFu) + (addr & 0xFFFu);
             uint8_t byte = *(volatile uint8_t*)(uintptr_t)phys;
-            hex_to_ascii(byte, buf);
+            snprintf(buf, sizeof(buf), "0x%x", (unsigned)byte);
             if (i == 0) printk_color("<", COLOR_LIGHT_GREEN);
             printk(buf);
             if (i == 0) printk_color(">", COLOR_LIGHT_GREEN);
@@ -222,27 +222,6 @@ void irq_apic_eoi(void) {
     apic_eoi();
 }
 
-// Kernel logging with color-coded levels
-void klog(log_level_t level, const char* message) {
-    printk("        ");
-    switch (level) {
-    case LOG_OK:
-        printk_color("[  OK  ] ", COLOR_LIGHT_GREEN);
-        break;
-    case LOG_WARN:
-        printk_color("[ WARN ] ", COLOR_LIGHT_BROWN);
-        break;
-    case LOG_ERROR:
-        printk_color("[ERROR ] ", COLOR_LIGHT_RED);
-        break;
-    case LOG_FAIL:
-        printk_color("[ FAIL ] ", COLOR_LIGHT_RED);
-        break;
-    }
-    printk((char*)message);
-    printk("\n");
-}
-
 // Swap I/O callbacks — read from block device (LBA addressing)
 static int swap_disk_read(uint32_t lba, void* buf, uint32_t sectors)
 {
@@ -273,7 +252,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     // Memory management (order matters!)
     init_gdt();                     // Global Descriptor Table
-    klog(LOG_OK, "GDT initialized");
+    pr_info("GDT initialized");
 
     // CPU feature detection — before IDT / APIC / PAT so the rest of
     // the kernel can query cpu_vendor(), cpu_has_sep(), etc.
@@ -285,33 +264,33 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // fxsave/fxrstor path needs it too. Must be done before anything uses
     // 64-bit locals/returns in C.
     if (fpu_global_init() == 0)
-        klog(LOG_OK, "FPU + SSE initialized");
+        pr_info("FPU + SSE initialized");
     else
-        klog(LOG_WARN, "FPU/SSE unavailable — no SSE operations");
+        pr_warn("FPU/SSE unavailable — no SSE operations");
 
     pmm_init_from_mmap(mmap);       // Physical Memory Manager
-    klog(LOG_OK, "Physical memory manager ready");
+    pr_info("Physical memory manager ready");
     init_memory_manager();          // Virtual memory manager
-    klog(LOG_OK, "Virtual memory manager ready");
+    pr_info("Virtual memory manager ready");
     init_heap();                    // Kernel heap (kmalloc)
-    klog(LOG_OK, "Kernel heap ready");
+    pr_info("Kernel heap ready");
     init_paging();                  // Enable paging, load page directory
-    klog(LOG_OK, "Paging enabled");
+    pr_info("Paging enabled");
     slab_init();                    // Slab allocator for kernel objects
-    klog(LOG_OK, "Slab allocator ready");
+    pr_info("Slab allocator ready");
     page_fault_init();              // Page fault handler
-    klog(LOG_OK, "Page fault handler installed");
+    pr_info("Page fault handler installed");
 
     // Interrupts
     init_idt();                     // Interrupt Descriptor Table
-    klog(LOG_OK, "IDT loaded");
+    pr_info("IDT loaded");
 
     // Program fast-syscall MSRs now that GDT and IDT are ready.
     // IA32_SYSENTER_ESP is updated per-task by the scheduler on every switch.
     cpu_syscall_commit();
 
     serial_init();                  // COM1 — printk/klog also go here (QEMU: -serial stdio)
-    klog(LOG_OK, "Serial console (COM1) ready");
+    pr_info("Serial console (COM1) ready");
 
     // Display
     init_framebuffer();
@@ -331,7 +310,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         // printk(). Must run AFTER PAT enables WC (the seeding memcpy reads
         // the FB once; under UC this would stall, under WC it's bearable).
         fb_enable_shadow();
-        klog(LOG_OK, "Framebuffer WC + shadow buffer configured");
+        pr_info("Framebuffer WC + shadow buffer configured");
     }
 
     // Terminal window size from framebuffer geometry
@@ -348,31 +327,31 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     {
         int mem_status = detect_memory();
         if (mem_status)
-            klog(LOG_WARN, "CMOS returned 0 KB — memory size unreliable");
+            pr_warn("CMOS returned 0 KB — memory size unreliable");
     }
 
     // ACPI subsystem (before PCI — HPET/APIC need ACPI tables)
     if (acpi_init())
-        klog(LOG_WARN, "ACPI init returned error — hardware limited");
+        pr_warn("ACPI init returned error — hardware limited");
     else
-        klog(LOG_OK, "ACPI subsystem ready");
+        pr_info("ACPI subsystem ready");
 
     if (acpi_pm_timer_init() == 0)
-        klog(LOG_OK, "ACPI PM timer: timekeeping ready");
+        pr_info("ACPI PM timer: timekeeping ready");
     else
-        klog(LOG_WARN, "ACPI PM timer unavailable — timekeeping degraded");
+        pr_warn("ACPI PM timer unavailable — timekeeping degraded");
 
     if (hpet_init() != 0) {
-        klog(LOG_FAIL, "HPET init failed — no system timer");
+        pr_crit("HPET init failed — no system timer");
         while(1) __asm__ __volatile__("hlt");
     }
 
-    klog(LOG_OK, "HPET ready");
+    pr_info("HPET ready");
 
     if (apic_init() == 0)
-        klog(LOG_OK, "APIC operational");
+        pr_info("APIC operational");
     else
-        klog(LOG_WARN, "APIC init failed — interrupts will not work");
+        pr_warn("APIC init failed — interrupts will not work");
 
     msix_init();
 
@@ -384,7 +363,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     pcidev_init();
     {
         if (pci_device_count <= 0)
-            klog(LOG_WARN, "no PCI devices — storage/net/USB unavailable");
+            pr_warn("no PCI devices — storage/net/USB unavailable");
     }
 
     // USB xHCI stack
@@ -401,9 +380,9 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
         if (swap_status)
-            klog(LOG_WARN, "swap init failed — OOM killer is last resort");
+            pr_warn("swap init failed — OOM killer is last resort");
         else
-            klog(LOG_OK, "Swap subsystem ready");
+            pr_info("Swap subsystem ready");
     }
 
     // Virtual filesystem (mntfs_init is deferred — needs the scheduler).
@@ -415,7 +394,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Multitasking
     task_init();
     init_scheduler();
-    klog(LOG_OK, "Hardware setup complete — enabling interrupts / scheduler next");
+    pr_info("Hardware setup complete — enabling interrupts / scheduler next");
 }
 
 extern mb2_module_info_t mb2_cctkfs_module;
@@ -438,7 +417,7 @@ static void kernel_bootstrap_main(void) {
     // back to a virtual nodisk root and the kernel still boots to /bin/init.
     pci_gdd_prompt_fs();
     if (!fs_mod_loaded())
-        klog(LOG_WARN, "ext4 filesystem module not loaded — disk FS unavailable");
+        pr_warn("ext4 filesystem module not loaded — disk FS unavailable");
 
     mntfs_init();
 

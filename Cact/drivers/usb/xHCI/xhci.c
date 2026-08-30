@@ -156,7 +156,7 @@ static int xhci_wait_cmd(xhci_priv_t *priv, uint32_t timeout_ms) {
         }
         xhci_udelay(10);
     }
-    klog(LOG_WARN, "xHCI command timeout");
+    pr_warn("xHCI command timeout");
     priv->cmd_done = 0;
     priv->transfer_done = 0;
     return -1;
@@ -176,13 +176,12 @@ static int xhci_enable_slot(xhci_priv_t *priv, uint8_t *slot_id) {
     memset(&trb, 0, sizeof(trb));
     trb.control = (XHCI_TRB_ENABLE_SLOT << XHCI_TRB_TYPE_SHIFT);
     if (xhci_send_cmd(priv, &trb) < 0) {
-        klog(LOG_WARN, "xHCI enable_slot failed");
+        pr_warn("xHCI enable_slot failed");
         return -1;
     }
     *slot_id = (uint8_t)((priv->cmd_result >> 24) & 0xFF);
     if (*slot_id == 0 || *slot_id > priv->max_slots || *slot_id > XHCI_MAX_SLOTS) {
-        klog(LOG_WARN, "xHCI invalid slot ID ");
-        { char _nb[8]; itoa(*slot_id, _nb); printk(_nb); }
+        printk("xHCI: bad slot id %d", (int)*slot_id);
         return -1;
     }
     return 0;
@@ -201,11 +200,11 @@ static void xhci_setup_ep_ring(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
     xhci_ring_t *ring = &priv->ep_rings[slot][dci - 1];
     xhci_trb_t *mem = (xhci_trb_t *)kmalloc_aligned(XHCI_EP_RING_SIZE * sizeof(xhci_trb_t), 64);
     if (!mem) {
-        klog(LOG_WARN, "xHCI endpoint ring allocation failed");
+        pr_warn("xHCI endpoint ring allocation failed");
         return;
     }
     if (ring->ring)
-        kfree_aligned(ring->ring);
+        kfree(ring->ring);
     xhci_ring_init(ring, mem, XHCI_EP_RING_SIZE);
 }
 
@@ -539,7 +538,7 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     xhci_priv_t *priv = (xhci_priv_t *)hc->priv;
 
     if (priv->intr_ep_count >= XHCI_MAX_INTR_EP) {
-        klog(LOG_WARN, "xHCI interrupt endpoint slots full");
+        pr_warn("xHCI interrupt endpoint slots full");
         return -1;
     }
 
@@ -601,7 +600,7 @@ static int xhci_init_one(uint32_t phys_base) {
                 PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
 
     xhci_priv_t *priv = (xhci_priv_t *)kmalloc(sizeof(xhci_priv_t));
-    if (!priv) { klog(LOG_WARN, "xHCI state allocation failed"); return -1; }
+    if (!priv) { pr_warn("xHCI state allocation failed"); return -1; }
     memset(priv, 0, sizeof(xhci_priv_t));
     spin_lock_init(&priv->ctx_lock);
 
@@ -640,7 +639,7 @@ static int xhci_init_one(uint32_t phys_base) {
                     xhci_udelay(10000);
                 }
                 if (ecap[0] & (1u << 16))
-                    klog(LOG_WARN, "xHCI BIOS ownership handoff timed out");
+                    pr_warn("xHCI BIOS ownership handoff timed out");
                 ecap[1] = 0;
                 break;
             }
@@ -677,27 +676,27 @@ static int xhci_init_one(uint32_t phys_base) {
     xhci_op_write32(priv, XHCI_OP_DCBAAP + 4, 0);
 
     priv->dev_ctx_pool = (uint8_t *)kmalloc_aligned((priv->max_slots + 1) * 2048, 64);
-    if (!priv->dev_ctx_pool) { kfree_aligned(priv->dcbaa); kfree(priv); return -1; }
+    if (!priv->dev_ctx_pool) { kfree(priv->dcbaa); kfree(priv); return -1; }
     memset(priv->dev_ctx_pool, 0, (priv->max_slots + 1) * 2048);
 
     priv->input_ctx_pool = (uint8_t *)kmalloc_aligned(2048, 64);
-    if (!priv->input_ctx_pool) { kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree(priv); return -1; }
+    if (!priv->input_ctx_pool) { kfree(priv->dev_ctx_pool); kfree(priv->dcbaa); kfree(priv); return -1; }
 
     xhci_trb_t *cmd_mem = (xhci_trb_t *)kmalloc_aligned(XHCI_CMD_RING_SIZE * sizeof(xhci_trb_t), 64);
-    if (!cmd_mem) { kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree(priv); return -1; }
+    if (!cmd_mem) { kfree(priv->input_ctx_pool); kfree(priv->dev_ctx_pool); kfree(priv->dcbaa); kfree(priv); return -1; }
     xhci_ring_init(&priv->cmd_ring, cmd_mem, XHCI_CMD_RING_SIZE);
 
     xhci_op_write32(priv, XHCI_OP_CRCR, xhci_va_to_pa(cmd_mem) | 1);
     xhci_op_write32(priv, XHCI_OP_CRCR + 4, 0);
 
     priv->evt_ring = (xhci_trb_t *)kmalloc_aligned(XHCI_EVT_RING_SIZE * sizeof(xhci_trb_t), 64);
-    if (!priv->evt_ring) { kfree_aligned(cmd_mem); kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree(priv); return -1; }
+    if (!priv->evt_ring) { kfree(cmd_mem); kfree(priv->input_ctx_pool); kfree(priv->dev_ctx_pool); kfree(priv->dcbaa); kfree(priv); return -1; }
     memset(priv->evt_ring, 0, XHCI_EVT_RING_SIZE * sizeof(xhci_trb_t));
     priv->evt_dequeue = 0;
     priv->evt_cycle   = 1;
 
     priv->erst = (xhci_erst_entry_t *)kmalloc_aligned(sizeof(xhci_erst_entry_t) * XHCI_ERST_SIZE, 64);
-    if (!priv->erst) { kfree_aligned(priv->evt_ring); kfree_aligned(cmd_mem); kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree(priv); return -1; }
+    if (!priv->erst) { kfree(priv->evt_ring); kfree(cmd_mem); kfree(priv->input_ctx_pool); kfree(priv->dev_ctx_pool); kfree(priv->dcbaa); kfree(priv); return -1; }
     memset(priv->erst, 0, sizeof(xhci_erst_entry_t) * XHCI_ERST_SIZE);
     priv->erst[0].seg_addr_lo = xhci_va_to_pa(priv->evt_ring);
     priv->erst[0].seg_addr_hi = 0;
@@ -721,15 +720,15 @@ static int xhci_init_one(uint32_t phys_base) {
     }
 
     if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) {
-        klog(LOG_WARN, "xHCI host controller did not start");
-        kfree_aligned(priv->erst); kfree_aligned(priv->evt_ring); kfree_aligned(cmd_mem);
-        kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool);
-        kfree_aligned(priv->dcbaa); kfree(priv);
+        pr_warn("xHCI host controller did not start");
+        kfree(priv->erst); kfree(priv->evt_ring); kfree(cmd_mem);
+        kfree(priv->input_ctx_pool); kfree(priv->dev_ctx_pool);
+        kfree(priv->dcbaa); kfree(priv);
         return -1;
     }
 
     usb_hc_t *hc = (usb_hc_t *)kmalloc(sizeof(usb_hc_t));
-    if (!hc) { kfree_aligned(priv->erst); kfree_aligned(priv->evt_ring); kfree_aligned(cmd_mem); kfree_aligned(priv->input_ctx_pool); kfree_aligned(priv->dev_ctx_pool); kfree_aligned(priv->dcbaa); kfree(priv); return -1; }
+    if (!hc) { kfree(priv->erst); kfree(priv->evt_ring); kfree(cmd_mem); kfree(priv->input_ctx_pool); kfree(priv->dev_ctx_pool); kfree(priv->dcbaa); kfree(priv); return -1; }
     memset(hc, 0, sizeof(usb_hc_t));
 
     hc->name               = "XHCI";
@@ -848,7 +847,7 @@ static int xhci_pci_probe(pci_device_t *pdev) {
     }
     if (!mmio)
         mmio = pci_read_config_dword(pdev->bus, pdev->dev, pdev->fn, 0x10) & ~0xFu;
-    if (!mmio) { klog(LOG_WARN, "xHCI MMIO BAR missing"); return -1; }
+    if (!mmio) { pr_warn("xHCI MMIO BAR missing"); return -1; }
 
     uint32_t cmd = pci_read_config_dword(pdev->bus, pdev->dev, pdev->fn, 0x04);
     pci_write_config_dword(pdev->bus, pdev->dev, pdev->fn, 0x04, cmd | 0x06);
@@ -864,7 +863,7 @@ static int xhci_pci_probe(pci_device_t *pdev) {
                 if (vec > 0) {
                     msix_register_handler(vec, xhci_irq_handler);
                     pci_msix_enable(pdev, vec, table, 0);
-                    klog(LOG_OK, "xHCI MSI-X enabled");
+                    pr_info("xHCI MSI-X enabled");
                     goto probe_done;
                 }
             }
@@ -876,9 +875,9 @@ static int xhci_pci_probe(pci_device_t *pdev) {
         int vec = apic_pci_vector(pdev->irq_pin);
         if (vec > 0) {
             set_idt_gate(vec, (uint32_t)xhci_isr);
-            klog(LOG_WARN, "xHCI MSI-X unavailable, using INTx");
+            pr_warn("xHCI MSI-X unavailable, using INTx");
         } else {
-            klog(LOG_ERROR, "xHCI: no usable interrupt");
+            pr_err("xHCI: no usable interrupt");
             return -1;
         }
     }
@@ -916,8 +915,8 @@ void xhci_pci_init(void) {
             d = d->next;
     }
     if (found == 0) {
-        klog(LOG_WARN, "xHCI: no USB3 controller found on PCI bus");
+        pr_warn("xHCI: no USB3 controller found on PCI bus");
     } else {
-        klog(LOG_OK, "xHCI host controller(s) brought up");
+        pr_info("xHCI host controller(s) brought up");
     }
 }
