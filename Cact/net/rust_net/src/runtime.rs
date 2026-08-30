@@ -82,6 +82,21 @@ pub extern "C" fn netif_rx(skb: *mut Skb) {
     stack::stack_enqueue_rx(skb);
 }
 
+/// Stable alias exported for loadable NIC driver modules (see `net_shim.c`).
+#[no_mangle]
+pub extern "C" fn net_receive_packet(skb: *mut Skb) {
+    netif_rx(skb);
+}
+
+/// Wake `net_poll_task` after a NIC RX IRQ (stable alias for driver modules).
+#[no_mangle]
+pub extern "C" fn net_driver_irq_wake() {
+    // SAFETY: net_sema is a kernel-lifetime static.
+    unsafe {
+        ffi_kernel::up(core::ptr::addr_of_mut!(net_sema));
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn net_poll() {
     stack::stack_poll();

@@ -152,7 +152,7 @@ CactKernel-x86_32/
 │   │   ├── vfs/         core VFS, struct file, devfs, procfs, mntfs, etcfs, tmpfs,
 │   │   │                binfs, sbinfs, libfs, usrfs, varfs
 │   │   └── pipe/        kernel pipe implementation
-│   └── net/             legacy C path (ARP, IP, …) + rust_net/ (smoltcp)
+│   └── net/             rust_net/ — pure-Rust stack (smoltcp: Ethernet/ARP/IP/ICMP/TCP/UDP/DHCP/DNS) + rustls TLS + HTTP(S) client, C FFI header
 ├── Makefile
 ├── VERSION
 ├── linker.ld
@@ -327,6 +327,8 @@ All out-of-tree PCI drivers now use **MSI-X** instead of PIC IRQ lines. Extra PC
 
 ## 🌐 Network stack
 
+The **entire L3+ stack is pure Rust** (`cact_net`): Ethernet demux, ARP, IPv4, ICMP, TCP and UDP sockets, DHCPv4, and the DNS resolver all run on **smoltcp**; TLS 1.3 runs on the vendored **rustls** with the in-kernel `cact_crypto` provider. The C side is only a thin FFI layer (`rust_net_ffi.h` + syscall glue) — `net_shim.c` was removed in favour of Rust symbols (`net_receive_packet`, `net_driver_irq_wake`) that out-of-tree NIC modules resolve via the ksym table.
+
 Logical TCP states (C metadata / VFS view; ingress TCP is handled by **smoltcp**):
 
 ```
@@ -336,20 +338,34 @@ CLOSED → LISTEN → SYN_SENT → SYN_RECEIVED
        → CLOSE_WAIT → LAST_ACK → CLOSED
 ```
 
-The legacy **C** path still owns **Ethernet demux**, **ARP**, parts of **IPv4/ICMP**, and **`skb`** lifetime. **TCP/UDP sockets** for syscalls are backed by **smoltcp** inside **`cact_net`**: `stack_poll()` drives the iface, **DHCPv4** updates runtime IPv4 + DNS server IP, **`SYS_DNS_RESOLVE`** performs a blocking **A-record** query over UDP/53, and **`SYS_PING_ECHO`** sends ICMP echo requests.
+`stack_poll()` drives the iface, **DHCPv4** updates runtime IPv4 + DNS server IP, **`SYS_DNS_RESOLVE`** performs a blocking **A-record** query over UDP/53, and **`SYS_PING_ECHO`** sends ICMP echo requests.
 
 Full socket syscall API: `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, `recvfrom`, `shutdown`, `setsockopt`, `getsockopt`.
 
 | Layer | Responsibility |
 |-------|----------------|
-| **skb** | Kernel packet buffer alloc/push/pull |
-| **Ethernet / ARP / IPv4 / ICMP** | Mostly C; ICMP echo path bridges into Rust |
-| **TCP / UDP** | **smoltcp** sockets + C-side `ksock` / `tcp_socket_t` metadata |
+| **Ethernet / ARP / IPv4 / ICMP / TCP / UDP** | smoltcp (`cact_net`) |
 | **Sockets / VFS** | Up to **16** kernel socket nodes integrated with `read`/`write`/`close`, `.poll` op |
 | **net_poll_task** | Dedicated kernel thread: sleeps on a semaphore, wakes on NIC RX, calls **`net_poll` → `stack_poll()`** |
-| **TLS 1.3** | In-kernel via Rustls — `SYS_ACCEPT` + handshake, `SYS_SEND`/`SYS_RECV` with TLS framing |
+| **TLS 1.3** | In-kernel via rustls — `cact_tls_connect_ex` / `cact_tls_send` / `cact_tls_recv` / `cact_tls_close` |
+| **HTTP/HTTPS** | `cact_http_request` / `cact_http_get` / `cact_http_post` — DNS → TCP → (TLS) → HTTP/1.1 fetch; `Content-Length`, chunked and read-to-close bodies |
 
-**Limits (non-exhaustive):** no **IPv6**; default NIC is **virtio-net** in QEMU; DNS resolver is **A-record only** and needs a configured DNS IP (from DHCP or **`SYS_NETCFG_SET`**).
+**HTTP(S) FFI** (`Cact/net/rust_net_ffi.h`): the kernel can fetch pages without a userspace
+process, e.g.
+
+```c
+cact_http_resp_t r;
+static char buf[65536];
+int rc = cact_http_get(&r, "https://example.com/", 0, 0, buf, sizeof(buf));
+if (rc == 0) { /* r.status == 200, body at buf + r.body_off, r.body_len bytes */ }
+```
+
+HTTPS currently skips certificate chain verification (the `cact_crypto` provider has not
+implemented certificate signature verification yet — RSA/ECDSA signature algorithms are
+empty), so it works against arbitrary servers with a one-time warning. The verified
+root-store path exists in `tls.rs` and is used by `cact_tls_connect`.
+
+**Limits (non-exhaustive):** no **IPv6**; default NIC is **virtio-net** in QEMU; DNS resolver is **A-record only**; HTTP responses are buffered with a 1 MiB cap; no gzip decompression.
 
 ---
 

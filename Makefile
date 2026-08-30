@@ -272,7 +272,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/sc_user.o \
       $(BUILD_DIR)/sc_net.o \
       $(BUILD_DIR)/sc_kmod.o \
-      $(BUILD_DIR)/net_shim.o \
       $(BUILD_DIR)/keyboard.o \
       $(BUILD_DIR)/mouse.o \
       $(BUILD_DIR)/usb.o \
@@ -495,10 +494,6 @@ $(BUILD_DIR)/sc_kmod.o: $(KERN_SC_KMOD_DIR)/kmod.c
 	gcc $(CFLAGS) -I$(KERN_SC_KMOD_DIR) -c $< -o $@
 
 $(BUILD_DIR)/idt.o: $(KERN_IDT_DIR)/idt.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/net_shim.o: $(NET_DIR)/net_shim.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

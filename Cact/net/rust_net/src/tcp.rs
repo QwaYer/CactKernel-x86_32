@@ -69,6 +69,25 @@ pub(crate) static mut NEXT_EPHEMERAL: u16 = 49152;
 
 static TCP_LOCK: AtomicU32 = AtomicU32::new(0);
 
+/// Run `f` against the smoltcp TCP socket backing socket index `idx`, holding
+/// `tcp_lock` (interrupts disabled) for the whole access so the poll thread's
+/// `sync_tcp_pcbs_from_smoltcp` cannot race us on the socket state.
+pub(crate) fn with_tcp_socket<R>(idx: i32, f: impl FnOnce(&mut smoltcp::socket::tcp::Socket) -> R) -> Option<R> {
+    if idx < 0 || idx as usize >= TCP_MAX_SOCKETS {
+        return None;
+    }
+    // SAFETY: index bounds checked above; TCP_HANDLE and the SocketSet access
+    // are serialized by tcp_lock.
+    crate::stack::with_iface_sockets(|_iface, socks| unsafe {
+        tcp_lock();
+        let h = *TCP_HANDLE.get_unchecked(idx as usize);
+        let r = h.map(|h| f(socks.get_mut::<smoltcp::socket::tcp::Socket>(h)));
+        tcp_unlock();
+        r
+    })
+    .flatten()
+}
+
 pub(crate) unsafe fn reset_tcp_smoltcp_state() {
     TCP_HANDLE = [None; TCP_MAX_SOCKETS];
     NEXT_EPHEMERAL = 49152;
