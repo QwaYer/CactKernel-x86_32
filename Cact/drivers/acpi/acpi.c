@@ -12,6 +12,15 @@ int acpi_init(void)
 
     klog(LOG_OK, "ACPI: initializing ACPICA subsystem");
 
+    /*
+     * Firmware AML is written and tested mostly against Windows and often
+     * contains sloppy constructs on the non-Windows paths.  Pretend to be
+     * Windows: enable interpreter slack (tolerate malformed AML) and report
+     * a modern Windows version so firmware takes its well-tested _OSI path.
+     */
+    AcpiGbl_EnableInterpreterSlack = TRUE;
+    AcpiGbl_OsiData = ACPI_OSI_WIN_10;
+
     status = AcpiInitializeSubsystem();
     if (ACPI_FAILURE(status)) {
         klog(LOG_ERROR, "ACPI: AcpiInitializeSubsystem failed");

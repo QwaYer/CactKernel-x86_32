@@ -13,4 +13,8 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
 /* Iterate all discovered PCI devices and prompt the user for driver modules. */
 void pci_gdd_prompt_devices(void);
 
+/* Offer a non-PCI filesystem module (e.g. ext4) with the same interactive
+ * "load driver? (y/n)" prompt. Runs after PCI probing so a boot disk exists. */
+void pci_gdd_prompt_fs(void);
+
 #endif

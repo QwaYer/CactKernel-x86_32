@@ -1,6 +1,9 @@
 #ifndef SC_NET_H
 #define SC_NET_H
 
+// Kernel-internal net.h defines skb_t before tcp.h/udp.h/socket.h use it.
+#include <net.h>
+
 #include "kernel.h"
 #include "task.h"
 #include "vfs.h"
@@ -8,8 +11,6 @@
 #include "tcp.h"
 #include "udp.h"
 #include "mod.h"
-// kernel-internal net.h (ntohs/htonl/MY_IP) is included in net.c as <net.h>
-// to avoid name collision with this file (net/net.h).
 
 // setsockopt/getsockopt argument structs
 typedef struct {

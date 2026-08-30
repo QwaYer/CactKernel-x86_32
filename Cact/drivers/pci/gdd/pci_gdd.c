@@ -1,6 +1,8 @@
 #include "pci_gdd.h"
 #include "pci_driver.h"
 #include "pci_loader.h"
+#include "pci_modblob.h"
+#include "fs_mod.h"
 #include "keyboard.h"
 #include "kernel.h"
 #include "klib.h"
@@ -196,4 +198,66 @@ void pci_gdd_prompt_devices(void) {
     extern pci_device_t *pci_device_list;
     for (pci_device_t *d = pci_device_list; d; d = d->next)
         pci_user_prompt_module(d->class_code, d->subclass, d->prog_if, d);
+}
+
+/* Human-readable name from a module path: "/lib/mdls/btrfs.cctk" -> "btrfs". */
+static void fs_module_display_name(const char *path, char *out, int out_sz) {
+    const char *base = path;
+    for (const char *p = path; p && *p; p++)
+        if (*p == '/') base = p + 1;
+
+    int i = 0;
+    for (; base[i] && base[i] != '.' && i < out_sz - 1; i++)
+        out[i] = base[i];
+    out[i] = '\0';
+}
+
+/* Non-PCI filesystem driver load. Unlike PCI devices a filesystem module is
+ * not bound to a VID:DID/class — instead we enumerate the staged cctkfs
+ * image and offer every module that exports the generic 'fs_mount' symbol.
+ * This keeps GDD agnostic to *which* filesystem (ext4, btrfs, ...) is packed
+ * in. If none are staged or all are declined, mntfs uses the virtual nodisk
+ * root. Exactly one filesystem module may be loaded (fs_mod is single-slot). */
+void pci_gdd_prompt_fs(void) {
+    int count = pci_modblob_count();
+    if (count <= 0)
+        return;
+
+    for (int i = 0; i < count; i++) {
+        const char    *path = NULL;
+        const uint8_t *data = NULL;
+        uint32_t       size = 0;
+        if (pci_modblob_at(i, &path, &data, &size) != 0 || !path)
+            continue;
+
+        if (fs_mod_detect(path) != 1)
+            continue;
+
+        char fname[32];
+        fs_module_display_name(path, fname, sizeof(fname));
+
+        kprint("File System Found: ");
+        kprint(fname);
+        kprint(" (");
+        kprint((char *)path);
+        kprint("). Load driver? (y/n) [5s timeout]\n");
+
+        if (!gdd_prompt_yes_no()) {
+            kprint("[GDD] filesystem driver skipped (timeout or 'n'): ");
+            kprint(fname);
+            kprint("\n");
+            continue;
+        }
+
+        if (fs_mod_load(path) != 0) {
+            kprint("[GDD] filesystem driver load failed: ");
+            kprint(fname);
+            kprint("\n");
+            continue;
+        }
+        kprint("[GDD] filesystem driver loaded: ");
+        kprint(fname);
+        kprint("\n");
+        break;   // single-slot; stop after the first accepted module
+    }
 }

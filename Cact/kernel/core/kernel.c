@@ -9,6 +9,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "vfs.h"
+#include "fs_mod.h"
 #include "devfs.h"
 #include "klib.h"
 #include "task.h"
@@ -278,6 +279,16 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // the kernel can query cpu_vendor(), cpu_has_sep(), etc.
     cpudev_init();
 
+    // Enable the x87 FPU + SSE up front. The compiler emits XMM sequences
+    // for 64-bit operations (e.g. ACPI's AcpiOsGetRootPointer returns a
+    // UINT64); without CR4.OSFXSR those fault with #UD, and the lazy-FPU
+    // fxsave/fxrstor path needs it too. Must be done before anything uses
+    // 64-bit locals/returns in C.
+    if (fpu_global_init() == 0)
+        klog(LOG_OK, "FPU + SSE initialized");
+    else
+        klog(LOG_WARN, "FPU/SSE unavailable — no SSE operations");
+
     pmm_init_from_mmap(mmap);       // Physical Memory Manager
     klog(LOG_OK, "Physical memory manager ready");
     init_memory_manager();          // Virtual memory manager
@@ -421,6 +432,13 @@ static void kernel_bootstrap_main(void) {
     extern void procfs_set_meminfo(uint32_t);
 
     pcidev_probe_all();
+
+    // Offer the ext4 filesystem module interactively (GDD y/n prompt).
+    // If it is missing, declined, or fails HMAC verification, mntfs falls
+    // back to a virtual nodisk root and the kernel still boots to /bin/init.
+    pci_gdd_prompt_fs();
+    if (!fs_mod_loaded())
+        klog(LOG_WARN, "ext4 filesystem module not loaded — disk FS unavailable");
 
     mntfs_init();
 

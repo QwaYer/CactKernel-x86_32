@@ -18,6 +18,24 @@ int fpu_global_init(void) {
         return -1;
     }
 
+    // Enable the x87 FPU and SSE.  Without CR4.OSFXSR the compiler's SSE
+    // sequences (e.g. movd/movq via XMM for 64-bit returns) #UD, and the lazy
+    // FPU code (fxsave/fxrstor) needs OSFXSR + OSXMMEXCPT set as well.
+    // Clear CR0.EM and set CR0.MP so the x87 lands on #NM (driven by TS) and
+    // is never trapped in software emulation.
+    __asm__ __volatile__(
+        "mov %%cr0, %%eax\n\t"
+        "and $~0x4, %%eax\n\t"   /* clear EM */
+        "or  $0x2, %%eax\n\t"    /* set MP  */
+        "mov %%eax, %%cr0\n\t"
+        :: : "eax", "memory");
+
+    __asm__ __volatile__(
+        "mov %%cr4, %%eax\n\t"
+        "or  $0x600, %%eax\n\t"  /* OSFXSR | OSXMMEXCPT */
+        "mov %%eax, %%cr4\n\t"
+        :: : "eax", "memory");
+
     __asm__ __volatile__("fninit");
     return 0;
 }
