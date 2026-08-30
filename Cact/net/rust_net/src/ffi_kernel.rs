@@ -58,7 +58,7 @@ pub fn klog_static(level: c_int, msg: &'static [u8]) {
     };
     buf[0] = 0x01;              // KERN_SOH
     buf[1] = lvl;
-    let len = core::cmp::min(msg.len(), buf.len() - 3);
+    let len = core::cmp::min(msg.len().saturating_sub(1), buf.len() - 3);
     buf[2..2 + len].copy_from_slice(&msg[..len]);
     buf[2 + len] = b'\n';
     buf[3 + len] = 0;
