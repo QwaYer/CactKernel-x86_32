@@ -239,7 +239,7 @@ int cpudev_init(void) {
 
     detect_leaf7();
 
-    printk("        [  OK  ] CPUDEV: ");
+    printk("CPUDEV: ");
     printk((char*)cpu_vendor_str(g_vendor));
     if (g_brand[0]) {
         printk(" ");
@@ -260,7 +260,7 @@ int cpudev_init(void) {
         pr_crit("CPUDEV: CPU supports neither SYSCALL nor SEP — syscalls will NOT work");
     }
 
-    printk("        [  OK  ] CPUDEV: syscall = ");
+    printk("CPUDEV: syscall = ");
     printk((char*)cpu_syscall_mech_str(g_syscall_mech));
     printk("\n");
 
