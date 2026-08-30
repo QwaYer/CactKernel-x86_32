@@ -67,4 +67,7 @@ int sys_pipe(struct syscall_frame* regs);
 int sys_select(struct syscall_frame* regs);
 int sys_poll(struct syscall_frame* regs);
 
+// Shared fd-table lookup (fd.c), used by the mux syscalls too.
+file_t *_get_file(int fd);
+
 #endif 

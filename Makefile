@@ -28,8 +28,8 @@ KERN_SC_NET_DIR      = $(KERN_SYSCALLS_DIR)/net
 KERN_SC_KMOD_DIR     = $(KERN_SYSCALLS_DIR)/kmod
 KERN_GDT_DIR     = Cact/kernel/gdt
 KERN_CPUDEV_DIR  = Cact/kernel/cpudev
-KERN_ELF_DIR     = Cact/elf
-KERN_DYNLINK_DIR = Cact/elf/dynlink
+KERN_ELF_DIR     = Cact/kernel/elf
+KERN_DYNLINK_DIR = Cact/kernel/elf/dynlink
 KERN_MEM_DIR     = Cact/kernel/memory
 KERN_PROC_DIR    = Cact/kernel/proc
 KERN_SYNC_DIR    = Cact/kernel/sync
@@ -65,11 +65,11 @@ DRIVER_PCI_MSI_DIR    = Cact/drivers/pci/msi
 DRIVER_PCIE_DIR       = Cact/drivers/pci/pcie
 DRIVER_BLK_BLOCK_DIR  = Cact/drivers/block/blkdev
 DRIVER_USB_DIR       = Cact/drivers/usb
-DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xHCI
+DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xhci
 DRIVER_USB_HID_DIR   = Cact/drivers/usb/hid
 DRIVER_USB_HUB_DIR   = Cact/drivers/usb/hub
 FS_VFS_DIR       = Cact/fs/vfs
-FS_PIPE_DIR      = Cact/pipe
+FS_PIPE_DIR      = Cact/fs/pipe
 FS_DEVFS_DIR     = Cact/fs/vfs/devfs
 FS_PG_DIR        = Cact/drivers/block/pagecache
 FS_PROCFS_DIR    = Cact/fs/vfs/procfs
@@ -213,20 +213,31 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/gdt.o \
       $(BUILD_DIR)/version.o \
       $(BUILD_DIR)/kernel.o \
+      $(BUILD_DIR)/kernel_exc.o \
+      $(BUILD_DIR)/kernel_boot.o \
       $(BUILD_DIR)/multiboot2.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/dynlink.o \
+      $(BUILD_DIR)/dynlink_elf.o \
+      $(BUILD_DIR)/dynlink_reloc.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/klib.o \
       $(BUILD_DIR)/ksym.o \
       $(BUILD_DIR)/sym.o \
       $(BUILD_DIR)/vfs.o \
+      $(BUILD_DIR)/vfs_ops.o \
+      $(BUILD_DIR)/vfs_file.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
+      $(BUILD_DIR)/devfs_devices.o \
       $(BUILD_DIR)/fs_mod.o \
 	  $(BUILD_DIR)/pagecache.o \
       $(BUILD_DIR)/procfs.o \
+      $(BUILD_DIR)/procfs_mdls.o \
+      $(BUILD_DIR)/procfs_std.o \
       $(BUILD_DIR)/mntfs.o \
+      $(BUILD_DIR)/mntfs_ops.o \
+      $(BUILD_DIR)/mntfs_mounts.o \
       $(BUILD_DIR)/etcfs.o \
       $(BUILD_DIR)/tmpfs.o \
       $(BUILD_DIR)/binfs.o \
@@ -238,6 +249,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pci_enum.o \
       $(BUILD_DIR)/pci_driver.o \
       $(BUILD_DIR)/pci_loader.o \
+      $(BUILD_DIR)/pci_manifest.o \
       $(BUILD_DIR)/pci_gdd.o \
       $(BUILD_DIR)/pcie.o \
       $(BUILD_DIR)/pcidev.o \
@@ -251,6 +263,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/sc_signal.o \
       $(BUILD_DIR)/sc_session.o \
       $(BUILD_DIR)/sc_fd.o \
+      $(BUILD_DIR)/sc_fd_mux.o \
       $(BUILD_DIR)/sc_file.o \
       $(BUILD_DIR)/sc_path.o \
       $(BUILD_DIR)/sc_sys.o \
@@ -265,15 +278,22 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/mouse.o \
       $(BUILD_DIR)/usb.o \
       $(BUILD_DIR)/xhci.o \
+      $(BUILD_DIR)/xhci_hw.o \
+      $(BUILD_DIR)/xhci_ring.o \
+      $(BUILD_DIR)/xhci_dev.o \
+      $(BUILD_DIR)/xhci_xfer.o \
       $(BUILD_DIR)/usb_hid.o \
       $(BUILD_DIR)/usb_hub.o \
       $(BUILD_DIR)/fb.o \
+      $(BUILD_DIR)/fb_text.o \
       $(BUILD_DIR)/font.o \
       $(BUILD_DIR)/pat.o \
       $(BUILD_DIR)/stack_guard.o \
       $(BUILD_DIR)/cpudev.o \
       $(BUILD_DIR)/acpi.o \
       $(BUILD_DIR)/osl.o \
+      $(BUILD_DIR)/osl_sync.o \
+      $(BUILD_DIR)/osl_io.o \
       $(BUILD_DIR)/acpi_timer.o \
       $(BUILD_DIR)/acpi_hpet.o \
       $(BUILD_DIR)/apic.o
@@ -387,7 +407,15 @@ $(BUILD_DIR)/version.o: $(KERN_VER_DIR)/version.c $(KERN_VER_DIR)/version.h VERS
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) $(VERSION_DEFS) -c $< -o $@
 
-$(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c
+$(BUILD_DIR)/kernel.o: $(KERN_CORE_DIR)/kernel.c $(KERN_CORE_DIR)/kernel.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel_exc.o: $(KERN_CORE_DIR)/kernel_exc.c $(KERN_CORE_DIR)/kernel.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel_boot.o: $(KERN_CORE_DIR)/kernel_boot.c $(KERN_CORE_DIR)/kernel.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -423,7 +451,11 @@ $(BUILD_DIR)/sc_session.o: $(KERN_SC_PROC_DIR)/session.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_PROC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/sc_fd.o: $(KERN_SC_FD_DIR)/fd.c
+$(BUILD_DIR)/sc_fd.o: $(KERN_SC_FD_DIR)/fd.c $(KERN_SC_FD_DIR)/fd.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_FD_DIR) -c $< -o $@
+
+$(BUILD_DIR)/sc_fd_mux.o: $(KERN_SC_FD_DIR)/fd_mux.c $(KERN_SC_FD_DIR)/fd.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_FD_DIR) -c $< -o $@
 
@@ -484,7 +516,15 @@ $(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/dynlink.o: $(KERN_DYNLINK_DIR)/dynlink.c
+$(BUILD_DIR)/dynlink.o: $(KERN_DYNLINK_DIR)/dynlink.c $(KERN_DYNLINK_DIR)/dynlink_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/dynlink_elf.o: $(KERN_DYNLINK_DIR)/dynlink_elf.c $(KERN_DYNLINK_DIR)/dynlink_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/dynlink_reloc.o: $(KERN_DYNLINK_DIR)/dynlink_reloc.c $(KERN_DYNLINK_DIR)/dynlink_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -501,7 +541,15 @@ $(BUILD_DIR)/sym.o: $(KERN_ELF_DIR)/sym.c
 	gcc $(CFLAGS) -c $< -o $@
 
 
-$(BUILD_DIR)/vfs.o: $(FS_VFS_DIR)/vfs.c
+$(BUILD_DIR)/vfs.o: $(FS_VFS_DIR)/vfs.c $(FS_VFS_DIR)/vfs_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vfs_ops.o: $(FS_VFS_DIR)/vfs_ops.c $(FS_VFS_DIR)/vfs_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vfs_file.o: $(FS_VFS_DIR)/vfs_file.c $(FS_VFS_DIR)/vfs_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -509,7 +557,11 @@ $(BUILD_DIR)/pipe.o: $(FS_PIPE_DIR)/pipe.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/devfs.o: $(FS_DEVFS_DIR)/devfs.c
+$(BUILD_DIR)/devfs.o: $(FS_DEVFS_DIR)/devfs.c $(FS_DEVFS_DIR)/devfs_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/devfs_devices.o: $(FS_DEVFS_DIR)/devfs_devices.c $(FS_DEVFS_DIR)/devfs_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -521,11 +573,27 @@ $(BUILD_DIR)/fs_mod.o: $(FS_VFS_DIR)/fs_mod.c $(FS_VFS_DIR)/fs_mod.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/procfs.o: $(FS_PROCFS_DIR)/procfs.c
+$(BUILD_DIR)/procfs.o: $(FS_PROCFS_DIR)/procfs.c $(FS_PROCFS_DIR)/procfs_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c
+$(BUILD_DIR)/procfs_mdls.o: $(FS_PROCFS_DIR)/procfs_mdls.c $(FS_PROCFS_DIR)/procfs_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/procfs_std.o: $(FS_PROCFS_DIR)/procfs_std.c $(FS_PROCFS_DIR)/procfs_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c $(FS_MNTFS_DIR)/mntfs_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mntfs_ops.o: $(FS_MNTFS_DIR)/mntfs_ops.c $(FS_MNTFS_DIR)/mntfs_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mntfs_mounts.o: $(FS_MNTFS_DIR)/mntfs_mounts.c $(FS_MNTFS_DIR)/mntfs_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -569,7 +637,11 @@ $(BUILD_DIR)/pci_driver.o: $(DRIVER_PCI_DRV_DIR)/pci_driver.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/pci_loader.o: $(DRIVER_PCI_LOADER_DIR)/pci_loader.c
+$(BUILD_DIR)/pci_loader.o: $(DRIVER_PCI_LOADER_DIR)/pci_loader.c $(DRIVER_PCI_LOADER_DIR)/pci_loader_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/pci_manifest.o: $(DRIVER_PCI_LOADER_DIR)/pci_manifest.c $(DRIVER_PCI_LOADER_DIR)/pci_loader_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -632,7 +704,23 @@ $(BUILD_DIR)/usb.o: $(DRIVER_USB_DIR)/usb.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/xhci.o: $(DRIVER_USB_XHCI_DIR)/xhci.c
+$(BUILD_DIR)/xhci.o: $(DRIVER_USB_XHCI_DIR)/xhci.c $(DRIVER_USB_XHCI_DIR)/xhci_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/xhci_hw.o: $(DRIVER_USB_XHCI_DIR)/xhci_hw.c $(DRIVER_USB_XHCI_DIR)/xhci_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/xhci_ring.o: $(DRIVER_USB_XHCI_DIR)/xhci_ring.c $(DRIVER_USB_XHCI_DIR)/xhci_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/xhci_dev.o: $(DRIVER_USB_XHCI_DIR)/xhci_dev.c $(DRIVER_USB_XHCI_DIR)/xhci_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/xhci_xfer.o: $(DRIVER_USB_XHCI_DIR)/xhci_xfer.c $(DRIVER_USB_XHCI_DIR)/xhci_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -644,7 +732,11 @@ $(BUILD_DIR)/usb_hub.o: $(DRIVER_USB_HUB_DIR)/usb_hub.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/fb.o: $(DRIVER_FB_DIR)/fb.c
+$(BUILD_DIR)/fb.o: $(DRIVER_FB_DIR)/fb.c $(DRIVER_FB_DIR)/fb_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/fb_text.o: $(DRIVER_FB_DIR)/fb_text.c $(DRIVER_FB_DIR)/fb_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -661,6 +753,14 @@ $(BUILD_DIR)/acpi.o: $(DRIVER_ACPI_DIR)/acpi.c $(DRIVER_ACPI_DIR)/cact_acpi.h | 
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/osl.o: $(DRIVER_ACPI_DIR)/osl.c $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/osl_sync.o: $(DRIVER_ACPI_DIR)/osl_sync.c $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/osl_io.o: $(DRIVER_ACPI_DIR)/osl_io.c $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -689,38 +789,6 @@ $(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/cpudev.o: $(KERN_CPUDEV_DIR)/cpudev.c $(KERN_CPUDEV_DIR)/cpudev.h
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/net.o: $(NET_DIR)/net.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ethernet.o: $(NET_ETH_DIR)/ethernet.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/arp.o: $(NET_ARP_DIR)/arp.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ip.o: $(NET_IP_DIR)/ip.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/icmp.o: $(NET_ICMP_DIR)/icmp.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/udp.o: $(NET_UDP_DIR)/udp.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/tcp.o: $(NET_TCP_DIR)/tcp.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/ksocket.o: $(NET_SOCKET_DIR)/socket.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

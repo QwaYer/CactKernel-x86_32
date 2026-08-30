@@ -33,7 +33,7 @@ static struct acpi_mapping acpi_mappings[ACPI_OSL_MAX_MAPPINGS];
 static spinlock_t          acpi_mappings_lock;
 static UINT32              acpi_mapping_next_va = ACPI_TEMP_MAP_BASE;
 
-static void* acpi_temp_map(UINT32 phys, UINT32 size)
+void* acpi_temp_map(UINT32 phys, UINT32 size)
 {
     UINT32 offset    = phys & 0xFFF;
     UINT32 phys_page = phys & ~0xFFF;
@@ -82,7 +82,7 @@ static void* acpi_temp_map(UINT32 phys, UINT32 size)
     return (void*)(UINT32)(virt + offset);
 }
 
-static void acpi_temp_unmap(void *virt, UINT32 size)
+void acpi_temp_unmap(void *virt, UINT32 size)
 {
     UINT32 va      = (UINT32)(UINT32)virt & ~0xFFF;
     UINT32 *pd     = get_current_pd();
@@ -117,7 +117,7 @@ static void acpi_temp_unmap(void *virt, UINT32 size)
     spin_unlock(&acpi_mappings_lock);
 }
 
-static void udelay(UINT32 us)
+void osl_udelay(UINT32 us)
 {
     if (us == 0) return;
     while (us > 0) {
@@ -242,267 +242,6 @@ ACPI_STATUS AcpiOsGetPhysicalAddress(
     if (!PhysicalAddress)
         return AE_BAD_PARAMETER;
     *PhysicalAddress = vmm_get_phys(get_current_pd(), (UINT32)(UINT32)LogicalAddress);
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsCreateLock(ACPI_SPINLOCK *OutHandle)
-{
-    spinlock_t *lock = (spinlock_t*)kmalloc(sizeof(spinlock_t));
-    if (!lock) return AE_NO_MEMORY;
-    spin_lock_init(lock);
-    *OutHandle = lock;
-    return AE_OK;
-}
-
-void AcpiOsDeleteLock(ACPI_SPINLOCK Handle)
-{
-    kfree(Handle);
-}
-
-ACPI_CPU_FLAGS AcpiOsAcquireLock(ACPI_SPINLOCK Handle)
-{
-    spin_lock((spinlock_t*)Handle);
-    return 0;
-}
-
-void AcpiOsReleaseLock(ACPI_SPINLOCK Handle, ACPI_CPU_FLAGS Flags)
-{
-    (void)Flags;
-    spin_unlock((spinlock_t*)Handle);
-}
-
-ACPI_STATUS AcpiOsCreateSemaphore(
-    UINT32                  MaxUnits,
-    UINT32                  InitialUnits,
-    ACPI_SEMAPHORE          *OutHandle)
-{
-    (void)MaxUnits;
-    semaphore_t *s = (semaphore_t*)kmalloc(sizeof(semaphore_t));
-    if (!s) return AE_NO_MEMORY;
-    sema_init(s, (int)InitialUnits);
-    *OutHandle = s;
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsDeleteSemaphore(ACPI_SEMAPHORE Handle)
-{
-    kfree(Handle);
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsWaitSemaphore(
-    ACPI_SEMAPHORE          Handle,
-    UINT32                  Units,
-    UINT16                  Timeout)
-{
-    (void)Units;
-    (void)Timeout;
-    down((semaphore_t*)Handle);
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsSignalSemaphore(
-    ACPI_SEMAPHORE          Handle,
-    UINT32                  Units)
-{
-    for (UINT32 i = 0; i < Units; i++)
-        up((semaphore_t*)Handle);
-    return AE_OK;
-}
-
-#if (ACPI_MUTEX_TYPE != ACPI_BINARY_SEMAPHORE)
-
-ACPI_STATUS AcpiOsCreateMutex(
-    ACPI_MUTEX              *OutHandle)
-{
-    mutex_t *m = (mutex_t*)kmalloc(sizeof(mutex_t));
-    if (!m) return AE_NO_MEMORY;
-    mutex_init(m);
-    *OutHandle = m;
-    return AE_OK;
-}
-
-void AcpiOsDeleteMutex(ACPI_MUTEX Handle)
-{
-    kfree(Handle);
-}
-
-ACPI_STATUS AcpiOsAcquireMutex(
-    ACPI_MUTEX              Handle,
-    UINT16                  Timeout)
-{
-    (void)Timeout;
-    mutex_lock((mutex_t*)Handle);
-    return AE_OK;
-}
-
-void AcpiOsReleaseMutex(ACPI_MUTEX Handle)
-{
-    mutex_unlock((mutex_t*)Handle);
-}
-
-#endif
-
-ACPI_STATUS AcpiOsInstallInterruptHandler(
-    UINT32                  InterruptNumber,
-    ACPI_OSD_HANDLER        ServiceRoutine,
-    void                    *Context)
-{
-    (void)Context;
-    extern void (*acpi_sci_callback)(void);
-    extern void acpi_sci_isr();
-    acpi_sci_callback = (void (*)(void))ServiceRoutine;
-    set_idt_gate(0x20 + InterruptNumber, (uint32_t)acpi_sci_isr);
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsRemoveInterruptHandler(
-    UINT32                  InterruptNumber,
-    ACPI_OSD_HANDLER        ServiceRoutine)
-{
-    (void)InterruptNumber;
-    (void)ServiceRoutine;
-    return AE_OK;
-}
-
-ACPI_THREAD_ID AcpiOsGetThreadId(void)
-{
-    return 1;
-}
-
-ACPI_STATUS AcpiOsExecute(
-    ACPI_EXECUTE_TYPE       Type,
-    ACPI_OSD_EXEC_CALLBACK  Function,
-    void                    *Context)
-{
-    (void)Type;
-    (void)Function;
-    (void)Context;
-    return AE_OK;
-}
-
-void AcpiOsWaitEventsComplete(void)
-{
-}
-
-void AcpiOsSleep(UINT64 Milliseconds)
-{
-    UINT32 ticks = (UINT32)(Milliseconds / 10);
-    if (ticks == 0) ticks = 1;
-    sched_sleep_ticks(ticks);
-}
-
-void AcpiOsStall(UINT32 Microseconds)
-{
-    udelay(Microseconds);
-}
-
-ACPI_STATUS AcpiOsReadPort(
-    ACPI_IO_ADDRESS         Address,
-    UINT32                  *Value,
-    UINT32                  Width)
-{
-    switch (Width) {
-    case 8:  *Value = inb((UINT16)Address); break;
-    case 16: *Value = inw((UINT16)Address); break;
-    case 32: *Value = port_dword_in((UINT16)Address); break;
-    default: return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsWritePort(
-    ACPI_IO_ADDRESS         Address,
-    UINT32                  Value,
-    UINT32                  Width)
-{
-    switch (Width) {
-    case 8:  outb((UINT16)Address, (UINT8)Value); break;
-    case 16: outw((UINT16)Address, (UINT16)Value); break;
-    case 32: port_dword_out((UINT16)Address, Value); break;
-    default: return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsReadMemory(
-    ACPI_PHYSICAL_ADDRESS   Address,
-    UINT64                  *Value,
-    UINT32                  Width)
-{
-    void *virt = acpi_temp_map((UINT32)Address, 4);
-    if (!virt) return AE_BAD_ADDRESS;
-    switch (Width) {
-    case 8:  *Value = *(volatile UINT8*)virt;  break;
-    case 16: *Value = *(volatile UINT16*)virt; break;
-    case 32: *Value = *(volatile UINT32*)virt; break;
-    case 64: *Value = *(volatile UINT64*)virt; break;
-    default: acpi_temp_unmap(virt, 4); return AE_BAD_PARAMETER;
-    }
-    acpi_temp_unmap(virt, 4);
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsWriteMemory(
-    ACPI_PHYSICAL_ADDRESS   Address,
-    UINT64                  Value,
-    UINT32                  Width)
-{
-    void *virt = acpi_temp_map((UINT32)Address, 4);
-    if (!virt) return AE_BAD_ADDRESS;
-    switch (Width) {
-    case 8:  *(volatile UINT8*)virt  = (UINT8)Value;  break;
-    case 16: *(volatile UINT16*)virt = (UINT16)Value; break;
-    case 32: *(volatile UINT32*)virt = (UINT32)Value; break;
-    case 64: *(volatile UINT64*)virt = Value;          break;
-    default: acpi_temp_unmap(virt, 4); return AE_BAD_PARAMETER;
-    }
-    acpi_temp_unmap(virt, 4);
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsReadPciConfiguration(
-    ACPI_PCI_ID             *PciId,
-    UINT32                  Reg,
-    UINT64                  *Value,
-    UINT32                  Width)
-{
-    UINT32 val = pci_read_config_dword(PciId->Bus, PciId->Device, PciId->Function,
-                              (UINT8)(Reg & 0xFC));
-    switch (Width) {
-    case 8:  *Value = (UINT8)(val >> ((Reg & 3) * 8)); break;
-    case 16: *Value = (UINT16)(val >> ((Reg & 2) * 8)); break;
-    case 32: *Value = val; break;
-    default: return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsWritePciConfiguration(
-    ACPI_PCI_ID             *PciId,
-    UINT32                  Reg,
-    UINT64                  Value,
-    UINT32                  Width)
-{
-    UINT32 val = pci_read_config_dword(PciId->Bus, PciId->Device, PciId->Function,
-                              (UINT8)(Reg & 0xFC));
-    switch (Width) {
-    case 8: {
-        UINT32 shift = (Reg & 3) * 8;
-        val &= ~(0xFFu << shift);
-        val |= ((UINT8)Value) << shift;
-        break;
-    }
-    case 16: {
-        UINT32 shift = (Reg & 2) * 8;
-        val &= ~(0xFFFFu << shift);
-        val |= ((UINT16)Value) << shift;
-        break;
-    }
-    case 32: val = (UINT32)Value; break;
-    default: return AE_BAD_PARAMETER;
-    }
-    pci_write_config_dword(PciId->Bus, PciId->Device, PciId->Function, (UINT8)(Reg & 0xFC), val);
     return AE_OK;
 }
 

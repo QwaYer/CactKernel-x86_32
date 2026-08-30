@@ -136,25 +136,22 @@ CactKernel-x86_32/
 │   │   ├── memory/      rust_mm/ — PMM, VMM, page faults, mmap, swap, slab, SHM
 │   │   ├── proc/        task_struct, context switch, sched/ (Rust MLFQ), lazy FPU, stack canary
 │   │   ├── sync/        locks, semaphores (Rust + C FFI)
-│   │   ├── elf/         static ELF loader, dynlink/ for relocatable objects
+│   │   ├── elf/         static ELF loader, ksym/sym, dynlink/ for relocatable objects
 │   │   ├── gdt/ idt/
-│   │   ├── acpi/        ACPICA engine — AML interpreter, MADT/HPET/APIC tables
-│   │   ├── crypto/      Rustls — in-kernel TLS 1.3
-│   │   └── net/         legacy C path (ARP, IP, …) + rust_net/ (smoltcp)
 │   ├── drivers/
+│   │   ├── acpi/        ACPICA engine — AML interpreter, MADT/HPET/APIC tables
 │   │   ├── block/       blkdev, page cache (increased constant limits)
 │   │   ├── input/       USB HID only (PS/2 removed in 2.0)
-│   │   ├── network/     virtio-net (in-tree NIC for QEMU)
 │   │   ├── pci/         enumerator, GDD, PCIe, ELF module loader, cctkfs staging,
 │   │   │                HMAC-SHA256 module signature verification
-│   │   ├── usb/         xHCI + HID + hub
+│   │   ├── usb/         xhci + HID + hub
 │   │   └── video/       framebuffer console, font, PAT WC + shadow blit
+│   ├── crypto/          Rustls — in-kernel TLS 1.3, HMAC-SHA256 signer, cact_shim
 │   ├── fs/
 │   │   ├── vfs/         core VFS, struct file, devfs, procfs, mntfs, etcfs, tmpfs,
 │   │   │                binfs, sbinfs, libfs, usrfs, varfs
-│   │   ├── ext4/
-│   │   └── btrfs/ exFAT/ ramfs/   ← tiny stubs
-│   └── pipe/
+│   │   └── pipe/        kernel pipe implementation
+│   └── net/             legacy C path (ARP, IP, …) + rust_net/ (smoltcp)
 ├── Makefile
 ├── VERSION
 ├── linker.ld
@@ -384,7 +381,7 @@ System halted.
 | #PF (vector 14) | `SIGSEGV` | Page fault (invalid address / protection) |
 | *others* | `SIGKILL` | Unmapped / unsupported fault path |
 
-The call trace walks the EBP chain and resolves addresses via the per-task ELF symbol table (both main binary and dynamically loaded shared objects), using `sym_resolve_addr()` from `Cact/elf/sym.c`.
+The call trace walks the EBP chain and resolves addresses via the per-task ELF symbol table (both main binary and dynamically loaded shared objects), using `sym_resolve_addr()` from `Cact/kernel/elf/sym.c`.
 
 ---
 
