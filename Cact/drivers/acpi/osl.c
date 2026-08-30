@@ -11,11 +11,22 @@
 
 #define ACPI_OSL_MAX_MAPPINGS  64
 
+/*
+ * Stable, reference-counted temporary mapping of ACPI physical memory.
+ *
+ * The same physical page is always mapped at the same virtual address, so a
+ * persistent ACPI table pointer (Table->Pointer) stays valid across the
+ * validate/parse/re-parse cycles instead of being re-mapped to a fresh VA each
+ * time.  The mapping window is bounded by the number of distinct physical pages
+ * (not the number of map/unmap calls), so it cannot creep into MMIO/framebuffer
+ * space.  A mapping is torn down only when its last reference is released;
+ * a freed slot is reused for the same physical page first to keep its VA stable.
+ */
 struct acpi_mapping {
-    void*    virt;
-    UINT32   phys;
-    UINT32   size;
-    int      used;
+    void*    virt;    /* page-aligned base VA for this physical page */
+    UINT32   phys;    /* page-aligned physical address */
+    UINT32   pages;   /* number of 4K pages currently mapped */
+    UINT32   refs;    /* outstanding references */
 };
 
 static struct acpi_mapping acpi_mappings[ACPI_OSL_MAX_MAPPINGS];
@@ -29,23 +40,43 @@ static void* acpi_temp_map(UINT32 phys, UINT32 size)
     UINT32 pages     = ((offset + size + 0xFFF) >> 12);
 
     spinlock_acquire(&acpi_mappings_lock);
-    UINT32 virt      = acpi_mapping_next_va;
 
+    /* Reuse an existing mapping of the SAME physical page (keeps the VA stable). */
+    struct acpi_mapping *m = NULL;
+    for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
+        if (acpi_mappings[i].phys == phys_page) { m = &acpi_mappings[i]; break; }
+    }
+
+    if (m) {
+        if (pages > m->pages) {
+            for (UINT32 i = m->pages; i < pages; i++) {
+                vmm_map(get_current_pd(), (UINT32)m->virt + i * 4096,
+                        phys_page + i * 4096, PAGE_PRESENT | PAGE_RW | PAGE_PWT);
+            }
+            m->pages = pages;
+        }
+        m->refs++;
+        spinlock_release(&acpi_mappings_lock);
+        return (void*)(UINT32)((UINT32)m->virt + offset);
+    }
+
+    /* Otherwise claim a free slot. */
+    for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
+        if (acpi_mappings[i].refs == 0) { m = &acpi_mappings[i]; break; }
+    }
+
+    UINT32 virt = acpi_mapping_next_va;
     for (UINT32 i = 0; i < pages; i++) {
         vmm_map(get_current_pd(), virt + i * 4096, phys_page + i * 4096,
                 PAGE_PRESENT | PAGE_RW | PAGE_PWT);
     }
     acpi_mapping_next_va += pages * 4096;
 
-    struct acpi_mapping *m = NULL;
-    for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
-        if (!acpi_mappings[i].used) { m = &acpi_mappings[i]; break; }
-    }
     if (m) {
-        m->virt = (void*)(UINT32)virt;
-        m->phys = phys_page;
-        m->size = pages * 4096;
-        m->used = 1;
+        m->virt  = (void*)(UINT32)virt;
+        m->phys  = phys_page;
+        m->pages = pages;
+        m->refs  = 1;
     }
     spinlock_release(&acpi_mappings_lock);
     return (void*)(UINT32)(virt + offset);
@@ -54,24 +85,35 @@ static void* acpi_temp_map(UINT32 phys, UINT32 size)
 static void acpi_temp_unmap(void *virt, UINT32 size)
 {
     UINT32 va      = (UINT32)(UINT32)virt & ~0xFFF;
-    UINT32 pages   = (((UINT32)(UINT32)virt & 0xFFF) + size + 0xFFF) >> 12;
     UINT32 *pd     = get_current_pd();
 
-    for (UINT32 i = 0; i < pages; i++) {
-        UINT32 pde_idx = ((va + i * 4096) >> 22) & 0x3FF;
-        UINT32 pte_idx = ((va + i * 4096) >> 12) & 0x3FF;
-        UINT32 *pt = (UINT32*)(UINT32)(pd[pde_idx] & ~0xFFF);
-        if (pt) pt[pte_idx] = 0;
-    }
-    asm volatile("invlpg (%0)" :: "r"(va) : "memory");
-
     spinlock_acquire(&acpi_mappings_lock);
+
+    struct acpi_mapping *m = NULL;
     for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
-        if (acpi_mappings[i].used && acpi_mappings[i].virt == (void*)(UINT32)va) {
-            acpi_mappings[i].used = 0;
+        if ((UINT32)(UINT32)acpi_mappings[i].virt == va && acpi_mappings[i].refs) {
+            m = &acpi_mappings[i];
             break;
         }
     }
+
+    if (m && m->refs > 0) {
+        m->refs--;
+        if (m->refs == 0) {
+            /* Last reference: tear the mapping down, but keep phys so the VA
+             * is reused for the same physical page (stable header). */
+            for (UINT32 i = 0; i < m->pages; i++) {
+                UINT32 pde_idx = ((va + i * 4096) >> 22) & 0x3FF;
+                UINT32 pte_idx = ((va + i * 4096) >> 12) & 0x3FF;
+                UINT32 *pt = (UINT32*)(UINT32)(pd[pde_idx] & ~0xFFF);
+                if (pt) pt[pte_idx] = 0;
+            }
+            asm volatile("invlpg (%0)" :: "r"(va) : "memory");
+            m->pages = 0;
+            m->refs  = 0;
+        }
+    }
+
     spinlock_release(&acpi_mappings_lock);
 }
 
@@ -92,8 +134,12 @@ ACPI_STATUS AcpiOsInitialize(void)
 {
     spinlock_init(&acpi_mappings_lock);
     acpi_mapping_next_va = ACPI_TEMP_MAP_BASE;
-    for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++)
-        acpi_mappings[i].used = 0;
+    for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
+        acpi_mappings[i].virt  = NULL;
+        acpi_mappings[i].phys  = 0;
+        acpi_mappings[i].pages = 0;
+        acpi_mappings[i].refs  = 0;
+    }
     return AE_OK;
 }
 
@@ -470,6 +516,55 @@ void AcpiOsFree(void *Memory)
     if (Memory) kfree_heap(Memory);
 }
 
+struct acpi_osl_cache {
+    UINT16  object_size;
+    UINT16  max_depth;
+};
+
+ACPI_STATUS AcpiOsCreateCache(
+    char                    *CacheName,
+    UINT16                  ObjectSize,
+    UINT16                  MaxDepth,
+    ACPI_CACHE_T            **ReturnCache)
+{
+    (void)CacheName;
+    if (!ReturnCache) return AE_NO_MEMORY;
+    struct acpi_osl_cache    *c = (struct acpi_osl_cache *)kmalloc(sizeof(*c));
+    if (!c) return AE_NO_MEMORY;
+    c->object_size = ObjectSize;
+    c->max_depth   = MaxDepth;
+    *ReturnCache   = (ACPI_CACHE_T *)c;
+    return AE_OK;
+}
+
+ACPI_STATUS AcpiOsDeleteCache(ACPI_CACHE_T *Cache)
+{
+    if (Cache) kfree_heap(Cache);
+    return AE_OK;
+}
+
+ACPI_STATUS AcpiOsPurgeCache(ACPI_CACHE_T *Cache)
+{
+    (void)Cache;
+    return AE_OK;
+}
+
+void *AcpiOsAcquireObject(ACPI_CACHE_T *Cache)
+{
+    struct acpi_osl_cache *c = (struct acpi_osl_cache *)Cache;
+    void *obj = kmalloc(c ? c->object_size : 0);
+    if (obj && c)
+        memset(obj, 0, c->object_size);
+    return obj;
+}
+
+ACPI_STATUS AcpiOsReleaseObject(ACPI_CACHE_T *Cache, void *Object)
+{
+    (void)Cache;
+    if (Object) kfree_heap(Object);
+    return AE_OK;
+}
+
 BOOLEAN AcpiOsReadable(void *Pointer, ACPI_SIZE Length)
 {
     (void)Pointer;
@@ -493,13 +588,18 @@ UINT64 AcpiOsGetTimer(void)
 
 void AcpiOsPrintf(const char *Format, ...)
 {
-    (void)Format;
+    va_list Args;
+    va_start(Args, Format);
+    AcpiOsVprintf(Format, Args);
+    va_end(Args);
 }
 
 void AcpiOsVprintf(const char *Format, va_list Args)
 {
-    (void)Format;
-    (void)Args;
+    char buf[256];
+    extern int vsnprintf(char *String, unsigned int Size, const char *Format, va_list Args);
+    vsnprintf(buf, sizeof(buf), Format, Args);
+    kprint(buf);
 }
 
 void AcpiOsPuts(const char *String)
@@ -580,3 +680,15 @@ int toupper(int c)
     if (c >= 'a' && c <= 'z') return c - 32;
     return c;
 }
+
+int isdigit(int c)  { return (c >= '0' && c <= '9'); }
+int isxdigit(int c) { return isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+int isspace(int c)  { return (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'); }
+int isalpha(int c)  { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+int isalnum(int c)  { return isalpha(c) || isdigit(c); }
+int isupper(int c)  { return (c >= 'A' && c <= 'Z'); }
+int islower(int c)  { return (c >= 'a' && c <= 'z'); }
+int isprint(int c)  { return (c >= 0x20 && c <= 0x7E); }
+int isgraph(int c)  { return (c > 0x20 && c <= 0x7E); }
+int iscntrl(int c)  { return (c == 0x7F || (c >= 0 && c < 0x20)); }
+int ispunct(int c)  { return isprint(c) && !isalnum(c) && !isspace(c); }

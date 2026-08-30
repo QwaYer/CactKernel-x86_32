@@ -7,6 +7,7 @@
 #include "sync.h"
 #include "devfs.h"
 #include "blkdev.h"
+#include "pagecache.h"
 #include "msi.h"
 
 typedef struct {
@@ -21,6 +22,7 @@ typedef struct {
  */
 static const ksym_entry_t ksym_table[] = {
     { "compare_string", (uint32_t)compare_string },
+    { "copy_string",    (uint32_t)copy_string },
     { "hex_to_ascii",   (uint32_t)hex_to_ascii },
     { "itoa",           (uint32_t)itoa },
     { "kalloc",         (uint32_t)kalloc },
@@ -29,6 +31,8 @@ static const ksym_entry_t ksym_table[] = {
     { "kfree_page",     (uint32_t)kfree_page },
     { "kmalloc",        (uint32_t)kmalloc },
     { "kmalloc_aligned",(uint32_t)kmalloc_aligned },
+    { "memory_copy",    (uint32_t)memory_copy },
+    { "memory_set",     (uint32_t)memory_set },
     { "irq_spinlock_init",     (uint32_t)irq_spinlock_init },
     { "irq_spinlock_acquire",  (uint32_t)irq_spinlock_acquire },
     { "irq_spinlock_release",  (uint32_t)irq_spinlock_release },
@@ -42,8 +46,15 @@ static const ksym_entry_t ksym_table[] = {
     { "devfs_unregister",      (uint32_t)devfs_unregister },
     { "blkdev_register",       (uint32_t)blkdev_register },
     { "blkdev_unregister",     (uint32_t)blkdev_unregister },
+    { "blkdev_read_sector",    (uint32_t)blkdev_read_sector },
+    { "blkdev_write_sector",   (uint32_t)blkdev_write_sector },
+    { "pc_get_page",           (uint32_t)pc_get_page },
+    { "pc_put_page",           (uint32_t)pc_put_page },
+    { "pc_mark_dirty",         (uint32_t)pc_mark_dirty },
+    { "pc_flush_dev",          (uint32_t)pc_flush_dev },
     { "klog",           (uint32_t)klog },
     { "kprint",         (uint32_t)kprint },
+    { "kprint_color",   (uint32_t)kprint_color },
     { "kprint_hex",     (uint32_t)kprint_hex },
     { "memcpy",         (uint32_t)memcpy },
     { "memset",         (uint32_t)memset },

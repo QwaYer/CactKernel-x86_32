@@ -1,6 +1,7 @@
 #include "signal.h"
 #include "validate.h"
 #include "helper.h"
+#include "klib.h"
 
 // Timer frequency for alarm/setitimer conversions
 #define TIMER_HZ_SIGNALS 100

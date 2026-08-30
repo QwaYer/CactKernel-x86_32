@@ -37,7 +37,7 @@ static void hpet_map_mmio(uint32_t phys_base)
 {
     uint32_t phys_page = phys_base & ~0xFFF;
     vmm_map(get_current_pd(), HPET_MMIO_VADDR, phys_page,
-            PAGE_PRESENT | PAGE_RW);
+            PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);  // Uncacheable
     hpet_regs = (volatile uint64_t *)(HPET_MMIO_VADDR + (phys_base & 0xFFF));
 }
 

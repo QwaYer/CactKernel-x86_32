@@ -3,6 +3,7 @@
 #include "acpi.h"
 #include "apic.h"
 #include "cact_acpi.h"
+#include "acpi_hpet.h"
 #include <string.h>
 
 #define IA32_APIC_BASE      0x1B

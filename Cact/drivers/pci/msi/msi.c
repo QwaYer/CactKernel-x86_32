@@ -23,7 +23,7 @@ void msix_init(void)
     if (syscall_idx < MSIX_VECTOR_COUNT)
         msix_vector_alloc[syscall_idx] = 1;
     msix_initialized = 1;
-    klog(LOG_OK, "MSI-X: vector pool 0x30-0xEF ready (0x80 reserved for syscall)");
+    klog(LOG_OK, "MSI-X: vector pool 0x30-0xEF ready");
 }
 
 int msix_alloc_vector(void)

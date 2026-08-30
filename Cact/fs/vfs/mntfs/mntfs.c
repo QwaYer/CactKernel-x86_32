@@ -9,7 +9,7 @@
 #include "varfs.h"
 #include "usrfs.h"
 #include "vfs.h"
-#include "ext4.h"
+#include "fs_mod.h"
 #include "memory.h"
 #include "klib.h"
 #include "kernel.h"
@@ -128,7 +128,7 @@ static void _mounts_mount_all(void) {
         if (mntfs_resolve_device(line, &dev) < 0) {
             kprint("[mounts] unknown: "); kprint(line); kprint("\n"); continue;
         }
-        vfs_node_t *node = ext4_mount_disk(dev);
+        vfs_node_t *node = fs_mod_mount(dev);
         if (!node) { kprint("[mounts] failed: "); kprint(line); kprint("\n"); continue; }
         mntfs_mount_disk(line, node, 0);
         kprint("[mounts] "); kprint(line); kprint(" mounted\n");
@@ -414,7 +414,7 @@ void mntfs_init(void) {
     }
 
     strlcpy(boot_devname, boot->name, 32);
-    vfs_node_t *ext4 = ext4_mount_disk(0);
+    vfs_node_t *ext4 = fs_mod_mount(0);
     if (!ext4) {
         kprint("[mntfs] WARNING: no ext4 on "); kprint(boot_devname); kprint("\n");
         klog(LOG_WARN, "mntfs: ext4 mount failed — nodisk mode");

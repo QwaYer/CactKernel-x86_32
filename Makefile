@@ -8,6 +8,10 @@
 # Optional: path to LocalRepoCactOS for iso-full target
 LOCAL_REPO ?= $(abspath ../LocalRepoCactOS)
 
+# Make `all` (kernel + ISO) the default goal, not the first rule in the file
+# ($(CRYPTO_KEY)) which is only a convenience for the HMAC key.
+.DEFAULT_GOAL := all
+
 KERN_CORE_DIR    = Cact/kernel/core
 KERN_VER_DIR     = Cact/kernel/core/kern_ver
 KERN_SYSCALLS_DIR    = Cact/kernel/core/syscalls
@@ -68,7 +72,6 @@ FS_VFS_DIR       = Cact/fs/vfs
 FS_PIPE_DIR      = Cact/pipe
 FS_DEVFS_DIR     = Cact/fs/vfs/devfs
 FS_PG_DIR        = Cact/drivers/block/pagecache
-FS_EXT4_DIR      = Cact/fs/ext4
 FS_PROCFS_DIR    = Cact/fs/vfs/procfs
 FS_MNTFS_DIR     = Cact/fs/vfs/mntfs
 FS_ETCFS_DIR     = Cact/fs/vfs/etcfs
@@ -92,6 +95,7 @@ DRIVER_ACPI_DIR  = Cact/drivers/acpi
 ACPICA_DIR       = $(DRIVER_ACPI_DIR)/acpica
 ACPICA_SRC_DIR   = $(ACPICA_DIR)/source
 ACPICA_INC_DIR   = $(ACPICA_SRC_DIR)/include
+ACPICA_REPO     ?= https://github.com/acpica/acpica.git
 ACPICA_COMP_DIRS  = $(ACPICA_SRC_DIR)/components/tables \
                     $(ACPICA_SRC_DIR)/components/namespace \
                     $(ACPICA_SRC_DIR)/components/parser \
@@ -101,6 +105,24 @@ ACPICA_COMP_DIRS  = $(ACPICA_SRC_DIR)/components/tables \
                     $(ACPICA_SRC_DIR)/components/events \
                     $(ACPICA_SRC_DIR)/components/resources \
                     $(ACPICA_SRC_DIR)/components/utilities
+# ACPICA headers (acpi.h) and sources are consumed both by the C build objects
+# and by $(ACPICA_C_SRCS) below, which is computed with $(shell find ...) at
+# parse time. Clone ACPICA at parse time (for non-clean goals) so a single
+# `make build/kernel.bin` works end-to-end; a recipe-time order-only
+# prerequisite would be too late for the parse-time $(shell find).
+ifneq ($(filter clean distclean acpica-clean,$(MAKECMDGOALS)),)
+# clean goal — do not fetch (avoid network side effects)
+else
+ACPICA_FETCH := $(shell git -C $(ACPICA_DIR) rev-parse --git-dir >/dev/null 2>&1 || \
+        (echo "Cloning ACPICA from $(ACPICA_REPO)..." && \
+         git clone --depth 1 $(ACPICA_REPO) $(ACPICA_DIR)); \
+        python3 tools/cact_acpica_patch.py $(ACPICA_DIR))
+ifneq ($(wildcard $(ACPICA_SRC_DIR)/include/acpi.h),)
+# ok — ACPICA available
+else
+$(error ACPICA sources unavailable at $(ACPICA_DIR) — check network / run `make acpica-fetch`)
+endif
+endif
 BUILD_DIR        = build
 # По умолчанию: только ядро + GRUB (без cctkfs). Полный образ с модулем cctkfs: make iso-full
 GRUB_CFG         ?= grub.cfg.kernelonly
@@ -144,7 +166,6 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_VFS_DIR) \
          -I$(FS_PIPE_DIR) \
          -I$(FS_DEVFS_DIR) \
-         -I$(FS_EXT4_DIR) \
 		 -I$(FS_PG_DIR) \
          -I$(FS_PROCFS_DIR) \
          -I$(FS_MNTFS_DIR) \
@@ -168,7 +189,8 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
           -I$(DRIVER_ACPI_DIR) \
           -I$(DRIVER_ACPI_DIR)/include \
           -I$(ACPICA_INC_DIR) \
-          -Wall
+          -Wall \
+          -DCACT_ACPI_FREESTANDING
 
 # Отладка под QEMU+GDB: make clean && KERN_DEBUG=1 make
 KERN_DEBUG ?=
@@ -201,12 +223,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/vfs.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
-      $(BUILD_DIR)/ext4_blk.o \
-      $(BUILD_DIR)/ext4_jbd.o \
-      $(BUILD_DIR)/ext4_alloc.o \
-      $(BUILD_DIR)/ext4_extent.o \
-      $(BUILD_DIR)/ext4_dir.o \
-      $(BUILD_DIR)/ext4_vfs.o \
+      $(BUILD_DIR)/fs_mod.o \
 	  $(BUILD_DIR)/pagecache.o \
       $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/mntfs.o \
@@ -280,8 +297,6 @@ all: $(BUILD_DIR)/cact.iso
 	 echo "  Kernel size: $$KERN_SIZE bytes ($$KERN_SECTORS sectors)";
 	@echo "--------------------------------------------------"
 
-
-ACPICA_REPO ?= git://github.com/acpica/acpica.git
 
 $(ACPICA_DIR):
 	@echo "Cloning ACPICA from $(ACPICA_REPO)..."
@@ -501,7 +516,7 @@ $(BUILD_DIR)/pagecache.o: $(FS_PG_DIR)/pagecache.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ext4_%.o: $(FS_EXT4_DIR)/ext4_%.c $(FS_EXT4_DIR)/ext4.h $(FS_EXT4_DIR)/ext4_internal.h
+$(BUILD_DIR)/fs_mod.o: $(FS_VFS_DIR)/fs_mod.c $(FS_VFS_DIR)/fs_mod.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -561,7 +576,7 @@ $(BUILD_DIR)/pci_gdd.o: $(DRIVER_PCI_GDD_DIR)/pci_gdd.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/pcie.o: $(DRIVER_PCIE_DIR)/pcie.c
+$(BUILD_DIR)/pcie.o: $(DRIVER_PCIE_DIR)/pcie.c | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -640,23 +655,23 @@ $(BUILD_DIR)/pat.o: $(KERN_MEM_DIR)/pat.c $(KERN_MEM_DIR)/pat.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/acpi.o: $(DRIVER_ACPI_DIR)/acpi.c $(DRIVER_ACPI_DIR)/cact_acpi.h
+$(BUILD_DIR)/acpi.o: $(DRIVER_ACPI_DIR)/acpi.c $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/osl.o: $(DRIVER_ACPI_DIR)/osl.c $(DRIVER_ACPI_DIR)/cact_acpi.h
+$(BUILD_DIR)/osl.o: $(DRIVER_ACPI_DIR)/osl.c $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/acpi_timer.o: $(DRIVER_ACPI_DIR)/acpi_timer.c $(DRIVER_ACPI_DIR)/acpi_timer.h $(DRIVER_ACPI_DIR)/cact_acpi.h $(DRIVER_ACPI_DIR)/acpi_hpet.h
+$(BUILD_DIR)/acpi_timer.o: $(DRIVER_ACPI_DIR)/acpi_timer.c $(DRIVER_ACPI_DIR)/acpi_timer.h $(DRIVER_ACPI_DIR)/cact_acpi.h $(DRIVER_ACPI_DIR)/acpi_hpet.h | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/acpi_hpet.o: $(DRIVER_ACPI_DIR)/acpi_hpet.c $(DRIVER_ACPI_DIR)/acpi_hpet.h $(DRIVER_ACPI_DIR)/cact_acpi.h
+$(BUILD_DIR)/acpi_hpet.o: $(DRIVER_ACPI_DIR)/acpi_hpet.c $(DRIVER_ACPI_DIR)/acpi_hpet.h $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/apic.o: $(DRIVER_ACPI_DIR)/apic.c $(DRIVER_ACPI_DIR)/apic.h $(DRIVER_ACPI_DIR)/cact_acpi.h $(DRIVER_ACPI_DIR)/acpi_hpet.h
+$(BUILD_DIR)/apic.o: $(DRIVER_ACPI_DIR)/apic.c $(DRIVER_ACPI_DIR)/apic.h $(DRIVER_ACPI_DIR)/cact_acpi.h $(DRIVER_ACPI_DIR)/acpi_hpet.h | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
