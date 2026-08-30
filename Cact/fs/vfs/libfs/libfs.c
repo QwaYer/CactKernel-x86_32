@@ -3,12 +3,12 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 
 // libfs serves /lib by overlaying cctkfs blobs (e.g. libc.so) on top of
 // the on-disk ext4 /lib directory. cctkfs entries with prefix "/lib/" and
 // a non-.cctk suffix are registered here; .cctk PCI modules stay private
-// to pci_modblob_get() and are not exposed through VFS.
+// to initfs_modblob_get() and are not exposed through VFS.
 static vfs_node_t  libfs_root;
 static vfs_node_t *ext4_root   = 0;
 static int         libfs_ready = 0;
@@ -120,12 +120,12 @@ static void libfs_register_blobs(void) {
     sub_file_t *th = 0, **tt = &th;
     sub_file_t *sh = 0, **st = &sh;
 
-    int n = pci_modblob_count();
+    int n = initfs_modblob_count();
     for (int i = 0; i < n; i++) {
         const char *path;
         const uint8_t *data;
         uint32_t sz;
-        if (pci_modblob_at(i, &path, &data, &sz) != 0) continue;
+        if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
         if (!path_has_prefix(path, "/lib/")) continue;
         if (has_suffix(path, ".cctk")) continue;
         const char *base = path + 5;

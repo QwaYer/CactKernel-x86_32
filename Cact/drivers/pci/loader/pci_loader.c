@@ -2,7 +2,7 @@
 #include "pci_loader_internal.h"
 #include "pci_driver.h"
 #include "pci_enum.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 #include "cctkfs.h"
 #include "vfs.h"
 #include "memory.h"
@@ -79,7 +79,7 @@ int read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t *file_
     const uint8_t *blob_data = NULL;
     uint32_t       blob_size = 0;
 
-    if (pci_modblob_get(path, &blob_data, &blob_size) == 0) {
+    if (initfs_modblob_get(path, &blob_data, &blob_size) == 0) {
         if (!blob_size)
             return -1;
         uint8_t *buf = (uint8_t *)kmalloc(blob_size);

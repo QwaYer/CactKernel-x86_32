@@ -60,6 +60,7 @@ DRIVER_PCI_DIR        = Cact/drivers/pci
 DRIVER_PCI_ENUM_DIR   = Cact/drivers/pci/enum
 DRIVER_PCI_DRV_DIR    = Cact/drivers/pci/driver
 DRIVER_PCI_LOADER_DIR = Cact/drivers/pci/loader
+DRIVER_INITFS_DIR     = Cact/drivers/initfs
 DRIVER_PCI_MSI_DIR    = Cact/drivers/pci/msi
 DRIVER_PCIE_DIR       = Cact/drivers/pci/pcie
 DRIVER_BLK_BLOCK_DIR  = Cact/drivers/block/blkdev
@@ -154,6 +155,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_PCI_ENUM_DIR) \
          -I$(DRIVER_PCI_DRV_DIR) \
          -I$(DRIVER_PCI_LOADER_DIR) \
+         -I$(DRIVER_INITFS_DIR) \
          -I$(DRIVER_PCI_MSI_DIR) \
          -I$(DRIVER_PCIE_DIR) \
 		 -I$(DRIVER_BLK_BLOCK_DIR) \
@@ -250,7 +252,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pci_manifest.o \
       $(BUILD_DIR)/pcie.o \
       $(BUILD_DIR)/pcidev.o \
-      $(BUILD_DIR)/pci_modblob.o \
+      $(BUILD_DIR)/initfs_modblob.o \
       $(BUILD_DIR)/msi.o \
 	  $(BUILD_DIR)/blkdev.o \
       $(BUILD_DIR)/sc_mod.o \
@@ -650,7 +652,7 @@ $(BUILD_DIR)/pcidev.o: Cact/drivers/pci/pcidev.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/pci_modblob.o: $(DRIVER_PCI_LOADER_DIR)/pci_modblob.c $(DRIVER_PCI_LOADER_DIR)/pci_modblob.h
+$(BUILD_DIR)/initfs_modblob.o: $(DRIVER_INITFS_DIR)/initfs_modblob.c $(DRIVER_INITFS_DIR)/initfs_modblob.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

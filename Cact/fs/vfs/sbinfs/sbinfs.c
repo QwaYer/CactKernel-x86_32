@@ -3,9 +3,9 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 
-/* sbinfs: ext4 /sbin + cctkfs overlay entries named /sbin/<file> (pci_modblob). */
+/* sbinfs: ext4 /sbin + cctkfs overlay entries named /sbin/<file> (initfs_modblob). */
 static vfs_node_t  sbinfs_root;
 static vfs_node_t *ext4_root    = 0;
 static int         sbinfs_ready = 0;
@@ -68,12 +68,12 @@ static void sbinfs_register_init_sbin_blobs(void) {
     sbin_blob_t *head = 0;
     sbin_blob_t **tail = &head;
 
-    int n = pci_modblob_count();
+    int n = initfs_modblob_count();
     for (int i = 0; i < n; i++) {
         const char *path;
         const uint8_t *data;
         uint32_t sz;
-        if (pci_modblob_at(i, &path, &data, &sz) != 0) continue;
+        if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
         if (!path_has_prefix(path, "/sbin/")) continue;
         const char *base = path + 6;
         if (!basename_only(base)) continue;

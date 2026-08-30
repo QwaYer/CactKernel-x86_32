@@ -3,7 +3,7 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 
 static vfs_node_t  usrfs_root;
 static vfs_node_t *ext4_root   = 0;
@@ -104,12 +104,12 @@ static void usrfs_register_blobs(void) {
     usr_blob_t **tail = &head;
     inc_file_t *ih = 0, **it = &ih;
 
-    int n = pci_modblob_count();
+    int n = initfs_modblob_count();
     for (int i = 0; i < n; i++) {
         const char *path;
         const uint8_t *data;
         uint32_t sz;
-        if (pci_modblob_at(i, &path, &data, &sz) != 0) continue;
+        if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
         if (!path_has_prefix(path, "/usr/")) continue;
         if (has_suffix(path, ".cctk")) continue;
         const char *base = path + 5;

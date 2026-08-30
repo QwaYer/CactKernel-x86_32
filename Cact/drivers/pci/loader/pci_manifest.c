@@ -2,7 +2,7 @@
 #include "pci_loader_internal.h"
 #include "pci_driver.h"
 #include "pci_enum.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 #include "cctkfs.h"
 #include "vfs.h"
 #include "memory.h"

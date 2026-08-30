@@ -1,4 +1,4 @@
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 #include "klib.h"
 #include "kernel.h"
 #include "cctkfs.h"
@@ -103,7 +103,7 @@ static uint32_t compute_image_crc32(const uint8_t *img, uint32_t total) {
 /* ------------------------------------------------------------------ */
 /* Staging area for the cctkfs image handed to us by GRUB.            */
 /* ------------------------------------------------------------------ */
-static uint8_t  cctkfs_stage[PCI_MODBLOB_MAX_IMAGE];
+static uint8_t  cctkfs_stage[INITFS_MODBLOB_MAX_IMAGE];
 static uint32_t cctkfs_size;
 static int      cctkfs_ready;
 
@@ -137,7 +137,7 @@ static int validate_header(uint32_t size) {
     if (h->checksum != 0) {
         uint32_t expected = compute_image_crc32(cctkfs_stage, size);
         if (h->checksum != expected) {
-            printk("[MODBLOB] cctkfs checksum mismatch: got 0x");
+            printk("[INITFS] cctkfs checksum mismatch: got 0x");
             char nb[12];
             printk("0x%x", (unsigned)(h->checksum));
             printk(", expected 0x");
@@ -150,13 +150,13 @@ static int validate_header(uint32_t size) {
     return 0;
 }
 
-int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
+int initfs_modblob_load(uint32_t phys_addr, uint32_t size) {
     if (!phys_addr || !size) {
-        printk("[MODBLOB] no cctkfs module supplied by bootloader\n");
+        printk("[INITFS] no cctkfs module supplied by bootloader\n");
         return -1;
     }
-    if (size > PCI_MODBLOB_MAX_IMAGE) {
-        printk("[MODBLOB] cctkfs image too large for stage buffer\n");
+    if (size > INITFS_MODBLOB_MAX_IMAGE) {
+        printk("[INITFS] cctkfs image too large for stage buffer\n");
         return -2;
     }
 
@@ -167,7 +167,7 @@ int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
 
     int rc = validate_header(size);
     if (rc != 0) {
-        printk("[MODBLOB] cctkfs header invalid (rc=");
+        printk("[INITFS] cctkfs header invalid (rc=");
         char nb[8]; printk("%d", (int)(rc));
         printk(")\n");
         cctkfs_size = 0;
@@ -178,7 +178,7 @@ int pci_modblob_load(uint32_t phys_addr, uint32_t size) {
 
     char nb[16];
     snprintf(nb, sizeof(nb), "%d", (int)((int)hdr_ptr()->count));
-    printk("[MODBLOB] ready: ");
+    printk("[INITFS] ready: ");
     printk(nb);
     printk(" mods, ");
     printk("%d", (int)((int)size)); printk(" B\n");
@@ -214,7 +214,7 @@ static int basename_eq(const char *want_basename,
     return name_eq(want_basename, blob, blob_basename_off, blob_basename_len);
 }
 
-int pci_modblob_get(const char *path, const uint8_t **out_data,
+int initfs_modblob_get(const char *path, const uint8_t **out_data,
                     uint32_t *out_size) {
     if (!cctkfs_ready || !path || !out_data || !out_size) return -1;
     const cctkfs_hdr_t   *h = hdr_ptr();
@@ -247,11 +247,11 @@ int pci_modblob_get(const char *path, const uint8_t **out_data,
     return -1;
 }
 
-int pci_modblob_count(void) {
+int initfs_modblob_count(void) {
     return cctkfs_ready ? (int)hdr_ptr()->count : 0;
 }
 
-int pci_modblob_at(int idx, const char **out_path,
+int initfs_modblob_at(int idx, const char **out_path,
                    const uint8_t **out_data, uint32_t *out_size) {
     if (!cctkfs_ready) return -1;
     const cctkfs_hdr_t   *h = hdr_ptr();

@@ -24,7 +24,7 @@
 #include "acpi_hpet.h"
 #include "apic.h"
 #include "msi.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 
 // Kernel page directory (defined in paging.c)
 extern uint32_t page_directory[1024];
@@ -232,7 +232,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     /* Stage the cctkfs blob into kernel .bss BEFORE pmm_init / init_heap
      * — at this point we are still in flat protected mode without paging,
      * so a plain memcpy from the physical address GRUB chose is safe. */
-    pci_modblob_load(mb2_cctkfs_module.mod_start,
+    initfs_modblob_load(mb2_cctkfs_module.mod_start,
                      mb2_cctkfs_module.mod_size);
 
     // Must initialise framebuffer before any output

@@ -11,7 +11,7 @@
  */
 
 #include "fs_mod.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 #include "ksym.h"
 #include "klib.h"
 #include "memory.h"
@@ -143,7 +143,7 @@ int fs_mod_load(const char *path) {
 
     const uint8_t *blob_data = NULL;
     uint32_t       blob_size = 0;
-    if (pci_modblob_get(path, &blob_data, &blob_size) != 0 || !blob_size) {
+    if (initfs_modblob_get(path, &blob_data, &blob_size) != 0 || !blob_size) {
         printk("[FSMOD] module not found: "); printk((char *)path); printk("\n");
         return -1;
     }
@@ -332,7 +332,7 @@ int fs_mod_detect(const char *path) {
 
     const uint8_t *blob = NULL;
     uint32_t       size = 0;
-    if (pci_modblob_get(path, &blob, &size) != 0 || !blob || !size)
+    if (initfs_modblob_get(path, &blob, &size) != 0 || !blob || !size)
         return -1;
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)blob;
