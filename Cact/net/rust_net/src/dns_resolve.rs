@@ -7,7 +7,6 @@ use smoltcp::iface::{SocketHandle, SocketSet};
 use smoltcp::socket::udp;
 use smoltcp::wire::IpAddress;
 
-use crate::config;
 use crate::ffi_kernel;
 use crate::stack;
 
@@ -44,7 +43,7 @@ fn ipv4_host_from_smoltcp_v4(a: smoltcp::wire::Ipv4Address) -> u32 {
     u32::from(o[0]) << 24 | u32::from(o[1]) << 16 | u32::from(o[2]) << 8 | u32::from(o[3])
 }
 
-fn parse_ipv4_literal(host: &[u8]) -> Option<u32> {
+pub(crate) fn parse_ipv4_literal(host: &[u8]) -> Option<u32> {
     let s = core::str::from_utf8(host).ok()?;
     let mut parts = s.split('.');
     let a: u32 = parts.next()?.parse().ok()?;
@@ -58,6 +57,31 @@ fn parse_ipv4_literal(host: &[u8]) -> Option<u32> {
         return None;
     }
     Some((a << 24) | (b << 16) | (c << 8) | d)
+}
+
+/// Resolve `host` (already known not to be an IPv4 literal) to a host-order
+/// IPv4 address using the configured DNS server. Returns None on failure.
+pub(crate) fn resolve_host(host: &[u8]) -> Option<u32> {
+    let dns = crate::config::dns_host();
+    if dns == 0 {
+        return None;
+    }
+    if crate::config::ip_host() == 0 || crate::config::netmask_host() == 0 {
+        return None;
+    }
+    let Ok(name_str) = core::str::from_utf8(host) else {
+        return None;
+    };
+    let mut buf = [0u8; 512];
+    resolve_once(name_str, dns, &mut buf)
+}
+
+/// Resolve a hostname or IPv4 literal to a host-order IPv4 address.
+pub(crate) fn resolve_a(host: &[u8]) -> Option<u32> {
+    if let Some(ip) = parse_ipv4_literal(host) {
+        return Some(ip);
+    }
+    resolve_host(host)
 }
 
 fn read_u16_be(pkt: &[u8], i: usize) -> Option<u16> {
@@ -261,24 +285,7 @@ pub extern "C" fn rust_net_dns_resolve_a(name: *const c_char, out_ip_host: *mut 
         }
     }
     let host = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len) };
-    if let Some(ip) = parse_ipv4_literal(host) {
-        unsafe {
-            *out_ip_host = ip;
-        }
-        return 0;
-    }
-    let dns = config::dns_host();
-    if dns == 0 {
-        return -1;
-    }
-    if config::ip_host() == 0 || config::netmask_host() == 0 {
-        return -1;
-    }
-    let Ok(name_str) = core::str::from_utf8(host) else {
-        return -1;
-    };
-    let mut buf = [0u8; 512];
-    match resolve_once(name_str, dns, &mut buf) {
+    match resolve_a(host) {
         Some(ip) => {
             unsafe { *out_ip_host = ip };
             0
