@@ -14,7 +14,7 @@ extern uint32_t      pci_device_count;
 extern pci_driver_t *pcidev_driver_list;
 extern uint32_t      pcidev_driver_count;
 
-/* One-shot: PCIe ECAM init + legacy PCI probe + bus scan + GDD prompts.
+/* One-shot: PCIe ECAM init + legacy PCI probe + bus scan.
  * Call once after ACPI + APIC are up, before USB or any PCI driver init. */
 void pcidev_init(void);
 

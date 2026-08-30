@@ -73,7 +73,7 @@ uint16_t read_le16(const uint8_t *p) {
 
 // Read ET_REL file from VFS into kmalloc'd buffer; validate header.
 // In-memory blobs (objcopy'd from LocalRepoCactOS/lib) take priority so that
-// modules can load before VFS is up (used by GDD during PCI enumeration).
+// modules can load before VFS is up.
 // Returns 0 on success; -1 open/read/alloc; -2 bad ELF.
 int read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t *file_size) {
     const uint8_t *blob_data = NULL;

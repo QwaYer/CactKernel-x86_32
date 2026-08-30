@@ -1,14 +1,11 @@
 #include "kernel.h"
 #include "multiboot2.h"
 #include "vfs.h"
-#include "fs_mod.h"
 #include "pci_driver.h"
 #include "pcidev.h"
-#include "pci_gdd.h"
 #include "task.h"
 #include "fb.h"
 #include "version.h"
-#include "pci_modblob.h"
 
 /* Bootstrap thread — runs AFTER scheduler is live, so it can legitimately
  * sleep on semaphores when waiting for IRQ-driven NVMe/AHCI completions
@@ -22,13 +19,9 @@ static void kernel_bootstrap_main(void) {
 
     pcidev_probe_all();
 
-    // Offer the ext4 filesystem module interactively (GDD y/n prompt).
-    // If it is missing, declined, or fails HMAC verification, mntfs falls
+    // Module loading (PCI kmods, filesystem driver) is a userspace concern —
+    // nothing is auto-loaded here. Without a filesystem module mntfs falls
     // back to a virtual nodisk root and the kernel still boots to /bin/init.
-    pci_gdd_prompt_fs();
-    if (!fs_mod_loaded())
-        pr_warn("ext4 filesystem module not loaded — disk FS unavailable");
-
     mntfs_init();
 
     if (bootstrap_mbi) {
