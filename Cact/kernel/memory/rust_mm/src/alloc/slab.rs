@@ -32,11 +32,12 @@ pub struct SlabCache {
 }
 
 static G_CACHE_LIST: KStatic<*mut SlabCache> = KStatic::new(core::ptr::null_mut());
-static G_CACHE_LOCK: KStatic<IrqSpinlock> = KStatic::new(IrqSpinlock { spin_locked: 0, saved_flags: 0 });
+pub(crate) static G_CACHE_LOCK: KStatic<IrqSpinlock> = KStatic::new(IrqSpinlock { spin_locked: 0, saved_flags: 0 });
 
-const GENERIC_CACHE_COUNT: usize = 9;
-static GENERIC_SIZES: [u32; GENERIC_CACHE_COUNT] = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
-static G_GENERIC_CACHES: KStatic<[*mut SlabCache; GENERIC_CACHE_COUNT]> =
+/// Number of generic (kmalloc-style) size caches.
+pub(crate) const GENERIC_CACHE_COUNT: usize = 9;
+
+pub(crate) static G_GENERIC_CACHES: KStatic<[*mut SlabCache; GENERIC_CACHE_COUNT]> =
     KStatic::new([core::ptr::null_mut(); GENERIC_CACHE_COUNT]);
 
 fn align_up(size: u32, align: u32) -> u32 {
@@ -381,79 +382,6 @@ pub extern "C" fn slab_print_stats(cache: *const SlabCache) {
     kprint_str(b"\n\0".as_ptr());
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn slab_init() {
-    // SAFETY: boot-time init, single-threaded.
-    unsafe { irq_spinlock_init(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock) };
-    *G_CACHE_LIST.get_mut() = core::ptr::null_mut();
-
-    for i in 0..GENERIC_CACHE_COUNT {
-        let mut name = [0u8; SLAB_NAME_LEN];
-        let prefix = b"kmalloc-";
-        name[..prefix.len()].copy_from_slice(prefix);
-
-        let mut num_buf = [0u8; 8];
-        let mut sz = GENERIC_SIZES[i];
-        let mut p: usize = 6;
-        num_buf[7] = 0;
-        loop {
-            num_buf[p] = b'0' + (sz % 10) as u8;
-            sz /= 10;
-            if sz == 0 {
-                break;
-            }
-            p -= 1;
-        }
-        let mut j = prefix.len();
-        let mut k = p;
-        while k < 7 && j < SLAB_NAME_LEN - 1 {
-            name[j] = num_buf[k];
-            j += 1;
-            k += 1;
-        }
-        name[j] = 0;
-
-        let cache = slab_cache_create(name.as_ptr(), GENERIC_SIZES[i], None, None);
-        G_GENERIC_CACHES.get_mut()[i] = cache;
-        if cache.is_null() {
-            // SAFETY: printk_color is a C function that takes a valid string.
-            unsafe {
-                printk_color(b"[SLAB] failed to create cache: \0".as_ptr(), COLOR_LIGHT_RED);
-                printk_color(name.as_ptr(), COLOR_LIGHT_RED);
-            }
-            kprint_str(b"\n\0".as_ptr());
-            klog_msg(LOG_FAIL, b"slab cache creation failed\0".as_ptr());
-        }
-    }
-
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn slab_kmalloc(size: u32) -> *mut u8 {
-    if size == 0 {
-        return core::ptr::null_mut();
-    }
-    let caches = G_GENERIC_CACHES.get_mut();
-    for i in 0..GENERIC_CACHE_COUNT {
-        if size <= GENERIC_SIZES[i] {
-            return slab_alloc(caches[i]);
-        }
-    }
-    kmalloc(size)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn slab_kfree(ptr: *mut u8) {
-    if ptr.is_null() {
-        return;
-    }
-    // SAFETY: obj resides in a page whose start is a Slab header.
-    let s = (ptr as u32 & !(PAGE_SIZE - 1)) as *mut Slab;
-    unsafe {
-        if !(*s).cache.is_null() && (*s).capacity > 0 && (*s).capacity <= 512 {
-            slab_free((*s).cache, ptr);
-            return;
-        }
-    }
-    kfree(ptr);
-}
+#[path = "slab_generic.rs"]
+mod slab_generic;
+pub use slab_generic::*;

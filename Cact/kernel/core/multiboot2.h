@@ -119,4 +119,7 @@ typedef struct {
     char     name[MB2_MODULE_NAME_MAX];
 } mb2_module_info_t;
 
+// cctkfs staging module captured during multiboot2_parse() (defined in multiboot2.c)
+extern mb2_module_info_t mb2_cctkfs_module;
+
 #endif  
