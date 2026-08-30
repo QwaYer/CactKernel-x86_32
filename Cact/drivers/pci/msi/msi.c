@@ -23,7 +23,7 @@ void msix_init(void)
     if (syscall_idx < MSIX_VECTOR_COUNT)
         msix_vector_alloc[syscall_idx] = 1;
     msix_initialized = 1;
-    klog(LOG_OK, "MSI-X: vector pool 0x30-0xEF ready");
+    pr_info("MSI-X: vector pool 0x30-0xEF ready");
 }
 
 int msix_alloc_vector(void)
@@ -35,7 +35,7 @@ int msix_alloc_vector(void)
             return MSIX_VECTOR_BASE + i;
         }
     }
-    klog(LOG_WARN, "MSI-X: no free vectors");
+    pr_warn("MSI-X: no free vectors");
     return -1;
 }
 
@@ -111,10 +111,10 @@ int pci_msix_table_map(pci_device_t *dev,
     uint32_t table_addr = bar->base + table_offset;
     uint32_t table_end;
     if (__builtin_uadd_overflow(table_addr, table_size * MSIX_TABLE_ENTRY_SIZE, &table_end)) {
-        klog(LOG_WARN, "MSI-X: table end overflow"); return -1;
+        pr_warn("MSI-X: table end overflow"); return -1;
     }
 
-    if (table_end > bar->base + bar->size) { klog(LOG_WARN, "MSI-X: table beyond BAR"); return -1; }
+    if (table_end > bar->base + bar->size) { pr_warn("MSI-X: table beyond BAR"); return -1; }
 
     uint32_t page_base = table_addr & ~0xFFF;
     uint32_t page_end  = (table_end + 0xFFF) & ~0xFFF;

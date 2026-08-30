@@ -3,9 +3,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdarg.h>
 
-// kernel console output
-void printk(char* message);
+// kernel console output (varargs, Linux-style with KERN_* prefixes)
+void printk(const char* fmt, ...);
 
 // string operations
 int strcmp(const char* s1, const char* s2);
@@ -15,10 +16,14 @@ char* strcat(char* dest, const char* src);
 char* strcpy(char* dest, const char* src);
 char* copy_string(char* dest, const char* src);
 
-// numeric conversions
-void itoa(int n, char str[]);
+// numeric conversions (internal helpers; not exported via ksym)
 int atoi(char* str);
+void itoa(int n, char str[]);
 void hex_to_ascii(unsigned int n, char str[]);
+
+// Linux-style formatted output
+int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args);
+int snprintf(char* buf, unsigned int size, const char* fmt, ...);
 
 // memory operations (signed length)
 void* memory_set(void* dest, int val, int len);

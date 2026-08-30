@@ -257,7 +257,7 @@ int cpudev_init(void) {
         g_syscall_mech = SYSCALL_MECH_SYSENTER;
     } else {
         g_syscall_mech = SYSCALL_MECH_SYSENTER;  // placeholder
-        klog(LOG_FAIL, "CPUDEV: CPU supports neither SYSCALL nor SEP — syscalls will NOT work");
+        pr_crit("CPUDEV: CPU supports neither SYSCALL nor SEP — syscalls will NOT work");
     }
 
     printk("        [  OK  ] CPUDEV: syscall = ");
@@ -301,10 +301,14 @@ int cpu_syscall_commit(void) {
     }
 
     if (g_syscall_mech == SYSCALL_MECH_SYSCALL)
-        klog(g_syscall_use_sysexit ? LOG_OK : LOG_WARN,
-             "CPUDEV: EFER.SCE+STAR+FMASK programmed (return: SYSRET/IRET)");
+        if (g_syscall_use_sysexit)
+            pr_info("CPUDEV: EFER.SCE+STAR+FMASK programmed (return: SYSRET/IRET)");
+        else
+            pr_warn("CPUDEV: EFER.SCE+STAR+FMASK programmed (return: SYSRET/IRET)");
     else if (cpu_has_sep())
-        klog(g_syscall_use_sysexit ? LOG_OK : LOG_WARN,
-             "CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: SYSEXIT/IRET)");
+        if (g_syscall_use_sysexit)
+            pr_info("CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: SYSEXIT/IRET)");
+        else
+            pr_warn("CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: SYSEXIT/IRET)");
     return 0;
 }

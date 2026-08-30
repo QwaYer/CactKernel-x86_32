@@ -102,7 +102,6 @@ unsafe extern "C" {
     pub fn printk_color(s: *const u8, color: u32);
     pub fn itoa(n: i32, buf: *mut u8);
     pub fn hex_to_ascii(n: u32, buf: *mut u8);
-    pub fn klog(level: i32, s: *const u8);
 
     pub static page_directory: SyncUnsafeCell<u32>;       
     pub static tss_entry: SyncUnsafeCell<TssEntry>;

@@ -43,22 +43,22 @@ int pci_driver_modinfo_read(uint32_t off, uint32_t size, char *buf)
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    vendor_id:       ");
-        hex_to_ascii((unsigned int)d->vendor_id, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)d->vendor_id));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    device_id:       ");
-        hex_to_ascii((unsigned int)d->device_id, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)d->device_id));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    class_code:      ");
-        hex_to_ascii((unsigned int)d->class_code, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)d->class_code));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    subclass:        ");
-        hex_to_ascii((unsigned int)d->subclass, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)d->subclass));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
@@ -113,37 +113,37 @@ int pci_driver_modinfo_read(uint32_t off, uint32_t size, char *buf)
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    vendor_id:       ");
-        hex_to_ascii((unsigned int)dv->vendor_id, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)dv->vendor_id));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    device_id:       ");
-        hex_to_ascii((unsigned int)dv->device_id, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)dv->device_id));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    class_code:      ");
-        hex_to_ascii((unsigned int)dv->class_code, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)dv->class_code));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    subclass:        ");
-        hex_to_ascii((unsigned int)dv->subclass, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)dv->subclass));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    prog_if:         ");
-        hex_to_ascii((unsigned int)dv->prog_if, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)dv->prog_if));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    revision:        ");
-        hex_to_ascii((unsigned int)dv->revision, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)dv->revision));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "    header_type:     ");
-        hex_to_ascii((unsigned int)dv->header_type, hx);
+        snprintf(hx, sizeof(hx), "0x%x", (unsigned)((unsigned int)dv->header_type));
         p = buf_append(tmp, p, PCI_MODINFO_MAX, hx);
         p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n");
 

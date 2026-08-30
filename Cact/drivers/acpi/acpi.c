@@ -10,7 +10,7 @@ int acpi_init(void)
 {
     ACPI_STATUS status;
 
-    klog(LOG_OK, "ACPI: initializing ACPICA subsystem");
+    pr_info("ACPI: initializing ACPICA subsystem");
 
     /*
      * Firmware AML is written and tested mostly against Windows and often
@@ -23,37 +23,37 @@ int acpi_init(void)
 
     status = AcpiInitializeSubsystem();
     if (ACPI_FAILURE(status)) {
-        klog(LOG_ERROR, "ACPI: AcpiInitializeSubsystem failed");
+        pr_err("ACPI: AcpiInitializeSubsystem failed");
         return -1;
     }
-    klog(LOG_OK, "ACPI: subsystem initialized");
+    pr_info("ACPI: subsystem initialized");
 
     status = AcpiInitializeTables(NULL, 32, FALSE);
     if (ACPI_FAILURE(status)) {
-        klog(LOG_ERROR, "ACPI: AcpiInitializeTables failed");
+        pr_err("ACPI: AcpiInitializeTables failed");
         return -1;
     }
-    klog(LOG_OK, "ACPI: tables loaded");
+    pr_info("ACPI: tables loaded");
 
     status = AcpiLoadTables();
     if (ACPI_FAILURE(status)) {
-        klog(LOG_WARN, "ACPI: AcpiLoadTables failed (tables still available)");
+        pr_warn("ACPI: AcpiLoadTables failed (tables still available)");
     } else {
-        klog(LOG_OK, "ACPI: namespace tables loaded");
+        pr_info("ACPI: namespace tables loaded");
     }
 
     status = AcpiEnableSubsystem(ACPI_FULL_INITIALIZATION);
     if (ACPI_FAILURE(status)) {
-        klog(LOG_WARN, "ACPI: AcpiEnableSubsystem failed (partial ACPI)");
+        pr_warn("ACPI: AcpiEnableSubsystem failed (partial ACPI)");
     } else {
-        klog(LOG_OK, "ACPI: subsystem enabled");
+        pr_info("ACPI: subsystem enabled");
     }
 
     status = AcpiInitializeObjects(ACPI_FULL_INITIALIZATION);
     if (ACPI_FAILURE(status)) {
-        klog(LOG_WARN, "ACPI: AcpiInitializeObjects failed");
+        pr_warn("ACPI: AcpiInitializeObjects failed");
     } else {
-        klog(LOG_OK, "ACPI: namespace objects initialized");
+        pr_info("ACPI: namespace objects initialized");
     }
 
     acpi_initialized = 1;
@@ -64,15 +64,15 @@ int acpi_init(void)
             char buf[48];
             char hex[16];
             strcpy(buf, "ACPI: RSDP at 0x");
-            hex_to_ascii((uint32_t)rsdp_phys, hex);
+            snprintf(hex, sizeof(hex), "0x%x", (unsigned)((uint32_t)rsdp_phys));
             strcat(buf, hex);
-            klog(LOG_OK, buf);
+            pr_info("%s", buf);
         } else {
-            klog(LOG_WARN, "ACPI: RSDP not found");
+            pr_warn("ACPI: RSDP not found");
         }
     }
 
-    klog(LOG_OK, "ACPI: initialization complete");
+    pr_info("ACPI: initialization complete");
     return 0;
 }
 

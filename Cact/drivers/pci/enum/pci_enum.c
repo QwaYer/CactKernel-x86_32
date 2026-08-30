@@ -71,7 +71,7 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     if (id == 0xFFFFFFFF || id == 0x00000000) return;  // absent function
 
     pci_device_t *d = alloc_dev();
-    if (!d) { klog(LOG_WARN, "PCI device pool exhausted"); return; }
+    if (!d) { pr_warn("PCI device pool exhausted"); return; }
 
     d->bus = bus; d->dev = dev; d->fn = fn;
     d->vendor_id = (uint16_t)(id & 0xFFFF);
@@ -153,7 +153,7 @@ void pci_enumerate(void) {
             scan_bus(fn);
         }
     }
-    klog(LOG_OK, "PCI bus enumeration finished");
+    pr_info("PCI bus enumeration finished");
 }
 
 void pci_enum_dump(void) {

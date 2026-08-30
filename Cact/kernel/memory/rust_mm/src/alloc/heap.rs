@@ -123,16 +123,32 @@ pub extern "C" fn kmalloc_aligned(size: u32, align: u32) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kfree_aligned(ptr: *mut u8) {
+pub extern "C" fn kfree(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
+    let hdr_size = core::mem::size_of::<HeapBlock>() as usize;
+
+    // Normal heap block?
+    let block = unsafe { ptr.sub(hdr_size) } as *mut HeapBlock;
+    if heap_addr_in_range(block as u32) && unsafe { (*block).magic } == HEAP_MAGIC {
+        kfree_impl(ptr);
+        return;
+    }
+
+    // Linux-style fallback: kmalloc_aligned stores the raw heap pointer
+    // 4 bytes below the aligned address.
     let raw = unsafe { *((ptr as u32 - 4) as *const u32) } as *mut u8;
-    kfree(raw);
+    if heap_addr_in_range(raw as u32) {
+        let rblock = unsafe { raw.sub(hdr_size) } as *mut HeapBlock;
+        if unsafe { (*rblock).magic } == HEAP_MAGIC {
+            kfree_impl(raw);
+            return;
+        }
+    }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn kfree(ptr: *mut u8) {
+fn kfree_impl(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }

@@ -356,7 +356,7 @@ int sys_netcfg_set(struct syscall_frame *regs) {
     };
     int rc = rust_net_dhcp_set_lease(&lease);
     if (rc != 0) {
-        klog(LOG_WARN, "netcfg_set failed");
+        pr_warn("netcfg_set failed");
     }
     return rc;
 }

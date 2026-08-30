@@ -15,7 +15,6 @@ unsafe extern "C" {
     pub fn printk(s: *mut c_char);
     pub fn printk_color(s: *mut c_char, color: u32);
     pub fn printk_hex(v: u32);
-    pub fn klog(level: c_int, s: *const c_char);
 
     pub fn itoa(v: c_int, out: *mut c_char);
 
@@ -43,15 +42,28 @@ pub const LOG_WARN: c_int = 1;
 pub const LOG_ERROR: c_int = 2;
 pub const LOG_FAIL: c_int = 3;
 
-/// `msg` must be a static `b"...\0"` slice (NUL-terminated for C `klog`).
+/// `msg` must be a static `b"...\0"` slice (NUL-terminated).  Builds a
+/// KERN_SOH + level prefixed buffer and forwards it to `printk`.
 #[inline]
 pub fn klog_static(level: c_int, msg: &'static [u8]) {
     debug_assert!(
         msg.last().copied() == Some(0),
         "klog_static requires NUL-terminated message"
     );
+    let mut buf = [0u8; 1024];
+    let lvl = match level {
+        0 => b'6',              // LOG_OK  -> KERN_INFO
+        1 => b'4',              // LOG_WARN -> KERN_WARNING
+        _ => b'3',              // LOG_ERROR/LOG_FAIL -> KERN_ERR
+    };
+    buf[0] = 0x01;              // KERN_SOH
+    buf[1] = lvl;
+    let len = core::cmp::min(msg.len(), buf.len() - 3);
+    buf[2..2 + len].copy_from_slice(&msg[..len]);
+    buf[2 + len] = b'\n';
+    buf[3 + len] = 0;
     unsafe {
-        klog(level, msg.as_ptr().cast());
+        printk(buf.as_mut_ptr().cast());
     }
 }
 

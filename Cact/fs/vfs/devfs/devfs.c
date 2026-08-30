@@ -415,7 +415,7 @@ devfs_entry_t *devfs_find(const char *name) {
 }
 
 // register a new device in devfs; returns the entry or NULL on duplicate/allocation failure
-devfs_entry_t *devfs_register(const char *name, uint32_t flags,
+devfs_entry_t *register_chrdev(const char *name, uint32_t flags,
                                devfs_driver_t *drv, void *drv_priv) {
     if (!name || !drv) return 0;
     if (devfs_find(name)) {
@@ -439,7 +439,7 @@ devfs_entry_t *devfs_register(const char *name, uint32_t flags,
 }
 
 // remove a device from devfs by name; returns 0 on success, -1 if not found
-int devfs_unregister(const char *name) {
+int unregister_chrdev(const char *name) {
     devfs_entry_t **pp = &dev_list;
     while (*pp) {
         if (streq((*pp)->name, name)) {
@@ -467,21 +467,21 @@ void devfs_init(void) {
     modinfo_node.type = VFS_FILE;
     modinfo_node.ops  = &modinfo_ops;
 
-    devfs_register("null",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_null,   0);
-    devfs_register("zero",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_zero,   0);
-    devfs_register("random",  DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
-    devfs_register("urandom", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
+    register_chrdev("null",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_null,   0);
+    register_chrdev("zero",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_zero,   0);
+    register_chrdev("random",  DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
+    register_chrdev("urandom", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
 
     blkdev_t *boot = blkdev_get_boot();
     if (boot) {
-        devfs_register(boot->name, DEVFS_F_BLOCK, &drv_disk, 0);
+        register_chrdev(boot->name, DEVFS_F_BLOCK, &drv_disk, 0);
     }
-    devfs_register("tty", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_tty, 0);
+    register_chrdev("tty", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_tty, 0);
 
-    devfs_register("keyboard", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_keyboard, 0);
-    devfs_register("mouse",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_mouse,    0);
+    register_chrdev("keyboard", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_keyboard, 0);
+    register_chrdev("mouse",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_mouse,    0);
 
-    devfs_register("fb0", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_fb, 0);
+    register_chrdev("fb0", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_fb, 0);
 
     devfs_ready = 1;
 }

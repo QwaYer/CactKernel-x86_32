@@ -206,7 +206,7 @@ static int hid_probe(usb_device_t *dev) {
     }
 
     if (type == HID_TYPE_UNKNOWN) {
-        klog(LOG_WARN, "USB HID: unsupported protocol");
+        pr_warn("USB HID: unsupported protocol");
         return -1;
     }
 
@@ -224,7 +224,7 @@ static int hid_probe(usb_device_t *dev) {
         }
     }
     if (!priv->intr_ep) {
-        klog(LOG_WARN, "USB HID: interrupt IN endpoint not found");
+        pr_warn("USB HID: interrupt IN endpoint not found");
         kfree(priv);
         return -1;
     }
@@ -269,7 +269,7 @@ static int hid_probe(usb_device_t *dev) {
                                          hid_irq_notify, priv);
 
     if (rc != 0) {
-        klog(LOG_WARN, "USB HID: interrupt transfer registration failed");
+        pr_warn("USB HID: interrupt transfer registration failed");
         kfree(priv);
         dev->driver_priv = NULL;
         return -1;

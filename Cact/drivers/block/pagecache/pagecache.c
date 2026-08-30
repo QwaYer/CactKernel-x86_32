@@ -169,7 +169,7 @@ void pc_init(void) {
     stat_evictions  = 0;
     stat_writebacks = 0;
     irq_spinlock_init(&pc_lock);
-    klog(LOG_OK, "Page cache initialized");
+    pr_info("Page cache initialized");
 }
 
 // Get a page from cache; on miss, read from disk into a new or evicted slot
@@ -281,11 +281,8 @@ void pc_put_page(uint32_t dev, uint32_t block_no) {
     if (!p) { irq_spinlock_release(&pc_lock); return; }
     if (p->pin_count == 0) {
         irq_spinlock_release(&pc_lock);
-        printk("[pc] pc_put_page: pin_count underflow (dev=");
-        { char _b[16]; itoa((int)dev, _b); printk(_b); }
-        printk(", block=");
-        { char _b[16]; itoa((int)block_no, _b); printk(_b); }
-        printk(")\n");
+        printk("[pc] pc_put_page: pin_count underflow (dev=%d, block=%d)\n",
+               (int)dev, (int)block_no);
         return;
     }
     p->pin_count--;
@@ -356,10 +353,10 @@ void pc_invalidate_dev(uint32_t dev) {
 // Print cache statistics and current state
 void pc_dump_stats(void) {
     irq_spinlock_acquire(&pc_lock);
-    printk("[pc] hits=");      { char _b[16]; itoa((int)(stat_hits), _b); printk(_b); };
-    printk(" misses=");        { char _b[16]; itoa((int)(stat_misses), _b); printk(_b); };
-    printk(" evictions=");     { char _b[16]; itoa((int)(stat_evictions), _b); printk(_b); };
-    printk(" writebacks=");    { char _b[16]; itoa((int)(stat_writebacks), _b); printk(_b); };
+    printk("[pc] hits=%d", (int)((int)(stat_hits)));
+    printk(" misses=%d", (int)((int)(stat_misses)));
+    printk(" evictions=%d", (int)((int)(stat_evictions)));
+    printk(" writebacks=%d", (int)((int)(stat_writebacks)));
     printk("\n");
 
     uint32_t valid = 0, dirty = 0, pinned = 0;
@@ -369,9 +366,9 @@ void pc_dump_stats(void) {
         if (pool[i].pin_count > 0)          pinned++;
     }
     irq_spinlock_release(&pc_lock);
-    printk("[pc] pages: valid="); { char _b[16]; itoa((int)(valid), _b); printk(_b); };
-    printk(" dirty=");            { char _b[16]; itoa((int)(dirty), _b); printk(_b); };
-    printk(" pinned=");           { char _b[16]; itoa((int)(pinned), _b); printk(_b); };
-    printk("/");                  { char _b[16]; itoa((int)(PC_MAX_PAGES), _b); printk(_b); };
+    printk("[pc] pages: valid=%d", (int)((int)(valid)));
+    printk(" dirty=%d", (int)((int)(dirty)));
+    printk(" pinned=%d", (int)((int)(pinned)));
+    printk("/%d", (int)((int)(PC_MAX_PAGES)));
     printk("\n");
 }

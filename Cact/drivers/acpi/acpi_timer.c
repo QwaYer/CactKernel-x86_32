@@ -1,10 +1,10 @@
 #include "kernel.h"
+#include "klib.h"
 #include "acpi.h"
 #include "acpi_timer.h"
 #include "acpi_hpet.h"
 #include "cact_acpi.h"
 #include "sync.h"
-#include <string.h>
 
 static uint16_t pm_timer_port = 0;
 static int      pm_timer_32bit = 0;
@@ -33,7 +33,7 @@ int acpi_pm_timer_init(void)
     ACPI_TABLE_FADT *fadt = &AcpiGbl_FADT;
 
     if (fadt->PmTimerBlock == 0 && fadt->XPmTimerBlock.Address == 0) {
-        klog(LOG_WARN, "ACPI PM timer: no PM timer block in FADT");
+        pr_warn("ACPI PM timer: no PM timer block in FADT");
         return -1;
     }
 
@@ -44,12 +44,12 @@ int acpi_pm_timer_init(void)
     } else if (fadt->PmTimerBlock != 0) {
         pm_timer_port = (uint16_t)fadt->PmTimerBlock;
     } else {
-        klog(LOG_WARN, "ACPI PM timer: unsupported address space");
+        pr_warn("ACPI PM timer: unsupported address space");
         return -1;
     }
 
     if (pm_timer_port == 0) {
-        klog(LOG_WARN, "ACPI PM timer: invalid port 0");
+        pr_warn("ACPI PM timer: invalid port 0");
         return -1;
     }
 
@@ -67,10 +67,10 @@ int acpi_pm_timer_init(void)
     char buf[64];
     char hex[16];
     strcpy(buf, "ACPI PM timer: port 0x");
-    hex_to_ascii(pm_timer_port, hex);
+    snprintf(hex, sizeof(hex), "0x%x", (unsigned)(pm_timer_port));
     strcat(buf, hex);
     strcat(buf, pm_timer_32bit ? " (32-bit)" : " (24-bit)");
-    klog(LOG_OK, buf);
+    pr_info("%s", buf);
 
     return 0;
 }

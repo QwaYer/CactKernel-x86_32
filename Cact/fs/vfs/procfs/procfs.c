@@ -189,7 +189,7 @@ static int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     uint32_t apic_id = apic_lapic_id();
 
     #define _APP(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
-    #define _APPN(n) { char _nb[16]; itoa((int)(n),_nb); _APP(_nb); }
+    #define _APPN(n) { char _nb[16]; snprintf(_nb, sizeof(_nb), "%d", (int)(n)); _APP(_nb); }
 
     _APP("processor       : 0\n");
     _APP("apicid          : "); _APPN(apic_id); _APP("\n");
@@ -332,14 +332,14 @@ static int _apic_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[512]; int p = 0;
 
     #define _A(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
-    #define _N(n) { char _b[16]; itoa((int)(n),_b); _A(_b); }
+    #define _N(n) { char _b[16]; snprintf(_b, sizeof(_b), "%d", (int)(n)); _A(_b); }
 
     _A("APIC enabled    : ");
     _A(apic_is_enabled() ? "yes" : "no"); _A("\n");
 
     if (apic_is_enabled()) {
         _A("LAPIC base      : 0x");
-        { char h[12]; hex_to_ascii(apic_lapic_base(), h); _A(h); }
+        { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)apic_lapic_base()); _A(h); }
         _A("\n");
         _A("LAPIC ID        : "); _N(apic_lapic_id()); _A("\n");
 
@@ -347,7 +347,7 @@ static int _apic_read(uint32_t off, uint32_t size, char *buf) {
         if (apic_ioapic_info(&io_base, &io_id, &io_max, &io_gsi)) {
             _A("IOAPIC ID       : "); _N(io_id); _A("\n");
             _A("IOAPIC base     : 0x");
-            { char h[12]; hex_to_ascii(io_base, h); _A(h); }
+            { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)io_base); _A(h); }
             _A("\n");
             _A("IOAPIC max entry: "); _N(io_max); _A("\n");
             _A("IOAPIC GSI base : "); _N(io_gsi); _A("\n");
@@ -364,9 +364,9 @@ static int _apic_read(uint32_t off, uint32_t size, char *buf) {
     }
 
     _A("MSI-X vectors   : 0x");
-    { char h[12]; hex_to_ascii(MSIX_VECTOR_BASE, h); _A(h); }
+    { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)MSIX_VECTOR_BASE); _A(h); }
     _A("-0x");
-    { char h[12]; hex_to_ascii(MSIX_VECTOR_END - 1, h); _A(h); }
+    { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)(MSIX_VECTOR_END - 1)); _A(h); }
     _A(" ("); _N(MSIX_VECTOR_COUNT); _A(" total)\n");
 
     int used = msix_used_vectors();
@@ -392,7 +392,7 @@ static int _meminfo_read(uint32_t off, uint32_t size, char *buf) {
     unsigned int used_kb  = total_kb > free_kb ? total_kb - free_kb : 0;
 
     #define _A(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
-    #define _N(n) { char _b[16]; itoa((int)(n),_b); _A(_b); }
+    #define _N(n) { char _b[16]; snprintf(_b, sizeof(_b), "%d", (int)(n)); _A(_b); }
 
     _A("MemTotal:     "); _N(total_kb); _A(" kB\n");
     _A("MemFree:      "); _N(free_kb);  _A(" kB\n");
@@ -416,7 +416,7 @@ extern unsigned int timer_ticks_get(void);
 static int _uptime_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[64];
     int  p = 0;
-    char nb[16]; itoa((int)(timer_ticks_get() / 100), nb);
+    char nb[16]; snprintf(nb, sizeof(nb), "%d", (int)(timer_ticks_get() / 100));
     for (int i = 0; nb[i]; i++) tmp[p++] = nb[i];
     const char *s = " seconds\n";
     for (int i = 0; s[i]; i++) tmp[p++] = s[i];
@@ -474,7 +474,7 @@ static int _tasks_read(uint32_t off, uint32_t size, char *buf) {
     int  p = 0;
 
     #define _A(s) { const char *_s=(s); while(*_s && p<(int)sizeof(tmp)-1) tmp[p++]=*_s++; }
-    #define _N(n) { char _b[16]; itoa((int)(n),_b); _A(_b); }
+    #define _N(n) { char _b[16]; snprintf(_b, sizeof(_b), "%d", (int)(n)); _A(_b); }
 
     _A("PID  STATE     TYPE\n");
     _A("---  --------  --------\n");

@@ -51,7 +51,7 @@ int sys_module_load(const char* path, uint32_t vendor_id, uint32_t device_id) {
         return -2;
 
     if (usermod_slot_active) {
-        klog(LOG_WARN, "kmod slot busy");
+        pr_warn("kmod slot busy");
         return -3;
     }
 
@@ -93,7 +93,7 @@ int sys_module_load(const char* path, uint32_t vendor_id, uint32_t device_id) {
         pci_driver_match(d);
 
     if (!usermod_pci_drv.probe) {
-        klog(LOG_WARN, "kmod probe not linked");
+        pr_warn("kmod probe not linked");
         pci_unregister_driver(&usermod_pci_drv);
         return -4;
     }
@@ -123,17 +123,17 @@ int sys_module_unload(const char *name) {
     if (user_str_all_decimal(name)) {
         int idx;
         if (parse_pci_modinfo_index(name, &idx) != 0) {
-            klog(LOG_WARN, "kmod invalid pci index");
+            pr_warn("kmod invalid pci index");
             return -2;
         }
         pci_device_t *dev = pci_device_by_index(idx);
         if (!dev) {
-            klog(LOG_WARN, "kmod pci function index not found");
+            pr_warn("kmod pci function index not found");
             return -7;
         }
         pci_driver_t *rdrv = pci_driver_find_reloc_for_device(dev);
         if (!rdrv) {
-            klog(LOG_WARN, "kmod no relocatable module for pci function");
+            pr_warn("kmod no relocatable module for pci function");
             return -8;
         }
         pci_unload_module(rdrv);
@@ -148,11 +148,11 @@ int sys_module_unload(const char *name) {
 
     pci_driver_t *drv = pci_driver_find_by_name(name);
     if (!drv) {
-        klog(LOG_WARN, "kmod driver not found");
+        pr_warn("kmod driver not found");
         return -5;
     }
     if (!(drv->flags & PCI_DRV_F_RELOC_MODULE)) {
-        klog(LOG_WARN, "kmod driver is built-in");
+        pr_warn("kmod driver is built-in");
         return -6;
     }
 

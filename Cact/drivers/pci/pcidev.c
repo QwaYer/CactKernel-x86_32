@@ -98,12 +98,12 @@ int pcidev_register_driver(pci_driver_t *drv)
 {
     if (!drv || (!drv->probe && !drv->module_path)) return -1;
     if (pcidev_driver_count >= MAX_PCI_DRIVERS) {
-        klog(LOG_WARN, "pcidev: driver table full");
+        pr_warn("pcidev: driver table full");
         return -1;
     }
     for (pci_driver_t *d = pcidev_driver_list; d; d = d->next)
         if (streq(d->name, drv->name)) {
-            klog(LOG_WARN, "pcidev: duplicate driver name");
+            pr_warn("pcidev: duplicate driver name");
             return -1;
         }
     drv->next   = pcidev_driver_list;
@@ -136,14 +136,14 @@ int pcidev_match_device(pci_device_t *dev)
 
         if (drv->module_path && !drv->probe) {
             if (pci_load_module(drv->module_path, drv) != 0) {
-                klog(LOG_WARN, "pcidev: module load failed");
+                pr_warn("pcidev: module load failed");
                 continue;
             }
         }
 
         if (!drv->probe) return -1;
 
-        klog(LOG_OK, "pcidev: driver attached");
+        pr_info("pcidev: driver attached");
         if (drv->probe(dev) != 0) return -1;
         return 1;
     }
@@ -246,7 +246,7 @@ void pcidev_defer_device(pci_device_t *dev)
 void pcidev_probe_all(void)
 {
     if (deferred_count == 0) {
-        klog(LOG_OK, "pcidev: deferred probe queue empty");
+        pr_info("pcidev: deferred probe queue empty");
         return;
     }
     uint32_t ok = 0, fail = 0, none = 0;
@@ -260,7 +260,7 @@ void pcidev_probe_all(void)
         else               { dev->drv_probe_state = 3; fail++; }
     }
     deferred_count = 0;
-    klog(LOG_OK, "pcidev: deferred probe done");
+    pr_info("pcidev: deferred probe done");
 }
 
 
@@ -269,7 +269,7 @@ void pcidev_init(void)
     pcie_init();
 
     if (search_pci())
-        klog(LOG_WARN, "pcidev: PCI scan reported error");
+        pr_warn("pcidev: PCI scan reported error");
 
     pci_enumerate();
 }
@@ -277,7 +277,7 @@ void pcidev_init(void)
 
 void pcidev_dump(void)
 {
-    klog(LOG_OK, "pcidev: PCI devices");
+    pr_info("pcidev: PCI devices");
 }
 
 

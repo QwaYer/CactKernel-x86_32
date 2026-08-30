@@ -38,7 +38,7 @@ int register_blkdev(const char *name, uint32_t max_lba,
     printk(d->name);
     printk(" max_lba=");
     char buf[16];
-    hex_to_ascii(max_lba, buf);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(max_lba));
     printk(buf);
     if (boot_dev == d)
         printk(" *boot*\n");
@@ -78,7 +78,7 @@ void blkdev_init(void) {
     boot_dev  = 0;
     memset(devices, 0, sizeof(devices));
 
-    klog(LOG_OK, "Block device layer ready (drivers register at PCI probe)");
+    pr_info("Block device layer ready (drivers register at PCI probe)");
 }
 
 // Return the boot device (first successfully probed drive)
@@ -105,7 +105,7 @@ void blkdev_dump(void) {
     char b[16];
     for (int i = 0; i < dev_count; i++) {
         printk("  "); printk(devices[i].name);
-        printk(" lba="); hex_to_ascii(devices[i].max_lba, b); printk(b);
+        printk(" lba="); snprintf(b, sizeof(b), "0x%x", (unsigned)(devices[i].max_lba)); printk(b);
         if (&devices[i] == boot_dev) printk(" *boot*");
         printk("\n");
     }
@@ -115,9 +115,9 @@ void blkdev_dump(void) {
 static int blkdev_lba_oob(const char *op, uint32_t lba, uint32_t max_lba) {
     if (lba < max_lba) return 0;
     printk("[blkdev] "); printk(op); printk(" out of range: lba=");
-    char _b[16]; hex_to_ascii(lba, _b); printk(_b);
+    char _b[16]; snprintf(_b, sizeof(_b), "0x%x", (unsigned)(lba)); printk(_b);
     printk(" >= max_lba=");
-    hex_to_ascii(max_lba, _b); printk(_b);
+    snprintf(_b, sizeof(_b), "0x%x", (unsigned)(max_lba)); printk(_b);
     printk("\n");
     return 1;
 }
