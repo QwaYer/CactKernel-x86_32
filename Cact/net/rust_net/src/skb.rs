@@ -21,13 +21,13 @@ pub extern "C" fn skb_alloc() -> *mut Skb {
 }
 
 #[no_mangle]
-pub extern "C" fn skb_free(skb: *mut Skb) {
+pub extern "C" fn kfree_skb(skb: *mut Skb) {
     if skb.is_null() {
         return;
     }
     // SAFETY: skb was allocated via kmalloc.
     unsafe {
-        ffi_kernel::kfree_heap(skb as *mut c_void);
+        ffi_kernel::kfree(skb as *mut c_void);
     }
 }
 

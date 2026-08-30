@@ -375,9 +375,9 @@ pub struct Mb2MmapTable {
 // mutated under the scheduler spinlock — callers must hold that lock or be
 // in a single-threaded context (boot / IRQ-off) before accessing them.
 unsafe extern "C" {
-    pub fn kprint(msg: *const u8);
-    pub fn kprint_color(msg: *const u8, color: u32);
-    pub fn kprint_hex(n: u32);
+    pub fn printk(msg: *const u8);
+    pub fn printk_color(msg: *const u8, color: u32);
+    pub fn printk_hex(n: u32);
     pub fn klog(level: u32, msg: *const u8);
     pub fn itoa(n: i32, buf: *mut u8);
     pub fn hex_to_ascii(n: u32, buf: *mut u8);

@@ -34,17 +34,17 @@ static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     vfs_node_t *var = _var_dir();
     if (!var || !var->ops || !var->ops->readdir) {
-        kprint("  (empty)\n");
+        printk("  (empty)\n");
         return;
     }
     vfs_dirent_t *de;
     int any = 0;
     for (uint32_t i = 0; (de = var->ops->readdir(var, i)); i++) {
         if (de->name[0] == '.') continue;
-        kprint("  "); kprint(de->name); kprint("\n");
+        printk("  "); printk(de->name); printk("\n");
         any = 1;
     }
-    if (!any) kprint("  (empty)\n");
+    if (!any) printk("  (empty)\n");
 }
 
 static int _root_create(vfs_node_t *dir, const char *name) {

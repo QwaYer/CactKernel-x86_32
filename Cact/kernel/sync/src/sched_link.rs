@@ -1,6 +1,6 @@
 //! Weak link boundary into the scheduler and console.
 //!
-//! Declares `extern "C"` items (`schedule`, `sched_mlfq_enqueue_locked`, `kprint`,
+//! Declares `extern "C"` items (`schedule`, `sched_mlfq_enqueue_locked`, `printk`,
 //! `current_task`, `scheduler_lock`) that `cact_sync` references; the final kernel or
 //! `sched` staticlib supplies the definitions. `improper_ctypes` is allowed because
 //! `irq_spinlock_t` is a Rust type passed through the C ABI edge.
@@ -14,7 +14,7 @@ use crate::task_abi::{TaskState, TaskStruct};
 unsafe extern "C" {
     fn schedule();
     fn sched_mlfq_enqueue_locked(task: *mut TaskStruct, priority: u32);
-    fn kprint(s: *const u8);
+    fn printk(s: *const u8);
     static mut current_task: *mut TaskStruct;
     #[link_name = "scheduler_lock"]
     static mut SCHEDULER_LOCK: irq_spinlock_t;
@@ -32,7 +32,7 @@ pub(crate) fn mlfq_enqueue(task: *mut TaskStruct, priority: u32) {
 
 #[inline]
 pub(crate) fn kprint_str(p: *const u8) {
-    unsafe { kprint(p) }
+    unsafe { printk(p) }
 }
 
 #[inline]

@@ -133,7 +133,7 @@ static void usb_parse_config(usb_device_t *dev) {
 usb_device_t *usb_device_enumerate(usb_hc_t *hc, uint8_t port, uint8_t speed)
 {
     if (hc->port_reset(hc, port) != 0) {
-        kprint("[USB] Port reset failed\n");
+        printk("[USB] Port reset failed\n");
         return NULL;
     }
 
@@ -147,16 +147,16 @@ usb_device_t *usb_device_enumerate(usb_hc_t *hc, uint8_t port, uint8_t speed)
     dev->address = USB_DEFAULT_ADDRESS;
 
     if (usb_get_descriptor(dev, USB_DESC_DEVICE, 0, &dev->dev_desc, 8) < 0) {
-        kprint("[USB] Failed to read device descriptor\n");
-        kfree_heap(dev);
+        printk("[USB] Failed to read device descriptor\n");
+        kfree(dev);
         return NULL;
     }
 
     uint8_t new_addr = usb_alloc_address();
     if (!new_addr || usb_set_address(dev, new_addr) < 0) {
-        kprint("[USB] SET_ADDRESS failed\n");
+        printk("[USB] SET_ADDRESS failed\n");
         usb_free_address(new_addr);
-        kfree_heap(dev);
+        kfree(dev);
         return NULL;
     }
     dev->address = new_addr;
@@ -164,7 +164,7 @@ usb_device_t *usb_device_enumerate(usb_hc_t *hc, uint8_t port, uint8_t speed)
     if (usb_get_descriptor(dev, USB_DESC_DEVICE, 0,
                             &dev->dev_desc, sizeof(usb_dev_desc_t)) < 0) {
         usb_free_address(new_addr);
-        kfree_heap(dev);
+        kfree(dev);
         return NULL;
     }
 
@@ -172,7 +172,7 @@ usb_device_t *usb_device_enumerate(usb_hc_t *hc, uint8_t port, uint8_t speed)
     if (usb_get_descriptor(dev, USB_DESC_CONFIGURATION, 0,
                             &cfg_hdr, sizeof(usb_cfg_desc_t)) < 0) {
         usb_free_address(new_addr);
-        kfree_heap(dev);
+        kfree(dev);
         return NULL;
     }
 
@@ -182,7 +182,7 @@ usb_device_t *usb_device_enumerate(usb_hc_t *hc, uint8_t port, uint8_t speed)
     if (usb_get_descriptor(dev, USB_DESC_CONFIGURATION, 0,
                             dev->config_buf, total) < 0) {
         usb_free_address(new_addr);
-        kfree_heap(dev);
+        kfree(dev);
         return NULL;
     }
     dev->config_len = total;
@@ -214,7 +214,7 @@ void usb_device_disconnect(usb_hc_t *hc, uint8_t port) {
             if (drv && drv->remove) drv->remove(dev);
             usb_free_address(dev->address);
             *pp = dev->next;
-            kfree_heap(dev);
+            kfree(dev);
             device_count--;
             return;
         }

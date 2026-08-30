@@ -114,7 +114,7 @@ static void _mounts_remove(const char *devname) {
 static void _mounts_mount_all(void) {
     char buf[1024]; memset(buf, 0, sizeof(buf));
     int len = etcfs_read("mounts", buf, sizeof(buf) - 1);
-    if (len <= 0) { kprint("[mounts] empty\n"); return; }
+    if (len <= 0) { printk("[mounts] empty\n"); return; }
     buf[len] = '\0';
     int i = 0;
     while (i < len) {
@@ -126,12 +126,12 @@ static void _mounts_mount_all(void) {
         if (_find_disk(line)) continue; // already mounted
         uint32_t dev;
         if (mntfs_resolve_device(line, &dev) < 0) {
-            kprint("[mounts] unknown: "); kprint(line); kprint("\n"); continue;
+            printk("[mounts] unknown: "); printk(line); printk("\n"); continue;
         }
         vfs_node_t *node = fs_mod_mount(dev);
-        if (!node) { kprint("[mounts] failed: "); kprint(line); kprint("\n"); continue; }
+        if (!node) { printk("[mounts] failed: "); printk(line); printk("\n"); continue; }
         mntfs_mount_disk(line, node, 0);
-        kprint("[mounts] "); kprint(line); kprint(" mounted\n");
+        printk("[mounts] "); printk(line); printk(" mounted\n");
     }
 }
 
@@ -152,7 +152,7 @@ static void _raw_listdir(vfs_node_t *dir) {
     vfs_dirent_t *de;
     for (uint32_t i=0;(de=d->ext4_root->ops->readdir(d->ext4_root,i));i++) {
         if (de->name[0]=='.' && (de->name[1]=='\0'||(de->name[1]=='.'&&de->name[2]=='\0'))) continue;
-        kprint("  "); kprint(de->name); kprint("\n");
+        printk("  "); printk(de->name); printk("\n");
     }
 }
 static int _raw_create(vfs_node_t *dir, const char *n) {
@@ -218,7 +218,7 @@ static void _sys_listdir(vfs_node_t *dir) {
         const char *rest=e->name+pl;
         int has_slash=0; for (int k=0;rest[k];k++) if (rest[k]=='/') {has_slash=1;break;}
         if (has_slash) continue;
-        kprint("  "); kprint((char*)rest); kprint("/   ["); kprint(e->source); kprint("]\n");
+        printk("  "); printk((char*)rest); printk("/   ["); printk(e->source); printk("]\n");
     }
 }
 static vfs_ops_t sys_ops = {
@@ -247,8 +247,8 @@ static vfs_dirent_t *_disk_readdir(vfs_node_t *dir, uint32_t index) {
 static void _disk_listdir(vfs_node_t *dir) {
     disk_entry_t *d=(disk_entry_t*)dir->priv;
     if (!d) return;
-    if (d->has_sys) kprint("  sys/   [virtual]\n");
-    kprint("  raw/   [ext4]\n");
+    if (d->has_sys) printk("  sys/   [virtual]\n");
+    printk("  raw/   [ext4]\n");
 }
 static vfs_ops_t disk_ops = {
     .walk=_disk_walk,.readdir=_disk_readdir,.listdir=_disk_listdir,
@@ -272,11 +272,11 @@ static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     int any=0;
     for (disk_entry_t *d=disk_list;d;d=d->next) {
-        kprint("  /"); kprint(d->devname);
-        kprint(d->has_sys ? "/   [sys+raw]\n" : "/   [raw]\n");
+        printk("  /"); printk(d->devname);
+        printk(d->has_sys ? "/   [sys+raw]\n" : "/   [raw]\n");
         any=1;
     }
-    if (!any) kprint("  (no disks)\n");
+    if (!any) printk("  (no disks)\n");
 }
 static vfs_ops_t root_ops = {
     .walk=_root_walk,.readdir=_root_readdir,.listdir=_root_listdir,
@@ -359,7 +359,7 @@ int mntfs_umount_disk(const char *devname) {
         if (streq((*pp)->devname,devname)) {
             disk_entry_t *dead=*pp; *pp=dead->next;
             if (dead->persistent) _mounts_remove(dead->devname);
-            kfree_heap(dead); return 0;
+            kfree(dead); return 0;
         }
         pp=&(*pp)->next;
     }
@@ -373,7 +373,7 @@ int mntfs_umount(const char *name) {
     while (*pp) {
         if (streq((*pp)->name,name)) {
             mntfs_entry_t *dead=*pp; *pp=dead->next;
-            kfree_heap(dead); return 0;
+            kfree(dead); return 0;
         }
         pp=&(*pp)->next;
     }
@@ -382,15 +382,15 @@ int mntfs_umount(const char *name) {
 
 // Print all mounted disks and virtual mount points
 void mntfs_list(void) {
-    kprint("\nDisks:\n");
+    printk("\nDisks:\n");
     int any=0;
     for (disk_entry_t *d=disk_list;d;d=d->next) {
-        kprint("  /"); kprint(d->devname);
-        kprint(d->has_sys ? "  [master: sys+raw]" : "  [slave: raw]");
-        kprint(d->persistent ? "  [saved]\n" : "\n");
+        printk("  /"); printk(d->devname);
+        printk(d->has_sys ? "  [master: sys+raw]" : "  [slave: raw]");
+        printk(d->persistent ? "  [saved]\n" : "\n");
         any=1;
     }
-    if (!any) kprint("  (none)\n");
+    if (!any) printk("  (none)\n");
 }
 
 // Initialize mntfs, boot disk, and subsystem mounts.
@@ -406,7 +406,7 @@ void mntfs_init(void) {
 
     blkdev_t *boot = blkdev_get_boot();
     if (!boot) {
-        kprint("[mntfs] WARNING: no boot block device (load ahci/nvme kmod for disk)\n");
+        printk("[mntfs] WARNING: no boot block device (load ahci/nvme kmod for disk)\n");
         klog(LOG_WARN, "mntfs: no boot disk — nodisk mode");
         mntfs_setup_nodisk();
         klog(LOG_OK, "mntfs: virtual root ready (no boot disk)");
@@ -416,7 +416,7 @@ void mntfs_init(void) {
     strlcpy(boot_devname, boot->name, 32);
     vfs_node_t *ext4 = fs_mod_mount(0);
     if (!ext4) {
-        kprint("[mntfs] WARNING: no ext4 on "); kprint(boot_devname); kprint("\n");
+        printk("[mntfs] WARNING: no ext4 on "); printk(boot_devname); printk("\n");
         klog(LOG_WARN, "mntfs: ext4 mount failed — nodisk mode");
         mntfs_setup_nodisk();
         klog(LOG_OK, "mntfs: virtual root ready (ext4 unavailable)");
@@ -431,7 +431,7 @@ void mntfs_init(void) {
     char sys_etc[64];
     strlcpy(sys_etc, boot_devname, 64);
     if (strlen(boot_devname) + 9 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/etc\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/etc\n");
     } else {
         strlcpy(sys_etc + strlen(boot_devname), "/sys/etc", 64 - strlen(boot_devname));
         mntfs_mount(sys_etc, "etcfs", etcfs_get_root(), 0);
@@ -443,7 +443,7 @@ void mntfs_init(void) {
     char sys_dev[64];
     strlcpy(sys_dev, boot_devname, 64);
     if (strlen(boot_devname) + 9 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/dev\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/dev\n");
     } else {
         strlcpy(sys_dev + strlen(boot_devname), "/sys/dev", 64 - strlen(boot_devname));
         mntfs_mount(sys_dev, "devfs", devfs_get_root(), 0);
@@ -453,7 +453,7 @@ void mntfs_init(void) {
     char sys_proc[64];
     strlcpy(sys_proc, boot_devname, 64);
     if (strlen(boot_devname) + 10 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/proc\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/proc\n");
     } else {
         strlcpy(sys_proc + strlen(boot_devname), "/sys/proc", 64 - strlen(boot_devname));
         mntfs_mount(sys_proc, "procfs", procfs_get_root(), 0);
@@ -463,7 +463,7 @@ void mntfs_init(void) {
     char sys_tmp[64];
     strlcpy(sys_tmp, boot_devname, 64);
     if (strlen(boot_devname) + 9 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/tmp\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/tmp\n");
     } else {
         strlcpy(sys_tmp + strlen(boot_devname), "/sys/tmp", 64 - strlen(boot_devname));
         mntfs_mount(sys_tmp, "tmpfs", tmpfs_get_root(), 0);
@@ -473,7 +473,7 @@ void mntfs_init(void) {
     char sys_bin[64];
     strlcpy(sys_bin, boot_devname, 64);
     if (strlen(boot_devname) + 9 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/bin\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/bin\n");
     } else {
         strlcpy(sys_bin + strlen(boot_devname), "/sys/bin", 64 - strlen(boot_devname));
         mntfs_mount(sys_bin, "binfs", binfs_get_root(), 0);
@@ -483,7 +483,7 @@ void mntfs_init(void) {
     char sys_sbin[64];
     strlcpy(sys_sbin, boot_devname, 64);
     if (strlen(boot_devname) + 10 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/sbin\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/sbin\n");
     } else {
         strlcpy(sys_sbin + strlen(boot_devname), "/sys/sbin", 64 - strlen(boot_devname));
         mntfs_mount(sys_sbin, "sbinfs", sbinfs_get_root(), 0);
@@ -493,7 +493,7 @@ void mntfs_init(void) {
     char sys_lib[64];
     strlcpy(sys_lib, boot_devname, 64);
     if (strlen(boot_devname) + 9 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/lib\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/lib\n");
     } else {
         strlcpy(sys_lib + strlen(boot_devname), "/sys/lib", 64 - strlen(boot_devname));
         mntfs_mount(sys_lib, "libfs", libfs_get_root(), 0);
@@ -503,7 +503,7 @@ void mntfs_init(void) {
     char sys_var[64];
     strlcpy(sys_var, boot_devname, 64);
     if (strlen(boot_devname) + 9 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/var\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/var\n");
     } else {
         strlcpy(sys_var + strlen(boot_devname), "/sys/var", 64 - strlen(boot_devname));
         mntfs_mount(sys_var, "varfs", varfs_get_root(), 0);
@@ -513,7 +513,7 @@ void mntfs_init(void) {
     char sys_usr[64];
     strlcpy(sys_usr, boot_devname, 64);
     if (strlen(boot_devname) + 9 > 63) {
-        kprint("[mntfs] boot_devname too long, skipping /sys/usr\n");
+        printk("[mntfs] boot_devname too long, skipping /sys/usr\n");
     } else {
         strlcpy(sys_usr + strlen(boot_devname), "/sys/usr", 64 - strlen(boot_devname));
         mntfs_mount(sys_usr, "usrfs", usrfs_get_root(), 0);

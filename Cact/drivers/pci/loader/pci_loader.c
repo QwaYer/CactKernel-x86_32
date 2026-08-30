@@ -110,14 +110,14 @@ static void module_proc_name(const char *path, char *out, int out_sz) {
 
 static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
     if (*file_size <= CACT_HMAC_TAG_SIZE) {
-        kprint("[LDR] HMAC: unsigned module (no signature) — rejected\n");
+        printk("[LDR] HMAC: unsigned module (no signature) — rejected\n");
         return -1;
     }
     uint32_t  data_len = *file_size - CACT_HMAC_TAG_SIZE;
     uint8_t  *tag      = elf_data + data_len;
     int       rc       = cact_hmac_verify(elf_data, data_len, tag, CACT_HMAC_TAG_SIZE);
     if (rc != 0) {
-        kprint("[LDR] HMAC: signature mismatch — rejected\n");
+        printk("[LDR] HMAC: signature mismatch — rejected\n");
         return -1;
     }
     *file_size = data_len;
@@ -166,7 +166,7 @@ static int read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t
 
         Elf32_Ehdr *eh = (Elf32_Ehdr *)buf;
         if (eh->e_magic != ELF_MAGIC || eh->e_type != ET_REL || eh->e_machine != EM_386) {
-            kfree_heap(buf);
+            kfree(buf);
             return -2;
         }
         *elf_data  = buf;
@@ -192,14 +192,14 @@ static int read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t
 
     int br = read_vfs(node, 0, fsz, (char *)buf);
     if (br <= 0) {
-        kfree_heap(buf);
+        kfree(buf);
         vfs_node_unref(node);
         return -1;
     }
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)buf;
     if (eh->e_magic != ELF_MAGIC || eh->e_type != ET_REL || eh->e_machine != EM_386) {
-        kfree_heap(buf);
+        kfree(buf);
         vfs_node_unref(node);
         return -2;
     }
@@ -294,16 +294,16 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     uint32_t file_size = 0;
     int      rr        = read_rel_elf_from_path(path, &elf_data, &file_size);
     if (rr == -1) {
-        kprint("[LDR] manifest: file not found\n");
+        printk("[LDR] manifest: file not found\n");
         return -1;
     }
     if (rr == -2) {
-        kprint("[LDR] manifest: not a valid ELF32 relocatable\n");
+        printk("[LDR] manifest: not a valid ELF32 relocatable\n");
         return -2;
     }
     if (hmac_verify_module(elf_data, &file_size) != 0) {
-        kprint("[LDR] manifest: HMAC verification failed\n");
-        kfree_heap(elf_data);
+        printk("[LDR] manifest: HMAC verification failed\n");
+        kfree(elf_data);
         return -5;
     }
 
@@ -314,8 +314,8 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     if (__builtin_umul_overflow(eh->e_shnum, eh->e_shentsize, &sh_tab_end) ||
         __builtin_uadd_overflow(eh->e_shoff, sh_tab_end, &sh_tab_end) ||
         eh->e_shentsize < sizeof(Elf32_Shdr) || sh_tab_end > file_size) {
-        kprint("[LDR] manifest: corrupted section header table\n");
-        kfree_heap(elf_data);
+        printk("[LDR] manifest: corrupted section header table\n");
+        kfree(elf_data);
         return -3;
     }
 
@@ -330,21 +330,21 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
         }
     }
     if (!symtab_sh) {
-        kprint("[LDR] manifest: no .symtab\n");
-        kfree_heap(elf_data);
+        printk("[LDR] manifest: no .symtab\n");
+        kfree(elf_data);
         return -3;
     }
 
     // Validate symtab and its string table section data fit in file
     if (symtab_sh->sh_offset + symtab_sh->sh_size > file_size) {
-        kprint("[LDR] manifest: symtab exceeds file\n");
-        kfree_heap(elf_data);
+        printk("[LDR] manifest: symtab exceeds file\n");
+        kfree(elf_data);
         return -3;
     }
     Elf32_Shdr *strtab_sh = get_shdr(eh, strtab_idx);
     if (!strtab_sh || strtab_sh->sh_offset + strtab_sh->sh_size > file_size) {
-        kprint("[LDR] manifest: strtab exceeds file\n");
-        kfree_heap(elf_data);
+        printk("[LDR] manifest: strtab exceeds file\n");
+        kfree(elf_data);
         return -3;
     }
 
@@ -381,8 +381,8 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
         (void)read_sym_u8(eh, elf_data, ss, subclass_out);
 
     if (!have_vendor && !have_class) {
-        kprint("[LDR] manifest: need cact_pci_vendor_id or cact_pci_class\n");
-        kfree_heap(elf_data);
+        printk("[LDR] manifest: need cact_pci_vendor_id or cact_pci_class\n");
+        kfree(elf_data);
         return -4;
     }
 
@@ -398,7 +398,7 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     *vendor_out = vendor;
     *device_out = did;
 
-    kfree_heap(elf_data);
+    kfree(elf_data);
     return 0;
 }
 
@@ -410,16 +410,16 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     uint32_t file_size = 0;
     int      rr        = read_rel_elf_from_path(path, &elf_data, &file_size);
     if (rr == -1) {
-        kprint("[LDR] File not found\n");
+        printk("[LDR] File not found\n");
         return -1;
     }
     if (rr == -2) {
-        kprint("[LDR] Invalid ELF32 relocatable\n");
+        printk("[LDR] Invalid ELF32 relocatable\n");
         return -2;
     }
     if (hmac_verify_module(elf_data, &file_size) != 0) {
-        kprint("[LDR] HMAC verification failed\n");
-        kfree_heap(elf_data);
+        printk("[LDR] HMAC verification failed\n");
+        kfree(elf_data);
         return -8;
     }
 
@@ -430,8 +430,8 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     if (__builtin_umul_overflow(eh->e_shnum, eh->e_shentsize, &sh_tab_end) ||
         __builtin_uadd_overflow(eh->e_shoff, sh_tab_end, &sh_tab_end) ||
         eh->e_shentsize < sizeof(Elf32_Shdr) || sh_tab_end > file_size) {
-        kprint("[LDR] corrupted module ELF\n");
-        kfree_heap(elf_data);
+        printk("[LDR] corrupted module ELF\n");
+        kfree(elf_data);
         return -8;
     }
 
@@ -449,7 +449,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
 
     // Allocate and zero the module private image
     uint8_t *image = (uint8_t *)kmalloc(total);
-    if (!image) { kfree_heap(elf_data); return -3; }
+    if (!image) { kfree(elf_data); return -3; }
     memset(image, 0, total);
 
     // Copy PROGBITS sections into image
@@ -457,8 +457,8 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         Elf32_Shdr *sh = get_shdr(eh, i);
         if (!(sh->sh_flags & SHF_ALLOC) || sh->sh_type != SHT_PROGBITS) continue;
         if (sh->sh_offset + sh->sh_size > file_size) {
-            kprint("[LDR] section offset exceeds file\n");
-            kfree_heap(image); kfree_heap(elf_data);
+            printk("[LDR] section offset exceeds file\n");
+            kfree(image); kfree(elf_data);
             return -8;
         }
         memcpy(image + sh->sh_addr, elf_data + sh->sh_offset, sh->sh_size);
@@ -476,20 +476,20 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         }
     }
     if (!symtab_sh) {
-        kprint("[LDR] No .symtab found\n");
-        kfree_heap(image); kfree_heap(elf_data);
+        printk("[LDR] No .symtab found\n");
+        kfree(image); kfree(elf_data);
         return -4;
     }
 
     if (symtab_sh->sh_offset + symtab_sh->sh_size > file_size) {
-        kprint("[LDR] symtab exceeds file\n");
-        kfree_heap(image); kfree_heap(elf_data);
+        printk("[LDR] symtab exceeds file\n");
+        kfree(image); kfree(elf_data);
         return -8;
     }
     Elf32_Shdr *strtab_sh = get_shdr(eh, strtab_idx);
     if (!strtab_sh || strtab_sh->sh_offset + strtab_sh->sh_size > file_size) {
-        kprint("[LDR] strtab exceeds file\n");
-        kfree_heap(image); kfree_heap(elf_data);
+        printk("[LDR] strtab exceeds file\n");
+        kfree(image); kfree(elf_data);
         return -8;
     }
 
@@ -507,9 +507,9 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         for (uint32_t r = 0; r < rel_cnt; r++) {
             uint32_t   sym_idx = ELF32_R_SYM(rels[r].r_info);
             if (sym_idx >= sym_cnt) {
-                kprint("[LDR] Relocation symbol index out of bounds\n");
-                kfree_heap(image);
-                kfree_heap(elf_data);
+                printk("[LDR] Relocation symbol index out of bounds\n");
+                kfree(image);
+                kfree(elf_data);
                 return -7;
             }
             uint8_t    type    = ELF32_R_TYPE(rels[r].r_info);
@@ -519,40 +519,40 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
             if (sym->st_shndx == SHN_UNDEF) {
                 const char *sym_name = get_str(eh, strtab_idx, sym->st_name);
                 if (!sym_name) {
-                    kprint("[LDR] Bad string table index\n");
-                    kfree_heap(image);
-                    kfree_heap(elf_data);
+                    printk("[LDR] Bad string table index\n");
+                    kfree(image);
+                    kfree(elf_data);
                     return -7;
                 }
                 S = ksym_resolve(sym_name);
                 if (S == 0 && ELF32_ST_BIND(sym->st_info) != STB_WEAK) {
-                    kprint("[LDR] Unresolved symbol: ");
-                    kprint((char *)sym_name);
-                    kprint("\n");
-                    kfree_heap(image);
-                    kfree_heap(elf_data);
+                    printk("[LDR] Unresolved symbol: ");
+                    printk((char *)sym_name);
+                    printk("\n");
+                    kfree(image);
+                    kfree(elf_data);
                     return -7;
                 }
             } else {
                 Elf32_Shdr *sym_sh = get_shdr(eh, sym->st_shndx);
                 if (!sym_sh) {
-                    kprint("[LDR] Symbol section index out of bounds\n");
-                    kfree_heap(image);
-                    kfree_heap(elf_data);
+                    printk("[LDR] Symbol section index out of bounds\n");
+                    kfree(image);
+                    kfree(elf_data);
                     return -7;
                 }
                 if (!(sym_sh->sh_flags & SHF_ALLOC)) {
-                    kprint("[LDR] Symbol in non-ALLOC section\n");
-                    kfree_heap(image);
-                    kfree_heap(elf_data);
+                    printk("[LDR] Symbol in non-ALLOC section\n");
+                    kfree(image);
+                    kfree(elf_data);
                     return -7;
                 }
                 S = (uint32_t)(image + sym_sh->sh_addr + sym->st_value);
             }
             if (rels[r].r_offset + sizeof(uint32_t) > target_sh->sh_size) {
-                kprint("[LDR] Relocation offset out of section bounds\n");
-                kfree_heap(image);
-                kfree_heap(elf_data);
+                printk("[LDR] Relocation offset out of section bounds\n");
+                kfree(image);
+                kfree(elf_data);
                 return -7;
             }
             uint32_t *patch = (uint32_t *)(image
@@ -580,9 +580,9 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     }
 
     if (!found_probe) {
-        kprint("[LDR] Symbol 'pci_driver_probe' not found\n");
-        kfree_heap(image);
-        kfree_heap(elf_data);
+        printk("[LDR] Symbol 'pci_driver_probe' not found\n");
+        kfree(image);
+        kfree(elf_data);
         return -5;
     }
 
@@ -606,8 +606,8 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     // Bookkeeping: store image pointer so it can be freed on unload
     mod_mem_t *mm  = (mod_mem_t *)kmalloc(sizeof(mod_mem_t));
     if (!mm) {
-        kfree_heap(image);
-        kfree_heap(elf_data);
+        kfree(image);
+        kfree(elf_data);
         drv->probe = NULL;
         return -6;
     }
@@ -617,8 +617,8 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     drv->priv      = mm;
     drv->flags    |= PCI_DRV_F_RELOC_MODULE;
 
-    kfree_heap(elf_data);   // ELF header no longer needed
-    kprint("[LDR] module ready: "); kprint(mm->proc_name);
+    kfree(elf_data);   // ELF header no longer needed
+    printk("[LDR] module ready: "); printk(mm->proc_name);
 
     return 0;
 }
@@ -628,11 +628,11 @@ void pci_unload_module(struct pci_driver *drv) {
     if (!drv || !drv->priv) return;
     mod_mem_t *mm = (mod_mem_t *)drv->priv;
     if (drv->remove) drv->remove(NULL);
-    kfree_heap(mm->image);
-    kfree_heap(mm);
+    kfree(mm->image);
+    kfree(mm);
     drv->priv   = NULL;
     drv->probe  = NULL;
     drv->remove = NULL;
     drv->flags &= ~PCI_DRV_F_RELOC_MODULE;
-    kprint("[LDR] Module unloaded: "); kprint(drv->name); kprint("\n");
+    printk("[LDR] Module unloaded: "); printk(drv->name); printk("\n");
 }

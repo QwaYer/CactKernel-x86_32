@@ -208,7 +208,7 @@ pub extern "C" fn udp_sock_send(
 #[no_mangle]
 pub extern "C" fn udp_input(skb_ptr: *mut Skb) {
     if !skb_ptr.is_null() {
-        crate::skb::skb_free(skb_ptr);
+        crate::skb::kfree_skb(skb_ptr);
     }
 }
 

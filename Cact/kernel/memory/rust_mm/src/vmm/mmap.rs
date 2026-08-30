@@ -1,7 +1,7 @@
 //! `mmap` / `munmap` implementation: private PDEs, file-backed mappings, and COW with the VMM.
 
 use crate::ffi::*;
-use crate::pmm::{kalloc, kfree_page, page_ref_inc};
+use crate::pmm::{kalloc, free_page, page_ref_inc};
 use crate::vmm::paging::{vmm_map, PD_KERNEL_ENTRIES};
 use crate::fault::page_fault::vmm_map_zero;
 use crate::safe::{zero_page, flush_tlb, flush_tlb_all, kprint_str};
@@ -292,9 +292,9 @@ pub extern "C" fn do_munmap(
         let pte = unsafe { *pt.add(pt_index(va) as usize) };
 
         // Only release frames that were allocated for user mappings. Supervisor
-        // identity PTEs (present, no PAGE_USER) must not be passed to kfree_page.
+        // identity PTEs (present, no PAGE_USER) must not be passed to free_page.
         if pte & PAGE_PRESENT != 0 && pte & PAGE_USER != 0 {
-            kfree_page((pte & !0xFFF) as *mut u8);
+            free_page((pte & !0xFFF) as *mut u8);
         }
         unsafe { *pt.add(pt_index(va) as usize) = 0; }
         flush_tlb(va);
@@ -586,32 +586,32 @@ pub extern "C" fn mmap_print_regions(tbl: *const MmapTable) {
         // SAFETY: itoa/hex_to_ascii require a valid buffer.
         unsafe {
             itoa(i as i32, buf.as_mut_ptr());
-            kprint(buf.as_ptr());
+            printk(buf.as_ptr());
         }
         kprint_str(b"] base=0x\0".as_ptr());
         unsafe {
             hex_to_ascii(r.base, buf.as_mut_ptr());
-            kprint(buf.as_ptr());
+            printk(buf.as_ptr());
         }
         kprint_str(b" len=0x\0".as_ptr());
         unsafe {
             hex_to_ascii(r.length, buf.as_mut_ptr());
-            kprint(buf.as_ptr());
+            printk(buf.as_ptr());
         }
         kprint_str(b" prot=\0".as_ptr());
         unsafe {
             itoa(r.prot as i32, buf.as_mut_ptr());
-            kprint(buf.as_ptr());
+            printk(buf.as_ptr());
         }
         kprint_str(b" flags=\0".as_ptr());
         unsafe {
             itoa(r.flags as i32, buf.as_mut_ptr());
-            kprint(buf.as_ptr());
+            printk(buf.as_ptr());
         }
         kprint_str(b" fd=\0".as_ptr());
         unsafe {
             itoa(r.fd, buf.as_mut_ptr());
-            kprint(buf.as_ptr());
+            printk(buf.as_ptr());
         }
         kprint_str(b"\n\0".as_ptr());
     }

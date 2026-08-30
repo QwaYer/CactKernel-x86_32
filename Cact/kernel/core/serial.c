@@ -4,11 +4,11 @@
 #define COM1 0x3F8u
 
 static void com_wr(unsigned reg, uint8_t v) {
-    port_byte_out((uint16_t)(COM1 + reg), v);
+    outb((uint16_t)(COM1 + reg), v);
 }
 
 static uint8_t com_rd(unsigned reg) {
-    return (uint8_t)(port_byte_in((uint16_t)(COM1 + reg)) & 0xFFu);
+    return (uint8_t)(inb((uint16_t)(COM1 + reg)) & 0xFFu);
 }
 
 void serial_init(void) {

@@ -46,47 +46,47 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
     vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
     struct vfs_node* file = vfs_walk_path(base, path);
     if (!file) {
-        kprint("[ELF] ERR: file not found: "); kprint(path); kprint("\n");
+        printk("[ELF] ERR: file not found: "); printk(path); printk("\n");
         return 0;
     }
 
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) {
-        kprint("[ELF] ERR: cannot read header\n");
+        printk("[ELF] ERR: cannot read header\n");
         return 0;
     }
 
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
-        kprint("[ELF] ERR: bad magic\n");
+        printk("[ELF] ERR: bad magic\n");
         return 0;
     }
     if (hdr.e_ident[EI_CLASS] != ELFCLASS32) {
-        kprint("[ELF] ERR: not 32-bit\n");
+        printk("[ELF] ERR: not 32-bit\n");
         return 0;
     }
     if (hdr.e_ident[EI_DATA] != ELFDATA2LSB) {
-        kprint("[ELF] ERR: not little-endian\n");
+        printk("[ELF] ERR: not little-endian\n");
         return 0;
     }
     if (hdr.e_ident[EI_VERSION] != EV_CURRENT) {
-        kprint("[ELF] ERR: bad ident version\n");
+        printk("[ELF] ERR: bad ident version\n");
         return 0;
     }
     if (hdr.e_machine != 3) {
-        kprint("[ELF] ERR: not i386\n");
+        printk("[ELF] ERR: not i386\n");
         return 0;
     }
     if (hdr.e_phentsize < sizeof(Elf32_Phdr)) {
-        kprint("[ELF] ERR: phentsize too small\n");
+        printk("[ELF] ERR: phentsize too small\n");
         return 0;
     }
     if ((uint32_t)hdr.e_phnum > 65535u) {
-        kprint("[ELF] ERR: too many program headers\n");
+        printk("[ELF] ERR: too many program headers\n");
         return 0;
     }
     uint64_t ph_end_check = (uint64_t)hdr.e_phoff + (uint64_t)hdr.e_phnum * hdr.e_phentsize;
     if (ph_end_check > file->size) {
-        kprint("[ELF] ERR: program headers overflow file\n");
+        printk("[ELF] ERR: program headers overflow file\n");
         return 0;
     }
 
@@ -96,7 +96,7 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
                      hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
-            kprint("[ELF] ERR: cannot read phdr\n");
+            printk("[ELF] ERR: cannot read phdr\n");
             proc_free_pages(tracker);
             return 0;
         }
@@ -114,13 +114,13 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
             if (va < file_end) {
                 void* phys = kalloc();
                 if (!phys) {
-                    kprint("[ELF] ERR: OOM\n");
+                    printk("[ELF] ERR: OOM\n");
                     proc_free_pages(tracker);
                     return 0;
                 }
                 if (proc_tracker_add(tracker, phys) < 0) {
-                    kprint("[ELF] ERR: tracker_add failed\n");
-                    kfree_page(phys);
+                    printk("[ELF] ERR: tracker_add failed\n");
+                    free_page(phys);
                     proc_free_pages(tracker);
                     return 0;
                 }
@@ -138,11 +138,11 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 
                     int rd = read_vfs(file, file_offset, copy_sz, (char*)phys + page_offset);
                     if (rd <= 0) {
-                        kprint("[ELF] ERR: read_vfs failed at off=");
-                        char _b[12]; itoa(file_offset, _b); kprint(_b);
-                        kprint(" sz="); itoa(copy_sz, _b); kprint(_b);
-                        kprint(" ret="); itoa(rd, _b); kprint(_b);
-                        kprint("\n");
+                        printk("[ELF] ERR: read_vfs failed at off=");
+                        char _b[12]; itoa(file_offset, _b); printk(_b);
+                        printk(" sz="); itoa(copy_sz, _b); printk(_b);
+                        printk(" ret="); itoa(rd, _b); printk(_b);
+                        printk("\n");
                         proc_free_pages(tracker);
                         return 0;
                     }
@@ -153,13 +153,13 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
                 /* p_memsz > p_filesz: .bss / zero tail — need present mappings (not demand-only). */
                 void* zphys = kalloc();
                 if (!zphys) {
-                    kprint("[ELF] ERR: OOM (bss)\n");
+                    printk("[ELF] ERR: OOM (bss)\n");
                     proc_free_pages(tracker);
                     return 0;
                 }
                 if (proc_tracker_add(tracker, zphys) < 0) {
-                    kprint("[ELF] ERR: tracker_add failed (bss)\n");
-                    kfree_page(zphys);
+                    printk("[ELF] ERR: tracker_add failed (bss)\n");
+                    free_page(zphys);
                     proc_free_pages(tracker);
                     return 0;
                 }
@@ -183,46 +183,46 @@ void* load_elf_dynamic(char*                path,
     vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
     struct vfs_node* file = vfs_walk_path(base, path);
     if (!file) {
-        kprint("[ELF-DYN] ERR: file not found: "); kprint(path); kprint("\n");
+        printk("[ELF-DYN] ERR: file not found: "); printk(path); printk("\n");
         return 0;
     }
 
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) {
-        kprint("[ELF-DYN] ERR: cannot read header\n");
+        printk("[ELF-DYN] ERR: cannot read header\n");
         return 0;
     }
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
-        kprint("[ELF-DYN] ERR: bad magic\n");
+        printk("[ELF-DYN] ERR: bad magic\n");
         return 0;
     }
     if (hdr.e_ident[EI_CLASS] != ELFCLASS32) {
-        kprint("[ELF-DYN] ERR: not 32-bit\n");
+        printk("[ELF-DYN] ERR: not 32-bit\n");
         return 0;
     }
     if (hdr.e_ident[EI_DATA] != ELFDATA2LSB) {
-        kprint("[ELF-DYN] ERR: not little-endian\n");
+        printk("[ELF-DYN] ERR: not little-endian\n");
         return 0;
     }
     if (hdr.e_ident[EI_VERSION] != EV_CURRENT) {
-        kprint("[ELF-DYN] ERR: bad ident version\n");
+        printk("[ELF-DYN] ERR: bad ident version\n");
         return 0;
     }
     if (hdr.e_machine != 3) {
-        kprint("[ELF-DYN] ERR: not i386\n");
+        printk("[ELF-DYN] ERR: not i386\n");
         return 0;
     }
     if (hdr.e_phentsize < sizeof(Elf32_Phdr)) {
-        kprint("[ELF-DYN] ERR: phentsize too small\n");
+        printk("[ELF-DYN] ERR: phentsize too small\n");
         return 0;
     }
     if ((uint32_t)hdr.e_phnum > 65535u) {
-        kprint("[ELF-DYN] ERR: too many program headers\n");
+        printk("[ELF-DYN] ERR: too many program headers\n");
         return 0;
     }
     uint64_t ph_end_check = (uint64_t)hdr.e_phoff + (uint64_t)hdr.e_phnum * hdr.e_phentsize;
     if (ph_end_check > file->size) {
-        kprint("[ELF-DYN] ERR: program headers overflow file\n");
+        printk("[ELF-DYN] ERR: program headers overflow file\n");
         return 0;
     }
 
@@ -237,7 +237,7 @@ void* load_elf_dynamic(char*                path,
                      hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
-            kprint("[ELF-DYN] ERR: cannot read phdr (scan)\n");
+            printk("[ELF-DYN] ERR: cannot read phdr (scan)\n");
             return 0;
         }
         if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
@@ -246,7 +246,7 @@ void* load_elf_dynamic(char*                path,
     }
 
     if (min_load_vaddr == 0xFFFFFFFFu) {
-        kprint("[ELF-DYN] ERR: no PT_LOAD segments\n");
+        printk("[ELF-DYN] ERR: no PT_LOAD segments\n");
         return 0;
     }
 
@@ -261,7 +261,7 @@ void* load_elf_dynamic(char*                path,
                      hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
-            kprint("[ELF-DYN] ERR: cannot read phdr\n");
+            printk("[ELF-DYN] ERR: cannot read phdr\n");
             proc_free_pages(tracker);
             return 0;
         }
@@ -284,12 +284,12 @@ void* load_elf_dynamic(char*                path,
                 if (orig_va < file_end) {
                     void* phys = kalloc();
                     if (!phys) {
-                        kprint("[ELF-DYN] ERR: OOM\n");
+                        printk("[ELF-DYN] ERR: OOM\n");
                         proc_free_pages(tracker);
                         return 0;
                     }
                     if (proc_tracker_add(tracker, phys) < 0) {
-                        kfree_page(phys);
+                        free_page(phys);
                         proc_free_pages(tracker);
                         return 0;
                     }
@@ -306,7 +306,7 @@ void* load_elf_dynamic(char*                path,
                         uint32_t copy_sz     = copy_end - copy_start;
 
                         if (read_vfs(file, file_offset, copy_sz, (char*)phys + page_offset) <= 0) {
-                            kprint("[ELF-DYN] ERR: read failed\n");
+                            printk("[ELF-DYN] ERR: read failed\n");
                             proc_free_pages(tracker);
                             return 0;
                         }
@@ -316,12 +316,12 @@ void* load_elf_dynamic(char*                path,
                 } else {
                     void* zphys = kalloc();
                     if (!zphys) {
-                        kprint("[ELF-DYN] ERR: OOM (bss)\n");
+                        printk("[ELF-DYN] ERR: OOM (bss)\n");
                         proc_free_pages(tracker);
                         return 0;
                     }
                     if (proc_tracker_add(tracker, zphys) < 0) {
-                        kfree_page(zphys);
+                        free_page(zphys);
                         proc_free_pages(tracker);
                         return 0;
                     }
@@ -334,7 +334,7 @@ void* load_elf_dynamic(char*                path,
 
         if (ph.p_type == PT_DYNAMIC) {
             if (ph.p_vaddr + ph.p_filesz < ph.p_vaddr) {
-                kprint("[ELF-DYN] ERR: PT_DYNAMIC size wraps\n");
+                printk("[ELF-DYN] ERR: PT_DYNAMIC size wraps\n");
                 proc_free_pages(tracker);
                 return 0;
             }
@@ -348,7 +348,7 @@ void* load_elf_dynamic(char*                path,
                 }
             }
             if (!dyn_ok) {
-                kprint("[ELF-DYN] ERR: PT_DYNAMIC outside any PT_LOAD\n");
+                printk("[ELF-DYN] ERR: PT_DYNAMIC outside any PT_LOAD\n");
                 proc_free_pages(tracker);
                 return 0;
             }
@@ -372,14 +372,14 @@ void* load_elf_dynamic(char*                path,
         int rc = dynlink_process_dynamic(ctx, image_start, sym_bias, dyn_vaddr, dyn_size);
         if (rc != 0) {
             switch_paging(saved_pd);
-            kprint("[ELF-DYN] ERR: dynamic linking failed\n");
+            printk("[ELF-DYN] ERR: dynamic linking failed\n");
             proc_free_pages(tracker);
             return 0;
         }
         {
             Elf32_Dyn* test = dyn_vaddr;
             if (test->d_tag == 0 || test->d_tag > 100) {
-                kprint("[ELF-DYN] ERR: bad dynamic section!\n");
+                printk("[ELF-DYN] ERR: bad dynamic section!\n");
             }
         }
 
@@ -451,7 +451,7 @@ void elf_load_exec_symtab(const char* path, struct proc_metadata* proc) {
     if (!shdrs) return;
     if (read_vfs(file, hdr.e_shoff, hdr.e_shnum * sizeof(Elf32_Shdr),
                  (char*)shdrs) <= 0) {
-        kfree_heap(shdrs);
+        kfree(shdrs);
         return;
     }
 
@@ -485,11 +485,11 @@ void elf_load_exec_symtab(const char* path, struct proc_metadata* proc) {
             read_vfs(file, str_sh->sh_offset, str_sh->sh_size, proc->exec_strtab);
             proc->exec_symtab_count = sym_sh->sh_size / sizeof(Elf32_Sym);
         } else {
-            if (proc->exec_symtab) { kfree_heap(proc->exec_symtab); proc->exec_symtab = 0; }
-            if (proc->exec_strtab) { kfree_heap(proc->exec_strtab); proc->exec_strtab = 0; }
+            if (proc->exec_symtab) { kfree(proc->exec_symtab); proc->exec_symtab = 0; }
+            if (proc->exec_strtab) { kfree(proc->exec_strtab); proc->exec_strtab = 0; }
         }
     }
 
-    if (shstrtab) kfree_heap(shstrtab);
-    kfree_heap(shdrs);
+    if (shstrtab) kfree(shstrtab);
+    kfree(shdrs);
 }

@@ -129,26 +129,26 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
 
     const char *cat = pci_gdd_category(cl);
 
-    kprint("Device Found: ");
-    kprint((char *)ent->human_name);
-    kprint(" (");
-    kprint((char *)cat);
-    kprint("). Load driver ");
-    kprint((char *)ent->module_path);
-    kprint("? (y/n) [5s timeout]\n");
+    printk("Device Found: ");
+    printk((char *)ent->human_name);
+    printk(" (");
+    printk((char *)cat);
+    printk("). Load driver ");
+    printk((char *)ent->module_path);
+    printk("? (y/n) [5s timeout]\n");
 
     if (!gdd_prompt_yes_no()) {
-        kprint("[GDD] skipped (timeout or 'n'): ");
-        kprint((char *)ent->human_name);
-        kprint("\n");
+        printk("[GDD] skipped (timeout or 'n'): ");
+        printk((char *)ent->human_name);
+        printk("\n");
         return;
     }
 
     pci_driver_t *exist = pci_driver_find_class_module(ent->class_code, ent->subclass, ent->module_path);
     if (exist && exist->probe) {
-        kprint("[GDD] driver already resident for ");
-        kprint((char *)ent->human_name);
-        kprint("\n");
+        printk("[GDD] driver already resident for ");
+        printk((char *)ent->human_name);
+        printk("\n");
         return;
     }
 
@@ -157,15 +157,15 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
     char          seqbuf[16];
 
     if (!drv) {
-        kprint("[GDD] kmalloc(drv) failed\n");
+        printk("[GDD] kmalloc(drv) failed\n");
         return;
     }
 
     int plen = strlen((char *)ent->module_path) + 1;
     path_copy     = (char *)kmalloc((uint32_t)plen);
     if (!path_copy) {
-        kfree_heap(drv);
-        kprint("[GDD] kmalloc(path) failed\n");
+        kfree(drv);
+        printk("[GDD] kmalloc(path) failed\n");
         return;
     }
     memcpy(path_copy, ent->module_path, (unsigned int)plen);
@@ -183,15 +183,15 @@ void pci_user_prompt_module(uint8_t cl, uint8_t sc, uint8_t pi, pci_device_t *de
     drv->probe       = NULL;
 
     if (pci_register_driver(drv) != 0) {
-        kfree_heap(path_copy);
-        kfree_heap(drv);
-        kprint("[GDD] pci_register_driver failed\n");
+        kfree(path_copy);
+        kfree(drv);
+        printk("[GDD] pci_register_driver failed\n");
         return;
     }
 
-    kprint("[GDD] lazy driver registered: ");
-    kprint((char *)ent->module_path);
-    kprint("\n");
+    printk("[GDD] lazy driver registered: ");
+    printk((char *)ent->module_path);
+    printk("\n");
 }
 
 void pci_gdd_prompt_devices(void) {
@@ -236,28 +236,28 @@ void pci_gdd_prompt_fs(void) {
         char fname[32];
         fs_module_display_name(path, fname, sizeof(fname));
 
-        kprint("File System Found: ");
-        kprint(fname);
-        kprint(" (");
-        kprint((char *)path);
-        kprint("). Load driver? (y/n) [5s timeout]\n");
+        printk("File System Found: ");
+        printk(fname);
+        printk(" (");
+        printk((char *)path);
+        printk("). Load driver? (y/n) [5s timeout]\n");
 
         if (!gdd_prompt_yes_no()) {
-            kprint("[GDD] filesystem driver skipped (timeout or 'n'): ");
-            kprint(fname);
-            kprint("\n");
+            printk("[GDD] filesystem driver skipped (timeout or 'n'): ");
+            printk(fname);
+            printk("\n");
             continue;
         }
 
         if (fs_mod_load(path) != 0) {
-            kprint("[GDD] filesystem driver load failed: ");
-            kprint(fname);
-            kprint("\n");
+            printk("[GDD] filesystem driver load failed: ");
+            printk(fname);
+            printk("\n");
             continue;
         }
-        kprint("[GDD] filesystem driver loaded: ");
-        kprint(fname);
-        kprint("\n");
+        printk("[GDD] filesystem driver loaded: ");
+        printk(fname);
+        printk("\n");
         break;   // single-slot; stop after the first accepted module
     }
 }

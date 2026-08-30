@@ -1,6 +1,6 @@
 //! Intrusive free-list heap in the fixed `[HEAP_START, HEAP_START+HEAP_SIZE)` window.
 //!
-//! `kmalloc` / `kfree_heap` are IRQ-spinlocked and back much of the kernel and Rust MM code.
+//! `kmalloc` / `kfree` are IRQ-spinlocked and back much of the kernel and Rust MM code.
 
 use crate::ffi::*;
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, klog_msg};
@@ -128,11 +128,11 @@ pub extern "C" fn kfree_aligned(ptr: *mut u8) {
         return;
     }
     let raw = unsafe { *((ptr as u32 - 4) as *const u32) } as *mut u8;
-    kfree_heap(raw);
+    kfree(raw);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn kfree_heap(ptr: *mut u8) {
+pub extern "C" fn kfree(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
@@ -151,14 +151,14 @@ pub extern "C" fn kfree_heap(ptr: *mut u8) {
     let mut found = false;
     while !walk.is_null() {
         if !heap_addr_in_range(walk as u32) {
-            kprint_str(b"[FATAL] kfree_heap: walk pointer left heap range\n\0".as_ptr());
+            kprint_str(b"[FATAL] kfree: walk pointer left heap range\n\0".as_ptr());
             klog_msg(LOG_FAIL, b"heap list pointer out of range\0".as_ptr());
             lock_release(HEAP_LOCK.as_ptr() as *mut IrqSpinlock);
             return;
         }
         let walk_magic = unsafe { (*walk).magic };
         if walk_magic != HEAP_MAGIC {
-            kprint_str(b"[FATAL] kfree_heap: list magic corrupted during lookup\n\0".as_ptr());
+            kprint_str(b"[FATAL] kfree: list magic corrupted during lookup\n\0".as_ptr());
             klog_msg(LOG_FAIL, b"heap list magic corrupted\0".as_ptr());
             lock_release(HEAP_LOCK.as_ptr() as *mut IrqSpinlock);
             return;
@@ -184,7 +184,7 @@ pub extern "C" fn kfree_heap(ptr: *mut u8) {
 
     let bsize = unsafe { (*block).size } as usize;
     if bsize < 4 {
-        kprint_str(b"[FATAL] kfree_heap: block too small for tail canary\n\0".as_ptr());
+        kprint_str(b"[FATAL] kfree: block too small for tail canary\n\0".as_ptr());
         klog_msg(LOG_FAIL, b"heap block too small for canary\0".as_ptr());
         lock_release(HEAP_LOCK.as_ptr() as *mut IrqSpinlock);
         return;
@@ -192,7 +192,7 @@ pub extern "C" fn kfree_heap(ptr: *mut u8) {
     let tail = unsafe { ptr.add(bsize - 4) as *mut u32 };
     let tail_magic = unsafe { *tail };
     if tail_magic != HEAP_TAIL_MAGIC {
-        kprint_str(b"[FATAL] kfree_heap: tail canary corrupted (buffer overflow)\n\0".as_ptr());
+        kprint_str(b"[FATAL] kfree: tail canary corrupted (buffer overflow)\n\0".as_ptr());
         klog_msg(LOG_FAIL, b"heap tail canary corrupted\0".as_ptr());
         lock_release(HEAP_LOCK.as_ptr() as *mut IrqSpinlock);
         return;
@@ -210,7 +210,7 @@ pub extern "C" fn kfree_heap(ptr: *mut u8) {
     while !curr.is_null() {
         let curr_magic = unsafe { (*curr).magic };
         if curr_magic != HEAP_MAGIC {
-            kprint_str(b"[FATAL] kfree_heap: heap corruption at curr\n\0".as_ptr());
+            kprint_str(b"[FATAL] kfree: heap corruption at curr\n\0".as_ptr());
             klog_msg(LOG_FAIL, b"heap corruption during coalesce\0".as_ptr());
             break;
         }
@@ -219,7 +219,7 @@ pub extern "C" fn kfree_heap(ptr: *mut u8) {
         if curr_free != 0 && !next.is_null() {
             let next_magic = unsafe { (*next).magic };
             if next_magic != HEAP_MAGIC {
-                kprint_str(b"[FATAL] kfree_heap: next header corrupted, stopping coalesce\n\0".as_ptr());
+                kprint_str(b"[FATAL] kfree: next header corrupted, stopping coalesce\n\0".as_ptr());
                 klog_msg(LOG_FAIL, b"next heap header corrupted\0".as_ptr());
                 break;
             }

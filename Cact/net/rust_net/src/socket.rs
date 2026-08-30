@@ -84,7 +84,7 @@ extern "C" fn socket_close_op(node: *mut VfsNode) {
             }
             (*ks).used = 0;
         }
-        ffi_kernel::kfree_heap(node.cast::<c_void>());
+        ffi_kernel::kfree(node.cast::<c_void>());
     }
 }
 

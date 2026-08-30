@@ -2,7 +2,7 @@
 
 use crate::ffi::*;
 use crate::safe::kprint_str;
-use crate::pmm::{kalloc, kfree_page};
+use crate::pmm::{kalloc, free_page};
 
 pub(crate) const PD_KERNEL_ENTRIES: usize = (PCI_HOLE_START / (PAGE_SIZE * 1024)) as usize;
 
@@ -142,7 +142,7 @@ pub extern "C" fn vmm_map(pd: *mut u32,
                     && old_pte & PAGE_COW  != 0
                     && (old_pte & !0xFFF) != (physical_addr & !0xFFF)
                 {
-                    kfree_page((old_pte & !0xFFF) as *mut u8);
+                    free_page((old_pte & !0xFFF) as *mut u8);
                 }
                 *pt.add(pti) = (physical_addr & !0xFFF) | flags | PAGE_PRESENT;
             } else {
@@ -171,7 +171,7 @@ pub extern "C" fn vmm_map(pd: *mut u32,
             && old_pte & PAGE_COW  != 0
             && (old_pte & !0xFFF) != (physical_addr & !0xFFF)
         {
-            kfree_page((old_pte & !0xFFF) as *mut u8);
+            free_page((old_pte & !0xFFF) as *mut u8);
         }
 
         *pt.add(pti) = (physical_addr & !0xFFF) | flags | PAGE_PRESENT;
@@ -251,12 +251,12 @@ pub extern "C" fn vmm_free_address_space(pd: *mut u32) {
                 // Free only user pages; kernel identity-mapped frames are
                 // managed by the PMM and must not be double-freed.
                 if pte & PAGE_PRESENT != 0 && pte & PAGE_USER != 0 {
-                    kfree_page((pte & !0xFFF) as *mut u8);
+                    free_page((pte & !0xFFF) as *mut u8);
                 }
             }
-            kfree_page(pt as *mut u8);
+            free_page(pt as *mut u8);
         }
-        kfree_page(pd as *mut u8);
+        free_page(pd as *mut u8);
     }
 }
 

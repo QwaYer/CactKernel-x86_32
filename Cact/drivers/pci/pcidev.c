@@ -27,7 +27,7 @@ uint32_t pcidev_cfg_read32(pci_device_t *dev, uint16_t reg)
     if (!dev) return 0xFFFFFFFF;
     if (pcie_is_available())
         return pcie_read32(dev->bus, dev->dev, dev->fn, reg);
-    return pci_read32(dev->bus, dev->dev, dev->fn, (uint8_t)reg);
+    return pci_read_config_dword(dev->bus, dev->dev, dev->fn, (uint8_t)reg);
 }
 
 void pcidev_cfg_write32(pci_device_t *dev, uint16_t reg, uint32_t val)
@@ -37,7 +37,7 @@ void pcidev_cfg_write32(pci_device_t *dev, uint16_t reg, uint32_t val)
         pcie_write32(dev->bus, dev->dev, dev->fn, reg, val);
         return;
     }
-    pci_write32(dev->bus, dev->dev, dev->fn, (uint8_t)reg, val);
+    pci_write_config_dword(dev->bus, dev->dev, dev->fn, (uint8_t)reg, val);
 }
 
 uint8_t pcidev_cfg_read8(pci_device_t *dev, uint16_t reg)
@@ -45,7 +45,7 @@ uint8_t pcidev_cfg_read8(pci_device_t *dev, uint16_t reg)
     if (!dev) return 0xFF;
     if (pcie_is_available())
         return pcie_read8(dev->bus, dev->dev, dev->fn, reg);
-    uint32_t v = pci_read32(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3));
+    uint32_t v = pci_read_config_dword(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3));
     return (uint8_t)(v >> ((reg & 3) * 8));
 }
 
@@ -54,7 +54,7 @@ uint16_t pcidev_cfg_read16(pci_device_t *dev, uint16_t reg)
     if (!dev) return 0xFFFF;
     if (pcie_is_available())
         return pcie_read16(dev->bus, dev->dev, dev->fn, reg);
-    uint32_t v = pci_read32(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3));
+    uint32_t v = pci_read_config_dword(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3));
     return (uint16_t)(v >> ((reg & 2) * 8));
 }
 
@@ -65,10 +65,10 @@ void pcidev_cfg_write8(pci_device_t *dev, uint16_t reg, uint8_t val)
         pcie_write8(dev->bus, dev->dev, dev->fn, reg, val);
         return;
     }
-    uint32_t v = pci_read32(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3));
+    uint32_t v = pci_read_config_dword(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3));
     uint32_t shift = (reg & 3) * 8;
     v = (v & ~(0xFFu << shift)) | ((uint32_t)val << shift);
-    pci_write32(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3), v);
+    pci_write_config_dword(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3), v);
 }
 
 void pcidev_cfg_write16(pci_device_t *dev, uint16_t reg, uint16_t val)
@@ -78,10 +78,10 @@ void pcidev_cfg_write16(pci_device_t *dev, uint16_t reg, uint16_t val)
         pcie_write16(dev->bus, dev->dev, dev->fn, reg, val);
         return;
     }
-    uint32_t v = pci_read32(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3));
+    uint32_t v = pci_read_config_dword(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3));
     uint32_t shift = (reg & 2) * 8;
     v = (v & ~(0xFFFFu << shift)) | ((uint32_t)val << shift);
-    pci_write32(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3), v);
+    pci_write_config_dword(dev->bus, dev->dev, dev->fn, (uint8_t)(reg & ~3), v);
 }
 
 

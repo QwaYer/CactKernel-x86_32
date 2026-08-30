@@ -144,14 +144,14 @@ static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     vfs_node_t *sd = _sbin_dir();
     if (!sd || !sd->ops || !sd->ops->readdir) {
-        kprint("  (empty)\n");
+        printk("  (empty)\n");
         return;
     }
     vfs_dirent_t *de;
     int any = 0;
     for (uint32_t i = 0; (de = sd->ops->readdir(sd, i)); i++) {
         if (de->name[0] == '.') continue;
-        kprint("  "); kprint(de->name); kprint("\n");
+        printk("  "); printk(de->name); printk("\n");
         any = 1;
     }
     for (sbin_blob_t *b = sbin_blobs; b; b = b->next) {
@@ -161,10 +161,10 @@ static void _root_listdir(vfs_node_t *dir) {
             if (streq(de->name, b->node.name)) { dup = 1; break; }
         }
         if (dup) continue;
-        kprint("  "); kprint(b->node.name); kprint("  [cctkfs]\n");
+        printk("  "); printk(b->node.name); printk("  [cctkfs]\n");
         any = 1;
     }
-    if (!any) kprint("  (empty)\n");
+    if (!any) printk("  (empty)\n");
 }
 
 static int _root_create(vfs_node_t *dir, const char *name) {

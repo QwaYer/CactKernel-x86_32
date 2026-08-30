@@ -37,7 +37,7 @@ static mut ICMP_TX_PAYLOAD: [u8; 512] = [0; 512];
 pub(crate) static mut ICMP_HANDLE: Option<smoltcp::iface::SocketHandle> = None;
 static mut ICMP_IDENT_BOUND: u16 = 0xFFFF;
 
-/// Set after `stack_init` from `net_register_driver`.
+/// Set after `stack_init` from `register_netdev`.
 pub static mut STACK_READY: bool = false;
 
 pub(crate) fn ticks_to_instant(ticks: u32) -> Instant {
@@ -197,10 +197,10 @@ impl TxToken for CactTxToken<'_> {
                         if let Some(send) = (*nic).send {
                             let _ = send(skb);
                         } else {
-                            skb::skb_free(skb);
+                            skb::kfree_skb(skb);
                         }
                     } else {
-                        skb::skb_free(skb);
+                        skb::kfree_skb(skb);
                     }
                 }
             }
@@ -248,19 +248,19 @@ pub fn stack_enqueue_rx(skb: *mut Skb) {
     unsafe {
         let len = skb::skb_len(skb) as usize;
         if len == 0 || len > PHY_MTU {
-            skb::skb_free(skb);
+            skb::kfree_skb(skb);
             return;
         }
         let src = skb::skb_data(skb);
         if !STACK_READY {
-            skb::skb_free(skb);
+            skb::kfree_skb(skb);
             return;
         }
         core::ptr::copy_nonoverlapping(src, PHY.rx.as_mut_ptr(), len);
         PHY.rx_len = len;
         PHY.rx_pending = true;
-        skb::skb_free(skb);
-        ffi_kernel::sema_up(core::ptr::addr_of_mut!(runtime::net_sema));
+        skb::kfree_skb(skb);
+        ffi_kernel::up(core::ptr::addr_of_mut!(runtime::net_sema));
     }
 }
 

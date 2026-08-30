@@ -69,7 +69,7 @@ int sys_exec(struct syscall_frame* regs) {
 
     vfs_node_t* exec_node = _resolve_path(kpath);
     if (!exec_node || vfs_check_perm(exec_node, VFS_PERM_EXEC) < 0) {
-        kfree_heap(kpath);
+        kfree(kpath);
         return -1;
     }
 
@@ -80,7 +80,7 @@ int sys_exec(struct syscall_frame* regs) {
     cf.useresp = regs->useresp;
     cf.ss      = regs->ss;
     int ret = task_exec(kpath, argv, envp, &cf);   // never returns on success
-    kfree_heap(kpath);
+    kfree(kpath);
     return ret;
 }
 

@@ -2,8 +2,8 @@
 
 use crate::ffi::*;
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg};
-use crate::pmm::{kalloc, kfree_page};
-use crate::alloc::heap::{kmalloc, kfree_heap};
+use crate::pmm::{kalloc, free_page};
+use crate::alloc::heap::{kmalloc, kfree};
 
 #[repr(C)]
 pub struct Slab {
@@ -122,7 +122,7 @@ fn slab_destroy_slab(cache: *mut SlabCache, s: *mut Slab) {
                 dtor(obj_base.add((i * (*cache).obj_size) as usize));
             }
         }
-        kfree_page(s as *mut u8);
+        free_page(s as *mut u8);
         (*cache).total_slabs -= 1;
     }
 }
@@ -328,7 +328,7 @@ pub extern "C" fn slab_cache_destroy(cache: *mut SlabCache) {
     }
 
     lock_release(G_CACHE_LOCK.as_ptr() as *mut IrqSpinlock);
-    kfree_heap(cache as *mut u8);
+    kfree(cache as *mut u8);
 }
 
 #[unsafe(no_mangle)]
@@ -365,7 +365,7 @@ pub extern "C" fn slab_print_stats(cache: *const SlabCache) {
 
     kprint_str(b"[SLAB] cache=\0".as_ptr());
     // SAFETY: cache is valid.
-    unsafe { kprint((*cache).name.as_ptr()); }
+    unsafe { printk((*cache).name.as_ptr()); }
     kprint_str(b" obj_size=\0".as_ptr());
     unsafe { kprint_int((*cache).obj_size as i32); }
     kprint_str(b" slabs(full/partial/free)=\0".as_ptr());
@@ -416,10 +416,10 @@ pub extern "C" fn slab_init() {
         let cache = slab_cache_create(name.as_ptr(), GENERIC_SIZES[i], None, None);
         G_GENERIC_CACHES.get_mut()[i] = cache;
         if cache.is_null() {
-            // SAFETY: kprint_color is a C function that takes a valid string.
+            // SAFETY: printk_color is a C function that takes a valid string.
             unsafe {
-                kprint_color(b"[SLAB] failed to create cache: \0".as_ptr(), COLOR_LIGHT_RED);
-                kprint_color(name.as_ptr(), COLOR_LIGHT_RED);
+                printk_color(b"[SLAB] failed to create cache: \0".as_ptr(), COLOR_LIGHT_RED);
+                printk_color(name.as_ptr(), COLOR_LIGHT_RED);
             }
             kprint_str(b"\n\0".as_ptr());
             klog_msg(LOG_FAIL, b"slab cache creation failed\0".as_ptr());
@@ -455,5 +455,5 @@ pub extern "C" fn slab_kfree(ptr: *mut u8) {
             return;
         }
     }
-    kfree_heap(ptr);
+    kfree(ptr);
 }

@@ -107,7 +107,7 @@ static void _lru_touch(struct page *p) {
 static void _writeback(struct page *p) {
     if (!(p->flags & PC_FLAG_DIRTY)) return;
     if (!p->data) {
-        kprint("[pc] _writeback: page has no data buffer, clearing dirty flag\n");
+        printk("[pc] _writeback: page has no data buffer, clearing dirty flag\n");
         p->flags &= (uint8_t)~PC_FLAG_DIRTY;
         return;
     }
@@ -187,12 +187,12 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     irq_spinlock_release(&pc_lock);
 
     if (block_size == 0 || block_size % 512 != 0) {
-        kprint("[pc] pc_get_page: block_size must be non-zero multiple of 512\n");
+        printk("[pc] pc_get_page: block_size must be non-zero multiple of 512\n");
         return 0;
     }
 
     if (block_size > PC_MAX_BLOCK_SIZE) {
-        kprint("[pc] pc_get_page: block_size exceeds PC_MAX_BLOCK_SIZE\n");
+        printk("[pc] pc_get_page: block_size exceeds PC_MAX_BLOCK_SIZE\n");
         return 0;
     }
 
@@ -202,12 +202,12 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     blkdev_t *bd = blkdev_get_boot();
     if (bd) {
         if (block_no > (UINT32_MAX / spb)) {
-            kprint("[pc] pc_get_page: LBA computation overflow\n");
+            printk("[pc] pc_get_page: LBA computation overflow\n");
             return 0;
         }
         uint32_t lba = block_no * spb;
         if (lba + spb > bd->max_lba) {
-            kprint("[pc] pc_get_page: LBA out of device range\n");
+            printk("[pc] pc_get_page: LBA out of device range\n");
             return 0;
         }
     }
@@ -216,7 +216,7 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     p = _alloc_page();
     if (!p) {
         irq_spinlock_release(&pc_lock);
-        kprint("[pc] pc_get_page: all pages pinned, cache full!\n");
+        printk("[pc] pc_get_page: all pages pinned, cache full!\n");
         return 0;
     }
     p->dev        = dev;
@@ -230,7 +230,7 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     if (!p->data) {
         p->data = (uint8_t*)kalloc();
         if (!p->data) {
-            kprint("[pc] pc_get_page: kalloc failed\n");
+            printk("[pc] pc_get_page: kalloc failed\n");
             irq_spinlock_acquire(&pc_lock);
             p->flags     = 0;
             p->pin_count = 0;
@@ -281,11 +281,11 @@ void pc_put_page(uint32_t dev, uint32_t block_no) {
     if (!p) { irq_spinlock_release(&pc_lock); return; }
     if (p->pin_count == 0) {
         irq_spinlock_release(&pc_lock);
-        kprint("[pc] pc_put_page: pin_count underflow (dev=");
-        { char _b[16]; itoa((int)dev, _b); kprint(_b); }
-        kprint(", block=");
-        { char _b[16]; itoa((int)block_no, _b); kprint(_b); }
-        kprint(")\n");
+        printk("[pc] pc_put_page: pin_count underflow (dev=");
+        { char _b[16]; itoa((int)dev, _b); printk(_b); }
+        printk(", block=");
+        { char _b[16]; itoa((int)block_no, _b); printk(_b); }
+        printk(")\n");
         return;
     }
     p->pin_count--;
@@ -326,7 +326,7 @@ void pc_invalidate_block(uint32_t dev, uint32_t block_no) {
     irq_spinlock_release(&pc_lock);
 
     if (freed_data)
-        kfree_page(freed_data);
+        free_page(freed_data);
 }
 
 // Flush and remove all pages belonging to a device, freeing their data.
@@ -346,7 +346,7 @@ void pc_invalidate_dev(uint32_t dev) {
             p->pin_count = 0;
             irq_spinlock_release(&pc_lock);
             if (freed_data)
-                kfree_page(freed_data);
+                free_page(freed_data);
             irq_spinlock_acquire(&pc_lock);
         }
     }
@@ -356,11 +356,11 @@ void pc_invalidate_dev(uint32_t dev) {
 // Print cache statistics and current state
 void pc_dump_stats(void) {
     irq_spinlock_acquire(&pc_lock);
-    kprint("[pc] hits=");      { char _b[16]; itoa((int)(stat_hits), _b); kprint(_b); };
-    kprint(" misses=");        { char _b[16]; itoa((int)(stat_misses), _b); kprint(_b); };
-    kprint(" evictions=");     { char _b[16]; itoa((int)(stat_evictions), _b); kprint(_b); };
-    kprint(" writebacks=");    { char _b[16]; itoa((int)(stat_writebacks), _b); kprint(_b); };
-    kprint("\n");
+    printk("[pc] hits=");      { char _b[16]; itoa((int)(stat_hits), _b); printk(_b); };
+    printk(" misses=");        { char _b[16]; itoa((int)(stat_misses), _b); printk(_b); };
+    printk(" evictions=");     { char _b[16]; itoa((int)(stat_evictions), _b); printk(_b); };
+    printk(" writebacks=");    { char _b[16]; itoa((int)(stat_writebacks), _b); printk(_b); };
+    printk("\n");
 
     uint32_t valid = 0, dirty = 0, pinned = 0;
     for (int i = 0; i < PC_MAX_PAGES; i++) {
@@ -369,9 +369,9 @@ void pc_dump_stats(void) {
         if (pool[i].pin_count > 0)          pinned++;
     }
     irq_spinlock_release(&pc_lock);
-    kprint("[pc] pages: valid="); { char _b[16]; itoa((int)(valid), _b); kprint(_b); };
-    kprint(" dirty=");            { char _b[16]; itoa((int)(dirty), _b); kprint(_b); };
-    kprint(" pinned=");           { char _b[16]; itoa((int)(pinned), _b); kprint(_b); };
-    kprint("/");                  { char _b[16]; itoa((int)(PC_MAX_PAGES), _b); kprint(_b); };
-    kprint("\n");
+    printk("[pc] pages: valid="); { char _b[16]; itoa((int)(valid), _b); printk(_b); };
+    printk(" dirty=");            { char _b[16]; itoa((int)(dirty), _b); printk(_b); };
+    printk(" pinned=");           { char _b[16]; itoa((int)(pinned), _b); printk(_b); };
+    printk("/");                  { char _b[16]; itoa((int)(PC_MAX_PAGES), _b); printk(_b); };
+    printk("\n");
 }

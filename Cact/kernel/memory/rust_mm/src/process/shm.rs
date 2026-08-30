@@ -1,7 +1,7 @@
 //! Fixed-size shared-memory segment table: attach/detach, refcount, and page mapping into a PD.
 
 use crate::ffi::*;
-use crate::pmm::{kalloc, kfree_page};
+use crate::pmm::{kalloc, free_page};
 use crate::vmm::paging::vmm_map;
 use crate::safe::{KStatic, lock_acquire, lock_release, zero_page, flush_tlb};
 
@@ -63,7 +63,7 @@ fn seg_free(s: *mut ShmSeg) {
     unsafe {
         for i in 0..(*s).num_pages as usize {
             if !(*s).pages[i].is_null() {
-                kfree_page((*s).pages[i]);
+                free_page((*s).pages[i]);
                 (*s).pages[i] = core::ptr::null_mut();
             }
         }
@@ -178,7 +178,7 @@ pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
         let p = kalloc();
         if p.is_null() {
             for j in 0..i {
-                kfree_page(s.pages[j]);
+                free_page(s.pages[j]);
                 s.pages[j] = core::ptr::null_mut();
             }
             lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);

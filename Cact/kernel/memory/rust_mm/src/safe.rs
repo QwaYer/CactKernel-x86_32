@@ -70,7 +70,7 @@ pub fn zero_page(ptr: *mut u8) {
 // ---------------------------------------------------------------------------
 
 use crate::ffi::{
-    irq_spinlock_acquire, irq_spinlock_release, itoa, kprint, klog,
+    irq_spinlock_acquire, irq_spinlock_release, itoa, printk, klog,
     read_cr2, tlb_flush, tlb_flush_all, get_current_pd,
 };
 
@@ -98,7 +98,7 @@ pub fn current_page_dir() -> *mut u32 {
 pub fn kprint_str(s: *const u8) {
     if !s.is_null() {
         // SAFETY: caller guarantees `s` is a valid null-terminated string.
-        unsafe { kprint(s) };
+        unsafe { printk(s) };
     }
 }
 
@@ -107,7 +107,7 @@ pub fn kprint_int(n: i32) {
     let mut buf = [0u8; 16];
     unsafe {
         itoa(n, buf.as_mut_ptr());
-        kprint(buf.as_ptr());
+        printk(buf.as_ptr());
     }
 }
 

@@ -4,49 +4,49 @@
 ; Each function takes port number as first argument, value (for out) as second.
 ; Return value in EAX for in functions.
 
-global port_long_out
-global port_long_in
-global port_byte_out
-global port_byte_in
-global port_word_in
-global port_word_out 
+global outl
+global inl
+global outb
+global inb
+global inw
+global outw 
 
-; void port_long_out(uint16_t port, uint32_t value)
-port_long_out:
+; void outl(uint16_t port, uint32_t value)
+outl:
     mov edx, [esp + 4]   ; port
     mov eax, [esp + 8]   ; value
     out dx, eax
     ret
 
-; uint32_t port_long_in(uint16_t port)
-port_long_in:
+; uint32_t inl(uint16_t port)
+inl:
     mov edx, [esp + 4]   ; port
     in eax, dx            ; 32-bit read — EAX fully overwritten
     ret
 
-; void port_byte_out(uint16_t port, uint8_t value)
-port_byte_out:
+; void outb(uint16_t port, uint8_t value)
+outb:
     mov edx, [esp + 4]   ; port
     mov al, [esp + 8]    ; value (low byte only)
     out dx, al
     ret
 
-; uint8_t port_byte_in(uint16_t port)
-port_byte_in:
+; uint8_t inb(uint16_t port)
+inb:
     mov edx, [esp + 4]   ; port
     xor eax, eax          ; zero EAX so upper bits are clean
     in al, dx             ; 8-bit read
     ret
 
-; uint16_t port_word_in(uint16_t port)
-port_word_in:
+; uint16_t inw(uint16_t port)
+inw:
     mov edx, [esp + 4]   ; port
     xor eax, eax          ; zero EAX so upper bits are clean
     in ax, dx             ; 16-bit read
     ret
 
-; void port_word_out(uint16_t port, uint16_t value)
-port_word_out:
+; void outw(uint16_t port, uint16_t value)
+outw:
     mov edx, [esp + 4]   ; port
     mov eax, [esp + 8]   ; value (low 16 bits used)
     out dx, ax

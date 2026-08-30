@@ -5,7 +5,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::ffi::*;
-use crate::pmm::{kalloc, kfree_page};
+use crate::pmm::{kalloc, free_page};
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, kprint_int, klog_msg, flush_tlb};
 
 pub type SwapSlot = u32;
@@ -278,7 +278,7 @@ pub extern "C" fn swap_evict_page(pd: *mut u32) -> i32 {
         let vaddr = (pdi << 22) | (ptj << 12);
         flush_tlb(vaddr);
 
-        kfree_page(phys as *mut u8);
+        free_page(phys as *mut u8);
 
         ptj += 1;
         if ptj >= 1024 {
@@ -332,7 +332,7 @@ pub extern "C" fn swap_handle_fault(pd: *mut u32, fault_addr: u32) -> i32 {
     }
 
     if swap_in_page(slot, phys as u32) != 0 {
-        kfree_page(phys);
+        free_page(phys);
         return -1;
     }
 

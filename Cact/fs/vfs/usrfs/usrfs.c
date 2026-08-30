@@ -198,9 +198,9 @@ static vfs_dirent_t *_inc_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _inc_listdir(vfs_node_t *dir) {
     usr_inc_dir_t *inc = (usr_inc_dir_t *)dir->priv;
-    if (!inc || !inc->files) { kprint("  (empty)\n"); return; }
+    if (!inc || !inc->files) { printk("  (empty)\n"); return; }
     for (inc_file_t *f = inc->files; f; f = f->next) {
-        kprint("  "); kprint(f->node.name); kprint("\n");
+        printk("  "); printk(f->node.name); printk("\n");
     }
 }
 
@@ -268,12 +268,12 @@ static void _root_listdir(vfs_node_t *dir) {
     if (usr && usr->ops && usr->ops->readdir) {
         for (uint32_t i = 0; (de = usr->ops->readdir(usr, i)); i++) {
             if (de->name[0] == '.') continue;
-            kprint("  "); kprint(de->name); kprint("\n");
+            printk("  "); printk(de->name); printk("\n");
             any = 1;
         }
     }
     if (usr_inc_dir.files) {
-        kprint("  include/  [headers]\n");
+        printk("  include/  [headers]\n");
         any = 1;
     }
     for (usr_blob_t *b = usr_blobs; b; b = b->next) {
@@ -285,10 +285,10 @@ static void _root_listdir(vfs_node_t *dir) {
             }
         }
         if (dup) continue;
-        kprint("  "); kprint(b->node.name); kprint("  [cctkfs]\n");
+        printk("  "); printk(b->node.name); printk("  [cctkfs]\n");
         any = 1;
     }
-    if (!any) kprint("  (empty)\n");
+    if (!any) printk("  (empty)\n");
 }
 
 static int _root_create(vfs_node_t *dir, const char *name) {

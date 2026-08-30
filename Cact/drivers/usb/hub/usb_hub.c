@@ -86,7 +86,7 @@ static void hub_handle_port(usb_hub_priv_t *priv, uint8_t port) {
             __asm__ __volatile__("pause");
 
         if (hub_port_reset(priv->dev, port) != 0) {
-            kprint("[HUB] Port reset fail port="); kprint_hex(port); kprint("\n");
+            printk("[HUB] Port reset fail port="); printk_hex(port); printk("\n");
             return;
         }
 
@@ -94,8 +94,8 @@ static void hub_handle_port(usb_hub_priv_t *priv, uint8_t port) {
         uint8_t speed = (ps.wPortStatus & HUB_PORT_STS_LOW_SPEED)
                       ? USB_SPEED_LOW : USB_SPEED_FULL;
 
-        kprint("[HUB] Connect port="); kprint_hex(port);
-        kprint(" speed="); kprint_hex(speed); kprint("\n");
+        printk("[HUB] Connect port="); printk_hex(port);
+        printk(" speed="); printk_hex(speed); printk("\n");
 
         hub_hc_wrapper_t *wrap = (hub_hc_wrapper_t *)
             kmalloc(sizeof(hub_hc_wrapper_t));
@@ -113,10 +113,10 @@ static void hub_handle_port(usb_hub_priv_t *priv, uint8_t port) {
             child->hub = priv->dev;
             child->hc  = priv->dev->hc;
         }
-        kfree_heap(wrap);
+        kfree(wrap);
 
     } else {
-        kprint("[HUB] Disconnect port="); kprint_hex(port); kprint("\n");
+        printk("[HUB] Disconnect port="); printk_hex(port); printk("\n");
         usb_device_disconnect(priv->dev->hc, port);
     }
 
@@ -143,7 +143,7 @@ static void hub_irq_notify(usb_device_t *dev, void *buf,
 }
 
 static int hub_probe(usb_device_t *dev) {
-    kprint("[HUB] Hub detected\n");
+    printk("[HUB] Hub detected\n");
 
     usb_hub_priv_t *priv = (usb_hub_priv_t *)kmalloc(sizeof(usb_hub_priv_t));
     if (!priv) return -1;
@@ -151,8 +151,8 @@ static int hub_probe(usb_device_t *dev) {
     priv->dev = dev;
 
     if (hub_get_descriptor(dev, &priv->desc) < 0) {
-        kprint("[HUB] Failed to get hub descriptor\n");
-        kfree_heap(priv); return -1;
+        printk("[HUB] Failed to get hub descriptor\n");
+        kfree(priv); return -1;
     }
     priv->num_ports = priv->desc.bNbrPorts;
     if (priv->num_ports > USB_MAX_PORTS)
@@ -185,10 +185,10 @@ static int hub_probe(usb_device_t *dev) {
                                              sizeof(priv->status_buf),
                                              hub_irq_notify, priv);
         if (rc != 0)
-            kprint("[HUB] Failed to register interrupt EP\n");
+            printk("[HUB] Failed to register interrupt EP\n");
     }
 
-    kprint("[HUB] Ports="); kprint_hex(priv->num_ports); kprint("\n");
+    printk("[HUB] Ports="); printk_hex(priv->num_ports); printk("\n");
     return 0;
 }
 
@@ -197,7 +197,7 @@ static void hub_remove(usb_device_t *dev) {
         usb_hub_priv_t *priv = (usb_hub_priv_t *)dev->driver_priv;
         priv->removed = 1;
         __sync_synchronize();
-        kfree_heap(priv);
+        kfree(priv);
         dev->driver_priv = NULL;
     }
 }

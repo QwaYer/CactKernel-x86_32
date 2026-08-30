@@ -35,13 +35,13 @@ static void list_push(pci_device_t *d) {
 static void decode_bars(pci_device_t *d) {
     for (int i = 0; i < 6; i++) {
         uint8_t  off  = 0x10 + i * 4;
-        uint32_t orig = pci_read32(d->bus, d->dev, d->fn, off);
+        uint32_t orig = pci_read_config_dword(d->bus, d->dev, d->fn, off);
         if (!orig) continue;
 
         // BAR sizing: write ~0, read mask, restore original
-        pci_write32(d->bus, d->dev, d->fn, off, 0xFFFFFFFF);
-        uint32_t mask = pci_read32(d->bus, d->dev, d->fn, off);
-        pci_write32(d->bus, d->dev, d->fn, off, orig);
+        pci_write_config_dword(d->bus, d->dev, d->fn, off, 0xFFFFFFFF);
+        uint32_t mask = pci_read_config_dword(d->bus, d->dev, d->fn, off);
+        pci_write_config_dword(d->bus, d->dev, d->fn, off, orig);
 
         if (orig & PCI_BAR_IO) {
             // I/O BAR — 4-byte aligned, lower 16 bits of size
@@ -67,7 +67,7 @@ static void scan_bus(uint8_t bus);
 
 // Probe a single PCI function: read IDs, decode BARs, match drivers, recurse bridges
 static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
-    uint32_t id = pci_read32(bus, dev, fn, 0x00);
+    uint32_t id = pci_read_config_dword(bus, dev, fn, 0x00);
     if (id == 0xFFFFFFFF || id == 0x00000000) return;  // absent function
 
     pci_device_t *d = alloc_dev();
@@ -77,16 +77,16 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     d->vendor_id = (uint16_t)(id & 0xFFFF);
     d->device_id = (uint16_t)(id >> 16);
 
-    uint32_t cls  = pci_read32(bus, dev, fn, 0x08);
+    uint32_t cls  = pci_read_config_dword(bus, dev, fn, 0x08);
     d->revision   = (uint8_t) cls;
     d->prog_if    = (uint8_t)(cls >>  8);
     d->subclass   = (uint8_t)(cls >> 16);
     d->class_code = (uint8_t)(cls >> 24);
 
-    uint32_t hdr   = pci_read32(bus, dev, fn, 0x0C);
+    uint32_t hdr   = pci_read_config_dword(bus, dev, fn, 0x0C);
     d->header_type = (uint8_t)(hdr >> 16);
 
-    uint32_t irq = pci_read32(bus, dev, fn, 0x3C);
+    uint32_t irq = pci_read_config_dword(bus, dev, fn, 0x3C);
     d->irq_line  = (uint8_t) irq;
     d->irq_pin   = (uint8_t)(irq >> 8);
 
@@ -111,7 +111,7 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
         d->subclass   == PCI_SUBCLASS_PCI_BRIDGE &&
         (d->header_type & 0x7F) == PCI_HEADER_TYPE_BRIDGE)
     {
-        uint32_t br  = pci_read32(bus, dev, fn, 0x18);
+        uint32_t br  = pci_read_config_dword(bus, dev, fn, 0x18);
         uint8_t  sec = (uint8_t)(br >> 8);          // secondary bus number
         if (sec) scan_bus(sec);
     }
@@ -124,16 +124,16 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
 static void scan_bus(uint8_t bus) {
     for (uint8_t dev = 0; dev < PCI_MAX_DEV; dev++) {
         // Quick check for device presence by reading vendor/device ID
-        if (pci_read32(bus, dev, 0, 0x00) == 0xFFFFFFFF) continue;
-        if (pci_read32(bus, dev, 0, 0x00) == 0x00000000) continue;
+        if (pci_read_config_dword(bus, dev, 0, 0x00) == 0xFFFFFFFF) continue;
+        if (pci_read_config_dword(bus, dev, 0, 0x00) == 0x00000000) continue;
 
         probe_fn(bus, dev, 0);
 
         // Check header type for multi-function device
-        uint32_t hdr = pci_read32(bus, dev, 0, 0x0C);
+        uint32_t hdr = pci_read_config_dword(bus, dev, 0, 0x0C);
         if ((uint8_t)(hdr >> 16) & PCI_HEADER_MULTIFUNCTION) {
             for (uint8_t fn = 1; fn < PCI_MAX_FN; fn++) {
-                uint32_t idn = pci_read32(bus, dev, fn, 0x00);
+                uint32_t idn = pci_read_config_dword(bus, dev, fn, 0x00);
                 if (idn == 0xFFFFFFFF || idn == 0x00000000) continue;
                 probe_fn(bus, dev, fn);
             }
@@ -143,12 +143,12 @@ static void scan_bus(uint8_t bus) {
 
 // Entry point: determine host bridge type, then scan the PCI hierarchy
 void pci_enumerate(void) {
-    uint32_t hdr0 = pci_read32(0, 0, 0, 0x0C);
+    uint32_t hdr0 = pci_read_config_dword(0, 0, 0, 0x0C);
     if (!((uint8_t)(hdr0 >> 16) & PCI_HEADER_MULTIFUNCTION)) {
         scan_bus(0);
     } else {
         for (uint8_t fn = 0; fn < PCI_MAX_FN; fn++) {
-            uint32_t id = pci_read32(0, 0, fn, 0x00);
+            uint32_t id = pci_read_config_dword(0, 0, fn, 0x00);
             if (id == 0xFFFFFFFF || id == 0x00000000) break;
             scan_bus(fn);
         }

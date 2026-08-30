@@ -60,8 +60,8 @@ pub extern "C" fn oom_kill() -> i32 {
 
     if victim.is_null() || best_score == 0 {
         lock_release(unsafe { scheduler_lock.get() });
-        // SAFETY: kprint_color takes a valid string.
-        unsafe { kprint_color(b"[OOM] no killable process found\n\0".as_ptr(), COLOR_LIGHT_RED); }
+        // SAFETY: printk_color takes a valid string.
+        unsafe { printk_color(b"[OOM] no killable process found\n\0".as_ptr(), COLOR_LIGHT_RED); }
         return -1;
     }
 
@@ -83,15 +83,15 @@ pub extern "C" fn oom_kill() -> i32 {
     stats.last_killed_pid = victim_pid;
 
     let mut buf = [0u8; 16];
-    // SAFETY: kprint_color takes valid strings.
+    // SAFETY: printk_color takes valid strings.
     unsafe {
-        kprint_color(b"\n[OOM] Killed pid=\0".as_ptr(), COLOR_LIGHT_RED);
+        printk_color(b"\n[OOM] Killed pid=\0".as_ptr(), COLOR_LIGHT_RED);
         itoa(victim_pid as i32, buf.as_mut_ptr());
-        kprint_color(buf.as_ptr(), COLOR_LIGHT_RED);
-        kprint_color(b" (\0".as_ptr(), COLOR_LIGHT_RED);
+        printk_color(buf.as_ptr(), COLOR_LIGHT_RED);
+        printk_color(b" (\0".as_ptr(), COLOR_LIGHT_RED);
         itoa(victim_pages as i32, buf.as_mut_ptr());
-        kprint_color(buf.as_ptr(), COLOR_LIGHT_RED);
-        kprint_color(b" pages)\n\0".as_ptr(), COLOR_LIGHT_RED);
+        printk_color(buf.as_ptr(), COLOR_LIGHT_RED);
+        printk_color(b" pages)\n\0".as_ptr(), COLOR_LIGHT_RED);
     }
 
     // SAFETY: task_reap is a kernel FFI entry point.

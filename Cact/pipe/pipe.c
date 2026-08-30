@@ -75,10 +75,10 @@ int pipe_create(vfs_node_t *pipefd[2], int flags) {
     if (!p) return -1;
 
     pipefd[0] = _make_node(p, "pipe:r", 0);   // Read end
-    if (!pipefd[0]) { kfree_heap(p); return -1; }
+    if (!pipefd[0]) { kfree(p); return -1; }
 
     pipefd[1] = _make_node(p, "pipe:w", 1);   // Write end
-    if (!pipefd[1]) { kfree_heap(pipefd[0]); kfree_heap(p); return -1; }
+    if (!pipefd[1]) { kfree(pipefd[0]); kfree(p); return -1; }
 
     mutex_lock(&p->lock);
     p->write_open = 1;
@@ -93,7 +93,7 @@ vfs_node_t *fifo_create(const char *name, int flags) {
     if (!p) return 0;
 
     vfs_node_t *n = _make_node(p, name, 0);
-    if (!n) { kfree_heap(p); return 0; }
+    if (!n) { kfree(p); return 0; }
 
     // Store FIFO name inside pipe_t to avoid dangling pointer if vfs_node is freed first
     int i = 0;
@@ -231,7 +231,7 @@ void pipe_destroy(pipe_t *p) {
     mutex_lock(&p->lock);
     p->magic = 0;    // Invalidate magic for UAF detection
     mutex_unlock(&p->lock);
-    kfree_heap(p);
+    kfree(p);
 }
 
 // VFS read wrapper
@@ -269,7 +269,7 @@ static void _vfs_pipe_close(vfs_node_t *node) {
 
     // Handle case where pipe_t was already force-destroyed (e.g., via pipe_destroy)
     if (!p || p->magic != PIPE_MAGIC) {
-        if (node->refcount <= 1) kfree_heap(node);
+        if (node->refcount <= 1) kfree(node);
         else                     node->refcount--;
         return;
     }
@@ -293,13 +293,13 @@ static void _vfs_pipe_close(vfs_node_t *node) {
 
     // Free pipe_t outside lock (after confirming ref_count == 0)
     if (should_free) {
-        kfree_heap(p);
+        kfree(p);
         node->priv = NULL;
     }
 
     // Release the vfs_node_t wrapper
     if (node->refcount <= 1)
-        kfree_heap(node);
+        kfree(node);
     else
         node->refcount--;
 }

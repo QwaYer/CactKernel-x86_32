@@ -35,7 +35,7 @@ fn sema_init_impl(s: &mut semaphore_t, val: i32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sema_down(s: *mut semaphore_t) {
+pub unsafe extern "C" fn down(s: *mut semaphore_t) {
     sema_down_impl(&mut *s);
 }
 
@@ -83,7 +83,7 @@ fn sema_down_impl(s: &mut semaphore_t) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sema_up(s: *mut semaphore_t) {
+pub unsafe extern "C" fn up(s: *mut semaphore_t) {
     sema_up_impl(&mut *s);
 }
 

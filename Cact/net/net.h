@@ -48,7 +48,7 @@ typedef struct sk_buff {
 } skb_t;
 
 skb_t* skb_alloc(void);
-void   skb_free(skb_t* skb);
+void   kfree_skb(skb_t* skb);
 
 /* Reserve headroom so lower layers can prepend their header */
 uint8_t* skb_push(skb_t* skb, uint16_t len);
@@ -76,12 +76,12 @@ typedef struct net_driver {
 
 extern net_driver_t* active_nic;
 
-void net_register_driver(net_driver_t* drv);
-void net_unregister_driver(net_driver_t* drv);
+void register_netdev(net_driver_t* drv);
+void unregister_netdev(net_driver_t* drv);
 void net_init(void);                  /* called from kernel_setup_hardware() */
 void net_poll(void);                  /* call periodically from scheduler    */
 extern semaphore_t net_sema;
-void net_receive(skb_t* skb);        /* drivers call this on RX             */
+void netif_rx(skb_t* skb);        /* drivers call this on RX             */
 
 /* Stable alias for loadable modules / external driver sources */
 void net_receive_packet(skb_t* skb);

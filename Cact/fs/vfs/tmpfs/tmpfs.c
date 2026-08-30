@@ -77,8 +77,8 @@ static void _init_vnode(tmpfs_node_t *n) {
 static void _free_tmpfs_node(tmpfs_node_t *n) {
     if (!n) return;
     if (n == &tmpfs_root_node) return;   // static root, never freed
-    if (n->data) kfree_heap(n->data);
-    kfree_heap(n);
+    if (n->data) kfree(n->data);
+    kfree(n);
 }
 
 // Ensure file capacity using doubling growth.
@@ -90,7 +90,7 @@ static int _ensure_cap(tmpfs_node_t *n, uint32_t needed) {
     if (!nd) return -1;
     memset(nd, 0, nc);
     if (n->data && n->size) memcpy(nd, n->data, n->size);
-    if (n->data) kfree_heap(n->data);
+    if (n->data) kfree(n->data);
     n->data = nd;
     n->cap  = nc;
     return 0;
@@ -163,8 +163,8 @@ static void _tmp_listdir(vfs_node_t *dir) {
     tmpfs_node_t *d = (tmpfs_node_t*)dir->priv;
     if (!d || d->type != VFS_DIRECTORY) return;
     for (tmpfs_node_t *c = d->children; c; c = c->next) {
-        kprint("  "); kprint(c->name);
-        kprint(c->type == VFS_DIRECTORY ? "/\n" : "\n");
+        printk("  "); printk(c->name);
+        printk(c->type == VFS_DIRECTORY ? "/\n" : "\n");
     }
 }
 

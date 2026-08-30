@@ -11,8 +11,8 @@ int sys_print(char* msg) {
     int len = 0;
     while (msg[len] && len < USER_STR_MAX - 1) { buf[len] = msg[len]; len++; }
     buf[len] = '\0';
-    kprint(buf);
-    kfree_heap(buf);
+    printk(buf);
+    kfree(buf);
     return 0;
 }
 
@@ -25,15 +25,15 @@ int sys_mount(char* src, char* target, char* fstype) {
     char *ksrc = copy_path_from_user(src);
     if (!ksrc) return -1;
     char *ktgt = copy_path_from_user(target);
-    if (!ktgt) { kfree_heap(ksrc); return -1; }
+    if (!ktgt) { kfree(ksrc); return -1; }
 
     vfs_node_t* src_node = _resolve_path(ksrc);
-    kfree_heap(ksrc);
-    if (!src_node) { kfree_heap(ktgt); return -1; }
+    kfree(ksrc);
+    if (!src_node) { kfree(ktgt); return -1; }
 
     char basename[128];
     vfs_node_t* parent = _resolve_parent(ktgt, basename, 128);
-    kfree_heap(ktgt);
+    kfree(ktgt);
     if (!parent || !basename[0]) return -1;
 
     return vfs_mount(parent, basename, src_node);
@@ -49,7 +49,7 @@ int sys_umount(char* target) {
 
     char basename[128];
     vfs_node_t* parent = _resolve_parent(ktgt, basename, 128);
-    kfree_heap(ktgt);
+    kfree(ktgt);
     if (!parent || !basename[0]) return -1;
 
     return vfs_umount(parent, basename);

@@ -268,9 +268,9 @@ static vfs_dirent_t *_sub_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _sub_listdir(vfs_node_t *dir) {
     lib_subdir_t *sd = (lib_subdir_t *)dir->priv;
-    if (!sd || !sd->files) { kprint("  (empty)\n"); return; }
+    if (!sd || !sd->files) { printk("  (empty)\n"); return; }
     for (sub_file_t *f = sd->files; f; f = f->next) {
-        kprint("  "); kprint(f->node.name); kprint("\n");
+        printk("  "); printk(f->node.name); printk("\n");
     }
 }
 
@@ -346,14 +346,14 @@ static void _root_listdir(vfs_node_t *dir) {
     int any = 0;
 
     // List subdirectories
-    if (lib_inc_dir.files) { kprint("  include\n"); any = 1; }
-    if (lib_tcc_dir.files) { kprint("  tcc\n"); any = 1; }
-    if (lib_sys_dir.files) { kprint("  sys\n"); any = 1; }
+    if (lib_inc_dir.files) { printk("  include\n"); any = 1; }
+    if (lib_tcc_dir.files) { printk("  tcc\n"); any = 1; }
+    if (lib_sys_dir.files) { printk("  sys\n"); any = 1; }
 
     if (lib && lib->ops && lib->ops->readdir) {
         for (uint32_t i = 0; (de = lib->ops->readdir(lib, i)); i++) {
             if (de->name[0] == '.') continue;
-            kprint("  "); kprint(de->name); kprint("\n");
+            printk("  "); printk(de->name); printk("\n");
             any = 1;
         }
     }
@@ -366,10 +366,10 @@ static void _root_listdir(vfs_node_t *dir) {
             }
         }
         if (dup) continue;
-        kprint("  "); kprint(b->node.name); kprint("  [cctkfs]\n");
+        printk("  "); printk(b->node.name); printk("  [cctkfs]\n");
         any = 1;
     }
-    if (!any) kprint("  (empty)\n");
+    if (!any) printk("  (empty)\n");
 }
 
 // Forward create/delete/mkdir/rmdir to ext4 /lib
