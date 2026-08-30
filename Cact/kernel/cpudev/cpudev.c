@@ -300,15 +300,4 @@ int cpu_syscall_commit(void) {
         wrmsr(AMD_FMASK, 0x200);
     }
 
-    if (g_syscall_mech == SYSCALL_MECH_SYSCALL)
-        if (g_syscall_use_sysexit)
-            pr_info("CPUDEV: EFER.SCE+STAR+FMASK programmed (return: SYSRET/IRET)");
-        else
-            pr_warn("CPUDEV: EFER.SCE+STAR+FMASK programmed (return: SYSRET/IRET)");
-    else if (cpu_has_sep())
-        if (g_syscall_use_sysexit)
-            pr_info("CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: SYSEXIT/IRET)");
-        else
-            pr_warn("CPUDEV: IA32_SYSENTER_CS/EIP/ESP programmed (return: SYSEXIT/IRET)");
-    return 0;
 }

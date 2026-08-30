@@ -6,7 +6,7 @@
 #include "klib.h"
 #include "task.h"
 #include "version.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 #include "cpudev.h"
 #include "apic.h"
 #include "msi.h"

@@ -3,7 +3,7 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 
 // binfs forwards ext4 /bin with optional cctkfs overlay files.
 static vfs_node_t  binfs_root;
@@ -69,12 +69,12 @@ static void binfs_register_init_bin_blobs(void) {
     bin_blob_t *head = 0;
     bin_blob_t **tail = &head;
 
-    int n = pci_modblob_count();
+    int n = initfs_modblob_count();
     for (int i = 0; i < n; i++) {
         const char *path;
         const uint8_t *data;
         uint32_t sz;
-        if (pci_modblob_at(i, &path, &data, &sz) != 0) continue;
+        if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
         if (!path_has_prefix(path, "/bin/")) continue;
         const char *base = path + 5;
         if (!basename_only(base)) continue;

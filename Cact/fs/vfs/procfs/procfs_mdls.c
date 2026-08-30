@@ -6,7 +6,7 @@
 #include "klib.h"
 #include "task.h"
 #include "version.h"
-#include "pci_modblob.h"
+#include "initfs_modblob.h"
 #include "cpudev.h"
 #include "apic.h"
 #include "msi.h"
@@ -31,7 +31,7 @@ static int _mdls_file_read(vfs_node_t *node, uint32_t off, uint32_t size,
     const char    *path;
     const uint8_t *data;
     uint32_t       total;
-    if (pci_modblob_at(idx, &path, &data, &total) != 0) return 0;
+    if (initfs_modblob_at(idx, &path, &data, &total) != 0) return 0;
     if (off >= total) return 0;
     uint32_t avail = total - off;
     if (size > avail) size = avail;
@@ -42,7 +42,7 @@ static int _mdls_file_read(vfs_node_t *node, uint32_t off, uint32_t size,
 static vfs_ops_t mdls_file_ops = { .read = _mdls_file_read };
 
 static int _mdls_count(void) {
-    int n = pci_modblob_count();
+    int n = initfs_modblob_count();
     if (n < 0) return 0;
     if (n > MDLS_MAX_FILES) n = MDLS_MAX_FILES;
     return n;
@@ -57,7 +57,7 @@ static void _mdls_init_lazy(void) {
         const char    *path;
         const uint8_t *data;
         uint32_t       sz;
-        if (pci_modblob_at(i, &path, &data, &sz) != 0) continue;
+        if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
         const char *bn = _mdls_basename(path);
         memset(&mdls_files[i], 0, sizeof(vfs_node_t));
         strlcpy(mdls_files[i].name, bn, 128);

@@ -121,7 +121,7 @@ typedef enum {
 /* Each pr_<level>() call is a complete log record: append a trailing '\n'
  * unless the format string already ends with one.  Concatenated output is
  * built with raw printk() calls (they never add '\n'), e.g.
- *   printk("[MODBLOB] ready: "); printk(n); printk(" B\n");
+ *   printk("[INITFS] ready: "); printk(n); printk(" B\n");
  */
 #define __PR_NEEDS_NL(fmt) (sizeof(fmt) > 1 && (fmt)[sizeof(fmt) - 2] != '\n')
 #define __PR_FMT(level, fmt) (__PR_NEEDS_NL(fmt) ? level fmt "\n" : level fmt)

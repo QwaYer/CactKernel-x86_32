@@ -44,7 +44,7 @@ CactKernel is one piece of a larger workspace. Typical pieces:
 | **[LocalRepoCactOS](../LocalRepoCactOS)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
 | **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`make`** in this tree → **`build/cact.iso`**. |
 
-**Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`pci_modblob_load`). At runtime, **binfs / sbinfs / libfs** overlay files from that archive on top of ext4 (e.g. **`/bin/init`**, **`libc.so`**, optional **`*.cctk`** drivers). PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with **HMAC-SHA256** against the kernel's embedded static key before loading.
+**Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs** overlay files from that archive on top of ext4 (e.g. **`/bin/init`**, **`libc.so`**, optional **`*.cctk`** drivers). PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with **HMAC-SHA256** against the kernel's embedded static key before loading.
 
 From the workspace root (QEMU-oriented full rebuild):
 
@@ -142,7 +142,8 @@ CactKernel-x86_32/
 │   │   ├── acpi/        ACPICA engine — AML interpreter, MADT/HPET/APIC tables
 │   │   ├── block/       blkdev, page cache (increased constant limits)
 │   │   ├── input/       USB HID only (PS/2 removed in 2.0)
-│   │   ├── pci/         enumerator, PCIe, ELF module loader, cctkfs staging,
+│   │   ├── initfs/      cctkfs staging + module blob reader, HMAC signature verify
+│   │   ├── pci/         enumerator, PCIe, ELF module loader,
 │   │   │                HMAC-SHA256 module signature verification
 │   │   ├── usb/         xhci + HID + hub
 │   │   └── video/       framebuffer console, font, PAT WC + shadow blit
@@ -174,7 +175,7 @@ Boot is split into **three phases**: early `init()` (identity map, no user IRQs 
 | Step | What happens |
 |------|----------------|
 | 1 | **Multiboot2** parse — memory map, framebuffer tag, modules |
-| 2 | **cctkfs staging** — `pci_modblob_load()` copies the GRUB "cctkfs" module from its physical address into kernel **`.bss`** before paging is enabled |
+| 2 | **cctkfs staging** — `initfs_modblob_load()` copies the GRUB "cctkfs" module from its physical address into kernel **`.bss`** before paging is enabled |
 | 3 | **Framebuffer** — `fb_init()`; if no FB tag / zero size → halt (blind) |
 | 4 | Magic check (`0x36D76289`) |
 | 5 | **`kernel_setup_hardware()`** — see Phase B |
