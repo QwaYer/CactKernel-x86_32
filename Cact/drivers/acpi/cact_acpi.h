@@ -46,6 +46,7 @@ struct acpi_sdt_header {
 
 int  acpi_init(void);
 int  acpi_available(void);
+void acpi_osc_pcie_init(void);
 void acpi_power_off(void);
 void acpi_reboot(void);
 

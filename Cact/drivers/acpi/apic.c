@@ -5,6 +5,7 @@
 #include "apic.h"
 #include "cact_acpi.h"
 #include "acpi_hpet.h"
+#include "lapic_timer.h"
 
 #define IA32_APIC_BASE      0x1B
 #define APIC_ENABLE         (1u << 11)
@@ -36,7 +37,23 @@ static unsigned int ioapic_global_irq_base = 0;
 static unsigned int ioapic_id = 0;
 static uint32_t lapic_base_addr = 0;
 static uint32_t ioapic_base_addr = 0;
-static uint32_t irq_override[16];
+
+struct irq_override_info {
+    uint32_t gsi;
+    uint16_t flags;   /* MADT IntiFlags: [1:0] polarity, [3:2] trigger */
+};
+static struct irq_override_info irq_override[16];
+
+/* Translate MADT interrupt-source-override flags to IOAPIC redirection flags.
+ * Only explicit "active low" / "level" settings force bits; everything else
+ * keeps the IOAPIC defaults (active-high edge). */
+static uint32_t madt_flags_to_ioapic(uint16_t inti_flags)
+{
+    uint32_t flags = 0;
+    if ((inti_flags & 0x3) == 0x3)          flags |= REDIR_LOW_POL;
+    if (((inti_flags >> 2) & 0x3) == 0x3)   flags |= REDIR_LEVEL;
+    return flags;
+}
 
 static inline uint64_t rdmsr(uint32_t msr)
 {
@@ -76,10 +93,14 @@ static void lapic_init(uint32_t lapic_base)
             PAGE_PRESENT | PAGE_RW | PAGE_PCD);
     lapic = (volatile uint32_t *)(APIC_MMIO_VADDR + (lapic_base & 0xFFF));
 
-    lapic[0x320 / 4] = 0x00010000;
-    lapic[0x350 / 4] = 0x00010000;
-    lapic[0x360 / 4] = 0x00010000;
-    lapic[0x370 / 4] = 0x00010000;
+    /* Mask the LVT entries with a valid spurious vector (0xFF): any stray
+     * delivery then targets the spurious-vector gate instead of tripping a
+     * #GP and cascading into a triple fault. */
+    lapic[0x320 / 4] = 0x000100FF; /* LVT Timer */
+    lapic[0x350 / 4] = 0x000100FF; /* LVT Thermal */
+    lapic[0x360 / 4] = 0x000100FF; /* LVT Performance Counter */
+    lapic[0x370 / 4] = 0x000100FF; /* LVT LINT0 */
+    lapic[0x380 / 4] = 0x000100FF; /* LVT LINT1 */
 
     uint64_t msr_val = rdmsr(IA32_APIC_BASE);
     msr_val &= ~0xFFF;
@@ -106,8 +127,10 @@ int apic_init(void)
     uint32_t global_irq_base = 0;
     uint8_t  ioapic_id_local = 0;
 
-    for (int i = 0; i < 16; i++)
-        irq_override[i] = i;
+    for (int i = 0; i < 16; i++) {
+        irq_override[i].gsi   = (uint32_t)i;
+        irq_override[i].flags = 0;
+    }
 
     uint8_t *entry = (uint8_t *)(madt + 1);
     uint8_t *end   = (uint8_t *)madt + madt->Header.Length;
@@ -124,8 +147,10 @@ int apic_init(void)
         } else if (type == 2) {
             ACPI_MADT_INTERRUPT_OVERRIDE *ovr =
                 (ACPI_MADT_INTERRUPT_OVERRIDE *)entry;
-            if (ovr->SourceIrq < 16)
-                irq_override[ovr->SourceIrq] = ovr->GlobalIrq;
+            if (ovr->SourceIrq < 16) {
+                irq_override[ovr->SourceIrq].gsi   = ovr->GlobalIrq;
+                irq_override[ovr->SourceIrq].flags = ovr->IntiFlags;
+            }
         }
         entry += len;
     }
@@ -150,11 +175,12 @@ int apic_init(void)
 
     for (unsigned int i = 0; i < 16; i++) {
         if (i == 2) continue;
-        unsigned int gsi = irq_override[i];
+        unsigned int gsi = irq_override[i].gsi;
         if (gsi < global_irq_base) continue;
         unsigned int entry_idx = gsi - global_irq_base;
         if (entry_idx > ioapic_max_redir) continue;
-        ioapic_set_redir(entry_idx, 0x20 + i, 0, 0);
+        ioapic_set_redir(entry_idx, 0x20 + i,
+                         madt_flags_to_ioapic(irq_override[i].flags), 0);
     }
 
     // Program IOAPIC entries for PCI IRQs (GSI 16+, level-triggered active-low).
@@ -166,24 +192,68 @@ int apic_init(void)
         ioapic_set_redir(i, 0xF0 + (i & 0x0F), REDIR_LEVEL | REDIR_LOW_POL, 0);
     }
 
-    unsigned int timer_entry = irq_override[0];
+    /*
+     * ACPI SCI must be level-triggered.  Polarity is firmware-specific: most
+     * machines use active-low, but some (this HP BIOS!) report "high level"
+     * in the MADT interrupt-source override.  Honor the override for the SCI
+     * GSI; only fall back to the ACPI-spec active-low default when the
+     * firmware did not describe the line at all.
+     */
+    {
+        uint16_t sci_gsi = AcpiGbl_FADT.SciInterrupt;
+        if (sci_gsi != 0 && sci_gsi >= global_irq_base) {
+            unsigned int entry_idx = sci_gsi - global_irq_base;
+            if (entry_idx <= ioapic_max_redir) {
+                uint32_t flags = REDIR_LEVEL;
+                uint16_t madt_flags = 0;
+                int have_override = 0;
+                for (int src = 0; src < 16; src++) {
+                    if (irq_override[src].gsi == sci_gsi) {
+                        madt_flags = irq_override[src].flags;
+                        have_override = 1;
+                        break;
+                    }
+                }
+                if (have_override)
+                    flags |= madt_flags_to_ioapic(madt_flags);
+                else
+                    flags |= REDIR_LOW_POL;
+
+                ioapic_set_redir(entry_idx, 0x20 + sci_gsi, flags, 0);
+                char buf[64]; char num[32];
+                strcpy(buf, "APIC: SCI (GSI ");
+                snprintf(num, sizeof(num), "%d", (int)((int)sci_gsi)); strcat(buf, num);
+                strcat(buf, (flags & REDIR_LOW_POL) ? ") level/active-low" : ") level/active-high");
+                pr_info("%s", buf);
+            }
+        }
+    }
+
+    unsigned int timer_entry = irq_override[0].gsi;
     if (timer_entry < global_irq_base) timer_entry = 0;
     else timer_entry -= global_irq_base;
     if (timer_entry > ioapic_max_redir) timer_entry = 0;
+
     uint64_t period = hpet_get_freq() / 100;
-    if (period == 0 || hpet_start_periodic(timer_entry, period) != 0) {
-        pr_crit("HPET periodic timer failed to start");
-        while(1) __asm__ __volatile__("hlt");
-    }
-
-    apic_enabled = 1;
-
-    {
+    if (period != 0 && hpet_start_periodic(timer_entry, period) == 0) {
         char buf[64]; char num[32];
         strcpy(buf, "APIC: HPET timer0 → IOAPIC entry ");
         snprintf(num, sizeof(num), "%d", (int)((int)timer_entry)); strcat(buf, num);
         pr_info("%s", buf);
+    } else {
+        /* Board quirk: the Intel 300/500-series PCH HPET (or an HPET that
+         * accepted our writes but never raises its IRQ) cannot drive the
+         * tick — fall back to the LAPIC timer calibrated against the PIT. */
+        pr_warn("APIC: HPET timer unavailable — switching to LAPIC timer");
+        uint32_t per_ms = lapic_timer_calibrate();
+        if (per_ms == 0) {
+            pr_crit("APIC: LAPIC timer calibration failed — no system timer");
+            while(1) __asm__ __volatile__("hlt");
+        }
+        lapic_timer_start_periodic(per_ms);
     }
+
+    apic_enabled = 1;
 
     return 0;
 }
@@ -208,6 +278,10 @@ int apic_pci_vector(uint8_t irq_pin)
 }
 
 uint32_t apic_lapic_base(void)       { return lapic_base_addr; }
+
+/* Expose the mapped LAPIC MMIO window (used by the LAPIC-timer quirk). */
+volatile uint32_t *apic_lapic_regs(void) { return lapic; }
+
 uint32_t apic_lapic_id(void)
 {
     uint32_t ebx, eax, ecx, edx;
@@ -229,5 +303,5 @@ bool     apic_ioapic_info(uint32_t *base, uint32_t *id, uint32_t *max_redir, uin
 int apic_irq_override(int isa_irq)
 {
     if (!apic_enabled || isa_irq < 0 || isa_irq >= 16) return -1;
-    return (int)irq_override[isa_irq];
+    return (int)irq_override[isa_irq].gsi;
 }

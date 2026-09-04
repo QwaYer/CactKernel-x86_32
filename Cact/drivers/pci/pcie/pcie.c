@@ -87,7 +87,11 @@ void pcie_write16(uint8_t bus, uint8_t dev, uint8_t fn, uint16_t reg, uint16_t v
 int pcie_find_cap(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t cap_id)
 {
     uint8_t cap_ptr = (uint8_t)(pci_read_config_dword(bus, dev, fn, 0x34) & 0xFF);
-    while (cap_ptr && cap_ptr != 0xFF) {
+    int iter = 0;
+
+    /* Capability pointers are always >= 0x40; a bounded walk prevents a
+     * corrupted list (common on real boards) from hanging the boot. */
+    while (cap_ptr >= 0x40 && cap_ptr != 0xFF && iter++ < 32) {
         uint32_t cap = pcie_read32(bus, dev, fn, cap_ptr);
         if ((uint8_t)(cap & 0xFF) == cap_id)
             return (int)cap_ptr;

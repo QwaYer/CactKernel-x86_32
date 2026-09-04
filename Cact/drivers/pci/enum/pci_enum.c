@@ -8,6 +8,13 @@
 static pci_device_t  pool[MAX_PCI_DEVICES];
 static uint32_t      pool_idx = 0;
 
+// Bitmap of buses already scanned — guards the recursive bridge walk against
+// circular/misconfigured secondary-bus numbers on real boards.
+static uint8_t       scanned_bus_map[32];   // 256 buses
+static int           scan_depth = 0;
+
+#define MAX_SCAN_DEPTH 16
+
 // Allocate a device descriptor from the static pool
 static pci_device_t *alloc_dev(void) {
     if (pool_idx >= MAX_PCI_DEVICES) return NULL;
@@ -30,17 +37,35 @@ static void list_push(pci_device_t *d) {
 }
 
 // Probe a device's BARs: write all-ones, read back mask, determine base/size/type.
-// Skips 64-bit BARs (type != PCI_BAR_MEM_TYPE_32) by consuming the next slot.
+// A 64-bit memory BAR spans two slots: the second dword holds address bits
+// 32..63, so it is read/sized/restored too, otherwise the base gets silently
+// truncated to 32 bits.  The consumed upper slot is skipped via i++.
 static void decode_bars(pci_device_t *d) {
     for (int i = 0; i < 6; i++) {
         uint8_t  off  = 0x10 + i * 4;
         uint32_t orig = pci_read_config_dword(d->bus, d->dev, d->fn, off);
         if (!orig) continue;
 
-        // BAR sizing: write ~0, read mask, restore original
+        // Is this a 64-bit memory BAR? (bits 1..2 = 10).  A 64-bit BAR needs
+        // the next slot for its upper dword, so the pair must fit in slots 0..5.
+        int is_64bit = i < 5 &&
+                       !(orig & PCI_BAR_IO) &&
+                       (((orig >> 1) & 0x3) == 0x2);
+
+        uint32_t hi_orig = 0, hi_mask = 0;
+        if (is_64bit)
+            hi_orig = pci_read_config_dword(d->bus, d->dev, d->fn, off + 4);
+
+        // BAR sizing: write ~0 (both dwords for 64-bit), read mask, restore
         pci_write_config_dword(d->bus, d->dev, d->fn, off, 0xFFFFFFFF);
+        if (is_64bit)
+            pci_write_config_dword(d->bus, d->dev, d->fn, off + 4, 0xFFFFFFFF);
         uint32_t mask = pci_read_config_dword(d->bus, d->dev, d->fn, off);
+        if (is_64bit)
+            hi_mask = pci_read_config_dword(d->bus, d->dev, d->fn, off + 4);
         pci_write_config_dword(d->bus, d->dev, d->fn, off, orig);
+        if (is_64bit)
+            pci_write_config_dword(d->bus, d->dev, d->fn, off + 4, hi_orig);
 
         if (orig & PCI_BAR_IO) {
             // I/O BAR — 4-byte aligned, lower 16 bits of size
@@ -49,13 +74,21 @@ static void decode_bars(pci_device_t *d) {
             d->bars[i].size  = (~(mask & 0xFFFC) + 1) & 0xFFFF;
         } else {
             // Memory BAR — support both 32-bit and 64-bit
-            uint8_t type = (orig >> 1) & 0x3;
             d->bars[i].is_io = 0;
-            d->bars[i].base  = orig & 0xFFFFFFF0;
-            d->bars[i].size  = ~(mask & 0xFFFFFFF0) + 1;
-            if (d->bars[i].size == 0) d->bars[i].size = 1;
-            if (type != PCI_BAR_MEM_TYPE_32)
-                i++; // skip next slot (upper 32 bits of 64-bit BAR)
+            if (is_64bit) {
+                uint64_t lo = orig & 0xFFFFFFF0ULL;
+                uint64_t hi = (uint64_t)hi_orig << 32;
+                uint64_t lo_mask = mask & 0xFFFFFFF0ULL;
+                uint64_t hi_m    = (uint64_t)hi_mask << 32;
+                d->bars[i].base  = hi | lo;
+                d->bars[i].size  = ~(hi_m | lo_mask) + 1;
+                if (d->bars[i].size == 0) d->bars[i].size = 1;
+                i++; // consume the upper-32 dword slot of the 64-bit BAR
+            } else {
+                d->bars[i].base  = orig & 0xFFFFFFF0;
+                d->bars[i].size  = ~(mask & 0xFFFFFFF0) + 1;
+                if (d->bars[i].size == 0) d->bars[i].size = 1;
+            }
         }
     }
 }
@@ -75,6 +108,10 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     d->bus = bus; d->dev = dev; d->fn = fn;
     d->vendor_id = (uint16_t)(id & 0xFFFF);
     d->device_id = (uint16_t)(id >> 16);
+
+    pr_info("PCI: %02x:%02x.%u %04x:%04x",
+            (unsigned)bus, (unsigned)dev, (unsigned)fn,
+            (unsigned)d->vendor_id, (unsigned)d->device_id);
 
     uint32_t cls  = pci_read_config_dword(bus, dev, fn, 0x08);
     d->revision   = (uint8_t) cls;
@@ -121,6 +158,17 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
 
 // Scan all functions on a given bus
 static void scan_bus(uint8_t bus) {
+    // Never rescan a bus and never recurse deeper than MAX_SCAN_DEPTH —
+    // a corrupt secondary-bus number must not hang the boot.
+    if (bus >= 256) return;
+    uint8_t bit = 1u << (bus & 7);
+    if (scanned_bus_map[bus >> 3] & bit) return;
+    scanned_bus_map[bus >> 3] |= bit;
+    if (scan_depth >= MAX_SCAN_DEPTH) return;
+    scan_depth++;
+
+    pr_info("PCI: scanning bus %u", (unsigned)bus);
+
     for (uint8_t dev = 0; dev < PCI_MAX_DEV; dev++) {
         // Quick check for device presence by reading vendor/device ID
         if (pci_read_config_dword(bus, dev, 0, 0x00) == 0xFFFFFFFF) continue;
@@ -138,6 +186,8 @@ static void scan_bus(uint8_t bus) {
             }
         }
     }
+
+    scan_depth--;
 }
 
 // Entry point: determine host bridge type, then scan the PCI hierarchy

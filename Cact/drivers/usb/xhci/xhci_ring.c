@@ -166,9 +166,34 @@ void xhci_handle_irq(usb_hc_t *hc) {
 
     uint32_t sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
 
-    if (!(sts & XHCI_STS_EINT)) {
-        return;
+    if (sts & XHCI_STS_HSE) {
+        /* HSE is RW1C.  On Intel 300-series it can be raised spuriously;
+         * with the quirk active we ack it so it can never cascade into a
+         * chipset-triggered system reboot. */
+        xhci_op_write32(priv, XHCI_OP_USBSTS, XHCI_STS_HSE);
+        if (priv->quirks & XHCI_QUIRK_SPURIOUS_REBOOT) {
+            pr_warn("xHCI: spurious host error ignored (Intel quirk)");
+        } else {
+            /* A real HSE puts the xHC into a fatal state: clearing the bit
+             * is not enough, further register access just hangs the bus.
+             * Run a bounded software reset to bring it back to a halted,
+             * re-initialisable state instead of touching a dead controller. */
+            printk("[XHCI] Host System Error! resetting controller\n");
+            xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
+            for (int i = 0; i < 100; i++) {
+                if (!(xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)) break;
+                xhci_udelay(1000);
+            }
+            for (int i = 0; i < 100; i++) {
+                if (!(xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_CNR)) break;
+                xhci_udelay(1000);
+            }
+            return;   /* controller halted; needs full re-init before use */
+        }
     }
+
+    if (!(sts & XHCI_STS_EINT))
+        return;
 
     xhci_op_write32(priv, XHCI_OP_USBSTS, XHCI_STS_EINT);
     irq_spinlock_acquire(&xhci_evt_lock);
@@ -176,7 +201,4 @@ void xhci_handle_irq(usb_hc_t *hc) {
     irq_spinlock_release(&xhci_evt_lock);
 
     xhci_rt_write32(priv, 0x20 + XHCI_IMAN, 0x3);
-
-    if (sts & XHCI_STS_HSE)
-        printk("[XHCI] Host System Error!\n");
 }

@@ -104,6 +104,6 @@ int  xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
                         uint8_t ep_num, uint8_t dir, void *buf, uint16_t len);
 
 /* Host bring-up (xhci_hw.c). */
-int  xhci_init_one(uint32_t phys_base);
+int  xhci_init_one(uint32_t phys_base, uint32_t quirks);
 
 #endif
