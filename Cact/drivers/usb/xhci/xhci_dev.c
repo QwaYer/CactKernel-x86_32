@@ -108,6 +108,15 @@ int xhci_address_device(xhci_priv_t *priv, uint8_t slot, uint8_t port,
 int xhci_configure_endpoint(xhci_priv_t *priv, uint8_t slot,
                             uint8_t dci, uint8_t ep_type,
                             uint16_t mps, uint8_t interval) {
+    if (!priv) return -1;
+    if (slot == 0 || slot > priv->max_slots || slot > XHCI_MAX_SLOTS)
+        return -1;
+    /* DCI 0 is EP0 (control, configured by Address Device); 31 is the last
+     * valid endpoint context index (EP7-IN).  Guarding here keeps the
+     * add_flags bit shift and the input-context offset in bounds. */
+    if (dci == 0 || dci > 31)
+        return -1;
+
     spin_lock(&priv->ctx_lock);
     uint8_t *input = xhci_get_input_ctx(priv);
     memset(input, 0, 2048);
@@ -195,6 +204,12 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
 
     if (priv->intr_ep_count >= XHCI_MAX_INTR_EP) {
         pr_warn("xHCI interrupt endpoint slots full");
+        return -1;
+    }
+
+    /* Endpoint number 1..15 keeps dci = 2*ep_num+1 within 3..31. */
+    if (ep_num == 0 || ep_num > 15) {
+        pr_warn("xHCI: invalid interrupt endpoint number %d", (int)ep_num);
         return -1;
     }
 

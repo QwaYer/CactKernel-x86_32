@@ -13,7 +13,7 @@
 #include "sync.h"
 #include "msi.h"
 
-int xhci_init_one(uint32_t phys_base) {
+int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
     extern uint32_t page_directory[1024];
     uint32_t map_size = 0x10000;
     /* Map xHCI MMIO as uncacheable (PCD|PWT). */
@@ -25,6 +25,7 @@ int xhci_init_one(uint32_t phys_base) {
     if (!priv) { pr_warn("xHCI state allocation failed"); return -1; }
     memset(priv, 0, sizeof(xhci_priv_t));
     spin_lock_init(&priv->ctx_lock);
+    priv->quirks = quirks;
 
     priv->cap_phys = phys_base;
     priv->cap = (volatile uint32_t *)phys_base;
@@ -88,6 +89,10 @@ int xhci_init_one(uint32_t phys_base) {
         xhci_udelay(1000);
     }
     xhci_op_write32(priv, XHCI_OP_USBSTS, xhci_op_read32(priv, XHCI_OP_USBSTS));
+
+    if (priv->quirks & XHCI_QUIRK_INTEL_HOST)
+        xhci_udelay(5000);   /* Intel hosts need extra settle after reset */
+
     xhci_op_write32(priv, XHCI_OP_DNCTRL, 0x2);
     xhci_op_write32(priv, XHCI_OP_CONFIG, priv->max_slots);
 
@@ -133,8 +138,15 @@ int xhci_init_one(uint32_t phys_base) {
     xhci_rt_write32(priv, 0x20 + XHCI_IMOD, 0x000003F8);
     xhci_rt_write32(priv, 0x20 + XHCI_IMAN, 0x3);
 
-    xhci_op_write32(priv, XHCI_OP_USBCMD,
-                     XHCI_CMD_RS | XHCI_CMD_INTE | XHCI_CMD_HSEE);
+    uint32_t run_cmd = XHCI_CMD_RS | XHCI_CMD_INTE;
+    if (priv->quirks & XHCI_QUIRK_SPURIOUS_REBOOT) {
+        /* Intel 300-series can raise a spurious host-system-error that trips
+         * a chipset reboot; keep HSEE disabled so it can never fire. */
+        pr_info("xHCI: HSE interrupt masked (spurious-reboot quirk)");
+    } else {
+        run_cmd |= XHCI_CMD_HSEE;
+    }
+    xhci_op_write32(priv, XHCI_OP_USBCMD, run_cmd);
 
     for (int i = 0; i < 100; i++) {
         if (!(xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH)) break;
@@ -176,7 +188,12 @@ int xhci_init_one(uint32_t phys_base) {
                 for (int i = 0; i < 500; i++) {
                     xhci_udelay(1000);
                     sc = xhci_portsc_read(priv, p);
+                    /* Reset is done once PRC is raised; some controllers (and
+                     * QEMU's xHCI model) finish by clearing PR and enabling
+                     * the port without ever raising PRC — catch that too, or
+                     * the wait burns the whole 500-iteration budget. */
                     if (sc & XHCI_PORTSC_PRC) break;
+                    if (!(sc & XHCI_PORTSC_PR) && (sc & XHCI_PORTSC_PED)) break;
                 }
                 if (sc & XHCI_PORTSC_PRC)
                     xhci_portsc_clear_change(priv, p, XHCI_PORTSC_PRC);

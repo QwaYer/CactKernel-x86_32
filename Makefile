@@ -68,6 +68,10 @@ DRIVER_USB_DIR       = Cact/drivers/usb
 DRIVER_USB_XHCI_DIR  = Cact/drivers/usb/xhci
 DRIVER_USB_HID_DIR   = Cact/drivers/usb/hid
 DRIVER_USB_HUB_DIR   = Cact/drivers/usb/hub
+DRIVER_QUIRKS_DIR    = Cact/drivers/quirks
+DRIVER_QUIRKS_ACPI_DIR = $(DRIVER_QUIRKS_DIR)/acpi
+DRIVER_QUIRKS_XHCI_DIR = $(DRIVER_QUIRKS_DIR)/xhci
+DRIVER_QUIRKS_TIMER_DIR = $(DRIVER_QUIRKS_DIR)/timer
 FS_VFS_DIR       = Cact/fs/vfs
 FS_PIPE_DIR      = Cact/fs/pipe
 FS_DEVFS_DIR     = Cact/fs/vfs/devfs
@@ -163,6 +167,9 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_USB_XHCI_DIR) \
          -I$(DRIVER_USB_HID_DIR) \
          -I$(DRIVER_USB_HUB_DIR) \
+         -I$(DRIVER_QUIRKS_ACPI_DIR) \
+         -I$(DRIVER_QUIRKS_XHCI_DIR) \
+         -I$(DRIVER_QUIRKS_TIMER_DIR) \
          -I$(FS_VFS_DIR) \
          -I$(FS_PIPE_DIR) \
          -I$(FS_DEVFS_DIR) \
@@ -190,6 +197,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
           -I$(DRIVER_ACPI_DIR)/include \
           -I$(ACPICA_INC_DIR) \
           -Wall \
+          -MMD -MP \
           -DCACT_ACPI_FREESTANDING
 
 # Отладка под QEMU+GDB: make clean && KERN_DEBUG=1 make
@@ -280,6 +288,9 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/xhci_ring.o \
       $(BUILD_DIR)/xhci_dev.o \
       $(BUILD_DIR)/xhci_xfer.o \
+      $(BUILD_DIR)/xhci_quirks.o \
+      $(BUILD_DIR)/lapic_timer.o \
+      $(BUILD_DIR)/acpi_quirks.o \
       $(BUILD_DIR)/usb_hid.o \
       $(BUILD_DIR)/usb_hub.o \
       $(BUILD_DIR)/fb.o \
@@ -714,6 +725,18 @@ $(BUILD_DIR)/xhci_xfer.o: $(DRIVER_USB_XHCI_DIR)/xhci_xfer.c $(DRIVER_USB_XHCI_D
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/xhci_quirks.o: $(DRIVER_QUIRKS_XHCI_DIR)/xhci_quirks.c $(DRIVER_QUIRKS_XHCI_DIR)/xhci_quirks.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/lapic_timer.o: $(DRIVER_QUIRKS_TIMER_DIR)/lapic_timer.c $(DRIVER_QUIRKS_TIMER_DIR)/lapic_timer.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/acpi_quirks.o: $(DRIVER_QUIRKS_ACPI_DIR)/acpi_quirks.c $(DRIVER_QUIRKS_ACPI_DIR)/acpi_quirks.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/usb_hid.o: $(DRIVER_USB_HID_DIR)/usb_hid.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -791,6 +814,12 @@ clean:
 	cd $(RUST_MM_DIR) && cargo clean
 	cd $(RUST_NET_DIR) && cargo +nightly clean
 	cd $(CRYPTO_DIR) && cargo +nightly clean
+
+# Auto-dependency files emitted by -MMD: rebuilding any .o whose headers
+# changed (e.g. pci_enum.h layout) is guaranteed, so stale ABI objects can
+# never silently corrupt the running kernel again.
+-include $(wildcard $(BUILD_DIR)/*.d)
+-include $(wildcard $(BUILD_DIR)/acpica_components/*/*.d)
 
 distclean: clean
 	rm -f $(CRYPTO_KEY)

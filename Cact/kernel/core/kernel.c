@@ -18,6 +18,7 @@
 #include "blkdev.h"
 #include "version.h"
 #include "serial.h"
+#include "lapic_timer.h"
 #include "pat.h"
 #include "cact_acpi.h"
 #include "acpi_timer.h"
@@ -164,12 +165,8 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     else
         pr_warn("ACPI PM timer unavailable — timekeeping degraded");
 
-    if (hpet_init() != 0) {
-        pr_crit("HPET init failed — no system timer");
-        while(1) __asm__ __volatile__("hlt");
-    }
-
-    pr_info("HPET ready");
+    if (lapic_timer_select_source() != 0)
+        pr_crit("no usable system timer source");
 
     if (apic_init() == 0)
         pr_info("APIC operational");
@@ -258,6 +255,44 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
      * preempt this context (saved into idle's task_struct) and switch to
      * the bootstrap thread. */
     __asm__ __volatile__("sti");
+
+    /* Watchdog: on real hardware a dead system timer silently freezes the
+     * machine here (no IRQ ever wakes the idle hlt).  Wait for the first
+     * scheduler tick against the ACPI PM timer wall clock; if none comes,
+     * arm the LAPIC timer as a last-resort fallback and only then give up —
+     * some boards expose an HPET that accepts register writes but never
+     * raises its interrupt. */
+    {
+        extern uint32_t timer_ticks_get(void);
+        uint32_t wd_ticks = timer_ticks_get();
+        int wd_attempts = 0;
+
+        for (;;) {
+            uint64_t wd_usec = acpi_pm_timer_get_usec();
+            while (timer_ticks_get() == wd_ticks) {
+                __asm__ __volatile__("pause");
+                if (acpi_pm_timer_get_usec() - wd_usec < 2000000ull)
+                    continue;
+                break;   /* 2 s with no scheduler tick */
+            }
+            if (timer_ticks_get() != wd_ticks)
+                break;   /* timer alive — normal boot */
+
+            if (wd_attempts++ < 1) {
+                printk_color("[WARN] no timer tick for 2s — arming LAPIC timer\n",
+                             COLOR_LIGHT_RED);
+                uint32_t per_ms = lapic_timer_calibrate();
+                if (per_ms)
+                    lapic_timer_start_periodic(per_ms);
+                continue;
+            }
+
+            printk_color("[FATAL] no timer tick for 2s — system timer dead "
+                         "(HPET/LAPIC), scheduler cannot start\n",
+                         COLOR_LIGHT_RED);
+            while (1) __asm__ __volatile__("hlt");
+        }
+    }
 
     while (1) {
         __asm__ __volatile__("hlt");

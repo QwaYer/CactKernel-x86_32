@@ -1,10 +1,12 @@
-/* xHCI — PCI glue: driver registration, interrupt dispatch, MSI-X / INTx setup. */
+/* xHCI — PCI glue: driver registration, interrupt dispatch, MSI-X setup. */
 
 #include "xhci.h"
 #include "xhci_internal.h"
+#include "xhci_quirks.h"
 #include "usb.h"
 #include "pci_enum.h"
 #include "pci_driver.h"
+#include "pcidev.h"
 #include "pci.h"
 #include "kernel.h"
 #include "memory.h"
@@ -22,55 +24,61 @@ void xhci_irq_handler(void) {
 
 static int xhci_pci_probe(pci_device_t *pdev) {
     if (pdev->prog_if != 0x30) return -1;
+    if (pdev->drv_probe_state >= 2) return 0;   /* already probed — no double probe */
 
     uint32_t mmio = 0;
     for (int i = 0; i < 6; i++) {
-        if (!pdev->bars[i].is_io && pdev->bars[i].base) {
-            mmio = pdev->bars[i].base; break;
+        pci_bar_t *bar = &pdev->bars[i];
+        if (!bar->is_io && bar->base) {
+            /* 64-bit BAR decoded above 4 GiB cannot be reached by the
+             * 32-bit identity MMIO map — refuse instead of truncating. */
+            if (bar->base >= 0x100000000ULL) {
+                pr_warn("xHCI: BAR%d above 4 GiB (0x%llx) not supported",
+                        i, (unsigned long long)bar->base);
+                return -1;
+            }
+            mmio = (uint32_t)bar->base;
+            break;
         }
     }
-    if (!mmio)
-        mmio = pci_read_config_dword(pdev->bus, pdev->dev, pdev->fn, 0x10) & ~0xFu;
     if (!mmio) { pr_warn("xHCI MMIO BAR missing"); return -1; }
 
-    uint32_t cmd = pci_read_config_dword(pdev->bus, pdev->dev, pdev->fn, 0x04);
-    pci_write_config_dword(pdev->bus, pdev->dev, pdev->fn, 0x04, cmd | 0x06);
+    /* Memory space + bus mastering on.  Legacy INTx is disabled for good:
+     * this driver delivers interrupts through MSI-X and nothing else. */
+    pcidev_enable_mmio(pdev);
+    pcidev_enable_bus_master(pdev);
+    pcidev_disable_intx(pdev);
 
-    // Try MSI-X first
-    {
-        volatile struct msix_table_entry *table = NULL;
-        uint32_t table_size = 0;
-        int cap_off = pci_msix_support(pdev);
-        if (cap_off) {
-            if (pci_msix_table_map(pdev, &table, &table_size) == 0 && table_size > 0) {
-                int vec = msix_alloc_vector();
-                if (vec > 0) {
-                    msix_register_handler(vec, xhci_irq_handler);
-                    pci_msix_enable(pdev, vec, table, 0);
-                    pr_info("xHCI MSI-X enabled");
-                    goto probe_done;
-                }
-            }
-        }
-        // Fallback: INTx via IOAPIC PCI vector
-        extern int apic_pci_vector(uint8_t irq_pin);
-        extern void set_idt_gate(int n, uint32_t handler);
-        extern void xhci_isr();
-        int vec = apic_pci_vector(pdev->irq_pin);
-        if (vec > 0) {
-            set_idt_gate(vec, (uint32_t)xhci_isr);
-            pr_warn("xHCI MSI-X unavailable, using INTx");
-        } else {
-            pr_err("xHCI: no usable interrupt");
-            return -1;
-        }
+    uint32_t quirks = xhci_quirks_for(pdev);
+    if (quirks & XHCI_QUIRK_SPURIOUS_REBOOT)
+        pr_info("xHCI: spurious-reboot quirk active (Intel 300-series)");
+
+    volatile struct msix_table_entry *table = NULL;
+    uint32_t table_size = 0;
+    int cap_off = pci_msix_support(pdev);
+    if (!cap_off || pci_msix_table_map(pdev, &table, &table_size) != 0 || !table_size) {
+        pr_err("xHCI: MSI-X unavailable (cap_off=%d) — controller not supported",
+               (int)cap_off);
+        return -1;
     }
 
-probe_done:
-    cmd = pci_read_config_dword(pdev->bus, pdev->dev, pdev->fn, 0x04);
-    pci_write_config_dword(pdev->bus, pdev->dev, pdev->fn, 0x04, cmd & ~(1u << 10));
+    int vec = msix_alloc_vector();
+    if (vec <= 0) {
+        pr_err("xHCI: no free MSI-X vector");
+        return -1;
+    }
 
-    return xhci_init_one(mmio);
+    msix_register_handler(vec, xhci_irq_handler);
+    pci_msix_enable(pdev, vec, table, 0);
+    pr_info("xHCI: MSI-X vector 0x%x (table 0x%x)",
+            (unsigned)vec, (unsigned)((uint32_t)(uintptr_t)table));
+
+    if (xhci_init_one(mmio, quirks) < 0) {
+        msix_unregister_handler(vec);
+        msix_free_vector(vec);
+        return -1;
+    }
+    return 0;
 }
 
 static pci_driver_t xhci_pci_driver = {
@@ -86,21 +94,8 @@ void xhci_pci_init(void) {
     irq_spinlock_init(&xhci_evt_lock);
     pci_register_driver(&xhci_pci_driver);
 
-    int found = 0;
-    pci_device_t *d = pci_find_by_class(0x0C, 0x03);
-    while (d) {
-        if (d->prog_if == 0x30) {
-            found++;
-            xhci_pci_probe(d);
-            d->drv_probe_state = 2;
-        }
-        d = d->next;
-        while (d && !(d->class_code == 0x0C && d->subclass == 0x03 && d->prog_if == 0x30))
-            d = d->next;
-    }
-    if (found == 0) {
-        pr_warn("xHCI: no USB3 controller found on PCI bus");
-    } else {
-        pr_info("xHCI host controller(s) brought up");
-    }
+    /* Probing is deferred by design: pci_enum queues every device and
+     * pcidev_probe_all() attaches this driver from the bootstrap task, once
+     * interrupts and the scheduler are live.  Nothing to probe here — an
+     * early scan only races the deferred queue and prints false negatives. */
 }

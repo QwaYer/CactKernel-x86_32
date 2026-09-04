@@ -5,6 +5,7 @@
 #include "usb.h"
 #include "pci_enum.h"
 #include "sync.h"
+#include "xhci_quirks.h"
 
 #define XHCI_CAP_CAPLENGTH   0x00
 #define XHCI_CAP_HCIVERSION  0x02
@@ -187,6 +188,7 @@ typedef struct {
     spinlock_t            ctx_lock;
 
     uint32_t              context_size;
+    uint32_t              quirks;
 } xhci_priv_t;
 
 void xhci_pci_init(void);

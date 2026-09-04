@@ -5,7 +5,7 @@
 #include "pci.h"
 
 // Scanner limits
-#define MAX_PCI_DEVICES          64
+#define MAX_PCI_DEVICES          128
 #define PCI_MAX_DEV              32
 #define PCI_MAX_FN               8
 
@@ -22,10 +22,12 @@
 #define PCI_BAR_IO               0x01   // I/O space BAR
 #define PCI_BAR_MEM_TYPE_32      0x00   // 32-bit memory BAR
 
-// Decoded Base Address Register descriptor
+// Decoded Base Address Register descriptor.  base/size are 64-bit because
+// memory BARs can be 64-bit typed: truncating to 32 bits mangles any BAR
+// placed above 4 GiB and turns it into garbage (or aliased RAM).
 typedef struct {
-    uint32_t base;
-    uint32_t size;
+    uint64_t base;
+    uint64_t size;
     uint8_t  is_io;      // 1 = I/O port, 0 = MMIO
 } pci_bar_t;
 
