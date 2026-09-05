@@ -302,6 +302,7 @@ void devfs_init(void) {
     register_chrdev("sys",     DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_sys,     0);
     register_chrdev("net",     DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_net,     0);
     register_chrdev("pipe",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_pipe,    0);
+    register_chrdev("kmsg",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_kmsg,    0);
 
     devfs_ready = 1;
 }

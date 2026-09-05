@@ -131,7 +131,7 @@ uint16_t pcie_read_ext_cap(uint8_t bus, uint8_t dev, uint8_t fn,
 void pcie_dump_all(void)
 {
     if (!pcie_ready) {
-        pr_warn("PCIe: not available");
+        pr_warn("  %-11s : not available\n", "pcie");
         return;
     }
     for (pci_device_t *d = pci_device_list; d; d = d->next) {
@@ -147,7 +147,7 @@ bool pcie_init(void)
     ACPI_STATUS status = AcpiGetTable("MCFG", 1, (ACPI_TABLE_HEADER **)&mcfg);
 
     if (ACPI_FAILURE(status) || !mcfg) {
-        pr_warn("PCIe: MCFG table not found — using legacy PCI");
+        pr_warn("  %-11s : MCFG table not found — legacy PCI config\n", "pcie");
         return false;
     }
 
@@ -166,7 +166,7 @@ bool pcie_init(void)
         uint32_t bus_count   = end_bus - start_bus + 1;
         uint32_t region_size;
         if (bus_count > 4095u) {
-            pr_warn("PCIe ECAM region_size overflow, skipping segment\n");
+            pr_warn("  %-11s : ECAM region size overflow, skipping segment\n", "pcie");
             entry++;
             offset += sizeof(ACPI_MCFG_ALLOCATION);
             continue;
@@ -195,11 +195,15 @@ bool pcie_init(void)
 
     if (mapped > 0) {
         pcie_ready = 1;
-        pr_info("PCIe: ECAM enabled");
+        pr_info("  %-11s : ECAM @ 0x%x, bus %u-%u (%u segment(s))\n",
+                "pcie", (unsigned)pcie_ecams[0].base_addr,
+                (unsigned)pcie_ecams[0].start_bus,
+                (unsigned)pcie_ecams[0].end_bus,
+                (unsigned)pcie_ecam_count);
         return true;
     }
 
-    pr_warn("PCIe: MCFG table invalid");
+    pr_warn("  %-11s : MCFG table invalid\n", "pcie");
     return false;
 }
 

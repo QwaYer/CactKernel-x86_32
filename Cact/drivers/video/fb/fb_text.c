@@ -5,6 +5,7 @@
 #include "memory.h"
 #include "serial.h"
 #include "kernel.h"
+#include "klog.h"
 #include <stddef.h>
 #include <stdarg.h>
 
@@ -125,6 +126,9 @@ void printk_color(char* message, uint32_t color) {
     int have_fb = (w != 0 && h != 0);
 
     current_fb_color = color;
+
+    /* Mirror every console line into the kernel message log (/dev/kmsg). */
+    klog_feed(message, strlen(message));
 
     if (unlikely(!have_fb)) {
         for (int i = 0; message[i] != '\0'; i++) {
@@ -287,11 +291,11 @@ void init_framebuffer(void) {
             [FB_INIT_BAD_BPP]    = "bpp != 32 (only 32-bit color supported)",
             [FB_INIT_NULL_PARAM] = "null address or zero width/height",
         };
-        pr_err("%s", fb_errors[status]);
-        pr_crit("Framebuffer — cannot continue without display");
+        pr_err("  %-11s : %s\n", "framebuffer", fb_errors[status]);
+        pr_crit("  %-11s : cannot continue without display\n", "framebuffer");
         return;
     }
-    pr_info("Framebuffer verified for kernel console (post-paging)");
+    /* Success line (geometry / PAT / shadow) is printed once by kernel.c. */
 }
 
 int get_cursor_x(void) {

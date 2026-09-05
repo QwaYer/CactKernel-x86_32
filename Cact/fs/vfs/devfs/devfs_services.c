@@ -12,6 +12,7 @@
 #include "helper.h"
 #include "ioctl_abi.h"
 #include "module/kmod.h"
+#include "klog.h"
 
 // devfs_services.c — kernel-service devices exposed through devfs.
 //
@@ -71,6 +72,40 @@ static int _console_write(void *p, uint32_t off, uint32_t size, char *buf) {
 }
 
 devfs_driver_t drv_console = { .read = _console_read, .write = _console_write };
+
+// ── /dev/kmsg ─────────────────────────────────────────────────────────────
+// Kernel message log: the plain-text boot log captured by klog (all printk
+// console output).  Offset-based reads: cat /dev/kmsg dumps the whole log.
+
+static int _kmsg_read(void *p, uint32_t off, uint32_t size, char *buf) {
+    (void)p;
+    return klog_read(off, size, buf);
+}
+
+static int _kmsg_status(void *p, char *buf, uint32_t size) {
+    (void)p;
+    char nb[16];
+    uint32_t n = 0;
+    const char *s = "device: kmsg\ntype: kernel message log\n";
+    while (s[n] && n < size - 1) { buf[n] = s[n]; n++; }
+    s = "lines: ";
+    for (int i = 0; s[i] && n < size - 1; i++) buf[n++] = s[i];
+    snprintf(nb, sizeof(nb), "%d", (int)klog_line_count());
+    for (int i = 0; nb[i] && n < size - 1; i++) buf[n++] = nb[i];
+    s = "\nbytes: ";
+    for (int i = 0; s[i] && n < size - 1; i++) buf[n++] = s[i];
+    snprintf(nb, sizeof(nb), "%d", (int)klog_available());
+    for (int i = 0; nb[i] && n < size - 1; i++) buf[n++] = nb[i];
+    s = "\ndropped: ";
+    for (int i = 0; s[i] && n < size - 1; i++) buf[n++] = s[i];
+    snprintf(nb, sizeof(nb), "%d", (int)klog_dropped_bytes());
+    for (int i = 0; nb[i] && n < size - 1; i++) buf[n++] = nb[i];
+    if (n < size) buf[n++] = '\n';
+    if (n < size) buf[n] = '\0';
+    return (int)n;
+}
+
+devfs_driver_t drv_kmsg = { .read = _kmsg_read, .status = _kmsg_status };
 
 // ── /dev/sys ──────────────────────────────────────────────────────────────
 

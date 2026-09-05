@@ -26,12 +26,12 @@ void pat_init(void) {
     uint32_t a, b, c, d;
     cpuid_raw(1, &a, &b, &c, &d);
     if (!(d & (1u << PAT_CPUID_EDX_BIT))) {
-        printk("[PAT] CPU does not advertise PAT (CPUID.01H:EDX.PAT=0)\n");
-        pr_warn("PAT unavailable — framebuffer stays UC");
+        pr_warn("  %-11s : unsupported (CPUID.01H:EDX.PAT=0) — framebuffer stays UC\n",
+                "pat");
         return;
     }
     g_pat_present = 1;
-    pr_info("PAT subsystem ready (per-PTE memory type via PAT bit)");
+    pr_info("  %-11s : per-PTE memory types (WC) available\n", "pat");
 }
 
 int pat_available(void) {
@@ -46,8 +46,7 @@ int pat_enable_wc_for_framebuffer(uint32_t fb_phys,
         return -2;
 
     if (!g_pat_present) {
-        pr_warn("framebuffer kept UC (no PAT) — rendering will be slow");
-        return -1;
+        return -1;   /* pat_init already reported the reason */
     }
 
     fb_phys &= ~0xFFFu;
@@ -77,6 +76,5 @@ int pat_enable_wc_for_framebuffer(uint32_t fb_phys,
         cpu_invlpg(va);
     }
 
-    pr_info("Framebuffer WC via PAT (per-PTE write-combining)");
-    return 0;
+    return 0;   /* success reported by kernel.c's framebuffer line */
 }

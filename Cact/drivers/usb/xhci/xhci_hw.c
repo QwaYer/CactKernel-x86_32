@@ -22,7 +22,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
                 PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
 
     xhci_priv_t *priv = (xhci_priv_t *)kmalloc(sizeof(xhci_priv_t));
-    if (!priv) { pr_warn("xHCI state allocation failed"); return -1; }
+    if (!priv) { pr_warn("  %-11s : state allocation failed\n", "xhci"); return -1; }
     memset(priv, 0, sizeof(xhci_priv_t));
     spin_lock_init(&priv->ctx_lock);
     priv->quirks = quirks;
@@ -62,7 +62,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
                     xhci_udelay(10000);
                 }
                 if (ecap[0] & (1u << 16))
-                    pr_warn("xHCI BIOS ownership handoff timed out");
+                    pr_warn("  %-11s : BIOS ownership handoff timed out\n", "xhci");
                 ecap[1] = 0;
                 break;
             }
@@ -142,7 +142,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
     if (priv->quirks & XHCI_QUIRK_SPURIOUS_REBOOT) {
         /* Intel 300-series can raise a spurious host-system-error that trips
          * a chipset reboot; keep HSEE disabled so it can never fire. */
-        pr_info("xHCI: HSE interrupt masked (spurious-reboot quirk)");
+        pr_info("  %-11s : HSE interrupt masked (spurious-reboot quirk)\n", "xhci");
     } else {
         run_cmd |= XHCI_CMD_HSEE;
     }
@@ -154,7 +154,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
     }
 
     if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) {
-        pr_warn("xHCI host controller did not start");
+        pr_warn("  %-11s : host controller did not start\n", "xhci");
         kfree(priv->erst); kfree(priv->evt_ring); kfree(cmd_mem);
         kfree(priv->input_ctx_pool); kfree(priv->dev_ctx_pool);
         kfree(priv->dcbaa); kfree(priv);

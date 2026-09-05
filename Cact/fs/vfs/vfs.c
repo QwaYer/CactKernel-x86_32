@@ -45,7 +45,7 @@ void vfs_init(void) {
     mutex_init(&vfs_mutex);
     mutex_init(&symlink_mutex);
     mount_count = 0;
-    pr_info("VFS core initialized (mount table + symlinks)");
+    pr_info("  %-11s : mount table + symlinks ready\n", "vfs");
 }
 
 // Mount a filesystem on a host directory

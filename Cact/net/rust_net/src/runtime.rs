@@ -72,7 +72,7 @@ pub extern "C" fn net_init() {
         dhcp::rust_net_dhcp_start_daemon();
         ffi_kernel::klog_static(
             ffi_kernel::LOG_OK,
-            b"Network subsystem ready (net_poll_task, RX semaphore, DHCP)\0",
+            b"  net         : ready (net_poll_task, RX semaphore, DHCP)\0",
         );
     }
 }

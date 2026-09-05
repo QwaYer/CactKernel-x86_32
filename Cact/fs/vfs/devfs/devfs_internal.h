@@ -18,5 +18,6 @@ extern devfs_driver_t drv_console;
 extern devfs_driver_t drv_sys;
 extern devfs_driver_t drv_net;
 extern devfs_driver_t drv_pipe;
+extern devfs_driver_t drv_kmsg;
 
 #endif

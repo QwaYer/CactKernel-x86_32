@@ -116,7 +116,7 @@ int apic_init(void)
     ACPI_STATUS status = AcpiGetTable("APIC", 1, (ACPI_TABLE_HEADER **)&madt);
 
     if (ACPI_FAILURE(status) || !madt) {
-        pr_warn("APIC: MADT not found");
+        pr_warn("  %-11s : MADT not found\n", "apic");
         return -1;
     }
 
@@ -159,7 +159,7 @@ int apic_init(void)
     ioapic_id = ioapic_id_local;
 
     if (ioapic_base == 0) {
-        pr_warn("IOAPIC: not found");
+        pr_warn("  %-11s : IOAPIC not found\n", "apic");
         return -1;
     }
 
@@ -220,11 +220,9 @@ int apic_init(void)
                     flags |= REDIR_LOW_POL;
 
                 ioapic_set_redir(entry_idx, 0x20 + sci_gsi, flags, 0);
-                char buf[64]; char num[32];
-                strcpy(buf, "APIC: SCI (GSI ");
-                snprintf(num, sizeof(num), "%d", (int)((int)sci_gsi)); strcat(buf, num);
-                strcat(buf, (flags & REDIR_LOW_POL) ? ") level/active-low" : ") level/active-high");
-                pr_info("%s", buf);
+                pr_info("  %-11s : SCI on GSI %u (level/%s)\n", "apic",
+                        (unsigned)sci_gsi,
+                        (flags & REDIR_LOW_POL) ? "active-low" : "active-high");
             }
         }
     }
@@ -236,18 +234,16 @@ int apic_init(void)
 
     uint64_t period = hpet_get_freq() / 100;
     if (period != 0 && hpet_start_periodic(timer_entry, period) == 0) {
-        char buf[64]; char num[32];
-        strcpy(buf, "APIC: HPET timer0 → IOAPIC entry ");
-        snprintf(num, sizeof(num), "%d", (int)((int)timer_entry)); strcat(buf, num);
-        pr_info("%s", buf);
+        pr_info("  %-11s : HPET timer0 -> IOAPIC entry %u\n", "apic",
+                (unsigned)timer_entry);
     } else {
         /* Board quirk: the Intel 300/500-series PCH HPET (or an HPET that
          * accepted our writes but never raises its IRQ) cannot drive the
          * tick — fall back to the LAPIC timer calibrated against the PIT. */
-        pr_warn("APIC: HPET timer unavailable — switching to LAPIC timer");
+        pr_warn("  %-11s : HPET timer unavailable — switching to LAPIC timer\n", "apic");
         uint32_t per_ms = lapic_timer_calibrate();
         if (per_ms == 0) {
-            pr_crit("APIC: LAPIC timer calibration failed — no system timer");
+            pr_crit("  %-11s : LAPIC timer calibration failed — no system timer\n", "apic");
             while(1) __asm__ __volatile__("hlt");
         }
         lapic_timer_start_periodic(per_ms);

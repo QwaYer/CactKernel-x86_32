@@ -27,21 +27,21 @@ int acpi_init(void)
 
     status = AcpiInitializeSubsystem();
     if (ACPI_FAILURE(status)) {
-        pr_err("ACPI: AcpiInitializeSubsystem failed");
+        pr_err("  %-11s : AcpiInitializeSubsystem failed\n", "acpi");
         return -1;
     }
     pr_info("ACPI [2/8]: subsystem initialized");
 
     status = AcpiInitializeTables(NULL, 32, FALSE);
     if (ACPI_FAILURE(status)) {
-        pr_err("ACPI: AcpiInitializeTables failed");
+        pr_err("  %-11s : AcpiInitializeTables failed\n", "acpi");
         return -1;
     }
     pr_info("ACPI [3/8]: tables loaded");
 
     status = AcpiLoadTables();
     if (ACPI_FAILURE(status)) {
-        pr_warn("ACPI: AcpiLoadTables failed (tables still available)");
+        pr_warn("  %-11s : AcpiLoadTables failed (tables still available)\n", "acpi");
     } else {
         pr_info("ACPI [4/8]: namespace tables loaded");
     }
@@ -51,14 +51,14 @@ int acpi_init(void)
     pr_info("ACPI [5/8]: enabling subsystem (SCI live)");
     status = AcpiEnableSubsystem(ACPI_FULL_INITIALIZATION);
     if (ACPI_FAILURE(status)) {
-        pr_warn("ACPI: AcpiEnableSubsystem failed (partial ACPI)");
+        pr_warn("  %-11s : AcpiEnableSubsystem failed (partial ACPI)\n", "acpi");
     } else {
         pr_info("ACPI [6/8]: subsystem enabled");
     }
 
     status = AcpiInitializeObjects(ACPI_FULL_INITIALIZATION);
     if (ACPI_FAILURE(status)) {
-        pr_warn("ACPI: AcpiInitializeObjects failed");
+        pr_warn("  %-11s : AcpiInitializeObjects failed\n", "acpi");
     } else {
         pr_info("ACPI [7/8]: namespace objects initialized");
     }
@@ -84,7 +84,7 @@ int acpi_init(void)
             strcat(buf, hex);
             pr_info("%s", buf);
         } else {
-            pr_warn("ACPI: RSDP not found");
+            pr_warn("  %-11s : RSDP not found\n", "acpi");
         }
     }
 
@@ -150,7 +150,7 @@ static void acpi_osc_pcie_bridge(ACPI_HANDLE handle)
 
     status = AcpiEvaluateObject(handle, "_OSC", &params, &ret);
     if (ACPI_FAILURE(status)) {
-        pr_warn("ACPI: _OSC failed on the PCIe root bridge");
+        pr_warn("  %-11s : _OSC failed on the PCIe root bridge\n", "acpi");
         return;
     }
 
@@ -184,7 +184,7 @@ void acpi_osc_pcie_init(void)
 
     status = AcpiGetHandle(ACPI_ROOT_OBJECT, "\\_SB.PCI0", &handle);
     if (ACPI_FAILURE(status) || !handle) {
-        pr_warn("ACPI: \\_SB.PCI0 not found — _OSC skipped");
+        pr_warn("  %-11s : \\_SB.PCI0 not found — _OSC skipped\n", "acpi");
         return;
     }
 

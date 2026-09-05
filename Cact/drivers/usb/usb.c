@@ -237,7 +237,7 @@ void usb_init(void) {
 
     extern void xhci_pci_init(void);
     xhci_pci_init();
-    pr_info("USB subsystem initialized (HID, hub, xHCI PCI)");
+    pr_info("  %-11s : xHCI stack ready (hubs, HID, PCI)\n", "usb");
 }
 
 

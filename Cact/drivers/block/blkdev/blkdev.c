@@ -78,7 +78,7 @@ void blkdev_init(void) {
     boot_dev  = 0;
     memset(devices, 0, sizeof(devices));
 
-    pr_info("Block device layer ready (drivers register at PCI probe)");
+    pr_info("  %-11s : layer ready (kmods attach during PCI probe)\n", "block");
 }
 
 // Return the boot device (first successfully probed drive)

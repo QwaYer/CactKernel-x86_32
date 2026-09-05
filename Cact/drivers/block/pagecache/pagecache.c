@@ -169,7 +169,7 @@ void pc_init(void) {
     stat_evictions  = 0;
     stat_writebacks = 0;
     irq_spinlock_init(&pc_lock);
-    pr_info("Page cache initialized");
+    pr_info("  %-11s : ready\n", "pagecache");
 }
 
 // Get a page from cache; on miss, read from disk into a new or evicted slot
