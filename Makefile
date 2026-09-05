@@ -284,6 +284,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/fb.o \
       $(BUILD_DIR)/fb_text.o \
       $(BUILD_DIR)/font.o \
+      $(BUILD_DIR)/font_boot.o \
       $(BUILD_DIR)/pat.o \
       $(BUILD_DIR)/stack_guard.o \
       $(BUILD_DIR)/cpudev.o \
@@ -740,7 +741,11 @@ $(BUILD_DIR)/fb_text.o: $(DRIVER_FB_DIR)/fb_text.c $(DRIVER_FB_DIR)/fb_internal.
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/font.o: $(DRIVER_FONT_DIR)/font.c
+$(BUILD_DIR)/font.o: $(DRIVER_FONT_DIR)/font.c $(DRIVER_FONT_DIR)/font.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/font_boot.o: $(DRIVER_FONT_DIR)/font_boot.c $(DRIVER_FONT_DIR)/font.h $(DRIVER_INITFS_DIR)/initfs_modblob.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

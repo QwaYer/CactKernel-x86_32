@@ -3,11 +3,11 @@
 
 #include <stdint.h>
 #include "kernel.h"    // multiboot_info_t, colors
-#include "font.h"
 
+/* Console glyph scale factor.  The glyph grid is defined by the active
+ * PSF2 font (see drivers/video/font); fb_char_cell_w()/h() return the
+ * on-screen cell size in pixels. */
 #define FB_CONSOLE_FONT_SCALE  2
-#define FB_CONSOLE_CHAR_WIDTH  (FONT_WIDTH * FB_CONSOLE_FONT_SCALE)
-#define FB_CONSOLE_CHAR_HEIGHT (FONT_HEIGHT * FB_CONSOLE_FONT_SCALE)
 
 // Return codes for fb_init()
 typedef enum {
@@ -29,6 +29,10 @@ fb_init_result_t fb_get_init_status(void);
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color);
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color);
 void fb_clear(uint32_t color);
+
+// On-screen console cell size (glyph size * FB_CONSOLE_FONT_SCALE)
+uint32_t fb_char_cell_w(void);
+uint32_t fb_char_cell_h(void);
 
 // Accessors
 uint32_t  fb_get_width(void);
