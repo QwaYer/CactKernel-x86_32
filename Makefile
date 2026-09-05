@@ -232,6 +232,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/devfs.o \
       $(BUILD_DIR)/devfs_devices.o \
       $(BUILD_DIR)/devfs_services.o \
+      $(BUILD_DIR)/devfs_crypto.o \
       $(BUILD_DIR)/fs_mod.o \
 	  $(BUILD_DIR)/pagecache.o \
       $(BUILD_DIR)/procfs.o \
@@ -553,6 +554,10 @@ $(BUILD_DIR)/devfs_devices.o: $(FS_DEVFS_DIR)/devfs_devices.c $(FS_DEVFS_DIR)/de
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/devfs_services.o: $(FS_DEVFS_DIR)/devfs_services.c $(FS_DEVFS_DIR)/devfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/devfs_crypto.o: $(FS_DEVFS_DIR)/devfs_crypto.c $(FS_DEVFS_DIR)/devfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

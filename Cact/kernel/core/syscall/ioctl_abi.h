@@ -19,6 +19,7 @@
 //   CACT_NETCTL_*  0x3400  ioctl on /dev/net           -> socket/ping/dns
 //   CACT_SYSCTL_*  0x3500  ioctl on /dev/sys           -> mount/reboot/modules
 //   CACT_PIPECTL_* 0x3600  ioctl on /dev/pipe          -> pipe creation
+//   CACT_CRYPTCTL_* 0x3700 ioctl on /dev/crypto        -> hash/hmac/hkdf/aead/kx/random
 // Device-specific ioctls (FB/TIOC, ...) keep their legacy numbers and are
 // routed straight to the node's own ops; they must stay outside 0x3000-0x3FFF.
 //
@@ -273,5 +274,103 @@ typedef struct cact_module_arg { char *path; uint32_t vendor_id; uint32_t device
 // /dev/pipe control. RANGE 0x3600.
 // ===========================================================================
 #define CACT_PIPECTL_CREATE 0x3601  // arg=uint32_t fds[2] (out)
+
+// ===========================================================================
+// /dev/crypto control. RANGE 0x3700.
+//
+// Exposes the in-kernel crypto primitives (the same algorithms the rustls
+// cact_crypto provider offers) to userspace.  Every arg is a struct from this
+// header; input buffers are read-only user pointers, output arrays are
+// embedded in the structs, output buffers are separate user pointers with an
+// explicit capacity.  All `alg` fields use the CACT_CRYPT_* constants below.
+// ===========================================================================
+#define CACT_CRYPTCTL_RANDOM      0x3701  // arg=cact_crypt_random_arg_t*
+#define CACT_CRYPTCTL_HASH        0x3702  // arg=cact_crypt_hash_arg_t*
+#define CACT_CRYPTCTL_HMAC        0x3703  // arg=cact_crypt_hmac_arg_t*  (sign)
+#define CACT_CRYPTCTL_HMAC_VERIFY 0x3704  // arg=cact_crypt_hmac_arg_t*  (tag in)
+#define CACT_CRYPTCTL_HKDF        0x3705  // arg=cact_crypt_hkdf_arg_t*
+#define CACT_CRYPTCTL_AEAD        0x3706  // arg=cact_crypt_aead_arg_t*
+#define CACT_CRYPTCTL_KX_KEYGEN   0x3707  // arg=cact_crypt_kx_keygen_arg_t*
+#define CACT_CRYPTCTL_KX_DERIVE   0x3708  // arg=cact_crypt_kx_derive_arg_t*
+
+// algorithm selectors
+#define CACT_CRYPT_SHA256     0   // hash / hmac / hkdf: SHA-256 family
+#define CACT_CRYPT_SHA384     1   // hash / hmac / hkdf: SHA-384 family
+#define CACT_CRYPT_AES128_GCM 0   // aead
+#define CACT_CRYPT_AES256_GCM 1   // aead
+#define CACT_CRYPT_KX_X25519  0   // key exchange
+#define CACT_CRYPT_KX_P256    1   // key exchange (secp256r1)
+#define CACT_CRYPT_OP_SEAL    0   // aead: encrypt
+#define CACT_CRYPT_OP_OPEN    1   // aead: decrypt
+
+// fixed sizes (bytes)
+#define CACT_CRYPT_SHA256_LEN  32
+#define CACT_CRYPT_SHA384_LEN  48
+#define CACT_CRYPT_MAX_TAG     64
+#define CACT_CRYPT_NONCE_LEN   12
+#define CACT_CRYPT_GCM_TAG_LEN 16
+#define CACT_CRYPT_PUB_MAX     65   // X25519: 32, P-256: 65 (uncompressed SEC1)
+#define CACT_CRYPT_SECRET_LEN  32
+
+typedef struct cact_crypt_random_arg {
+    uint8_t *buf;         // out: random bytes
+    uint32_t len;
+} cact_crypt_random_arg_t;
+
+typedef struct cact_crypt_hash_arg {
+    uint32_t alg;         // CACT_CRYPT_SHA256 / CACT_CRYPT_SHA384
+    const uint8_t *data;  // in
+    uint32_t data_len;
+    uint8_t digest[64];   // out: 32 or 48 bytes used
+} cact_crypt_hash_arg_t;
+
+typedef struct cact_crypt_hmac_arg {
+    uint32_t alg;         // CACT_CRYPT_SHA256 / CACT_CRYPT_SHA384
+    const uint8_t *key;   // in
+    uint32_t key_len;
+    const uint8_t *data;  // in
+    uint32_t data_len;
+    uint8_t tag[64];      // out (sign) / in (verify): 32 or 48 bytes used
+} cact_crypt_hmac_arg_t;
+
+typedef struct cact_crypt_hkdf_arg {
+    uint32_t alg;              // CACT_CRYPT_SHA256 / CACT_CRYPT_SHA384
+    const uint8_t *salt;       // in (may be NULL when salt_len == 0)
+    uint32_t salt_len;
+    const uint8_t *ikm;        // in
+    uint32_t ikm_len;
+    const uint8_t *info;       // in (may be NULL when info_len == 0)
+    uint32_t info_len;
+    uint8_t *out;              // out
+    uint32_t out_len;          // out length requested / written
+} cact_crypt_hkdf_arg_t;
+
+typedef struct cact_crypt_aead_arg {
+    uint32_t alg;         // CACT_CRYPT_AES128_GCM / CACT_CRYPT_AES256_GCM
+    uint32_t op;          // CACT_CRYPT_OP_SEAL / CACT_CRYPT_OP_OPEN
+    const uint8_t *key;   // in: 16 (AES-128) or 32 (AES-256) bytes
+    uint32_t key_len;
+    uint8_t nonce[12];    // in
+    const uint8_t *aad;   // in (may be NULL when aad_len == 0)
+    uint32_t aad_len;
+    const uint8_t *in;    // in: plaintext (SEAL) or ciphertext||tag (OPEN)
+    uint32_t in_len;
+    uint8_t *out;         // out: ciphertext||tag (SEAL) or plaintext (OPEN)
+    uint32_t out_cap;     // capacity of out
+    uint32_t out_len;     // out: bytes written
+} cact_crypt_aead_arg_t;
+
+typedef struct cact_crypt_kx_keygen_arg {
+    uint32_t alg;         // CACT_CRYPT_KX_X25519 / CACT_CRYPT_KX_P256
+    uint8_t pub[65];      // out: X25519 32 bytes / P-256 65 bytes
+    uint8_t priv[32];     // out
+} cact_crypt_kx_keygen_arg_t;
+
+typedef struct cact_crypt_kx_derive_arg {
+    uint32_t alg;         // CACT_CRYPT_KX_X25519 / CACT_CRYPT_KX_P256
+    uint8_t priv[32];     // in
+    uint8_t peer_pub[65]; // in: X25519 32 bytes / P-256 65 bytes (uncompressed)
+    uint8_t shared[32];   // out
+} cact_crypt_kx_derive_arg_t;
 
 #endif
