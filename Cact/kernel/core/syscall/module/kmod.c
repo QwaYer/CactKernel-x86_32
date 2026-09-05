@@ -1,12 +1,14 @@
 #include "kmod.h"
-#include "validate.h"
-#include "helper.h"
 #include "task.h"
 #include "pci_driver.h"
 #include "pci_loader.h"
 #include "pci_enum.h"
 #include "klib.h"
 #include "kernel.h"
+
+// Module load/unload core.  These are reached through the /dev/sys node
+// ioctls (CACT_SYSCTL_MODULE_LOAD/UNLOAD); the old sys_module_* trap
+// wrappers were removed.
 
 static int user_str_all_decimal(const char *name) {
     const char *p;
@@ -44,10 +46,11 @@ static int require_root(void) {
     return 0;
 }
 
-int sys_module_load(const char* path, uint32_t vendor_id, uint32_t device_id) {
+// Kernel-string core: load a module whose image path is a kernel buffer.
+int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
     if (require_root() != 0)
         return -1;
-    if (!validate_user_str(path))
+    if (!path || !path[0])
         return -2;
 
     if (usermod_slot_active) {
@@ -102,7 +105,9 @@ int sys_module_load(const char* path, uint32_t vendor_id, uint32_t device_id) {
     return 0;
 }
 
-int sys_module_unload(const char *name) {
+// Kernel-string core: unload by driver name / pci index / usermod slot.
+// |name| is a kernel buffer or NULL (NULL clears the usermod slot).
+int kmod_unload_kname(const char *name) {
     if (require_root() != 0)
         return -1;
 
@@ -116,9 +121,6 @@ int sys_module_unload(const char *name) {
         usermod_slot_active   = 0;
         return 0;
     }
-
-    if (!validate_user_str(name))
-        return -2;
 
     if (user_str_all_decimal(name)) {
         int idx;
