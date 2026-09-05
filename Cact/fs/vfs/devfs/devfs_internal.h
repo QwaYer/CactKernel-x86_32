@@ -20,4 +20,7 @@ extern devfs_driver_t drv_net;
 extern devfs_driver_t drv_pipe;
 extern devfs_driver_t drv_kmsg;
 
+/* devfs_crypto.c — /dev/crypto kernel crypto service. */
+extern devfs_driver_t drv_crypto;
+
 #endif

@@ -1,5 +1,7 @@
 #![no_std]
 
+mod crypt;
+
 use hmac::Mac;
 use sha2::Sha256;
 
