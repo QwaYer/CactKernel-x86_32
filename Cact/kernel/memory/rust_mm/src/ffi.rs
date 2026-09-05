@@ -259,11 +259,6 @@ pub struct TaskFdTable {
 }
 
 #[repr(C)]
-pub struct DynCtx {
-    _opaque: [u8; 0],
-}
-
-#[repr(C)]
 pub struct TaskStruct {
     pub esp:            u32,
     pub page_directory: *mut u32,
@@ -299,7 +294,6 @@ pub struct ProcMeta {
     pub fds:                *mut TaskFdTable,
     pub mm:                 ProcPageTracker,
     pub mmap_table:         *mut MmapTable,
-    pub dyn_ctx:            *mut DynCtx,
     pub parent_pid:         u32,
     pub exit_code:          i32,
     pub wait_for_pid:       u32,

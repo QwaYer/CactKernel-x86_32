@@ -56,10 +56,46 @@ void vfs_make_abs(const char *path, char *abs, int abs_max) {
     abs[p] = '\0';
 }
 
+// Canonicalise an absolute path: collapses '/./', resolves '/../', removes
+// duplicated slashes. Output is always clean, so walkers never see '.'/'..'.
+static void _canon_abs(const char *path, char *out, int out_max) {
+    char abs[512];
+    vfs_make_abs(path, abs, 512);
+
+    int seg_start[128], seg_len[128];
+    int nseg = 0;
+    const char *s = abs;
+    while (*s) {
+        while (*s == '/') s++;
+        if (!*s) break;
+        const char *seg = s;
+        int slen = 0;
+        while (*s && *s != '/') { s++; slen++; }
+        if (slen == 1 && seg[0] == '.') continue;
+        if (slen == 2 && seg[0] == '.' && seg[1] == '.') {
+            if (nseg > 0) nseg--;
+            continue;
+        }
+        if (nseg >= 128) break;
+        seg_start[nseg] = (int)(seg - abs);
+        seg_len[nseg]   = slen;
+        nseg++;
+    }
+
+    int p = 0;
+    for (int i = 0; i < nseg && p < out_max - 2; i++) {
+        out[p++] = '/';
+        for (int j = 0; j < seg_len[i] && p < out_max - 1; j++)
+            out[p++] = abs[seg_start[i] + j];
+    }
+    if (p == 0) out[p++] = '/';
+    out[p] = '\0';
+}
+
 vfs_node_t *vfs_resolve_path(const char *path) {
     if (!path || !current_task) return 0;
     char abs[512];
-    vfs_make_abs(path, abs, 512);
+    _canon_abs(path, abs, 512);
     return vfs_walk_path_follow(vfs_root, abs, 0);
 }
 
@@ -68,16 +104,19 @@ vfs_node_t *vfs_resolve_parent_follow(const char *path,
     if (!path || !current_task) return 0;
 
     char abs[512];
-    vfs_make_abs(path, abs, 512);
+    _canon_abs(path, abs, 512);
 
     int last_slash = -1;
     for (int i = 0; abs[i]; i++)
         if (abs[i] == '/') last_slash = i;
 
-    if (last_slash < 0) {
+    if (last_slash <= 0) {
+        /* "/" itself or a bare name resolved against cwd */
+        const char *bn = (last_slash == 0) ? (abs + 1) : path;
         int i = 0;
-        while (path[i] && i < basename_max - 1) { basename_out[i] = path[i]; i++; }
+        while (bn[i] && i < basename_max - 1) { basename_out[i] = bn[i]; i++; }
         basename_out[i] = '\0';
+        if (last_slash == 0) return vfs_root;
         return vfs_walk_path_follow(vfs_root, current_task->proc->cwd, 0);
     }
 
@@ -86,12 +125,11 @@ vfs_node_t *vfs_resolve_parent_follow(const char *path,
     while (bn[i] && i < basename_max - 1) { basename_out[i] = bn[i]; i++; }
     basename_out[i] = '\0';
 
-    if (last_slash == 0) return vfs_root;
-
     char parent_path[512];
     for (int j = 0; j < last_slash && j < 511; j++)
         parent_path[j] = abs[j];
     parent_path[last_slash] = '\0';
+    if (last_slash == 0) parent_path[0] = '\0';
 
     return vfs_walk_path_follow(vfs_root, parent_path, 0);
 }

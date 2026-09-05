@@ -17,10 +17,19 @@ typedef struct proc_file {
 extern proc_file_t *file_list;
 extern vfs_node_t   procfs_root;
 extern vfs_node_t   mdls_dir;
+extern vfs_node_t   proc_self_dir;
 extern vfs_ops_t    mdls_dir_ops;
 
 /* procfs_mdls.c */
 void procfs_mdls_init(void);
+
+/* procfs_proc.c — per-process /proc service nodes (self/, ...). */
+void procfs_proc_init(void);
+
+/* procfs_pid.c — dynamic /proc/<pid>/ directories. */
+vfs_node_t *_pid_dir_get(uint32_t pid);
+uint32_t    _pid_dir_at(uint32_t idx);
+void        procfs_pid_init(void);
 
 /* procfs_std.c — default /proc file generators. */
 int _cpuinfo_read(uint32_t off, uint32_t size, char *buf);
@@ -29,5 +38,7 @@ int _meminfo_read(uint32_t off, uint32_t size, char *buf);
 int _uptime_read(uint32_t off, uint32_t size, char *buf);
 int _version_read(uint32_t off, uint32_t size, char *buf);
 int _tasks_read(uint32_t off, uint32_t size, char *buf);
+int _time_read(uint32_t off, uint32_t size, char *buf);
+int _uname_read(uint32_t off, uint32_t size, char *buf);
 
 #endif

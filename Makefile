@@ -14,22 +14,15 @@ LOCAL_REPO ?= $(abspath ../LocalRepoCactOS)
 
 KERN_CORE_DIR    = Cact/kernel/core
 KERN_VER_DIR     = Cact/kernel/core/kern_ver
-KERN_SYSCALLS_DIR    = Cact/kernel/core/syscalls
-KERN_SC_PROC_DIR     = $(KERN_SYSCALLS_DIR)/proc
-KERN_SC_FD_DIR       = $(KERN_SYSCALLS_DIR)/fd
-KERN_SC_FILE_DIR     = $(KERN_SYSCALLS_DIR)/file
-KERN_SC_PATH_DIR     = $(KERN_SYSCALLS_DIR)/path
-KERN_SC_SYS_DIR      = $(KERN_SYSCALLS_DIR)/sys
-KERN_SC_MM_DIR       = $(KERN_SYSCALLS_DIR)/mm
-KERN_SC_IPC_DIR      = $(KERN_SYSCALLS_DIR)/ipc
-KERN_SC_TIME_DIR     = $(KERN_SYSCALLS_DIR)/time
-KERN_SC_USER_DIR     = $(KERN_SYSCALLS_DIR)/user
-KERN_SC_NET_DIR      = $(KERN_SYSCALLS_DIR)/net
-KERN_SC_KMOD_DIR     = $(KERN_SYSCALLS_DIR)/kmod
+KERN_SYSCALL_DIR = Cact/kernel/core/syscall
+KERN_SC_PROC_DIR = $(KERN_SYSCALL_DIR)/process
+KERN_SC_FD_DIR   = $(KERN_SYSCALL_DIR)/io
+KERN_SC_MM_DIR   = $(KERN_SYSCALL_DIR)/mem
+KERN_SC_NET_DIR  = $(KERN_SYSCALL_DIR)/sock
+KERN_SC_KMOD_DIR = $(KERN_SYSCALL_DIR)/module
 KERN_GDT_DIR     = Cact/kernel/gdt
 KERN_CPUDEV_DIR  = Cact/kernel/cpudev
 KERN_ELF_DIR     = Cact/kernel/elf
-KERN_DYNLINK_DIR = Cact/kernel/elf/dynlink
 KERN_MEM_DIR     = Cact/kernel/memory
 KERN_PROC_DIR    = Cact/kernel/proc
 KERN_SYNC_DIR    = Cact/kernel/sync
@@ -145,11 +138,10 @@ VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(KERN_CORE_DIR) \
          -I$(KERN_VER_DIR) \
-		 -I$(KERN_SYSCALLS_DIR) \
+		 -I$(KERN_SYSCALL_DIR) \
          -I$(KERN_GDT_DIR) \
          -I$(KERN_CPUDEV_DIR) \
          -I$(KERN_ELF_DIR) \
-         -I$(KERN_DYNLINK_DIR) \
          -I$(KERN_MEM_DIR) \
          -I$(KERN_PROC_DIR) \
          -I$(KERN_SYNC_DIR) \
@@ -228,9 +220,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/kernel_boot.o \
       $(BUILD_DIR)/multiboot2.o \
       $(BUILD_DIR)/elf_loader.o \
-      $(BUILD_DIR)/dynlink.o \
-      $(BUILD_DIR)/dynlink_elf.o \
-      $(BUILD_DIR)/dynlink_reloc.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/klib.o \
       $(BUILD_DIR)/ksym.o \
@@ -241,11 +230,14 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/devfs.o \
       $(BUILD_DIR)/devfs_devices.o \
+      $(BUILD_DIR)/devfs_services.o \
       $(BUILD_DIR)/fs_mod.o \
 	  $(BUILD_DIR)/pagecache.o \
       $(BUILD_DIR)/procfs.o \
       $(BUILD_DIR)/procfs_mdls.o \
       $(BUILD_DIR)/procfs_std.o \
+      $(BUILD_DIR)/procfs_proc.o \
+      $(BUILD_DIR)/procfs_pid.o \
       $(BUILD_DIR)/mntfs.o \
       $(BUILD_DIR)/mntfs_ops.o \
       $(BUILD_DIR)/mntfs_mounts.o \
@@ -271,16 +263,9 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/sc_helper.o \
       $(BUILD_DIR)/sc_proc.o \
       $(BUILD_DIR)/sc_signal.o \
-      $(BUILD_DIR)/sc_session.o \
       $(BUILD_DIR)/sc_fd.o \
       $(BUILD_DIR)/sc_fd_mux.o \
-      $(BUILD_DIR)/sc_file.o \
-      $(BUILD_DIR)/sc_path.o \
-      $(BUILD_DIR)/sc_sys.o \
       $(BUILD_DIR)/sc_mm.o \
-      $(BUILD_DIR)/sc_ipc.o \
-      $(BUILD_DIR)/sc_time.o \
-      $(BUILD_DIR)/sc_user.o \
       $(BUILD_DIR)/sc_net.o \
       $(BUILD_DIR)/sc_kmod.o \
       $(BUILD_DIR)/keyboard.o \
@@ -451,15 +436,15 @@ $(BUILD_DIR)/multiboot2.o: $(KERN_CORE_DIR)/multiboot2.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/sc_mod.o: $(KERN_SYSCALLS_DIR)/mod.c
+$(BUILD_DIR)/sc_mod.o: $(KERN_SYSCALL_DIR)/mod.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/sc_validate.o: $(KERN_SYSCALLS_DIR)/validate.c
+$(BUILD_DIR)/sc_validate.o: $(KERN_SYSCALL_DIR)/validate.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/sc_helper.o: $(KERN_SYSCALLS_DIR)/helper.c
+$(BUILD_DIR)/sc_helper.o: $(KERN_SYSCALL_DIR)/helper.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -471,7 +456,6 @@ $(BUILD_DIR)/sc_signal.o: $(KERN_SC_PROC_DIR)/signal.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_PROC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/sc_session.o: $(KERN_SC_PROC_DIR)/session.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_PROC_DIR) -c $< -o $@
 
@@ -483,33 +467,21 @@ $(BUILD_DIR)/sc_fd_mux.o: $(KERN_SC_FD_DIR)/fd_mux.c $(KERN_SC_FD_DIR)/fd.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_FD_DIR) -c $< -o $@
 
-$(BUILD_DIR)/sc_file.o: $(KERN_SC_FILE_DIR)/file.c
 	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -I$(KERN_SC_FILE_DIR) -c $< -o $@
 
-$(BUILD_DIR)/sc_path.o: $(KERN_SC_PATH_DIR)/path.c
 	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -I$(KERN_SC_PATH_DIR) -c $< -o $@
 
-$(BUILD_DIR)/sc_sys.o: $(KERN_SC_SYS_DIR)/sys.c
 	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -I$(KERN_SC_SYS_DIR) -c $< -o $@
 
 $(BUILD_DIR)/sc_mm.o: $(KERN_SC_MM_DIR)/mm.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_MM_DIR) -c $< -o $@
 
-$(BUILD_DIR)/sc_ipc.o: $(KERN_SC_IPC_DIR)/ipc.c
 	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -I$(KERN_SC_IPC_DIR) -c $< -o $@
 
-$(BUILD_DIR)/sc_time.o: $(KERN_SC_TIME_DIR)/time.c
 	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -I$(KERN_SC_TIME_DIR) -c $< -o $@
 
-$(BUILD_DIR)/sc_user.o: $(KERN_SC_USER_DIR)/user.c
 	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -I$(KERN_SC_USER_DIR) -c $< -o $@
 
 $(BUILD_DIR)/sc_net.o: $(KERN_SC_NET_DIR)/net.c
 	@mkdir -p $(BUILD_DIR)
@@ -533,18 +505,6 @@ $(SCHED_TARGET): $(SCHED_RS_SOURCES) $(CACT_SYNC_RS) $(SCHED_DIR)/Cargo.toml $(S
 	cp "$$TARGET_DIR/i686-cact/release/libsched.a" target/libsched.a
 
 $(BUILD_DIR)/elf_loader.o: $(KERN_ELF_DIR)/elf_loader.c
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/dynlink.o: $(KERN_DYNLINK_DIR)/dynlink.c $(KERN_DYNLINK_DIR)/dynlink_internal.h
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/dynlink_elf.o: $(KERN_DYNLINK_DIR)/dynlink_elf.c $(KERN_DYNLINK_DIR)/dynlink_internal.h
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/dynlink_reloc.o: $(KERN_DYNLINK_DIR)/dynlink_reloc.c $(KERN_DYNLINK_DIR)/dynlink_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -585,6 +545,10 @@ $(BUILD_DIR)/devfs_devices.o: $(FS_DEVFS_DIR)/devfs_devices.c $(FS_DEVFS_DIR)/de
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/devfs_services.o: $(FS_DEVFS_DIR)/devfs_services.c $(FS_DEVFS_DIR)/devfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/pagecache.o: $(FS_PG_DIR)/pagecache.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -602,6 +566,14 @@ $(BUILD_DIR)/procfs_mdls.o: $(FS_PROCFS_DIR)/procfs_mdls.c $(FS_PROCFS_DIR)/proc
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/procfs_std.o: $(FS_PROCFS_DIR)/procfs_std.c $(FS_PROCFS_DIR)/procfs_internal.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/procfs_proc.o: $(FS_PROCFS_DIR)/procfs_proc.c $(FS_PROCFS_DIR)/procfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/procfs_pid.o: $(FS_PROCFS_DIR)/procfs_pid.c $(FS_PROCFS_DIR)/procfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

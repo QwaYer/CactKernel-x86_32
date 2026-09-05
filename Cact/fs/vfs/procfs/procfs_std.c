@@ -1,5 +1,6 @@
 #include "procfs.h"
 #include "procfs_internal.h"
+#include "ioctl_abi.h"
 #include "vfs.h"
 #include "kernel.h"
 #include "memory.h"
@@ -253,6 +254,44 @@ int _meminfo_read(uint32_t off, uint32_t size, char *buf) {
 }
 
 extern unsigned int timer_ticks_get(void);
+
+// /proc/uname — binary struct cact_uname_t (relay for uname()).
+int _uname_read(uint32_t off, uint32_t size, char *buf) {
+    cact_uname_t u;
+    memset(&u, 0, sizeof(u));
+    const char *sysname  = "CactOS";
+    const char *nodename = "cact";
+    const char *release  = "0.1.0";
+    const char *version  = "#1";
+    const char *machine  = "i686";
+
+    int i;
+    for (i = 0; sysname[i] && i < 64; i++)  u.sysname[i]  = sysname[i];
+    for (i = 0; nodename[i] && i < 64; i++) u.nodename[i] = nodename[i];
+    for (i = 0; release[i] && i < 64; i++)  u.release[i]  = release[i];
+    for (i = 0; version[i] && i < 64; i++)  u.version[i]  = version[i];
+    for (i = 0; machine[i] && i < 64; i++)  u.machine[i]  = machine[i];
+
+    uint32_t len = sizeof(u);
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, (const char *)&u + off, size);
+    return (int)size;
+}
+
+// /proc/time — binary monotonic time (cact_time_t), used by the libc
+// gettimeofday()/clock_gettime() relay instead of a dedicated syscall.
+int _time_read(uint32_t off, uint32_t size, char *buf) {
+    cact_time_t t;
+    uint32_t ticks = timer_ticks_get();
+    t.sec  = ticks / 100;
+    t.usec = (ticks % 100) * (1000000 / 100);
+    uint32_t len = sizeof(t);
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, (const char *)&t + off, size);
+    return (int)size;
+}
 
 // /proc/uptime generator
 int _uptime_read(uint32_t off, uint32_t size, char *buf) {

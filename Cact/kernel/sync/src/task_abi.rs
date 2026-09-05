@@ -1,6 +1,6 @@
 use core::ffi::c_void;
 
-use crate::kernel_types::{DynCtx, MmapTable, ProcPageTracker, TaskFdTable, VfsNode};
+use crate::kernel_types::{MmapTable, ProcPageTracker, TaskFdTable, VfsNode};
 
 pub const NSIG: usize = 13;
 pub const TASK_SHM_MAX: usize = 16;
@@ -62,7 +62,6 @@ pub struct ProcMeta {
     pub fds:                *mut TaskFdTable,
     pub mm:                 ProcPageTracker,
     pub mmap_table:         *mut MmapTable,
-    pub dyn_ctx:            *mut DynCtx,
     pub parent_pid:         u32,
     pub exit_code:          i32,
     pub wait_for_pid:       u32,

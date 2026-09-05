@@ -53,6 +53,12 @@ struct pollfd {
     short revents;
 };
 
+// Directory entry structure for getdents()
+struct cact_dirent {
+    uint32_t d_ino;
+    char     d_name[124];
+};
+
 // File descriptor syscalls
 int sys_open(char* name, int flags);
 int sys_read(int fd, char* buf, unsigned int size);

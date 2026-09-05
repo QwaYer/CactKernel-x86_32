@@ -4,10 +4,10 @@
 #include "task.h"
 
 // Category headers — declare the remaining core handlers
-#include "proc/proc.h"      // fork/exec/exit/waitpid
-#include "proc/signal.h"    // sigreturn
-#include "fd/fd.h"          // open/close/read/write/ioctl/poll
-#include "mm/mm.h"          // brk/mmap/munmap/mprotect
+#include "process/proc.h"    // fork/exec/exit/waitpid
+#include "process/signal.h"  // sigreturn
+#include "io/fd.h"           // open/close/read/write/ioctl/poll
+#include "mem/mm.h"          // brk/mmap/munmap/mprotect
 
 // Exported to Rust sigreturn trampoline via FFI
 const uint32_t sys_sigreturn_num = SYS_SIGRETURN;

@@ -3,13 +3,13 @@
 
 use core::ffi::c_void;
 use core::ptr;
-use crate::ffi::{self, DynCtx, ProcPageTracker};
+use crate::ffi::{self, ProcPageTracker};
 use crate::mlfq;
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 use crate::task::{
     calc_highest_mapped_va, current_task, free_user_stack_pages, map_user_stack_in_pd,
     next_pid, push_empty_args, task_list_add, task_setup_sigreturn, task_zero_init,
-    ProcMeta, TaskStruct, SCHEDULER_LOCK, KERNEL_BASE, KERNEL_STACK_SIZE,
+    ustack_write_u32, ProcMeta, TaskStruct, SCHEDULER_LOCK, KERNEL_BASE, KERNEL_STACK_SIZE,
     USER_CODE_SEL, USER_DATA_SEL, USER_STACK_BYTES, USER_STACK_PAGES,
 };
 
@@ -178,23 +178,6 @@ pub unsafe extern "C" fn create_task_with_entry(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn create_task_dynamic(
-    entry:   *const c_void,
-    pd:      *mut u32,
-    tracker: *mut ProcPageTracker,
-    ctx:     *mut DynCtx,
-) -> *mut TaskStruct {
-    let t = create_task_with_entry(entry, pd, tracker);
-    if t.is_null() { return ptr::null_mut(); }
-
-    irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
-    (*(*t).proc).dyn_ctx = ctx;
-    irq_spinlock_release(&raw mut SCHEDULER_LOCK);
-
-    t
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     let pd = ffi::vmm_create_address_space();
     if pd.is_null() { return ptr::null_mut(); }
@@ -205,27 +188,26 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     let p = (*t).proc;
     ffi::proc_tracker_init(&raw mut (*p).mm);
 
-    let mut new_dyn_ctx: *mut DynCtx = ptr::null_mut();
-    let is_dynamic = ffi::elf_is_dynamic(path) != 0;
-    let entry = if is_dynamic {
-        new_dyn_ctx = ffi::dynlink_ctx_create(pd, &raw mut (*p).mm);
-        if new_dyn_ctx.is_null() {
-            ffi::printk(b"[INIT] dynlink_ctx_create failed\n\0".as_ptr());
-            ffi::free_page((*p).stack_base);
-            free_user_stack_pages(&mut *p);
-            ffi::kfree(p as *mut c_void);
-            ffi::kfree(t as *mut c_void);
-            ffi::vmm_free_address_space(pd);
-            return ptr::null_mut();
-        }
-        ffi::load_elf_dynamic(path, pd, &raw mut (*p).mm, new_dyn_ctx)
+    // PT_INTERP handoff (userspace ld.so) — same protocol as task_exec.
+    // Binaries without PT_INTERP are mapped by the plain loader (static ELF).
+    let mut interp_path = [0u8; 256];
+    let has_interp =
+        ffi::elf_get_interp_path(path, interp_path.as_mut_ptr(), 256) > 0;
+    let mut interp_info = ffi::InterpInfo {
+        main_entry:  0,
+        main_base:   0,
+        main_phdr:   0,
+        main_phnum:  0,
+        interp_base: 0,
+    };
+
+    let entry = if has_interp {
+        ffi::load_elf_interp(path, interp_path.as_ptr(), pd,
+                             &raw mut (*p).mm, &raw mut interp_info)
     } else {
         ffi::load_elf(path, pd, &raw mut (*p).mm)
     };
     if entry.is_null() {
-        if !new_dyn_ctx.is_null() {
-            ffi::dynlink_ctx_destroy(new_dyn_ctx);
-        }
         ffi::free_page((*p).stack_base);
         free_user_stack_pages(&mut *p);
         ffi::kfree(p as *mut c_void);
@@ -235,7 +217,6 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     }
 
     (*t).page_directory = pd;
-    (*p).dyn_ctx        = new_dyn_ctx;
 
     // Load symbol table for crash traces
     ffi::elf_load_exec_symtab(path, p as *mut c_void);
@@ -246,11 +227,50 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     map_user_stack_in_pd(pd, &*p);
 
     let highest = calc_highest_mapped_va(pd);
-    (*p).brk_start   = highest;
-    (*p).brk_current = highest;
+    if has_interp {
+        // With the interpreter mapped too, calc_highest lands above ld.so;
+        // the brk must start at the end of the *main* image instead.
+        let main_node = ffi::vfs_walk_path(unsafe { *ffi::vfs_root.get() }, path);
+        let brk = if !main_node.is_null() {
+            ffi::elf_get_brk_start(main_node)
+        } else {
+            highest
+        };
+        (*p).brk_start   = brk;
+        (*p).brk_current = brk;
+    } else {
+        (*p).brk_start   = highest;
+        (*p).brk_current = highest;
+    }
 
     let ustack_top = (*p).ustack_virt + USER_STACK_BYTES;
     let mut sp = ustack_top - 4;
+
+    // auxv goes between envp's NULL and the top of the stack (init has no
+    // argv/envp strings, so it sits directly above the empty envp array).
+    if has_interp {
+        const AT_PHDR: u32 = 3;
+        const AT_PHENT: u32 = 4;
+        const AT_PHNUM: u32 = 5;
+        const AT_PAGESZ: u32 = 6;
+        const AT_BASE: u32 = 7;
+        const AT_ENTRY: u32 = 9;
+        let auxv: [(u32, u32); 6] = [
+            (AT_PHDR, interp_info.main_phdr),
+            (AT_PHENT, 32),
+            (AT_PHNUM, interp_info.main_phnum),
+            (AT_PAGESZ, 4096),
+            (AT_BASE, interp_info.interp_base),
+            (AT_ENTRY, interp_info.main_entry),
+        ];
+        sp -= 4; ustack_write_u32(&*p, sp, 0); // auxv terminator (val)
+        sp -= 4; ustack_write_u32(&*p, sp, 0); // auxv terminator (tag)
+        for i in (0..6).rev() {
+            sp -= 4; ustack_write_u32(&*p, sp, auxv[i].1);
+            sp -= 4; ustack_write_u32(&*p, sp, auxv[i].0);
+        }
+    }
+
     push_empty_args(&*p, &mut sp);
     *stk.add(8) = sp;
 

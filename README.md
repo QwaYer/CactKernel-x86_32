@@ -21,7 +21,7 @@
 
 | | |
 |---|---|
-| **Syscalls** | 95 — authoritative enum in [`syscalls.h`](Cact/kernel/core/syscalls/syscalls.h) (`SYSCALL_COUNT`) |
+| **Syscalls** | 15 core traps — authoritative enum in [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) (`SYSCALL_COUNT`); everything else via VFS-node ioctls ([`ioctl_abi.h`](Cact/kernel/core/syscall/ioctl_abi.h)) |
 | **CPU ISRs** | 32 (IDT) + IRQ stubs via I/O APIC |
 | **PMM range** | Physical frames **0 … `0xC000_0000`** (3 GiB; PCI hole lowered from 0xE0000000) |
 | **MAX_FD** | 256 file descriptors per task (`rust_mm` FFI) |
@@ -40,7 +40,7 @@ CactKernel is one piece of a larger workspace. Typical pieces:
 
 | Component | Role |
 |-----------|------|
-| **[CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32)** | Userspace **`libc.a`** / **`libc.so`**. Every `SYS_*` number must match the kernel’s [`syscalls.h`](Cact/kernel/core/syscalls/syscalls.h). After any syscall change: rebuild libc and **re-link all ELFs** (init, shell, demos). |
+| **[CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32)** | Userspace **`libc.a`** / **`libc.so`**. Every `SYS_*` number must match the kernel’s [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) and `ioctl_abi.h`. After any syscall change: rebuild libc and **re-link all ELFs** (init, shell, demos). |
 | **[LocalRepoCactOS](../LocalRepoCactOS)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
 | **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`make`** in this tree → **`build/cact.iso`**. |
 
@@ -402,28 +402,26 @@ The call trace walks the EBP chain and resolves addresses via the per-task ELF s
 
 ---
 
-## 📞 System calls (95 total)
+## 📞 System calls (15 core traps)
 
-Authoritative list: [`Cact/kernel/core/syscalls/syscalls.h`](Cact/kernel/core/syscalls/syscalls.h) — must stay byte-for-byte in sync with **[CactLib `syscall.h`](https://github.com/QwaYer/CactLib-x86_32/blob/main/include/syscall.h)**.
+The kernel only traps for 15 syscalls; everything else is a **VFS-node service**. A process `open()`s a node and issues `ioctl`/`read`/`write` on it.
 
-Syscall dispatch uses the **`sysenter`** CPU instruction (legacy `int 0x80` gate preserved as ring-3 fallback for `sigreturn` and CPUs without SEP — see [`idt.c`](Cact/kernel/idt/idt.c):102-104, [`cpudev.c`](Cact/kernel/cpudev/cpudev.c):208-210). Many syscalls take a **`struct syscall_frame*`** (full register snapshot) in the dispatcher — see [`mod.c`](Cact/kernel/core/syscalls/mod.c) `_needs_frame()`.
+Authoritative ABI headers: [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) (15 trap numbers) and [`ioctl_abi.h`](Cact/kernel/core/syscall/ioctl_abi.h) (every relay command/protocol struct) — both must stay byte-for-byte in sync with **[CactLib `syscall.h`](https://github.com/QwaYer/CactLib-x86_32/blob/main/include/syscall.h)**.
 
-| Group | Calls |
+Syscall dispatch uses the **`sysenter`** CPU instruction (legacy `int 0x80` gate preserved as ring-3 fallback for `sigreturn` and CPUs without SEP — see [`idt.c`](Cact/kernel/idt/idt.c):102-104, [`cpudev.c`](Cact/kernel/cpudev/cpudev.c):208-210). Many syscalls take a **`struct syscall_frame*`** (full register snapshot) in the dispatcher — see [`mod.c`](Cact/kernel/core/syscall/mod.c) `_needs_frame()`.
+
+| ABI surface | Service |
 |-------|-------|
-| **Debug** | `print` |
-| **Process** | `getpid` `getppid` `fork` `exec` `exit` `waitpid` `sleep` |
-| **Session** | `setsid` `setpgid` `getpgid` `getpgrp` |
-| **Signals** | `kill` `signal` `sigaction` `sigprocmask` `sigreturn` `sigpending` `sigsuspend` `alarm` `setitimer` |
-| **FD / IO** | `open` `read` `write` `close` `lseek` `ioctl` `fcntl` `dup` `dup2` `pipe` `select` `poll` |
-| **File metadata** | `stat` `fstat` `access` `chmod` `chown` `umask` `truncate` `ftruncate` `sync` `fsync` `mknod` |
-| **Paths** | `create` `mkdir` `rmdir` `delete` `unlink` `rename` `link` `symlink` `readlink` `getdents` `chdir` `getcwd` `chroot` |
-| **System** | `mount` `umount` `reboot` `uname` |
-| **Memory** | `brk` `mmap` `munmap` `mprotect` |
-| **SHM** | `shmget` `shmat` `shmdt` `shmctl` |
-| **Time** | `gettimeofday` `clock_gettime` `nanosleep` |
-| **Users** | `getuid` `getgid` `geteuid` `getegid` `setuid` `setgid` |
-| **Network** | `socket` `bind` `connect` `listen` `accept` `send` `recv` `sendto` `recvfrom` `shutdown` `setsockopt` `getsockopt` plus **`SYS_PING_ECHO` (90)**, **`SYS_NETCFG_SET` (91)**, **`SYS_DNS_RESOLVE` (94)** — see libc **`dns_resolve()`** |
-| **Kernel modules** | `module_load` (92) `module_unload` (93) |
+| **`SYS_*`** 0–14 | Core traps: `open` `close` `read` `write` `ioctl` `poll` `fork` `exec` `exit` `waitpid` `brk` `mmap` `munmap` `mprotect` `sigreturn` |
+| **`CACT_FDCTL_*`** 0x3000 | ioctl on any fd — `dup` `dup2` `fcntl` `lseek` `fstat` `ftruncate` `getdents` `fsync` |
+| **`CACT_DIRCTL_*`** 0x3100 | ioctl on a directory fd — `openat` `create` `mkdir` `rmdir` `unlink` `link` `symlink` `readlink` `rename` `stat` `access` `chmod` `chown` `truncate` `mknod` |
+| **`CACT_PROCCTL_*`** 0x3200 | ioctl on `/proc/self\|pid/ctl` — `setsid` `setpgid` `setuid` `setgid` `umask` `chdir` `chroot` signals/itimers, `shmget` `shmat` `shmdt` `shmctl` |
+| **`CACT_SOCKCTL_*`** 0x3300 | ioctl on a socket fd — `bind` `connect` `listen` `accept` `shutdown` `setsockopt` `getsockopt` `sendto` `recvfrom` (data path: `read`/`write`) |
+| **`CACT_NETCTL_*`** 0x3400 | ioctl on `/dev/net` — `socket` creation, ping, DNS resolve, netcfg |
+| **`CACT_SYSCTL_*`** 0x3500 | ioctl on `/dev/sys` (root) — `mount` `umount` `reboot`, kernel module load/unload |
+| **`CACT_PIPECTL_*`** 0x3600 | ioctl on `/dev/pipe` — `pipe` creation |
+
+Identity/process info: `/proc/self/info`; cwd: `/proc/self/cwd`; time: `/proc/time`; `uname`: `/proc/uname`.
 
 ---
 

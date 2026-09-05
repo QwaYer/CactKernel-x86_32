@@ -4,7 +4,7 @@
 #include "klib.h"
 #include "pci.h"
 #include "task.h"
-#include "proc/proc.h"
+#include "process/proc.h"
 #include "acpi.h"
 #include "cact_acpi.h"
 #include "idt.h"

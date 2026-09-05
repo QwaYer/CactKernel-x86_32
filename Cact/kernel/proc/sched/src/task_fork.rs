@@ -94,7 +94,6 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     (*child_p).sleep_until    = 0;
     (*child_p).pending_signals = 0;
     (*child_p).wait_next      = ptr::null_mut();
-    (*child_p).dyn_ctx        = ptr::null_mut();
 
     ffi::proc_tracker_init(&raw mut (*child_p).mm);
     (*child_p).mm.page_dir = child_pd;
@@ -150,6 +149,10 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         (*parent).page_directory,
         child_pd,
     );
+
+    // The kernel MMIO mappings (framebuffer, xHCI BARs...) must be present in
+    // the child pd; fork only deep-copies the user half.
+    ffi::vmm_sync_kernel_mmio_mappings(child_pd);
 
     for i in 0..USER_STACK_PAGES as usize {
         let vaddr = (*child_p).ustack_virt.wrapping_add((i as u32).wrapping_mul(PAGE_SIZE));
@@ -372,11 +375,6 @@ fn reap_task_free(t: *mut TaskStruct) {
             }
             ffi::kfree(mt as *mut c_void);
             (*p).mmap_table = ptr::null_mut();
-        }
-
-        if !(*p).dyn_ctx.is_null() {
-            ffi::dynlink_ctx_destroy((*p).dyn_ctx);
-            (*p).dyn_ctx = ptr::null_mut();
         }
 
         ffi::shm_detach_all((*t).pid, (*t).page_directory);

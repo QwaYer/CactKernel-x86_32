@@ -19,7 +19,7 @@ mod sched_link;
 mod semaphore;
 mod spinlock;
 
-pub use kernel_types::{DynCtx, MmapTable, ProcPageTracker, TaskFdTable, VfsNode};
+pub use kernel_types::{MmapTable, ProcPageTracker, TaskFdTable, VfsNode};
 pub use mutex::*;
 pub use semaphore::*;
 pub use spinlock::*;

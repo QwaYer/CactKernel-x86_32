@@ -2,12 +2,12 @@
 #define TASK_H
 
 #include <stdint.h>
+#include "elf.h"
 #include "gdt.h"
 #include "vfs.h"
 #include "proc_mm.h"
 #include "sync.h"
 #include "mmap.h"
-#include "dynlink.h"
 #include "shm.h"
 
 #define USER_CODE_SEL 0x1B
@@ -38,7 +38,9 @@
 #define KERNEL_STACK_SIZE 4096
 #define USER_STACK_PAGES  4
 #define USER_STACK_BYTES  (USER_STACK_PAGES * 4096)
+#ifndef KERNEL_BASE
 #define KERNEL_BASE       0xC0000000
+#endif
 
 #define MLFQ_LEVEL_RT          0
 #define MLFQ_LEVEL_INTERACTIVE 1
@@ -99,7 +101,6 @@ typedef struct proc_metadata {
     task_fd_table_t *fds;
     proc_page_tracker_t mm;
     mmap_table_t *mmap_table;
-    dyn_ctx_t* dyn_ctx;
 
     uint32_t parent_pid;
     int      exit_code;
@@ -227,11 +228,6 @@ void task_set_state(struct task_struct* t, task_state old_state, task_state new_
 struct task_struct* create_task_with_entry(void*                entry,
                                              uint32_t*            pd,
                                              proc_page_tracker_t* tracker);
-
-struct task_struct* create_task_dynamic(void*                entry,
-                                         uint32_t*            pd,
-                                         proc_page_tracker_t* tracker,
-                                         dyn_ctx_t*           ctx);
 
 uint32_t* vmm_create_address_space();
 void vmm_free_address_space(uint32_t* pd);

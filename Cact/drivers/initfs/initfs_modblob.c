@@ -91,13 +91,14 @@ static uint32_t crc32(const uint8_t *buf, uint32_t len) {
 /* The on-disk checksum covers the entire image *except* that the
  * 4-byte checksum field itself is treated as 0 during computation. */
 static uint32_t compute_image_crc32(const uint8_t *img, uint32_t total) {
-    uint32_t c = crc32(img, CCTKFS_CKSUM_OFF);
-    for (uint32_t i = 0; i < 4 && (CCTKFS_CKSUM_OFF + i) < total; i++)
-        c = crc32_tab[c & 0xFFu] ^ (c >> 8);
-    uint32_t after = CCTKFS_CKSUM_OFF + 4;
-    if (after < total)
-        c = crc32(img + after, total - after);
-    return c;
+    uint32_t c = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < total; i++) {
+        uint8_t b = img[i];
+        if (i >= CCTKFS_CKSUM_OFF && i < CCTKFS_CKSUM_OFF + 4)
+            b = 0;
+        c = crc32_tab[(c ^ b) & 0xFFu] ^ (c >> 8);
+    }
+    return c ^ 0xFFFFFFFFu;
 }
 
 /* ------------------------------------------------------------------ */

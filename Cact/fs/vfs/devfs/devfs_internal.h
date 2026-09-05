@@ -13,4 +13,10 @@ extern devfs_driver_t drv_keyboard;
 extern devfs_driver_t drv_mouse;
 extern devfs_driver_t drv_fb;
 
+/* devfs_services.c — kernel-service devices (/dev/console, /dev/sys, ...). */
+extern devfs_driver_t drv_console;
+extern devfs_driver_t drv_sys;
+extern devfs_driver_t drv_net;
+extern devfs_driver_t drv_pipe;
+
 #endif
