@@ -3,7 +3,6 @@
 #include "helper.h"
 #include "pipe.h"
 #include "path/path.h"
-#include "file/file.h"
 #include "kernel.h"   // terminal_winsize
 
 int sys_pipe(struct syscall_frame *regs) {
@@ -129,7 +128,16 @@ int sys_poll(struct syscall_frame *regs) {
     int            timeout_ms = (int)regs->edx;
 
     if (!current_task) return -1;
-    if (nfds <= 0)     return 0;
+
+    // poll(NULL, 0, timeout) — чистый sleep (nfds == 0).
+    if (nfds <= 0) {
+        if (timeout_ms == 0) return 0;
+        if (timeout_ms < 0) { for (;;) schedule(); }
+        uint32_t ticks = (uint32_t)((timeout_ms + (1000 / 100) - 1) / (1000 / 100));
+        uint32_t deadline = timer_ticks_get() + ticks;
+        while ((int32_t)(timer_ticks_get() - deadline) < 0) schedule();
+        return 0;
+    }
     if ((uint32_t)nfds > UINT32_MAX / sizeof(struct pollfd)) return -1;
     if (!validate_user_ptr(fds_user, (uint32_t)nfds * sizeof(struct pollfd))) return -1;
 
