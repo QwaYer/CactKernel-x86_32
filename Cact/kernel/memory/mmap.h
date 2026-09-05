@@ -53,9 +53,6 @@ int            mmap_handle_fault(uint32_t* pd, mmap_table_t* tbl, uint32_t fault
 mmap_region_t* mmap_find_region(mmap_table_t* tbl, uint32_t addr);
 void           mmap_print_regions(const mmap_table_t* tbl);
 
-#define SYS_MMAP      90
-#define SYS_MUNMAP    91
-#define SYS_MPROTECT  125
 
 typedef struct {
     uint32_t addr;

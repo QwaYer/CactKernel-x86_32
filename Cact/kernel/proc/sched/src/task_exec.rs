@@ -3,7 +3,7 @@
 
 use core::ffi::c_void;
 use core::ptr;
-use crate::ffi::{self, ContextFrame, DynCtx, PAGE_PRESENT, PAGE_SIZE, PAGE_USER};
+use crate::ffi::{self, ContextFrame, PAGE_PRESENT, PAGE_SIZE, PAGE_USER};
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 use crate::task::{
     map_sigreturn_trampoline_on_pd, map_user_stack_in_pd, ustack_kernel_byte_mut,
@@ -49,9 +49,11 @@ pub unsafe extern "C" fn task_exec(
 
     irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
 
-    if !(*p).dyn_ctx.is_null() {
-        ffi::dynlink_ctx_destroy((*p).dyn_ctx);
-        (*p).dyn_ctx = ptr::null_mut();
+    // dynlink is gone; the old address space's frames are reclaimed when
+    // old_pd is released below.  Free the stale tracker array here so execs
+    // do not leak it.
+    if !(*p).mm.pages.is_null() {
+        ffi::kfree((*p).mm.pages as *mut c_void);
     }
 
     let new_pd = ffi::vmm_create_address_space();
@@ -66,16 +68,24 @@ pub unsafe extern "C" fn task_exec(
     ffi::proc_tracker_init(&raw mut (*p).mm);
     irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
-    let mut new_dyn_ctx: *mut DynCtx = ptr::null_mut();
-    let is_dynamic = ffi::elf_is_dynamic(path) != 0;
+    // PT_INTERP handoff (userspace ld.so): the kernel maps the main image and
+    // the interpreter without any relocation pass; ld.so does the rest.
+    // Binaries without PT_INTERP are mapped by the plain loader (static ELF).
+    let mut interp_path = [0u8; 256];
+    let has_interp =
+        ffi::elf_get_interp_path(path, interp_path.as_mut_ptr(), 256) > 0;
+    let mut interp_info = ffi::InterpInfo {
+        main_entry:  0,
+        main_base:   0,
+        main_phdr:   0,
+        main_phnum:  0,
+        interp_base: 0,
+    };
 
     // Check execute permission before loading
     {
         let exec_node = ffi::vfs_walk_path(unsafe { *ffi::vfs_root.get() }, path);
         if exec_node.is_null() || ffi::vfs_check_perm(exec_node, 0x01) < 0 {
-            if !new_dyn_ctx.is_null() {
-                ffi::dynlink_ctx_destroy(new_dyn_ctx);
-            }
             ffi::vmm_free_address_space(new_pd);
             for page in new_ustack_pages {
                 ffi::free_page(page);
@@ -84,24 +94,18 @@ pub unsafe extern "C" fn task_exec(
         }
     }
 
-    let entry = if is_dynamic {
-        new_dyn_ctx = ffi::dynlink_ctx_create(new_pd, &raw mut (*p).mm);
-        if new_dyn_ctx.is_null() {
-            ffi::printk(b"[EXEC] dynlink_ctx_create failed\n\0".as_ptr());
-            ffi::vmm_free_address_space(new_pd);
-            for page in new_ustack_pages {
-                ffi::free_page(page);
-            }
-            return -1;
-        }
-        ffi::load_elf_dynamic(path, new_pd, &raw mut (*p).mm, new_dyn_ctx)
+    let entry = if has_interp {
+        ffi::load_elf_interp(
+            path,
+            interp_path.as_ptr(),
+            new_pd,
+            &raw mut (*p).mm,
+            &raw mut interp_info,
+        )
     } else {
         ffi::load_elf(path, new_pd, &raw mut (*p).mm)
     };
     if entry.is_null() {
-        if !new_dyn_ctx.is_null() {
-            ffi::dynlink_ctx_destroy(new_dyn_ctx);
-        }
         ffi::vmm_free_address_space(new_pd);
         for page in new_ustack_pages {
             ffi::free_page(page);
@@ -193,9 +197,6 @@ pub unsafe extern "C" fn task_exec(
             ffi::printk(b"[EXEC] abort: argv copy / stack overflow\n\0".as_ptr());
             (*p).ustack_phys = old_ustack_pages[0];
             (*p).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
-            if !new_dyn_ctx.is_null() {
-                ffi::dynlink_ctx_destroy(new_dyn_ctx);
-            }
             ffi::vmm_free_address_space(new_pd);
             irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
@@ -207,23 +208,46 @@ pub unsafe extern "C" fn task_exec(
             ffi::printk(b"[EXEC] abort: envp copy / stack overflow\n\0".as_ptr());
             (*p).ustack_phys = old_ustack_pages[0];
             (*p).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
-            if !new_dyn_ctx.is_null() {
-                ffi::dynlink_ctx_destroy(new_dyn_ctx);
-            }
             ffi::vmm_free_address_space(new_pd);
             irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
         }
     };
 
+    // auxv pairs (Linux i386 stack layout): written just above envp's NULL,
+    // below the argv/envp string area. Only the PT_INTERP path uses them;
+    // kernel-dynlink binaries keep the plain stack.
+    const AT_PHDR: u32 = 3;
+    const AT_PHENT: u32 = 4;
+    const AT_PHNUM: u32 = 5;
+    const AT_PAGESZ: u32 = 6;
+    const AT_BASE: u32 = 7;
+    const AT_ENTRY: u32 = 9;
+    let mut auxv: [(u32, u32); 8] = [(0, 0); 8];
+    let mut auxc = 0usize;
+    if has_interp {
+        auxv[auxc] = (AT_PHDR, interp_info.main_phdr); auxc += 1;
+        auxv[auxc] = (AT_PHENT, 32);                  auxc += 1; // sizeof(Elf32_Phdr)
+        auxv[auxc] = (AT_PHNUM, interp_info.main_phnum); auxc += 1;
+        auxv[auxc] = (AT_PAGESZ, 4096);               auxc += 1;
+        auxv[auxc] = (AT_BASE, interp_info.interp_base); auxc += 1;
+        auxv[auxc] = (AT_ENTRY, interp_info.main_entry); auxc += 1;
+    }
+    if auxc > 0 {
+        sp -= 4; ustack_write_u32(&*p, sp, 0); // auxv terminator (val)
+        sp -= 4; ustack_write_u32(&*p, sp, 0); // auxv terminator (tag)
+        for i in (0..auxc).rev() {
+            sp -= 4; ustack_write_u32(&*p, sp, auxv[i].1);
+            sp -= 4; ustack_write_u32(&*p, sp, auxv[i].0);
+        }
+    }
+
+    // The pointer-layout block below stays identical for both exec paths.
     let ptr_overhead = (argc as u32 + envc as u32 + 5) * 4;
     if sp < (*p).ustack_virt + ptr_overhead {
         ffi::printk(b"[EXEC] abort: stack layout preflight failed\n\0".as_ptr());
         (*p).ustack_phys = old_ustack_pages[0];
         (*p).ustack_phys_extra = [old_ustack_pages[1], old_ustack_pages[2], old_ustack_pages[3]];
-        if !new_dyn_ctx.is_null() {
-            ffi::dynlink_ctx_destroy(new_dyn_ctx);
-        }
         ffi::vmm_free_address_space(new_pd);
         irq_spinlock_release(&raw mut SCHEDULER_LOCK);
         return -1;
@@ -280,7 +304,6 @@ pub unsafe extern "C" fn task_exec(
         ffi::vmm_free_address_space(old_pd);
     }
     ffi::vmm_sync_kernel_mmio_mappings(new_pd);
-    (*p).dyn_ctx = new_dyn_ctx;
 
     unsafe {
         core::arch::asm!(

@@ -31,9 +31,3 @@ pub struct TaskFdTable {
     pub fd_flags:   [u32; 256],
     pub fd_cloexec: [u32; 256],
 }
-
-/// Dynamic linker context (`DynCtx` in C); opaque pointer target.
-#[repr(C)]
-pub struct DynCtx {
-    _opaque: [u8; 0],
-}

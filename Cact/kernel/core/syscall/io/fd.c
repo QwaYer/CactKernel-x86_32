@@ -2,7 +2,6 @@
 #include "validate.h"
 #include "helper.h"
 #include "pipe.h"
-#include "path/path.h"
 #include "ioctl_abi.h"
 #include "kernel.h"   // terminal_winsize
 

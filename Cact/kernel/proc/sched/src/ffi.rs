@@ -6,7 +6,7 @@ use core::cell::SyncUnsafeCell;
 use core::ffi::c_void;
 
 pub use cact_sync::kernel_types::{
-    DynCtx, MmapTable, ProcPageTracker, TaskFdTable, VfsNode,
+    MmapTable, ProcPageTracker, TaskFdTable, VfsNode,
 };
 
 #[repr(C)]
@@ -28,6 +28,15 @@ pub struct ContextFrame {
     pub eflags:   u32,
     pub useresp:  u32,
     pub ss:       u32,
+}
+
+#[repr(C)]
+pub struct InterpInfo {
+    pub main_entry:  u32,
+    pub main_base:   u32,
+    pub main_phdr:   u32,
+    pub main_phnum:  u32,
+    pub interp_base: u32,
 }
 
 // SAFETY: All functions and statics are backed by C definitions in the kernel.
@@ -55,13 +64,14 @@ unsafe extern "C" {
         pd:      *mut u32,
         tracker: *mut ProcPageTracker,
     ) -> *mut c_void;
-    pub fn load_elf_dynamic(
-        path:    *const u8,
-        pd:      *mut u32,
-        tracker: *mut ProcPageTracker,
-        ctx:     *mut DynCtx,
+    pub fn elf_get_interp_path(path: *const u8, out: *mut u8, out_max: i32) -> i32;
+    pub fn load_elf_interp(
+        path:        *const u8,
+        interp_path: *const u8,
+        pd:          *mut u32,
+        tracker:     *mut ProcPageTracker,
+        info:        *mut InterpInfo,
     ) -> *mut c_void;
-    pub fn elf_is_dynamic(path: *const u8) -> i32;
 
     pub fn elf_get_brk_start(node: *mut VfsNode) -> u32;
 
@@ -86,10 +96,6 @@ unsafe extern "C" {
     pub fn mmap_table_free(table: *mut MmapTable, pd: *mut u32);
 
     pub fn shm_detach_all(pid: u32, pd: *mut u32);
-
-    pub fn dynlink_unload_all(ctx: *mut DynCtx);
-    pub fn dynlink_ctx_create(pd: *mut u32, tracker: *mut ProcPageTracker) -> *mut DynCtx;
-    pub fn dynlink_ctx_destroy(ctx: *mut DynCtx);
 
     pub fn switch_to(old_esp: *mut u32, new_esp: u32);
     pub fn switch_paging(pd: *mut u32);

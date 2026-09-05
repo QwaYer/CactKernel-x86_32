@@ -297,5 +297,11 @@ void devfs_init(void) {
 
     register_chrdev("fb0", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_fb, 0);
 
+    // Kernel-service devices (new VFS-node model)
+    register_chrdev("console", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_console, 0);
+    register_chrdev("sys",     DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_sys,     0);
+    register_chrdev("net",     DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_net,     0);
+    register_chrdev("pipe",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_pipe,    0);
+
     devfs_ready = 1;
 }
