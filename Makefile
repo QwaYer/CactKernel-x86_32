@@ -213,7 +213,10 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/gdt_asm.o \
       $(BUILD_DIR)/task_asm.o \
       $(BUILD_DIR)/mm.o \
-      $(BUILD_DIR)/interrupt.o \
+      $(BUILD_DIR)/exception_stubs.o \
+      $(BUILD_DIR)/device_isrs.o \
+      $(BUILD_DIR)/msix_stubs.o \
+      $(BUILD_DIR)/syscall_entries.o \
       $(BUILD_DIR)/fpu_entry.o \
       $(BUILD_DIR)/fpu_hd.o \
       $(BUILD_DIR)/io.o \
@@ -387,7 +390,19 @@ $(BUILD_DIR)/task_asm.o: $(KERN_PROC_DIR)/task.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
 
-$(BUILD_DIR)/interrupt.o: $(KERN_CORE_DIR)/interrupt.asm
+$(BUILD_DIR)/exception_stubs.o: $(KERN_CORE_DIR)/exception_stubs.asm
+	@mkdir -p $(BUILD_DIR)
+	nasm -f elf32 $< -o $@
+
+$(BUILD_DIR)/device_isrs.o: $(KERN_CORE_DIR)/device_isrs.asm
+	@mkdir -p $(BUILD_DIR)
+	nasm -f elf32 $< -o $@
+
+$(BUILD_DIR)/msix_stubs.o: $(KERN_CORE_DIR)/msix_stubs.asm
+	@mkdir -p $(BUILD_DIR)
+	nasm -f elf32 $< -o $@
+
+$(BUILD_DIR)/syscall_entries.o: $(KERN_CORE_DIR)/syscall_entries.asm
 	@mkdir -p $(BUILD_DIR)
 	nasm -f elf32 $< -o $@
 
