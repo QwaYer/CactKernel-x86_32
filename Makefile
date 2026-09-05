@@ -222,6 +222,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/elf_loader.o \
       $(BUILD_DIR)/idt.o \
       $(BUILD_DIR)/klib.o \
+      $(BUILD_DIR)/klog.o \
       $(BUILD_DIR)/ksym.o \
       $(BUILD_DIR)/sym.o \
       $(BUILD_DIR)/vfs.o \
@@ -279,6 +280,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/xhci_quirks.o \
       $(BUILD_DIR)/lapic_timer.o \
       $(BUILD_DIR)/acpi_quirks.o \
+      $(BUILD_DIR)/dmi.o \
       $(BUILD_DIR)/usb_hid.o \
       $(BUILD_DIR)/usb_hub.o \
       $(BUILD_DIR)/fb.o \
@@ -513,6 +515,10 @@ $(BUILD_DIR)/klib.o: $(KERN_CORE_DIR)/klib.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/klog.o: $(KERN_CORE_DIR)/klog.c $(KERN_CORE_DIR)/klog.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/ksym.o: $(KERN_ELF_DIR)/ksym.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -721,7 +727,11 @@ $(BUILD_DIR)/lapic_timer.o: $(DRIVER_QUIRKS_TIMER_DIR)/lapic_timer.c $(DRIVER_QU
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/acpi_quirks.o: $(DRIVER_QUIRKS_ACPI_DIR)/acpi_quirks.c $(DRIVER_QUIRKS_ACPI_DIR)/acpi_quirks.h
+$(BUILD_DIR)/acpi_quirks.o: $(DRIVER_QUIRKS_ACPI_DIR)/acpi_quirks.c $(DRIVER_QUIRKS_ACPI_DIR)/acpi_quirks.h $(DRIVER_QUIRKS_ACPI_DIR)/dmi.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/dmi.o: $(DRIVER_QUIRKS_ACPI_DIR)/dmi.c $(DRIVER_QUIRKS_ACPI_DIR)/dmi.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

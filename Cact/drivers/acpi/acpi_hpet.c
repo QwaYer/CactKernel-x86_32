@@ -48,17 +48,17 @@ int hpet_init(void)
 
     status = AcpiGetTable("HPET", 1, (ACPI_TABLE_HEADER **)&hpet_table);
     if (ACPI_FAILURE(status) || !hpet_table) {
-        pr_warn("HPET: table not found");
+        pr_warn("  %-11s : table not found\n", "hpet");
         return -1;
     }
     if (hpet_table->Address.SpaceId != ACPI_ADR_SPACE_SYSTEM_MEMORY) {
-        pr_warn("HPET: unsupported address space");
+        pr_warn("  %-11s : unsupported address space\n", "hpet");
         return -1;
     }
 
     uint64_t hpet_phys64 = hpet_table->Address.Address;
     if (hpet_phys64 > 0xFFFFFFFFull) {
-        pr_warn("HPET: address above 4GB not supported");
+        pr_warn("  %-11s : address above 4 GB not supported\n", "hpet");
         return -1;
     }
     uint32_t hpet_phys = (uint32_t)hpet_phys64;
@@ -67,7 +67,7 @@ int hpet_init(void)
     uint64_t cap_id = hpet_read64(HPET_REG_GCAP_ID);
     hpet_fs_per_tick = cap_id >> 32;
     if (hpet_fs_per_tick == 0) {
-        pr_warn("HPET: invalid counter clock period");
+        pr_warn("  %-11s : invalid counter clock period\n", "hpet");
         return -1;
     }
 
@@ -79,14 +79,9 @@ int hpet_init(void)
 
     hpet_available = 1;
 
-    {
-        char buf[96]; char num[32];
-        strcpy(buf, "HPET: base 0x"); snprintf(num, sizeof(num), "0x%x", (unsigned)(hpet_phys)); strcat(buf, num);
-        strcat(buf, ", "); snprintf(num, sizeof(num), "%d", (int)((int)(hpet_freq / 1000000))); strcat(buf, num);
-        strcat(buf, " MHz, "); snprintf(num, sizeof(num), "%d", (int)((int)num_timers)); strcat(buf, num);
-        strcat(buf, " timers");
-        pr_info("%s", buf);
-    }
+    pr_info("  %-11s : base 0x%x, %u MHz, %u timers\n",
+            "hpet", (unsigned)hpet_phys,
+            (unsigned)(hpet_freq / 1000000ull), (unsigned)num_timers);
     return 0;
 }
 

@@ -57,7 +57,7 @@ uint32_t lapic_timer_calibrate(void)
     lapic[LAPIC_TIMER_INITCNT / 4] = 0;             /* stop */
 
     if (guard == 0) {
-        pr_warn("LAPIC timer: PIT calibration timed out");
+        pr_warn("  %-11s : PIT calibration timed out\n", "timer");
         return 0;
     }
 
@@ -66,7 +66,7 @@ uint32_t lapic_timer_calibrate(void)
     uint32_t per_ms    = (uint32_t)((elapsed * 1000ull) / period_us);
 
     if (per_ms == 0) {
-        pr_warn("LAPIC timer: calibration failed");
+        pr_warn("  %-11s : calibration failed\n", "timer");
         return 0;
     }
 
@@ -126,15 +126,15 @@ bool lapic_timer_force_hpet_off(void)
 int lapic_timer_select_source(void)
 {
     if (lapic_timer_force_hpet_off()) {
-        pr_warn("HPET: disabled by board quirk — LAPIC timer will be used");
+        pr_warn("  %-11s : HPET disabled by board quirk — LAPIC timer used\n", "timer");
         return 0;
     }
 
     if (hpet_init() != 0) {
-        pr_warn("HPET init failed — LAPIC timer fallback will be used");
+        pr_warn("  %-11s : HPET init failed — LAPIC timer fallback used\n", "timer");
         return 0;
     }
 
-    pr_info("HPET ready");
+    pr_info("  %-11s : HPET selected as system clock\n", "timer");
     return 0;
 }

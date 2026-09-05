@@ -33,7 +33,7 @@ void msix_init(void)
         msix_vector_alloc[syscall_idx] = 1;
 
     msix_initialized = 1;
-    pr_info("MSI-X: vector pool 0x30-0xEF ready");
+    pr_info("  %-11s : vector pool ready\n", "msi-x");
 }
 
 int msix_alloc_vector(void)
@@ -45,7 +45,7 @@ int msix_alloc_vector(void)
             return MSIX_VECTOR_BASE + i;
         }
     }
-    pr_warn("MSI-X: no free vectors");
+    pr_warn("  %-11s : no free vectors\n", "msi-x");
     return -1;
 }
 
@@ -99,7 +99,7 @@ int pci_msix_support(pci_device_t *dev)
     while (cap_ptr >= 0x40 && cap_ptr != 0xFF && iter++ < 48) {
         uint8_t cap_id = pcidev_cfg_read8(dev, cap_ptr);
         if (cap_id == PCI_CAP_ID_MSIX) {
-            pr_info("MSI-X: capability at 0x%x (pcie=%d)", (int)cap_ptr, (int)pcie_is_available());
+            /* Reported once by pci_msix_enable() — do not spam per query. */
             return (int)cap_ptr;
         }
         cap_ptr = pcidev_cfg_read8(dev, (uint16_t)(cap_ptr + 1));   /* NextPtr */
@@ -118,13 +118,14 @@ int pci_msix_support(pci_device_t *dev)
         uint8_t next = pcidev_cfg_read8(dev, (uint16_t)(off + 1));
         uint16_t msg_ctrl = pcidev_cfg_read16(dev, (uint16_t)(off + 2));
         if ((next == 0x00 || next >= 0x40) && (msg_ctrl & 0x7FF) < 2048) {
-            pr_info("MSI-X: capability found by scan at 0x%x (pcie=%d)", (int)off, (int)pcie_is_available());
+            pr_info("  %-11s : capability found by scan at 0x%x\n",
+                    "msi-x", (unsigned)off);
             return (int)off;
         }
     }
 
-    pr_warn("MSI-X: capability NOT found (pcie=%d, cap_ptr=0x%x, vid=0x%x did=0x%x)",
-            (int)pcie_is_available(), (int)cap_ptr,
+    pr_warn("  %-11s : capability not found (pcie=%d, cap_ptr=0x%x, id=%04x:%04x)\n",
+            "msi-x", (int)pcie_is_available(), (unsigned)cap_ptr,
             (unsigned)dev->vendor_id, (unsigned)dev->device_id);
     return 0;
 }
@@ -159,13 +160,13 @@ int pci_msix_table_map(pci_device_t *dev,
     uint64_t table_end = table_addr + table_size_bytes;
 
     if (table_end <= table_addr) return -1;
-    if (table_end > bar->base + bar->size) { pr_warn("MSI-X: table beyond BAR"); return -1; }
+    if (table_end > bar->base + bar->size) { pr_warn("  %-11s : table beyond BAR\n", "msi-x"); return -1; }
 
     /* 32-bit non-PAE kernel: an identity map can only reach below 4 GiB. */
     uint64_t page_base = table_addr & ~0xFFFULL;
     uint64_t page_end  = (table_end + 0xFFF) & ~0xFFFULL;
     if (page_end > 0x100000000ULL) {
-        pr_warn("MSI-X: table above 4 GiB not mappable");
+        pr_warn("  %-11s : table above 4 GiB not mappable\n", "msi-x");
         return -1;
     }
 
@@ -250,8 +251,9 @@ int pci_msix_enable(pci_device_t *dev, int vector,
     table[entry_idx].vector_ctrl = 0;
     __asm__ volatile("sfence" ::: "memory");
 
-    pr_info("MSI-X: enabled vector 0x%x entry %u (table 0x%x)",
-            (unsigned)vector, (unsigned)entry_idx,
+    pr_info("  %-11s : vec 0x%x enabled, entry %u (%02x:%02x.%u, table 0x%x)\n",
+            "msi-x", (unsigned)vector, (unsigned)entry_idx,
+            (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn,
             (unsigned)((uint32_t)(uintptr_t)table));
     return 0;
 }

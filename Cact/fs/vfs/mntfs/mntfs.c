@@ -194,20 +194,18 @@ void mntfs_init(void) {
 
     blkdev_t *boot = blkdev_get_boot();
     if (!boot) {
-        printk("[mntfs] WARNING: no boot block device (load ahci/nvme kmod for disk)\n");
-        pr_warn("mntfs: no boot disk — nodisk mode");
+        pr_warn("  %-11s : no boot block device — nodisk root "
+                "(load ahci/nvme kmod for disk)\n", "mntfs");
         mntfs_setup_nodisk();
-        pr_info("mntfs: virtual root ready (no boot disk)");
         return;
     }
 
     strlcpy(boot_devname, boot->name, 32);
     vfs_node_t *ext4 = fs_mod_mount(0);
     if (!ext4) {
-        printk("[mntfs] WARNING: no ext4 on "); printk(boot_devname); printk("\n");
-        pr_warn("mntfs: ext4 mount failed — nodisk mode");
+        pr_warn("  %-11s : ext4 mount failed on %s — nodisk root\n",
+                "mntfs", boot_devname);
         mntfs_setup_nodisk();
-        pr_info("mntfs: virtual root ready (ext4 unavailable)");
         return;
     }
     mntfs_mount_disk(boot_devname, ext4, 0);
@@ -318,5 +316,5 @@ void mntfs_init(void) {
     vfs_mount(vfs_root, "etc",  etcfs_get_root());
     vfs_mount(vfs_root, "var",  varfs_get_root());
     vfs_mount(vfs_root, "sbin", sbinfs_get_root());
-    pr_info("mntfs: root filesystem and /bin /dev /proc mounts ready");
+    pr_info("  %-11s : root mounted with /bin /dev /etc /proc /var\n", "mntfs");
 }

@@ -107,9 +107,16 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     extern void stack_guard_init(void);
     stack_guard_init();
 
+    uint32_t mem_total_kb = 0;
+    if (mbi->flags & (1u << 6)) {
+        mem_total_kb = (uint32_t)(mbi->mem_total_bytes / 1024ull);
+    } else {
+        mem_total_kb = mbi->mem_lower + 1024 + mbi->mem_upper;
+    }
+
     // Memory management (order matters!)
     init_gdt();                     // Global Descriptor Table
-    pr_info("GDT initialized");
+    pr_info("  %-11s : loaded\n", "gdt");
 
     // CPU feature detection — before IDT / APIC / PAT so the rest of
     // the kernel can query cpu_vendor(), cpu_has_sep(), etc.
@@ -121,33 +128,35 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // fxsave/fxrstor path needs it too. Must be done before anything uses
     // 64-bit locals/returns in C.
     if (fpu_global_init() == 0)
-        pr_info("FPU + SSE initialized");
+        pr_info("  %-11s : x87 FPU + SSE enabled\n", "fpu/sse");
     else
-        pr_warn("FPU/SSE unavailable — no SSE operations");
+        pr_warn("  %-11s : x87 only — no SSE operations\n", "fpu/sse");
 
     pmm_init_from_mmap(mmap);       // Physical Memory Manager
-    pr_info("Physical memory manager ready");
+    pr_info("  %-11s : %u MiB usable RAM, frame allocator ready\n",
+            "pmm", mem_total_kb / 1024u);
     init_memory_manager();          // Virtual memory manager
-    pr_info("Virtual memory manager ready");
+    pr_info("  %-11s : virtual address-space manager ready\n", "vmm");
     init_heap();                    // Kernel heap (kmalloc)
-    pr_info("Kernel heap ready");
+    pr_info("  %-11s : kmalloc arena ready (%u KiB free)\n",
+            "heap", get_free_heap_memory() / 1024u);
     init_paging();                  // Enable paging, load page directory
-    pr_info("Paging enabled");
+    pr_info("  %-11s : enabled\n", "paging");
     slab_init();                    // Slab allocator for kernel objects
-    pr_info("Slab allocator ready");
+    pr_info("  %-11s : kernel object caches ready\n", "slab");
     page_fault_init();              // Page fault handler
-    pr_info("Page fault handler installed");
+    pr_info("  %-11s : #PF handler installed\n", "pagefault");
 
     // Interrupts
     init_idt();                     // Interrupt Descriptor Table
-    pr_info("IDT loaded");
+    pr_info("  %-11s : 256-vector table loaded\n", "idt");
 
     // Program fast-syscall MSRs now that GDT and IDT are ready.
     // IA32_SYSENTER_ESP is updated per-task by the scheduler on every switch.
     cpu_syscall_commit();
 
     serial_init();                  // COM1 — printk/klog also go here (QEMU: -serial stdio)
-    pr_info("Serial console (COM1) ready");
+    pr_info("  %-11s : COM1 @ 115200 8N1\n", "serial");
 
     // Display
     init_framebuffer();
@@ -159,15 +168,19 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // setting the PAT bit and clearing PCD|PWT — no MTRR ranges needed.
     pat_init();
     if (fb_get_width() != 0) {
-        pat_enable_wc_for_framebuffer((uint32_t)(uintptr_t)fb_get_buffer(),
-                                       fb_get_pitch(),
-                                       fb_get_height());
+        int fbwc = pat_enable_wc_for_framebuffer(
+            (uint32_t)(uintptr_t)fb_get_buffer(),
+            fb_get_pitch(),
+            fb_get_height());
         // Back-buffer in WB RAM: kills the FB->FB read penalty in scroll() and
         // coalesces all per-character writes into one rectangular blit per
         // printk(). Must run AFTER PAT enables WC (the seeding memcpy reads
         // the FB once; under UC this would stall, under WC it's bearable).
         fb_enable_shadow();
-        pr_info("Framebuffer WC + shadow buffer configured");
+        pr_info("  %-11s : %ux%u @ 32bpp, %s(PAT) + WB shadow ready\n",
+                "framebuffer",
+                fb_get_width(), fb_get_height(),
+                (fbwc == 0) ? "WC" : "UC");
     }
 
     // Terminal window size from framebuffer geometry
@@ -186,27 +199,24 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     {
         int mem_status = detect_memory();
         if (mem_status)
-            pr_warn("CMOS returned 0 KB — memory size unreliable");
+            pr_warn("  %-11s : CMOS reported 0 KB — size unreliable\n", "memory");
     }
 
     // ACPI subsystem (before PCI — HPET/APIC need ACPI tables)
     if (acpi_init())
-        pr_warn("ACPI init returned error — hardware limited");
-    else
-        pr_info("ACPI subsystem ready");
+        pr_warn("  %-11s : init failed — hardware limited\n", "acpi");
 
-    if (acpi_pm_timer_init() == 0)
-        pr_info("ACPI PM timer: timekeeping ready");
-    else
-        pr_warn("ACPI PM timer unavailable — timekeeping degraded");
+    /* Success (port/width detail) is reported inside acpi_pm_timer_init. */
+    if (acpi_pm_timer_init() != 0)
+        pr_warn("  %-11s : unavailable — timekeeping degraded\n", "pm-timer");
 
     if (lapic_timer_select_source() != 0)
-        pr_crit("no usable system timer source");
+        pr_crit("  %-11s : no usable system timer source\n", "timer");
 
     if (apic_init() == 0)
-        pr_info("APIC operational");
+        pr_info("  %-11s : LAPIC + IOAPIC operational\n", "apic");
     else
-        pr_warn("APIC init failed — interrupts will not work");
+        pr_warn("  %-11s : init failed — interrupts will not work\n", "apic");
 
     msix_init();
 
@@ -218,7 +228,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     pcidev_init();
     {
         if (pci_device_count <= 0)
-            pr_warn("no PCI devices — storage/net/USB unavailable");
+            pr_warn("  %-11s : no devices found\n", "pci");
     }
 
     // USB xHCI stack
@@ -232,9 +242,9 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
         if (swap_status)
-            pr_warn("swap init failed — OOM killer is last resort");
+            pr_warn("  %-11s : init failed — OOM killer is last resort\n", "swap");
         else
-            pr_info("Swap subsystem ready");
+            pr_info("  %-11s : disk-backed VM ready\n", "swap");
     }
 
     // Virtual filesystem (mntfs_init is deferred — needs the scheduler).
@@ -246,7 +256,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Multitasking
     task_init();
     init_scheduler();
-    pr_info("Hardware setup complete — enabling interrupts / scheduler next");
+    pr_info("  %-11s : hardware setup complete — scheduler live\n", "boot");
 }
 
 // Kernel entry point (called from boot.S)
@@ -322,7 +332,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
                 break;   /* timer alive — normal boot */
 
             if (wd_attempts++ < 1) {
-                printk_color("[WARN] no timer tick for 2s — arming LAPIC timer\n",
+                printk_color("  timer       : WARNING — no tick for 2 s, arming LAPIC timer\n",
                              COLOR_LIGHT_RED);
                 uint32_t per_ms = lapic_timer_calibrate();
                 if (per_ms)
@@ -330,8 +340,8 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
                 continue;
             }
 
-            printk_color("[FATAL] no timer tick for 2s — system timer dead "
-                         "(HPET/LAPIC), scheduler cannot start\n",
+            printk_color("  timer       : FATAL — no tick for 2 s (HPET/LAPIC dead), "
+                         "scheduler cannot start\n",
                          COLOR_LIGHT_RED);
             while (1) __asm__ __volatile__("hlt");
         }

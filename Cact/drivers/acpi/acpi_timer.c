@@ -33,7 +33,7 @@ int acpi_pm_timer_init(void)
     ACPI_TABLE_FADT *fadt = &AcpiGbl_FADT;
 
     if (fadt->PmTimerBlock == 0 && fadt->XPmTimerBlock.Address == 0) {
-        pr_warn("ACPI PM timer: no PM timer block in FADT");
+        pr_warn("  %-11s : no PM timer block in FADT\n", "pm-timer");
         return -1;
     }
 
@@ -44,12 +44,12 @@ int acpi_pm_timer_init(void)
     } else if (fadt->PmTimerBlock != 0) {
         pm_timer_port = (uint16_t)fadt->PmTimerBlock;
     } else {
-        pr_warn("ACPI PM timer: unsupported address space");
+        pr_warn("  %-11s : unsupported address space\n", "pm-timer");
         return -1;
     }
 
     if (pm_timer_port == 0) {
-        pr_warn("ACPI PM timer: invalid port 0");
+        pr_warn("  %-11s : invalid port 0\n", "pm-timer");
         return -1;
     }
 
@@ -64,12 +64,10 @@ int acpi_pm_timer_init(void)
     irq_spinlock_init(&pm_timer_lock);
     pm_timer_available = 1;
 
-    char buf[64];
-    char hex[16];
-    strcpy(buf, "ACPI PM timer: port 0x");
-    snprintf(hex, sizeof(hex), "0x%x", (unsigned)(pm_timer_port));
-    strcat(buf, hex);
-    strcat(buf, pm_timer_32bit ? " (32-bit)" : " (24-bit)");
+    char buf[96];
+    snprintf(buf, sizeof(buf), "  %-11s : timekeeping ready (port 0x%x, %s)\n",
+             "pm-timer", (unsigned)pm_timer_port,
+             pm_timer_32bit ? "32-bit" : "24-bit");
     pr_info("%s", buf);
 
     return 0;

@@ -33,15 +33,15 @@ static int xhci_pci_probe(pci_device_t *pdev) {
             /* 64-bit BAR decoded above 4 GiB cannot be reached by the
              * 32-bit identity MMIO map — refuse instead of truncating. */
             if (bar->base >= 0x100000000ULL) {
-                pr_warn("xHCI: BAR%d above 4 GiB (0x%llx) not supported",
-                        i, (unsigned long long)bar->base);
+                pr_warn("  %-11s : BAR%d above 4 GiB (0x%llx) not supported\n",
+                        "xhci", i, (unsigned long long)bar->base);
                 return -1;
             }
             mmio = (uint32_t)bar->base;
             break;
         }
     }
-    if (!mmio) { pr_warn("xHCI MMIO BAR missing"); return -1; }
+    if (!mmio) { pr_warn("  %-11s : MMIO BAR missing\n", "xhci"); return -1; }
 
     /* Memory space + bus mastering on.  Legacy INTx is disabled for good:
      * this driver delivers interrupts through MSI-X and nothing else. */
@@ -51,27 +51,26 @@ static int xhci_pci_probe(pci_device_t *pdev) {
 
     uint32_t quirks = xhci_quirks_for(pdev);
     if (quirks & XHCI_QUIRK_SPURIOUS_REBOOT)
-        pr_info("xHCI: spurious-reboot quirk active (Intel 300-series)");
+        pr_info("  %-11s : spurious-reboot quirk active\n", "xhci");
 
     volatile struct msix_table_entry *table = NULL;
     uint32_t table_size = 0;
     int cap_off = pci_msix_support(pdev);
     if (!cap_off || pci_msix_table_map(pdev, &table, &table_size) != 0 || !table_size) {
-        pr_err("xHCI: MSI-X unavailable (cap_off=%d) — controller not supported",
-               (int)cap_off);
+        pr_err("  %-11s : MSI-X unavailable (cap_off=%d) — controller not supported\n",
+               "xhci", (int)cap_off);
         return -1;
     }
 
     int vec = msix_alloc_vector();
     if (vec <= 0) {
-        pr_err("xHCI: no free MSI-X vector");
+        pr_err("  %-11s : no free MSI-X vector\n", "xhci");
         return -1;
     }
 
     msix_register_handler(vec, xhci_irq_handler);
     pci_msix_enable(pdev, vec, table, 0);
-    pr_info("xHCI: MSI-X vector 0x%x (table 0x%x)",
-            (unsigned)vec, (unsigned)((uint32_t)(uintptr_t)table));
+    /* MSI-X enable/vector line is reported once by pci_msix_enable(). */
 
     if (xhci_init_one(mmio, quirks) < 0) {
         msix_unregister_handler(vec);
