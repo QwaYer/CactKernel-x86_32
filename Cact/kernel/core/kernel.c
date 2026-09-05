@@ -13,6 +13,7 @@
 #include "klib.h"
 #include "task.h"
 #include "fb.h"
+#include "font.h"
 #include "swap.h"
 #include "pagecache.h"
 #include "blkdev.h"
@@ -44,6 +45,38 @@ int detect_memory() {
     outb(0x70, 0x18);
     unsigned char high = inb(0x71);
     return ((high << 8) | low) > 0 ? 0 : 1;
+}
+
+/* The framebuffer console has no built-in font: the PSF2 file must be staged
+ * inside the cctkfs archive.  When it is absent or unusable the kernel cannot
+ * draw a single glyph, so there is nothing left to do but panic. */
+static void boot_font_panic(int rc) __attribute__((noreturn));
+static void boot_font_panic(int rc) {
+    const char *reason;
+    switch (rc) {
+    case FONT_ERR_NOT_FOUND:    reason = "console font not found in cctkfs";  break;
+    case FONT_ERR_BAD_SIZE:     reason = "console font blob too small";        break;
+    case FONT_ERR_NOT_PSF2:     reason = "console font is not a PSF2 file";    break;
+    case FONT_ERR_BAD_VERSION:  reason = "console font: unsupported PSF2 version"; break;
+    case FONT_ERR_BAD_HEADER:   reason = "console font: malformed PSF2 header"; break;
+    case FONT_ERR_GLYPHS:       reason = "console font: glyph data truncated";  break;
+    case FONT_ERR_UNICODE:      reason = "console font: bad unicode table";     break;
+    default:                    reason = "console font load failed";            break;
+    }
+
+    serial_init();
+    serial_putc('\n');
+    for (const char *s = "*** KERNEL PANIC: "; *s; s++) serial_putc(*s);
+    for (const char *s = reason; *s; s++) serial_putc(*s);
+    serial_putc('\n');
+
+    uint32_t pw = fb_get_width();
+    uint32_t ph = fb_get_height();
+    if (pw != 0 && ph != 0)
+        fb_fill_rect(0, 0, pw, ph, COLOR_RED);
+
+    for (;;)
+        __asm__ __volatile__("hlt");
 }
 
 // Swap I/O callbacks — read from block device (LBA addressing)
@@ -141,8 +174,10 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     {
         uint32_t fb_w = fb_get_width();
         uint32_t fb_h = fb_get_height();
-        terminal_winsize.ws_col    = (uint16_t)(fb_w / FB_CONSOLE_CHAR_WIDTH);
-        terminal_winsize.ws_row    = (uint16_t)(fb_h / FB_CONSOLE_CHAR_HEIGHT);
+        uint32_t cellw = fb_char_cell_w();
+        uint32_t cellh = fb_char_cell_h();
+        terminal_winsize.ws_col    = (uint16_t)(fb_w / cellw);
+        terminal_winsize.ws_row    = (uint16_t)(fb_h / cellh);
         terminal_winsize.ws_xpixel = (uint16_t)fb_w;
         terminal_winsize.ws_ypixel = (uint16_t)fb_h;
     }
@@ -238,6 +273,14 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     // No display → completely blind, just halt
     if (fb_get_width() == 0) {
         while(1) __asm__ __volatile__("hlt");
+    }
+
+    // The framebuffer console has no embedded font: parse the PSF2 file
+    // staged in the cctkfs image before any glyph is drawn.
+    {
+        int frc = font_load_boot(CONSOLE_FONT_CCTKFS_PATH);
+        if (frc != FONT_OK)
+            boot_font_panic(frc);
     }
 
     clear_screen();

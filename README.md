@@ -146,7 +146,7 @@ CactKernel-x86_32/
 │   │   ├── pci/         enumerator, PCIe, ELF module loader,
 │   │   │                HMAC-SHA256 module signature verification
 │   │   ├── usb/         xhci + HID + hub
-│   │   └── video/       framebuffer console, font, PAT WC + shadow blit
+│   │   └── video/       framebuffer console, PSF2 font parser, PAT WC + shadow blit
 │   ├── crypto/          Rustls — in-kernel TLS 1.3, HMAC-SHA256 signer, cact_shim
 │   ├── fs/
 │   │   ├── vfs/         core VFS, struct file, devfs, procfs, mntfs, etcfs, tmpfs,
@@ -295,7 +295,7 @@ The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as
 | **Block** | AHCI, NVMe, blkdev, page cache | In-tree drivers; additional storage stacks can ship as **`.cctk`** in **`cctkfs.img`** |
 | **USB** | xHCI, HID, hub | ~32 KiB host code path — PS/2 removed in 2.0 |
 | **Input** | USB HID keyboard & mouse | |
-| **Video** | Linear FB 32 bpp, 8×8 font (×2 scale), PAT WC + shadow | |
+| **Video** | Linear FB 32 bpp, PSF2 console font from cctkfs (`/lib/consolefont.psf`, ×2 scale), PAT WC + shadow | |
 | **PCI** | Config scan, driver table, **modblob** loader, HMAC-SHA256 signature verification | Loads ET_REL modules from **cctkfs** or path (user-driven via kmod syscalls) |
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
 | **ACPI** | ACPICA — RSDP, MADT, HPET, APIC table parsing | New in 2.0 |
