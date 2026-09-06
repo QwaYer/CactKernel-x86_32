@@ -224,6 +224,14 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // kmods can register_blkdev(); otherwise mntfs sees no boot disk.
     blkdev_init();
 
+    // Partition layer: scans MBR/GPT whenever a disk is registered, so disks
+    // probed by storage kmods during the boot sweep and late-loaded kmods are
+    // both partitioned. Scanning reads sector 0/1 through the driver, so it
+    // must happen from a task context — register_blkdev() is only ever called
+    // from storage-driver probes running in the bootstrap/user task.
+    extern void part_probe_init(void);
+    part_probe_init();
+
     // PCI Express ECAM init (needs ACPI tables, before PCI enumeration)
     pcidev_init();
     {

@@ -111,10 +111,15 @@ static void _writeback(struct page *p) {
         p->flags &= (uint8_t)~PC_FLAG_DIRTY;
         return;
     }
+    blkdev_t *bd = blkdev_by_id(p->dev);
+    if (!bd) {
+        p->flags &= (uint8_t)~PC_FLAG_DIRTY;
+        return;
+    }
     uint32_t spb = p->block_size / 512;        // sectors per block
     uint32_t lba = p->block_no * spb;
     for (uint32_t i = 0; i < spb; i++)
-        blkdev_write_sector(lba + i, p->data + i * 512);
+        blkdev_write(bd, lba + i, p->data + i * 512);
     p->flags &= (uint8_t)~PC_FLAG_DIRTY;
     stat_writebacks++;
 }
@@ -198,8 +203,11 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
 
     uint32_t spb = block_size / 512;
 
-    // Check LBA overflow and device bounds
-    blkdev_t *bd = blkdev_get_boot();
+    // Check LBA overflow and device bounds against the real target device
+    // (which may be a partition; its own max_lba is partition-relative).
+    blkdev_t *bd = blkdev_by_id(dev);
+    if (!bd)
+        bd = blkdev_get_boot();
     if (bd) {
         if (block_no > (UINT32_MAX / spb)) {
             printk("[pc] pc_get_page: LBA computation overflow\n");
@@ -242,7 +250,7 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     uint32_t lba = block_no * spb;
     memory_set(p->data, 0, block_size);
     for (uint32_t i = 0; i < spb; i++)
-        blkdev_read_sector(lba + i, p->data + i * 512);
+        blkdev_read(bd ? bd : blkdev_get_boot(), lba + i, p->data + i * 512);
 
     irq_spinlock_acquire(&pc_lock);
     // Double-check: another thread may have inserted this block while we did I/O

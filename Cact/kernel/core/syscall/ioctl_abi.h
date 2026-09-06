@@ -310,6 +310,7 @@ typedef struct cact_netcfg_get {
 #define CACT_SYSCTL_REBOOT       0x3503  // arg=uint32_t* cmd
 #define CACT_SYSCTL_MODULE_LOAD  0x3504  // arg=cact_module_arg_t*
 #define CACT_SYSCTL_MODULE_UNLOAD 0x3505 // arg=char* name
+#define CACT_SYSCTL_BLKDEV_RESCAN 0x3506 // arg=char* disk name; returns #partitions
 
 typedef struct cact_mount_arg { char *src; char *target; char *fstype; } cact_mount_arg_t;
 typedef struct cact_module_arg { char *path; uint32_t vendor_id; uint32_t device_id; } cact_module_arg_t;

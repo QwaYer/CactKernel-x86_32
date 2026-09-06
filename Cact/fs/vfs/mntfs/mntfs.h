@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "vfs.h"
+#include "blkdev.h"
 
 #define MNTFS_NAME_LEN  128
 
@@ -54,5 +55,11 @@ void        mntfs_list     (void);
 // Path resolution helpers
 vfs_node_t *mntfs_resolve_path  (const char *path);
 int         mntfs_resolve_device(const char *devname, uint32_t *dev_out);
+
+// Mount a filesystem root already produced by fs_mod onto a block device
+// (whole disk or partition) and expose it as /<devname>.
+int mntfs_mount_blkdev  (blkdev_t *bd, vfs_node_t *root, int persistent);
+int mntfs_unmount_blkdev(blkdev_t *bd);
+int mntfs_device_mounted(const char *devname);
 
 #endif

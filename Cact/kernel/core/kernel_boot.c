@@ -19,6 +19,10 @@ static void kernel_bootstrap_main(void) {
 
     pcidev_probe_all();
 
+    // Partition labels are scanned automatically by the blkdev layer every
+    // time a whole disk is registered (see part_probe_init + blkdev probe
+    // hook), so nothing extra is needed here.
+
     // Module loading (PCI kmods, filesystem driver) is a userspace concern —
     // nothing is auto-loaded here. Without a filesystem module mntfs falls
     // back to a virtual nodisk root and the kernel still boots to /bin/init.
