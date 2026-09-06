@@ -59,12 +59,16 @@
 #ifndef EOPNOTSUPP
 #define EOPNOTSUPP 95
 #endif
+#ifndef EBADF
+#define EBADF 9
+#endif
 
 #define UNIX_MAGIC      0x554E4958u   /* 'UNIX' */
 #define UNIX_PATH_MAX   108
 #define UNIX_BUF_SIZE   4096
 #define UNIX_BACKLOG    4
 #define UNIX_BOUND_MAX  32
+#define UNIX_FD_QUEUE_MAX 16   /* pending SCM_RIGHTS fds on a connection */
 
 typedef enum {
     UEP_NONE = 0,
@@ -90,6 +94,11 @@ typedef struct unix_ep {
     uint8_t  rx[UNIX_BUF_SIZE];
     uint32_t rx_len;
     uint32_t rx_off;
+
+    /* pending SCM_RIGHTS descriptors received from the peer (FIFO).
+       Each entry holds one extra file_t reference owned by this queue. */
+    file_t  *fdq[UNIX_FD_QUEUE_MAX];
+    uint32_t fdq_len;
 
     /* listening endpoint state */
     char     bound[UNIX_PATH_MAX];
@@ -218,6 +227,13 @@ static void ep_destroy(unix_ep_t *ep) {
         ep_put(pend);
         pend = next;
     }
+
+    /* drop any SCM_RIGHTS descriptors that were never recvmsg()ed */
+    for (uint32_t i = 0; i < ep->fdq_len; i++) {
+        if (ep->fdq[i]) file_unref(ep->fdq[i]);
+        ep->fdq[i] = NULL;
+    }
+    ep->fdq_len = 0;
 
     ep->magic = 0;
     kfree(ep);
@@ -386,6 +402,72 @@ static uint32_t ep_pop(unix_ep_t *ep, char *dst, uint32_t max) {
     ep->rx_len -= n;
     if (ep->rx_len == 0) ep->rx_off = 0;
     return n;
+}
+
+/* ── SCM_RIGHTS fd FIFO ───────────────────────────────────────────────── */
+
+static int ep_fdq_push(unix_ep_t *ep, file_t **files, uint32_t n) {
+    int r = 0;
+    mutex_lock(&ep->lock);
+    if (ep->fdq_len + n > UNIX_FD_QUEUE_MAX) {
+        r = -EAGAIN;
+    } else {
+        for (uint32_t i = 0; i < n; i++) {
+            ep->fdq[ep->fdq_len + i] = files[i];
+            files[i] = NULL;          /* ownership moves into the queue */
+        }
+        ep->fdq_len += n;
+    }
+    mutex_unlock(&ep->lock);
+    return r;
+}
+
+static uint32_t ep_fdq_pop(unix_ep_t *ep, file_t **out, uint32_t n) {
+    uint32_t k = 0;
+    mutex_lock(&ep->lock);
+    uint32_t m = (ep->fdq_len < n) ? ep->fdq_len : n;
+    for (uint32_t i = 0; i < m; i++) out[i] = ep->fdq[i];
+    for (uint32_t i = m; i < ep->fdq_len; i++) ep->fdq[i - m] = ep->fdq[i];
+    ep->fdq_len -= m;
+    k = m;
+    mutex_unlock(&ep->lock);
+    return k;
+}
+
+/* blocking write of `size` user bytes into the peer's rx buffer */
+static int ep_write_payload(unix_ep_t *ep, const char *ubuf, uint32_t size) {
+    if (size == 0) return 0;
+    if (!validate_user_ptr(ubuf, size)) return -EFAULT;
+
+    uint32_t written = 0;
+    while (written < size) {
+        unix_ep_t *peer = ep->peer;      /* stable while this endpoint is open */
+        if (!peer) return written ? (int)written : -EPIPE;
+
+        mutex_lock(&peer->lock);
+        if (!peer->used || peer->peer_no_read || peer->shut_rd) {
+            mutex_unlock(&peer->lock);
+            return written ? (int)written : -EPIPE;
+        }
+        uint32_t space = UNIX_BUF_SIZE - peer->rx_len;
+        if (space == 0) {
+            mutex_unlock(&peer->lock);
+            if (!validate_user_ptr(ubuf + written, 1))
+                return written ? (int)written : -1;
+            schedule();
+            continue;
+        }
+        uint32_t chunk = size - written;
+        if (chunk > space) chunk = space;
+        ep_push(peer, ubuf + written, chunk);
+        written += chunk;
+        mutex_unlock(&peer->lock);
+        if (written == size) break;
+        if (!validate_user_ptr(ubuf + written, 1))
+            return written ? (int)written : -1;
+        schedule();
+    }
+    return (int)written;
 }
 
 /* ── VFS ops ──────────────────────────────────────────────────────────── */
@@ -763,6 +845,146 @@ static int unix_shutdown_ioctl(unix_ep_t *ep, void *arg) {
     return 0;
 }
 
+static int unix_sendmsg_ioctl(unix_ep_t *ep, void *arg) {
+    if (!current_task) return -1;
+    if (!arg) return -EINVAL;
+    if (ep->kind != UEP_CONN) return -EINVAL;
+
+    cact_sendmsg_arg_t a;
+    if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+    if (a.nfds > UNIX_FD_QUEUE_MAX) return -EINVAL;
+    if (a.len && !validate_user_ptr(a.buf, a.len)) return -EFAULT;
+
+    /* resolve and hold the descriptors being passed */
+    file_t *hold[UNIX_FD_QUEUE_MAX];
+    uint32_t nhold = 0;
+    if (a.nfds) {
+        if (!validate_user_ptr(a.fds, sizeof(int32_t) * a.nfds)) return -EFAULT;
+        int32_t ufds[UNIX_FD_QUEUE_MAX];
+        if (copy_from_user(ufds, a.fds, sizeof(int32_t) * a.nfds) != 0)
+            return -EFAULT;
+        for (uint32_t i = 0; i < a.nfds; i++) {
+            int fd = (int)ufds[i];
+            if (fd < 0 || fd >= MAX_FD ||
+                !current_task->proc->fds->files[fd]) {
+                for (uint32_t j = 0; j < i; j++) file_unref(hold[j]);
+                return -EBADF;
+            }
+            hold[i] = file_ref(current_task->proc->fds->files[fd]);
+        }
+        nhold = a.nfds;
+    }
+
+    unix_ep_t *peer = ep->peer;
+    if (!peer) {
+        for (uint32_t j = 0; j < nhold; j++) file_unref(hold[j]);
+        return -EPIPE;
+    }
+
+    /* queue the fds first so a concurrent recvmsg never sees the payload
+       without its descriptors */
+    int r = 0;
+    if (nhold) {
+        r = ep_fdq_push(peer, hold, nhold);
+        if (r != 0) {
+            for (uint32_t j = 0; j < nhold; j++) {
+                if (hold[j]) file_unref(hold[j]);
+            }
+            return r;
+        }
+    }
+
+    r = ep_write_payload(ep, (const char *)a.buf, a.len);
+    if (r < 0 && nhold) {
+        /* payload failed after fds were queued — leave the fds queued so
+           the peer can still drain them, but report the write error */
+    }
+    return r;
+}
+
+static int unix_recvmsg_ioctl(unix_ep_t *ep, void *arg) {
+    if (!current_task) return -1;
+    if (!arg) return -EINVAL;
+    if (ep->kind != UEP_CONN) return -EINVAL;
+
+    cact_recvmsg_arg_t a;
+    if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+    if (a.cap && !validate_user_ptr(a.buf, a.cap)) return -EFAULT;
+    if (a.fds_cap && !validate_user_ptr(a.fds, sizeof(int32_t) * a.fds_cap))
+        return -EFAULT;
+    if (a.fds_cap > UNIX_FD_QUEUE_MAX) return -EINVAL;
+
+    /* wait until payload, EOF or descriptors are available */
+    for (;;) {
+        mutex_lock(&ep->lock);
+        int ready = (ep->rx_len > 0) || ep->eof || ep->shut_rd ||
+                    (ep->fdq_len > 0 && a.fds_cap > 0);
+        mutex_unlock(&ep->lock);
+        if (ready) break;
+        schedule();
+    }
+
+    /* payload */
+    int got = 0;
+    mutex_lock(&ep->lock);
+    if (!ep->shut_rd && a.cap && a.buf) {
+        uint32_t n = (ep->rx_len < a.cap) ? ep->rx_len : a.cap;
+        if (n) got = (int)n;
+    }
+    if (got > 0) {
+        if (a.buf) {
+            char tmp[UNIX_BUF_SIZE];
+            uint32_t n = ep_pop(ep, tmp, (uint32_t)got);
+            mutex_unlock(&ep->lock);
+            if (copy_to_user(a.buf, tmp, n) != 0) return -EFAULT;
+            got = (int)n;
+        } else {
+            mutex_unlock(&ep->lock);
+        }
+    } else {
+        mutex_unlock(&ep->lock);
+    }
+
+    /* descriptors: install into our fd table */
+    uint32_t delivered = 0;
+    if (a.fds_cap && a.fds) {
+        /* how many free slots do we have? */
+        uint32_t free_slots = 0;
+        for (int i = 3; i < MAX_FD; i++)
+            if (!current_task->proc->fds->files[i]) free_slots++;
+        uint32_t want = a.fds_cap;
+        if (want > ep->fdq_len) want = ep->fdq_len;
+        if (want > free_slots) want = free_slots;
+
+        file_t *popv[UNIX_FD_QUEUE_MAX];
+        uint32_t npop = ep_fdq_pop(ep, popv, want);
+        int32_t out[UNIX_FD_QUEUE_MAX];
+        uint32_t nout = 0;
+        for (uint32_t i = 0; i < npop; i++) {
+            int slot = -1;
+            for (int s = 3; s < MAX_FD; s++) {
+                if (!current_task->proc->fds->files[s]) { slot = s; break; }
+            }
+            if (slot < 0) {
+                file_unref(popv[i]);   /* no room — drop this one */
+                continue;
+            }
+            current_task->proc->fds->files[slot] = popv[i];
+            out[nout++] = (int32_t)slot;
+        }
+        if (nout) {
+            if (copy_to_user(a.fds, out, sizeof(int32_t) * nout) != 0) {
+                /* descriptors are installed in our table; report what fits */
+            }
+        }
+        delivered = nout;
+    }
+
+    a.fds_len = delivered;
+    if (copy_to_user(arg, &a, sizeof(a)) != 0) return -EFAULT;
+    return got;
+}
+
 int unix_sock_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
     unix_ep_t *ep = ep_from_node(node);
     if (!ep) return -ENOTSOCK;
@@ -778,6 +1000,10 @@ int unix_sock_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         return unix_accept_ioctl(ep, arg);
     case CACT_SOCKCTL_SHUTDOWN:
         return unix_shutdown_ioctl(ep, arg);
+    case CACT_SOCKCTL_SENDMSG:
+        return unix_sendmsg_ioctl(ep, arg);
+    case CACT_SOCKCTL_RECVMSG:
+        return unix_recvmsg_ioctl(ep, arg);
     case CACT_SOCKCTL_SETSOCKOPT:
     case CACT_SOCKCTL_GETSOCKOPT:
         return -EOPNOTSUPP;
