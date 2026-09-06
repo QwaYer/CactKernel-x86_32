@@ -193,11 +193,21 @@ typedef struct cact_shmctl_arg { uint32_t shmid; uint32_t cmd; void *buf; } cact
 #define CACT_SOCKCTL_GETSOCKOPT  0x3307  // arg=cact_sockopt_arg_t*
 #define CACT_SOCKCTL_SENDTO      0x3308  // arg=cact_sendto_arg_t*
 #define CACT_SOCKCTL_RECVFROM    0x3309  // arg=cact_recvfrom_arg_t*
+#define CACT_SOCKCTL_UNIX_BIND   0x330A  // AF_UNIX bind:   arg=cact_unix_addr_t*
+#define CACT_SOCKCTL_UNIX_CONNECT 0x330B // AF_UNIX connect:arg=cact_unix_addr_t*
+// AF_UNIX reuses CACT_SOCKCTL_LISTEN / ACCEPT / SHUTDOWN; the data path is
+// plain read()/write(), as for AF_INET sockets.
 
 typedef struct cact_sockaddr_in {
     uint32_t addr;   // IPv4 big-endian
     uint32_t port;   // network order
 } cact_sockaddr_in_t;
+
+// AF_UNIX pathname (sockaddr_un layout: family is implicit — an AF_UNIX fd
+// already knows its family).  Paths are NUL-terminated; up to 107 bytes.
+typedef struct cact_unix_addr {
+    char path[108];
+} cact_unix_addr_t;
 
 typedef struct cact_sockaddr_arg {
     uint32_t fd;                 // for ioctls on /dev/net, the target fd
@@ -239,8 +249,10 @@ typedef struct cact_recvfrom_arg {
 #define CACT_NETCTL_PING         0x3402  // arg=cact_ping_arg_t*
 #define CACT_NETCTL_DNS_RESOLVE  0x3403  // arg=cact_dns_arg_t*
 #define CACT_NETCTL_NETCFG       0x3404  // arg=cact_netcfg_arg_t* (root)
+#define CACT_NETCTL_SOCKETPAIR   0x3405  // arg=cact_socketpair_arg_t*; fds[2] out
 
 typedef struct cact_socket_arg { uint32_t domain; uint32_t type; uint32_t proto; } cact_socket_arg_t;
+typedef struct cact_socketpair_arg { uint32_t type; uint32_t fds[2]; } cact_socketpair_arg_t;
 typedef struct cact_ping_arg { uint32_t dst_ip; uint32_t id; uint32_t seq; } cact_ping_arg_t;
 typedef struct cact_dns_arg { char *name; uint32_t *out_ip; } cact_dns_arg_t;
 typedef struct cact_netcfg_arg {

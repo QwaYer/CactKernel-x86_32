@@ -269,6 +269,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/sc_fd_mux.o \
       $(BUILD_DIR)/sc_mm.o \
       $(BUILD_DIR)/sc_net.o \
+      $(BUILD_DIR)/sc_unix_sock.o \
       $(BUILD_DIR)/sc_kmod.o \
       $(BUILD_DIR)/keyboard.o \
       $(BUILD_DIR)/mouse.o \
@@ -491,6 +492,10 @@ $(BUILD_DIR)/sc_net.o: $(KERN_SC_NET_DIR)/net.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_NET_DIR) -c $< -o $@
 
+$(BUILD_DIR)/sc_unix_sock.o: $(KERN_SC_NET_DIR)/unix_sock.c $(KERN_SC_NET_DIR)/unix_sock.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -I$(KERN_SC_NET_DIR) -c $< -o $@
+
 $(BUILD_DIR)/sc_kmod.o: $(KERN_SC_KMOD_DIR)/kmod.c
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -I$(KERN_SC_KMOD_DIR) -c $< -o $@
@@ -553,9 +558,9 @@ $(BUILD_DIR)/devfs_devices.o: $(FS_DEVFS_DIR)/devfs_devices.c $(FS_DEVFS_DIR)/de
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/devfs_services.o: $(FS_DEVFS_DIR)/devfs_services.c $(FS_DEVFS_DIR)/devfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
+$(BUILD_DIR)/devfs_services.o: $(FS_DEVFS_DIR)/devfs_services.c $(FS_DEVFS_DIR)/devfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h $(KERN_SC_NET_DIR)/unix_sock.h
 	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
+	gcc $(CFLAGS) -I$(KERN_SC_NET_DIR) -c $< -o $@
 
 $(BUILD_DIR)/devfs_crypto.o: $(FS_DEVFS_DIR)/devfs_crypto.c $(FS_DEVFS_DIR)/devfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
 	@mkdir -p $(BUILD_DIR)

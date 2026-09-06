@@ -7,6 +7,7 @@
 #include "task.h"
 #include "pipe.h"
 #include "socket.h"
+#include "unix_sock.h"
 #include "rust_net_ffi.h"
 #include "validate.h"
 #include "helper.h"
@@ -231,9 +232,25 @@ static int _net_ioctl(void *p, uint32_t cmd, void *arg) {
         if (!arg) return -EINVAL;
         if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
         if (!current_task) return -1;
-        vfs_node_t *node = ksock_create((int)a.domain, (int)a.type, (int)a.proto);
+        vfs_node_t *node;
+        if ((int)a.domain == AF_UNIX)
+            node = unix_sock_create((int)a.type, (int)a.proto);
+        else
+            node = ksock_create((int)a.domain, (int)a.type, (int)a.proto);
         if (!node) return -1;
         return alloc_fd(node);
+    }
+
+    case CACT_NETCTL_SOCKETPAIR: {
+        cact_socketpair_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        int fds[2];
+        int r = unix_socketpair((int)a.type, fds);
+        if (r < 0) return r;
+        a.fds[0] = (uint32_t)fds[0];
+        a.fds[1] = (uint32_t)fds[1];
+        return copy_to_user(arg, &a, sizeof(a));
     }
 
     case CACT_NETCTL_PING: {
