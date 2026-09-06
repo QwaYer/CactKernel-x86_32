@@ -3,6 +3,7 @@
 
 use crate::ffi::*;
 use crate::pmm::{kalloc, page_ref_inc};
+use crate::process::memfd::memfd_map_inc;
 use crate::safe::flush_tlb_all;
 use crate::vmm::mmap::{do_munmap, ensure_pde_private, EnsurePteTable};
 
@@ -36,6 +37,10 @@ pub extern "C" fn mmap_table_clone(
 
         if sr.flags & MAP_SHARED as u32 != 0 {
             unsafe {
+                // A memfd-backed region stays alive for the child as well.
+                if sr.shobj > 0 {
+                    memfd_map_inc(sr.shobj);
+                }
                 for p in 0..pages {
                     let va = sr.base + p * PAGE_SIZE;
                     let pdi = pd_index(va) as usize;

@@ -30,6 +30,7 @@ typedef struct mmap_region {
     int       fd;
     uint32_t  file_off;
     uint8_t   is_used;
+    int       shobj;   /* memfd backing object handle for MAP_SHARED, else 0 */
 } mmap_region_t;
 
 typedef struct mmap_table {

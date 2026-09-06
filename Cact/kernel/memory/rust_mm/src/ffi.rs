@@ -242,6 +242,9 @@ pub struct MmapRegion {
     pub fd: i32,
     pub file_off: u32,
     pub is_used: u8,
+    /// Handle of the shared backing object (memfd) for MAP_SHARED mappings,
+    /// or 0 for plain private/anon/file mappings.
+    pub shobj: i32,
 }
 
 #[repr(C)]
@@ -383,6 +386,9 @@ unsafe extern "C" {
     pub fn enable_paging();
 
     pub fn read_vfs(node: *mut VfsNode, off: u32, size: u32, buf: *mut u8) -> i32;
+
+    /// C memfd glue: returns the memfd object handle for an open fd, or -1.
+    pub fn memfd_fd_handle(fd: i32) -> i32;
 
     pub static current_task: SyncMut<*mut TaskStruct>;
     pub static task_list_head: SyncMut<*mut TaskStruct>;

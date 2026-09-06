@@ -14,6 +14,7 @@
 #include "ioctl_abi.h"
 #include "module/kmod.h"
 #include "klog.h"
+#include "memfd.h"
 
 // devfs_services.c — kernel-service devices exposed through devfs.
 //
@@ -27,6 +28,7 @@
 //   /dev/sys      ioctl  -> mount/umount/reboot/module load  (root only)
 //   /dev/net      ioctl  -> socket()/ping/dns/netcfg
 //   /dev/pipe     ioctl  -> pipe() creation
+//   /dev/memfd    ioctl  -> memfd_create()
 
 #ifndef EPERM
 #define EPERM 1
@@ -339,3 +341,34 @@ static int _pipe_ioctl(void *p, uint32_t cmd, void *arg) {
 }
 
 devfs_driver_t drv_pipe = { .ioctl = _pipe_ioctl };
+
+// ── /dev/memfd ────────────────────────────────────────────────────────────
+
+static int _memfd_ioctl(void *p, uint32_t cmd, void *arg) {
+    (void)p;
+    if (cmd != CACT_MEMFDCTL_CREATE) return -EINVAL;
+    if (!arg) return -EINVAL;
+    cact_memfd_create_arg_t a;
+    if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+    if (!current_task) return -1;
+
+    char name[128];
+    name[0] = 0;
+    if (a.name) {
+        if (!validate_user_str(a.name)) return -EFAULT;
+        if (copy_from_user(name, a.name, sizeof(name) - 1) != 0) return -EFAULT;
+        name[sizeof(name) - 1] = 0;
+    }
+
+    vfs_node_t *node = memfd_create_vnode(name[0] ? name : "memfd", (int)a.flags);
+    if (!node) return -ENOMEM;
+
+    int fd = alloc_fd(node);
+    if (fd < 0) return -EMFILE;   // alloc_fd released the node again
+
+    current_task->proc->fds->files[fd]->cloexec =
+        (a.flags & CACT_MFD_CLOEXEC) ? 1 : 0;
+    return fd;
+}
+
+devfs_driver_t drv_memfd = { .ioctl = _memfd_ioctl };

@@ -4,7 +4,8 @@ use crate::ffi::*;
 use crate::pmm::{kalloc, free_page, page_ref_inc};
 use crate::vmm::paging::{vmm_map, PD_KERNEL_ENTRIES};
 use crate::fault::page_fault::vmm_map_zero;
-use crate::safe::{zero_page, flush_tlb, flush_tlb_all, kprint_str};
+use crate::process::memfd::{memfd_get_page, memfd_grow_to, memfd_map_dec, memfd_map_inc};
+use crate::safe::{zero_page, flush_tlb, kprint_str};
 
 fn fd_to_node(fd: i32) -> *mut VfsNode {
     let t = unsafe { *current_task.get() };
@@ -115,6 +116,40 @@ fn alloc_region_slot(tbl: *mut MmapTable) -> *mut MmapRegion {
     core::ptr::null_mut()
 }
 
+/// Present physical frame backing `va` in `pd`, or 0 if absent.
+fn pte_phys(pd: *mut u32, va: u32) -> u32 {
+    // SAFETY: pd is valid.
+    let pde = unsafe { *pd.add(pd_index(va) as usize) };
+    if pde & PAGE_PRESENT == 0 {
+        return 0;
+    }
+    let pt = (pde & !0xFFF) as *const u32;
+    // SAFETY: pt is a valid page table.
+    let pte = unsafe { *pt.add(pt_index(va) as usize) };
+    if pte & PAGE_PRESENT == 0 {
+        return 0;
+    }
+    pte & !0xFFF
+}
+
+/// Drop the PTE for a user virtual address, releasing its frame reference.
+fn clear_user_pte(pd: *mut u32, va: u32) {
+    // SAFETY: pd is valid.
+    let pde = unsafe { *pd.add(pd_index(va) as usize) };
+    if pde & PAGE_PRESENT == 0 {
+        return;
+    }
+    let pt = (pde & !0xFFF) as *mut u32;
+    // SAFETY: pt is a valid page table.
+    let pte = unsafe { *pt.add(pt_index(va) as usize) };
+    if pte & PAGE_PRESENT != 0 && pte & PAGE_USER != 0 {
+        free_page((pte & !0xFFF) as *mut u8);
+    }
+    // SAFETY: pt is a valid page table.
+    unsafe { *pt.add(pt_index(va) as usize) = 0; }
+    flush_tlb(va);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn mmap_table_init(tbl: *mut MmapTable) {
     if tbl.is_null() {
@@ -125,6 +160,7 @@ pub extern "C" fn mmap_table_init(tbl: *mut MmapTable) {
         for i in 0..MMAP_MAX_REGIONS {
             (*tbl).regions[i].is_used = 0;
             (*tbl).regions[i].fd = -1;
+            (*tbl).regions[i].shobj = 0;
         }
         (*tbl).next_base = MMAP_BASE;
     }
@@ -194,6 +230,9 @@ pub extern "C" fn do_mmap(
     let page_flags = prot_to_page_flags(prot, true);
     let pages = length / PAGE_SIZE;
 
+    // memfd backing handle for the mapped fd (0 = not a memfd mapping).
+    let mut shobj: i32 = 0;
+
     if flags & MAP_ANON != 0 {
         if vmm_map_zero(pd, va, length, page_flags) != 0 {
             kprint_str(b"[MMAP] do_mmap: vmm_map_zero failed\n\0".as_ptr());
@@ -203,24 +242,90 @@ pub extern "C" fn do_mmap(
         if fd < 0 {
             return MAP_FAILED as *mut u8;
         }
-        let node = fd_to_node(fd);
-        let mut file_off = offset;
+        // SAFETY: memfd_fd_handle is a C helper that only inspects the fd table.
+        if flags & MAP_SHARED != 0 {
+            shobj = unsafe { memfd_fd_handle(fd) };
+        }
 
-        for i in 0..pages {
-            let phys = kalloc();
-            if phys.is_null() {
-                do_munmap(pd, tbl, va, i * PAGE_SIZE);
+        if shobj > 0 && flags & MAP_SHARED != 0 {
+            // Shared memfd mapping: map the object's own frames so that fd I/O,
+            // truncate, fork, and other MAP_SHARED mappings see one storage.
+            if offset % PAGE_SIZE != 0 {
                 return MAP_FAILED as *mut u8;
             }
-            zero_page(phys);
-            if !node.is_null() {
-                // SAFETY: node is a valid VfsNode.
-                unsafe { read_vfs(node, file_off, PAGE_SIZE, phys); }
+            if memfd_map_inc(shobj) != 0 {
+                return MAP_FAILED as *mut u8;
             }
-            vmm_map(pd, va + i * PAGE_SIZE, phys as u32, page_flags);
-            file_off += PAGE_SIZE;
+            let first_page = offset / PAGE_SIZE;
+            if memfd_grow_to(shobj, offset + length) != 0 {
+                memfd_map_dec(shobj);
+                return MAP_FAILED as *mut u8;
+            }
+            let mut installed = 0u32;
+            while installed < pages {
+                let page = memfd_get_page(shobj, first_page + installed);
+                if page.is_null() {
+                    break;
+                }
+                let va_i = va + installed * PAGE_SIZE;
+                vmm_map(pd, va_i, page as u32, page_flags);
+                if pte_phys(pd, va_i) != page as u32 {
+                    break;
+                }
+                page_ref_inc(page);
+                installed += 1;
+            }
+            if installed < pages {
+                for m in 0..installed {
+                    clear_user_pte(pd, va + m * PAGE_SIZE);
+                }
+                memfd_map_dec(shobj);
+                kprint_str(b"[MMAP] do_mmap: memfd shared map failed\n\0".as_ptr());
+                return MAP_FAILED as *mut u8;
+            }
+        } else if shobj > 0 {
+            // MAP_PRIVATE over a memfd: take a private snapshot copy.
+            if offset % PAGE_SIZE != 0 {
+                return MAP_FAILED as *mut u8;
+            }
+            for i in 0..pages {
+                let phys = kalloc();
+                if phys.is_null() {
+                    for m in 0..i {
+                        clear_user_pte(pd, va + m * PAGE_SIZE);
+                    }
+                    return MAP_FAILED as *mut u8;
+                }
+                zero_page(phys);
+                let src = memfd_get_page(shobj, offset / PAGE_SIZE + i);
+                if !src.is_null() {
+                    // SAFETY: both page pointers are valid 4 KiB frames.
+                    unsafe { core::ptr::copy_nonoverlapping(src, phys, PAGE_SIZE as usize); }
+                }
+                vmm_map(pd, va + i * PAGE_SIZE, phys as u32, page_flags);
+            }
+        } else {
+            let node = fd_to_node(fd);
+            let mut file_off = offset;
+
+            for i in 0..pages {
+                let phys = kalloc();
+                if phys.is_null() {
+                    do_munmap(pd, tbl, va, i * PAGE_SIZE);
+                    return MAP_FAILED as *mut u8;
+                }
+                zero_page(phys);
+                if !node.is_null() {
+                    // SAFETY: node is a valid VfsNode.
+                    unsafe { read_vfs(node, file_off, PAGE_SIZE, phys); }
+                }
+                vmm_map(pd, va + i * PAGE_SIZE, phys as u32, page_flags);
+                file_off += PAGE_SIZE;
+            }
         }
     }
+
+    let shared_backed = shobj > 0 && flags & MAP_SHARED != 0;
 
     // SAFETY: region is a valid slot we just allocated.
     unsafe {
@@ -231,6 +336,7 @@ pub extern "C" fn do_mmap(
         (*region).fd = if flags & MAP_ANON != 0 { -1 } else { fd };
         (*region).file_off = offset;
         (*region).is_used = 1;
+        (*region).shobj = if shared_backed { shobj } else { 0 };
     }
 
     // SAFETY: tbl is valid.
@@ -306,8 +412,13 @@ pub extern "C" fn do_munmap(
     // SAFETY: region is valid.
     unsafe {
         if addr == (*region).base && length >= (*region).length {
+            let obj = (*region).shobj;
             (*region).is_used = 0;
             (*region).fd = -1;
+            (*region).shobj = 0;
+            if obj > 0 {
+                memfd_map_dec(obj);
+            }
         } else if addr == (*region).base {
             (*region).base += length;
             (*region).length -= length;
