@@ -5,9 +5,10 @@
 
 /*
  * FFI surface exported by the Rust network module (cact_net).
- * The whole L3+ stack (Ethernet demux, ARP, IPv4, ICMP, TCP, UDP, DHCP, DNS,
+ * The whole L3+ stack (Ethernet demux, ARP, IPv4, ICMP, TCP, UDP, DNS,
  * TLS 1.3 via rustls, HTTP/HTTPS) lives in Rust; the C kernel side calls into
- * these entry points.
+ * these entry points.  The kernel does not run a DHCP client: addressing is
+ * configured by userspace through the `rust_net_set_ipv4_config` / netcfg path.
  *
  * All IPv4 values here use host byte order unless noted otherwise.
  */
@@ -16,17 +17,12 @@ int rust_net_ping_echo_host(uint32_t dst_ip_host, uint16_t id, uint16_t seq);
 int rust_net_set_ipv4_config(uint32_t ip_h, uint32_t mask_h, uint32_t gw_h, uint32_t dns_h);
 uint32_t rust_net_get_dns_host(void);
 uint32_t rust_net_get_ip_host(void);
-typedef struct {
-    uint32_t ip_host;
-    uint32_t netmask_host;
-    uint32_t gateway_host;
-    uint32_t dns_host;
-    uint32_t server_host;
-    uint32_t lease_s;
-    uint32_t t1_s;
-    uint32_t t2_s;
-} rust_net_dhcp_lease_cfg_t;
-int rust_net_dhcp_set_lease(const rust_net_dhcp_lease_cfg_t* cfg);
+/* Current IPv4 link configuration snapshot (host byte order); NULL pointers skipped. */
+int rust_net_get_ipv4_config(uint32_t* ip_h, uint32_t* mask_h, uint32_t* gw_h, uint32_t* dns_h);
+/* Link state: 1 while a NIC driver is registered, 0 otherwise. */
+int rust_net_link_is_up(void);
+/* Copy the registered NIC MAC address into out[6]; returns 0, or -1 when no NIC/NULL. */
+int rust_net_get_mac(uint8_t out[6]);
 int rust_net_dns_resolve_a(const char* name, uint32_t* out_ip_host);
 
 /*

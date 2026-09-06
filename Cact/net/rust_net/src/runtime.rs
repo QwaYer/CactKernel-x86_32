@@ -3,7 +3,6 @@
 //! `net_sema` serializes access between the interrupt/RX path and `net_poll_task`.
 
 use crate::ffi_kernel;
-use crate::dhcp;
 use crate::stack;
 use crate::types::{MacAddr, NetDriver, Semaphore, Skb};
 
@@ -27,6 +26,23 @@ extern "C" fn net_poll_task() {
         net_poll();
     }
 }
+
+/// Periodic timer kick.  smoltcp timers (TCP retransmission, connection timeouts,
+/// UDP/ARP caches) only advance while `stack_poll` runs, so a task wakes the poll
+/// loop on a fixed cadence even when no NIC IRQ has fired.  The kernel DHCP client
+/// that used to drive this wake-up is gone; the poll loop itself stays.
+extern "C" fn net_timer_task() {
+    loop {
+        // SAFETY: sleep is a plain kernel service; semaphore is kernel-lifetime.
+        unsafe {
+            ffi_kernel::sched_sleep_ticks(NET_POLL_PERIOD_TICKS);
+            ffi_kernel::up(core::ptr::addr_of_mut!(net_sema));
+        }
+    }
+}
+
+/// Poll cadence for the timer task (ticks, 10 ms/tick => 100 ms).
+const NET_POLL_PERIOD_TICKS: u32 = 10;
 
 #[no_mangle]
 pub extern "C" fn register_netdev(drv: *mut NetDriver) {
@@ -63,16 +79,42 @@ pub extern "C" fn unregister_netdev(drv: *mut NetDriver) {
     }
 }
 
+/// Link state for userspace network managers: 1 while a NIC driver is registered.
+#[no_mangle]
+pub extern "C" fn rust_net_link_is_up() -> i32 {
+    if unsafe { active_nic.is_null() } {
+        0
+    } else {
+        1
+    }
+}
+
+/// Copy the registered NIC's MAC address into `out[6]`.  Returns 0 on success,
+/// -1 when no NIC is registered or `out` is NULL.
+#[no_mangle]
+pub extern "C" fn rust_net_get_mac(out: *mut u8) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        if active_nic.is_null() {
+            return -1;
+        }
+        core::ptr::copy_nonoverlapping(my_mac.b.as_ptr(), out, 6);
+    }
+    0
+}
+
 #[no_mangle]
 pub extern "C" fn net_init() {
     // SAFETY: globals are static and valid.
     unsafe {
         ffi_kernel::sema_init(core::ptr::addr_of_mut!(net_sema), 0);
         let _ = ffi_kernel::create_task(net_poll_task);
-        dhcp::rust_net_dhcp_start_daemon();
+        let _ = ffi_kernel::create_task(net_timer_task);
         ffi_kernel::klog_static(
             ffi_kernel::LOG_OK,
-            b"  net         : ready (net_poll_task, RX semaphore, DHCP)\0",
+            b"  net         : ready (net_poll_task, RX semaphore, timer kick)\0",
         );
     }
 }

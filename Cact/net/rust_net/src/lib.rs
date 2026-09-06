@@ -2,7 +2,7 @@
 #![feature(sync_unsafe_cell)]
 #![allow(static_mut_refs)]
 
-//! In-kernel TCP/IP stack (smoltcp): Ethernet shim, sockets, DHCP/DNS helpers, and
+//! In-kernel TCP/IP stack (smoltcp): Ethernet shim, sockets, DNS helpers, and
 //! integration hooks for the C networking layer.
 
 extern crate alloc;
@@ -28,7 +28,6 @@ static ALLOCATOR: CactAllocator = CactAllocator;
 pub mod checksum;
 pub mod config;
 pub mod dns_resolve;
-pub mod dhcp;
 pub mod ffi;
 pub mod ffi_kernel;
 pub mod http;

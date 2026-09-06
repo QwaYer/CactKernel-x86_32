@@ -15,11 +15,9 @@ webpki-roots = { version = "1", default-features = false }
 smoltcp = { version = "0.12", default-features = false, features = [
     "medium-ethernet",
     "proto-ipv4",
-    "proto-dhcpv4",
     "socket-tcp",
     "socket-udp",
     "socket-icmp",
-    "socket-dhcpv4",
 ] }
 
 [patch.crates-io]
