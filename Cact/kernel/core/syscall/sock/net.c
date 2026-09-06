@@ -5,6 +5,7 @@
 #include "rust_net_ffi.h"
 #include "klib.h"
 #include "ioctl_abi.h"
+#include "unix_sock.h"
 
 // SOCKCTL_* — the new node-ioctl ABI for socket control.  The ioctl() is
 // issued on the socket fd itself (like bind/connect are today), so the node
@@ -22,6 +23,11 @@
 
 int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
     if (!node || node->type != VFS_SOCKET) return -1;
+
+    /* AF_UNIX sockets are served by the kernel-C unix_sock module */
+    if (unix_sock_is_node(node))
+        return unix_sock_ioctl(node, cmd, arg);
+
     ksock_t *ks = ksock_from_node(node);
     if (!ks) return -1;
 
@@ -78,6 +84,7 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
 
         a.peer.addr = peer.sin_addr;
         a.peer.port = peer.sin_port;
+        a.addrlen   = sizeof(struct sockaddr_in);
         if (copy_to_user(arg, &a, sizeof(a)) != 0) {
             close_vfs(conn);
             return -EFAULT;

@@ -5,6 +5,7 @@
 #include "vfs.h"
 
 /* ── Address families ─────────────────────────────────────────────────────── */
+#define AF_UNIX     1   /* local (Unix-domain) sockets */
 #define AF_INET     2
 
 /* ── Socket types ─────────────────────────────────────────────────────────── */
@@ -43,6 +44,11 @@ struct sockaddr_in {
     uint16_t sin_port;   /* network byte order */
     uint32_t sin_addr;   /* network byte order */
     uint8_t  sin_zero[8];
+};
+
+struct sockaddr_un {
+    uint16_t sun_family;   /* AF_UNIX */
+    char     sun_path[108];
 };
 
 /* ── args structs for sendto / recvfrom (passed via ebx pointer) ──────────── */
