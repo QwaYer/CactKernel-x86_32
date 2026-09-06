@@ -1,10 +1,12 @@
 /*
- * Loadable filesystem-module loader.
+ * Loadable filesystem-module loader (multi-slot).
  *
  * Mirrors pci_load_module() but for non-PCI filesystems: it loads an ET_REL
  * module (typically `ext4.cctk`) from the staged cctkfs image, verifies its
- * HMAC-SHA256 tag, relocates it, and resolves the generic `fs_mount` entry
- * symbol. mntfs uses fs_mod_mount() to mount the root filesystem at boot.
+ * HMAC-SHA256 tag, relocates it, and resolves the generic `fs_mount` /
+ * `fs_unmount` entry symbols.  Up to FS_MOD_MAX modules can be resident at
+ * once; mntfs and the /dev/sys mount ioctl select a module by instance name
+ * or probe them in registration order.
  *
  * Undefined kernel symbols referenced by the module are resolved through
  * ksym_resolve(), exactly like PCI modules do.
@@ -85,11 +87,20 @@ typedef struct {
     Elf32_Word r_info;
 } __attribute__((packed)) Elf32_Rel;
 
-// Loaded module bookkeeping
-static uint8_t      *fs_image;
-static uint32_t       fs_image_size;
-static fs_mount_fn_t  fs_mount_fn;
-static char           fs_instance_name[64];
+// Resident module slot
+typedef struct {
+    int             used;
+    char            instance[64];
+    uint8_t        *image;
+    uint32_t        size;
+    fs_mount_fn_t   mount;
+    fs_unmount_fn_t unmount;
+
+    char            mounted[FS_MOD_MAX_MOUNTS][BLKDEV_NAME_MAX];
+    uint32_t        mount_count;
+} fs_slot_t;
+
+static fs_slot_t slots[FS_MOD_MAX];
 
 static Elf32_Shdr *get_shdr(Elf32_Ehdr *eh, uint16_t idx) {
     if (idx >= eh->e_shnum)
@@ -104,14 +115,23 @@ static const char *get_str(Elf32_Ehdr *eh, uint16_t strtab_idx, uint32_t off) {
     return (const char *)((uint8_t *)eh + sh->sh_offset + off);
 }
 
-static void module_proc_name(const char *path, char *out, int out_sz) {
+// Instance name: path basename with a trailing ".cctk" stripped.
+static void instance_name(const char *path, char *out, int out_sz) {
     const char *base = path;
     for (const char *p = path; p && *p; p++)
         if (*p == '/') base = p + 1;
+
     int i = 0;
-    while (base[i] && i < out_sz - 1) {
-        out[i] = (base[i] == ' ') ? '_' : base[i];
-        i++;
+    for (; base[i] && i < out_sz - 1; i++) {
+        char c = base[i];
+        if (c == ' ')
+            c = '_';
+        // strip ".cctk" / ".so" style suffix
+        if (c == '.' &&
+            (base[i+1] == 'c' || base[i+1] == 's') &&
+            base[i+2] == 'c' && base[i+3] == 't' && base[i+4] == 'k')
+            break;
+        out[i] = c;
     }
     out[i] = '\0';
 }
@@ -134,13 +154,11 @@ static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
     return 0;
 }
 
-int fs_mod_load(const char *path) {
-    if (!path) return -1;
-    if (fs_image) {
-        printk("[FSMOD] a filesystem module is already loaded\n");
-        return -1;
-    }
-
+// Shared relocation/entry-point lookup. Returns a freshly kmalloc'd image
+// (must be freed by caller on error) or NULL.
+static int load_module_image(const char *path, uint8_t **image_out,
+                             uint32_t *size_out, fs_mount_fn_t *mount_out,
+                             fs_unmount_fn_t *unmount_out) {
     const uint8_t *blob_data = NULL;
     uint32_t       blob_size = 0;
     if (initfs_modblob_get(path, &blob_data, &blob_size) != 0 || !blob_size) {
@@ -277,56 +295,226 @@ int fs_mod_load(const char *path) {
         }
     }
 
-    // Find exported symbol "fs_mount" (STB_GLOBAL, STT_FUNC)
-    fs_mount_fn = NULL;
+    // Find exported symbols "fs_mount" (required) and "fs_unmount" (optional)
+    fs_mount_fn_t   mnt = NULL;
+    fs_unmount_fn_t unm = NULL;
     for (uint32_t s = 0; s < sym_cnt; s++) {
         if (ELF32_ST_BIND(syms[s].st_info) != STB_GLOBAL) continue;
         if (ELF32_ST_TYPE(syms[s].st_info) != STT_FUNC)   continue;
-        const char *sym_name = get_str(eh, strtab_idx, syms[s].st_name);
-        if (!sym_name || strcmp((char *)sym_name, "fs_mount") != 0) continue;
         if (syms[s].st_shndx == SHN_UNDEF) continue;
+        const char *sym_name = get_str(eh, strtab_idx, syms[s].st_name);
+        if (!sym_name) continue;
         Elf32_Shdr *sym_sh = get_shdr(eh, syms[s].st_shndx);
         if (!sym_sh) continue;
-        fs_mount_fn = (fs_mount_fn_t)(image + sym_sh->sh_addr + syms[s].st_value);
-        break;
+        uint32_t addr = (uint32_t)(image + sym_sh->sh_addr + syms[s].st_value);
+        if (strcmp((char *)sym_name, "fs_mount") == 0)
+            mnt = (fs_mount_fn_t)addr;
+        else if (strcmp((char *)sym_name, "fs_unmount") == 0)
+            unm = (fs_unmount_fn_t)addr;
     }
-    if (!fs_mount_fn) {
+    if (!mnt) {
         printk("[FSMOD] symbol 'fs_mount' not found\n");
         kfree(image); kfree(elf_data);
         return -5;
     }
 
-    fs_image      = image;
-    fs_image_size = total;
-    module_proc_name(path, fs_instance_name, sizeof(fs_instance_name));
-
     kfree(elf_data);
-    printk("[FSMOD] module ready: "); printk(fs_instance_name); printk("\n");
+    *image_out  = image;
+    *size_out   = total;
+    *mount_out  = mnt;
+    *unmount_out = unm;
     return 0;
 }
 
-void fs_mod_unload(void) {
-    if (!fs_image) return;
-    kfree(fs_image);
-    fs_image      = NULL;
-    fs_image_size = 0;
-    fs_mount_fn   = NULL;
-    fs_instance_name[0] = '\0';
-    printk("[FSMOD] module unloaded\n");
+int fs_mod_load(const char *path) {
+    if (!path) return -1;
+
+    int free_slot = -1;
+    for (int i = 0; i < FS_MOD_MAX; i++) {
+        if (!slots[i].used) {
+            if (free_slot < 0) free_slot = i;
+            continue;
+        }
+    }
+    if (free_slot < 0) {
+        printk("[FSMOD] no free filesystem-module slot\n");
+        return -1;
+    }
+
+    char inst[64];
+    instance_name(path, inst, sizeof(inst));
+    for (int i = 0; i < FS_MOD_MAX; i++) {
+        if (slots[i].used && strcmp(slots[i].instance, inst) == 0) {
+            printk("[FSMOD] filesystem module already loaded: "); printk(inst); printk("\n");
+            return -1;
+        }
+    }
+
+    uint8_t        *image = NULL;
+    uint32_t        size  = 0;
+    fs_mount_fn_t   mnt   = NULL;
+    fs_unmount_fn_t unm   = NULL;
+    int rc = load_module_image(path, &image, &size, &mnt, &unm);
+    if (rc != 0)
+        return rc;
+
+    fs_slot_t *s = &slots[free_slot];
+    memset(s, 0, sizeof(*s));
+    strlcpy(s->instance, inst, sizeof(s->instance));
+    s->used    = 1;
+    s->image   = image;
+    s->size    = size;
+    s->mount   = mnt;
+    s->unmount = unm;
+    s->mount_count = 0;
+
+    printk("[FSMOD] module loaded: "); printk(inst);
+    printk(" (slot "); { char b[8]; snprintf(b, sizeof(b), "%d", free_slot); printk(b); }
+    printk(")\n");
+    return 0;
 }
 
-vfs_node_t *fs_mod_mount(uint32_t dev) {
-    if (!fs_mount_fn) return NULL;
-    return fs_mount_fn(dev);
+static fs_slot_t *slot_by_instance(const char *instance) {
+    if (!instance)
+        return 0;
+    for (int i = 0; i < FS_MOD_MAX; i++)
+        if (slots[i].used && strcmp(slots[i].instance, (char *)instance) == 0)
+            return &slots[i];
+    return 0;
 }
 
-int fs_mod_loaded(void) {
-    return fs_mount_fn != NULL;
+static int slot_unload(fs_slot_t *s) {
+    if (!s || !s->used)
+        return -1;
+    if (s->mount_count > 0) {
+        printk("[FSMOD] module busy (still mounted), not unloading: ");
+        printk(s->instance);
+        printk("\n");
+        return -1;
+    }
+    if (s->image)
+        kfree(s->image);
+    memset(s, 0, sizeof(*s));
+    return 0;
+}
+
+int fs_mod_unload_slot(int slot) {
+    if (slot < 0 || slot >= FS_MOD_MAX)
+        return -1;
+    return slot_unload(&slots[slot]);
+}
+
+int fs_mod_unload(const char *instance) {
+    fs_slot_t *s = slot_by_instance(instance);
+    if (!s)
+        return -1;
+    int rc = slot_unload(s);
+    if (rc == 0) {
+        printk("[FSMOD] module unloaded: ");
+        printk((char *)instance);
+        printk("\n");
+    }
+    return rc;
+}
+
+int fs_mod_count(void) {
+    int n = 0;
+    for (int i = 0; i < FS_MOD_MAX; i++)
+        if (slots[i].used) n++;
+    return n;
+}
+
+int fs_mod_loaded_any(void) {
+    return fs_mod_count() > 0;
+}
+
+int fs_mod_loaded(const char *instance) {
+    return slot_by_instance(instance) != 0;
+}
+
+const char *fs_mod_instance(int slot) {
+    if (slot < 0 || slot >= FS_MOD_MAX || !slots[slot].used)
+        return 0;
+    return slots[slot].instance;
+}
+
+// Remember a successful mount so an unload can be refused while in use.
+static void slot_note_mount(fs_slot_t *s, const char *devname) {
+    if (!s || !devname)
+        return;
+    for (uint32_t i = 0; i < s->mount_count; i++)
+        if (strcmp(s->mounted[i], (char *)devname) == 0)
+            return;
+    if (s->mount_count >= FS_MOD_MAX_MOUNTS)
+        return;
+    strlcpy(s->mounted[s->mount_count], devname, BLKDEV_NAME_MAX);
+    s->mount_count++;
+}
+
+vfs_node_t *fs_mod_mount_type(blkdev_t *dev, const char *fstype) {
+    if (!dev)
+        return NULL;
+
+    if (!fstype || fstype[0] == '\0' ||
+        strcmp((char *)fstype, "auto") == 0 || strcmp((char *)fstype, "*") == 0)
+        return fs_mod_mount(dev);
+
+    fs_slot_t *s = slot_by_instance(fstype);
+    if (!s)
+        return NULL;
+    vfs_node_t *root = s->mount ? s->mount(dev) : NULL;
+    if (root)
+        slot_note_mount(s, dev->name);
+    return root;
+}
+
+vfs_node_t *fs_mod_mount(blkdev_t *dev) {
+    if (!dev)
+        return NULL;
+    for (int i = 0; i < FS_MOD_MAX; i++) {
+        fs_slot_t *s = &slots[i];
+        if (!s->used || !s->mount)
+            continue;
+        vfs_node_t *root = s->mount(dev);
+        if (root) {
+            slot_note_mount(s, dev->name);
+            return root;
+        }
+    }
+    return NULL;
+}
+
+int fs_mod_unmount_dev(blkdev_t *dev) {
+    if (!dev)
+        return -1;
+    int rc = -1;
+    for (int i = 0; i < FS_MOD_MAX; i++) {
+        fs_slot_t *s = &slots[i];
+        if (!s->used)
+            continue;
+        int removed = 0;
+        for (uint32_t m = 0; m < s->mount_count; m++) {
+            if (strcmp(s->mounted[m], (char *)dev->name) == 0) {
+                // compact
+                for (uint32_t k = m; k + 1 < s->mount_count; k++)
+                    strlcpy(s->mounted[k], s->mounted[k + 1], BLKDEV_NAME_MAX);
+                s->mount_count--;
+                removed = 1;
+                break;
+            }
+        }
+        if (removed) {
+            if (s->unmount)
+                s->unmount();
+            rc = 0;
+        }
+    }
+    return rc;
 }
 
 // Non-destructive probe: scan the ELF symbol table of the module at 'path'
-// for an exported global FUNC named 'fs_mount'. Used to discover filesystem
-// modules generically rather than hardcoding a specific FS.
+// for an exported global FUNC named 'fs_mount'. Used to auto-detect whether
+// modload should treat a .cctk as a filesystem module.
 int fs_mod_detect(const char *path) {
     if (!path) return -1;
 

@@ -70,11 +70,11 @@ int _sys_pfx(disk_entry_t *d, char *pfx) {
     return l;
 }
 
-// Resolve a device name to a block device ID (uses blkdev_find)
+// Resolve a device name to its blkdev id (uses blkdev_find)
 int mntfs_resolve_device(const char *devname, uint32_t *dev_out) {
     blkdev_t *bd = blkdev_find(devname);
     if (bd) {
-        if (dev_out) *dev_out = 0;   // single-device system, dev=0
+        if (dev_out) *dev_out = bd->id;
         return 0;
     }
     return -1;
@@ -92,8 +92,7 @@ vfs_node_t *mntfs_get(const char *name) {
 }
 
 // Register a physical disk with its ext4 root
-int mntfs_mount_disk(const char *devname, vfs_node_t *ext4_root, int persistent) {
-    if (!devname||!ext4_root) return -1;
+int mntfs_mount_disk(const char *devname, vfs_node_t *ext4_root, int persistent) {    if (!devname||!ext4_root) return -1;
     if (_find_disk(devname)) return -1;
 
     disk_entry_t *d=(disk_entry_t*)kmalloc(sizeof(disk_entry_t));
@@ -119,6 +118,22 @@ int mntfs_mount_disk(const char *devname, vfs_node_t *ext4_root, int persistent)
 
     if (persistent) _mounts_add(devname);
     return 0;
+}
+
+// Expose a filesystem root on a block device (whole disk or partition).
+int mntfs_mount_blkdev(blkdev_t *bd, vfs_node_t *root, int persistent) {
+    if (!bd || !root) return -1;
+    if (_find_disk(bd->name)) return -1;   // already mounted
+    return mntfs_mount_disk(bd->name, root, persistent);
+}
+
+int mntfs_unmount_blkdev(blkdev_t *bd) {
+    if (!bd) return -1;
+    return mntfs_umount_disk(bd->name);
+}
+
+int mntfs_device_mounted(const char *devname) {
+    return _find_disk(devname) != 0;
 }
 
 // Register a virtual mount point (e.g. devfs, procfs) under a disk's sys/
@@ -201,7 +216,7 @@ void mntfs_init(void) {
     }
 
     strlcpy(boot_devname, boot->name, 32);
-    vfs_node_t *ext4 = fs_mod_mount(0);
+    vfs_node_t *ext4 = fs_mod_mount(boot);
     if (!ext4) {
         pr_warn("  %-11s : ext4 mount failed on %s — nodisk root\n",
                 "mntfs", boot_devname);

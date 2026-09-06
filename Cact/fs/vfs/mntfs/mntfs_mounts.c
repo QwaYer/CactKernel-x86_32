@@ -71,11 +71,11 @@ void _mounts_mount_all(void) {
         while (li>0 && (line[li-1]==' '||line[li-1]=='\r')) line[--li]='\0';
         if (li==0 || line[0]=='#') continue;
         if (_find_disk(line)) continue; // already mounted
-        uint32_t dev;
-        if (mntfs_resolve_device(line, &dev) < 0) {
+        blkdev_t *bd = blkdev_find(line);
+        if (!bd) {
             printk("[mounts] unknown: "); printk(line); printk("\n"); continue;
         }
-        vfs_node_t *node = fs_mod_mount(dev);
+        vfs_node_t *node = fs_mod_mount(bd);
         if (!node) { printk("[mounts] failed: "); printk(line); printk("\n"); continue; }
         mntfs_mount_disk(line, node, 0);
         printk("[mounts] "); printk(line); printk(" mounted\n");

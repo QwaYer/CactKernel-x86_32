@@ -293,6 +293,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/font.o \
       $(BUILD_DIR)/font_boot.o \
       $(BUILD_DIR)/pat.o \
+      $(BUILD_DIR)/part.o \
       $(BUILD_DIR)/stack_guard.o \
       $(BUILD_DIR)/cpudev.o \
       $(BUILD_DIR)/acpi.o \
@@ -700,7 +701,11 @@ iso-full:
 	$(error iso-full requires LOCAL_REPO pointing at the directory that contains cctkfs.img)
 endif
 
-$(BUILD_DIR)/blkdev.o: $(DRIVER_BLK_BLOCK_DIR)/blkdev.c
+$(BUILD_DIR)/blkdev.o: $(DRIVER_BLK_BLOCK_DIR)/blkdev.c $(DRIVER_BLK_BLOCK_DIR)/blkdev.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/part.o: $(DRIVER_BLK_BLOCK_DIR)/part.c $(DRIVER_BLK_BLOCK_DIR)/part.h $(DRIVER_BLK_BLOCK_DIR)/blkdev.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

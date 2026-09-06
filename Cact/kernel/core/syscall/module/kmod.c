@@ -3,6 +3,7 @@
 #include "pci_driver.h"
 #include "pci_loader.h"
 #include "pci_enum.h"
+#include "fs_mod.h"
 #include "klib.h"
 #include "kernel.h"
 
@@ -52,6 +53,13 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
         return -1;
     if (!path || !path[0])
         return -2;
+
+    // Filesystem modules (export fs_mount instead of a PCI manifest) are
+    // loaded through the multi-slot fs_mod loader. Detection is a cheap
+    // non-destructive symbol scan; the real HMAC verification happens in
+    // fs_mod_load().
+    if (fs_mod_detect(path) == 1)
+        return fs_mod_load(path);
 
     if (usermod_slot_active) {
         pr_warn("kmod slot busy");
@@ -121,6 +129,10 @@ int kmod_unload_kname(const char *name) {
         usermod_slot_active   = 0;
         return 0;
     }
+
+    // Filesystem module instance names ("ext4", ...) unload through fs_mod.
+    if (fs_mod_loaded(name))
+        return fs_mod_unload(name);
 
     if (user_str_all_decimal(name)) {
         int idx;
