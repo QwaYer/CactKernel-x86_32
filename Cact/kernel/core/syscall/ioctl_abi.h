@@ -195,19 +195,44 @@ typedef struct cact_shmctl_arg { uint32_t shmid; uint32_t cmd; void *buf; } cact
 #define CACT_SOCKCTL_RECVFROM    0x3309  // arg=cact_recvfrom_arg_t*
 #define CACT_SOCKCTL_UNIX_BIND   0x330A  // AF_UNIX bind:   arg=cact_unix_addr_t*
 #define CACT_SOCKCTL_UNIX_CONNECT 0x330B // AF_UNIX connect:arg=cact_unix_addr_t*
+#define CACT_SOCKCTL_SENDMSG    0x330C  // payload + SCM_RIGHTS: arg=cact_sendmsg_arg_t*
+#define CACT_SOCKCTL_RECVMSG    0x330D  // payload + SCM_RIGHTS: arg=cact_recvmsg_arg_t*
 // AF_UNIX reuses CACT_SOCKCTL_LISTEN / ACCEPT / SHUTDOWN; the data path is
-// plain read()/write(), as for AF_INET sockets.
+// plain read()/write(), as for AF_INET sockets.  sendmsg/recvmsg ioctls add
+// SCM_RIGHTS fd passing on AF_UNIX stream sockets (payload stays a byte
+// stream; passed fds arrive as an ordered FIFO alongside it).
 
 typedef struct cact_sockaddr_in {
     uint32_t addr;   // IPv4 big-endian
     uint32_t port;   // network order
 } cact_sockaddr_in_t;
 
-// AF_UNIX pathname (sockaddr_un layout: family is implicit — an AF_UNIX fd
-// already knows its family).  Paths are NUL-terminated; up to 107 bytes.
+// AF_UNIX pathname (sockaddr_un layout: the family is implicit — an AF_UNIX
+// fd already knows its family).  Paths are NUL-terminated; up to 107 bytes.
 typedef struct cact_unix_addr {
     char path[108];
 } cact_unix_addr_t;
+
+// sendmsg: write `len` bytes from `buf` to the peer and pass `nfds` open fds
+// (numbers in the sender's fd table, referenced by `fds`).  Return = bytes
+// written.  nfds==0 degenerates to a plain write.
+typedef struct cact_sendmsg_arg {
+    const void *buf;
+    uint32_t    len;
+    const int32_t *fds;
+    uint32_t    nfds;
+} cact_sendmsg_arg_t;
+
+// recvmsg: read up to `cap` bytes into `buf` and install up to `fds_cap`
+// passed descriptors as new fds (written to `fds`, count in `fds_len`).
+// Return = payload bytes read.
+typedef struct cact_recvmsg_arg {
+    void    *buf;
+    uint32_t cap;
+    int32_t *fds;
+    uint32_t fds_cap;
+    uint32_t fds_len;
+} cact_recvmsg_arg_t;
 
 typedef struct cact_sockaddr_arg {
     uint32_t fd;                 // for ioctls on /dev/net, the target fd
