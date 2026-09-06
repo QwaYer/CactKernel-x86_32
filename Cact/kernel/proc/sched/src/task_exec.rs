@@ -12,6 +12,17 @@ use crate::task::{
     TASK_SHM_MAX, USER_STACK_BYTES, USER_STACK_PAGES, current_task,
 };
 
+/// C `file_t` layout: { node*, offset, flags, cloexec, refcount }.
+#[inline]
+fn exec_cloexec(ft: *mut c_void) -> bool {
+    if ft.is_null() {
+        return false;
+    }
+    // SAFETY: ft points to a live file_t; cloexec is the 4th u32 word.
+    let cloexec = unsafe { *(ft.cast::<u32>().add(3)) };
+    cloexec & 1 != 0
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn task_exec(
     path: *const u8,
@@ -286,12 +297,9 @@ pub unsafe extern "C" fn task_exec(
 
     for i in 3..MAX_FD {
         let ft = (*(*p).fds).fd_table[i];
-        if !ft.is_null() && (*(*p).fds).fd_cloexec[i] != 0 {
+        if !ft.is_null() && exec_cloexec(ft as *mut c_void) {
             ffi::file_unref(ft as *mut c_void);
             (*(*p).fds).fd_table[i]   = ptr::null_mut();
-            (*(*p).fds).fd_offset[i]  = 0;
-            (*(*p).fds).fd_flags[i]   = 0;
-            (*(*p).fds).fd_cloexec[i] = 0;
         }
     }
 

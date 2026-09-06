@@ -14,7 +14,7 @@ pub struct ProcPageTracker {
 /// Per-process memory mapping metadata; size matches the C struct (opaque bytes).
 #[repr(C)]
 pub struct MmapTable {
-    _opaque: [u8; 7172],
+    _opaque: [u8; 8196],
 }
 
 /// VFS inode pointer as seen from Rust (unsized in C headers; zero-sized placeholder).

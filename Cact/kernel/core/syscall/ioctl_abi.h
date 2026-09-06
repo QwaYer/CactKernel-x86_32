@@ -20,6 +20,7 @@
 //   CACT_SYSCTL_*  0x3500  ioctl on /dev/sys           -> mount/reboot/modules
 //   CACT_PIPECTL_* 0x3600  ioctl on /dev/pipe          -> pipe creation
 //   CACT_CRYPTCTL_* 0x3700 ioctl on /dev/crypto        -> hash/hmac/hkdf/aead/kx/random
+//   CACT_MEMFDCTL_* 0x3800 ioctl on /dev/memfd         -> memfd_create
 // Device-specific ioctls (FB/TIOC, ...) keep their legacy numbers and are
 // routed straight to the node's own ops; they must stay outside 0x3000-0x3FFF.
 //
@@ -409,5 +410,18 @@ typedef struct cact_crypt_kx_derive_arg {
     uint8_t peer_pub[65]; // in: X25519 32 bytes / P-256 65 bytes (uncompressed)
     uint8_t shared[32];   // out
 } cact_crypt_kx_derive_arg_t;
+
+// ===========================================================================
+// /dev/memfd control. RANGE 0x3800.
+// ===========================================================================
+#define CACT_MEMFDCTL_CREATE 0x3801  // arg=cact_memfd_create_arg_t*; returns new fd
+
+// memfd_create(2) flags
+#define CACT_MFD_CLOEXEC 0x0001
+
+typedef struct cact_memfd_create_arg {
+    char     *name;      // optional, NUL-terminated (may be NULL)
+    uint32_t  flags;     // CACT_MFD_CLOEXEC
+} cact_memfd_create_arg_t;
 
 #endif
