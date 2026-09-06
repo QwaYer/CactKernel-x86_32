@@ -277,17 +277,21 @@ static int _net_ioctl(void *p, uint32_t cmd, void *arg) {
         cact_netcfg_arg_t a;
         if (!arg) return -EINVAL;
         if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
-        rust_net_dhcp_lease_cfg_t lease;
-        memset(&lease, 0, sizeof(lease));
-        lease.ip_host       = a.ip_host;
-        lease.netmask_host  = a.netmask_host;
-        lease.gateway_host  = a.gateway_host;
-        lease.dns_host      = a.dns_host;
-        lease.server_host   = a.dhcp_server_host;
-        lease.lease_s       = a.lease_s;
-        lease.t1_s          = a.t1_s;
-        lease.t2_s          = a.t2_s;
-        return rust_net_dhcp_set_lease(&lease);
+        return rust_net_set_ipv4_config(a.ip_host, a.netmask_host,
+                                        a.gateway_host, a.dns_host);
+    }
+
+    case CACT_NETCTL_NETCFG_GET: {
+        if (!arg) return -EINVAL;
+        if (!validate_user_ptr(arg, sizeof(cact_netcfg_get_t))) return -EFAULT;
+        cact_netcfg_get_t g;
+        memset(&g, 0, sizeof(g));
+        rust_net_get_ipv4_config(&g.ip_host, &g.netmask_host,
+                                 &g.gateway_host, &g.dns_host);
+        g.link_up = (rust_net_link_is_up() > 0) ? 1u : 0u;
+        if (g.link_up)
+            rust_net_get_mac(g.mac);
+        return copy_to_user(arg, &g, sizeof(g));
     }
 
     default:

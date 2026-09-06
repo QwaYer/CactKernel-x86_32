@@ -12,7 +12,7 @@
 
 <p align="center">
   A <strong>hybrid monolithic kernel</strong> for <strong>i686</strong> (32-bit x86 protected mode).<br>
-  Low-level code in <strong>C</strong> and <strong>NASM</strong>; the <strong>physical/virtual memory manager</strong>, <strong>MLFQ scheduler</strong>, <strong>synchronization primitives</strong>, <strong>TLS 1.3 (Rustls)</strong>, <strong>HMAC-SHA256 module signing</strong>, and the <strong>TCP/UDP/DHCP/DNS stack (smoltcp)</strong> live in <strong>Rust</strong> crates <code>cact_mm</code>, <code>sched</code>, <code>sync</code>, <code>rustls</code>, <code>cact_crypto</code>, and <code>cact_net</code>.
+  Low-level code in <strong>C</strong> and <strong>NASM</strong>; the <strong>physical/virtual memory manager</strong>, <strong>MLFQ scheduler</strong>, <strong>synchronization primitives</strong>, <strong>TLS 1.3 (Rustls)</strong>, <strong>HMAC-SHA256 module signing</strong>, and the <strong>TCP/UDP/DNS stack (smoltcp)</strong> live in <strong>Rust</strong> crates <code>cact_mm</code>, <code>sched</code>, <code>sync</code>, <code>rustls</code>, <code>cact_crypto</code>, and <code>cact_net</code>.
 </p>
 
 ---
@@ -120,7 +120,7 @@ VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
                -DCACT_BUILD_TIME="$(CACT_BUILD_TIME)"
 ```
 
-**Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, DHCP, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3) + **`libcact_hmac_ffi.a`** (HMAC-SHA256 module signing). Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
+**Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3) + **`libcact_hmac_ffi.a`** (HMAC-SHA256 module signing). Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
 
 Optional: `KERN_DEBUG=1 make` for richer symbols; QEMU GDB: see [`run_qemu.sh`](run_qemu.sh).
 
@@ -152,7 +152,7 @@ CactKernel-x86_32/
 │   │   ├── vfs/         core VFS, struct file, devfs, procfs, mntfs, etcfs, tmpfs,
 │   │   │                binfs, sbinfs, libfs, usrfs, varfs
 │   │   └── pipe/        kernel pipe implementation
-│   └── net/             rust_net/ — pure-Rust stack (smoltcp: Ethernet/ARP/IP/ICMP/TCP/UDP/DHCP/DNS) + rustls TLS + HTTP(S) client, C FFI header
+│   └── net/             rust_net/ — pure-Rust stack (smoltcp: Ethernet/ARP/IP/ICMP/TCP/UDP/DNS) + rustls TLS + HTTP(S) client, C FFI header
 ├── Makefile
 ├── VERSION
 ├── linker.ld
@@ -327,7 +327,7 @@ All out-of-tree PCI drivers now use **MSI-X** instead of PIC IRQ lines. Extra PC
 
 ## 🌐 Network stack
 
-The **entire L3+ stack is pure Rust** (`cact_net`): Ethernet demux, ARP, IPv4, ICMP, TCP and UDP sockets, DHCPv4, and the DNS resolver all run on **smoltcp**; TLS 1.3 runs on the vendored **rustls** with the in-kernel `cact_crypto` provider. The C side is only a thin FFI layer (`rust_net_ffi.h` + syscall glue) — `net_shim.c` was removed in favour of Rust symbols (`net_receive_packet`, `net_driver_irq_wake`) that out-of-tree NIC modules resolve via the ksym table.
+The **entire L3+ stack is pure Rust** (`cact_net`): Ethernet demux, ARP, IPv4, ICMP, TCP and UDP sockets, and the DNS resolver all run on **smoltcp**; TLS 1.3 runs on the vendored **rustls** with the in-kernel `cact_crypto` provider. The kernel itself has **no DHCP client**: IPv4 addressing is decided in userspace (`ip`, `networkd`/`dhcpd`) and pushed in via `/dev/net` `CACT_NETCTL_NETCFG`, which calls `rust_net_set_ipv4_config`. The C side is only a thin FFI layer (`rust_net_ffi.h` + syscall glue) — `net_shim.c` was removed in favour of Rust symbols (`net_receive_packet`, `net_driver_irq_wake`) that out-of-tree NIC modules resolve via the ksym table.
 
 Logical TCP states (C metadata / VFS view; ingress TCP is handled by **smoltcp**):
 
@@ -338,7 +338,7 @@ CLOSED → LISTEN → SYN_SENT → SYN_RECEIVED
        → CLOSE_WAIT → LAST_ACK → CLOSED
 ```
 
-`stack_poll()` drives the iface, **DHCPv4** updates runtime IPv4 + DNS server IP, **`SYS_DNS_RESOLVE`** performs a blocking **A-record** query over UDP/53, and **`SYS_PING_ECHO`** sends ICMP echo requests.
+`stack_poll()` drives the iface, **`rust_net_set_ipv4_config`** applies the address/gateway/DNS chosen by userspace, **`SYS_DNS_RESOLVE`** performs a blocking **A-record** query over UDP/53, and **`SYS_PING_ECHO`** sends ICMP echo requests. A periodic `net_timer_task` wakes the poll loop so smoltcp timers (TCP retransmit, timeouts) advance even without RX traffic.
 
 Full socket syscall API: `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, `recvfrom`, `shutdown`, `setsockopt`, `getsockopt`.
 
@@ -347,6 +347,7 @@ Full socket syscall API: `socket`, `bind`, `connect`, `listen`, `accept`, `send`
 | **Ethernet / ARP / IPv4 / ICMP / TCP / UDP** | smoltcp (`cact_net`) |
 | **Sockets / VFS** | Up to **16** kernel socket nodes integrated with `read`/`write`/`close`, `.poll` op |
 | **net_poll_task** | Dedicated kernel thread: sleeps on a semaphore, wakes on NIC RX, calls **`net_poll` → `stack_poll()`** |
+| **net_timer_task** | Periodic timer kick — wakes `net_poll_task` so smoltcp timers advance without RX traffic |
 | **TLS 1.3** | In-kernel via rustls — `cact_tls_connect_ex` / `cact_tls_send` / `cact_tls_recv` / `cact_tls_close` |
 | **HTTP/HTTPS** | `cact_http_request` / `cact_http_get` / `cact_http_post` — DNS → TCP → (TLS) → HTTP/1.1 fetch; `Content-Length`, chunked and read-to-close bodies |
 

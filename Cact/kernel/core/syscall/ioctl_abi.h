@@ -274,23 +274,33 @@ typedef struct cact_recvfrom_arg {
 #define CACT_NETCTL_SOCKET       0x3401  // arg=cact_socket_arg_t*; returns fd
 #define CACT_NETCTL_PING         0x3402  // arg=cact_ping_arg_t*
 #define CACT_NETCTL_DNS_RESOLVE  0x3403  // arg=cact_dns_arg_t*
-#define CACT_NETCTL_NETCFG       0x3404  // arg=cact_netcfg_arg_t* (root)
+#define CACT_NETCTL_NETCFG       0x3404  // arg=cact_netcfg_arg_t* (root): set link config
 #define CACT_NETCTL_SOCKETPAIR   0x3405  // arg=cact_socketpair_arg_t*; fds[2] out
+#define CACT_NETCTL_NETCFG_GET   0x3406  // arg=cact_netcfg_get_t* (out): read link config
 
 typedef struct cact_socket_arg { uint32_t domain; uint32_t type; uint32_t proto; } cact_socket_arg_t;
 typedef struct cact_socketpair_arg { uint32_t type; uint32_t fds[2]; } cact_socketpair_arg_t;
 typedef struct cact_ping_arg { uint32_t dst_ip; uint32_t id; uint32_t seq; } cact_ping_arg_t;
 typedef struct cact_dns_arg { char *name; uint32_t *out_ip; } cact_dns_arg_t;
+
+// Link configuration set by the network manager.  ip_host/mask 0 removes the
+// interface address, gateway_host/dns_host 0 removes route / resolver server.
 typedef struct cact_netcfg_arg {
     uint32_t ip_host;
     uint32_t netmask_host;
     uint32_t gateway_host;
     uint32_t dns_host;
-    uint32_t dhcp_server_host;
-    uint32_t lease_s;
-    uint32_t t1_s;
-    uint32_t t2_s;
 } cact_netcfg_arg_t;
+
+// Snapshot of the current link configuration (all host byte order).
+typedef struct cact_netcfg_get {
+    uint32_t ip_host;
+    uint32_t netmask_host;
+    uint32_t gateway_host;
+    uint32_t dns_host;
+    uint8_t  mac[6];       // NIC hardware address
+    uint32_t link_up;      // 1 when a NIC is registered / the link is up
+} cact_netcfg_get_t;
 
 // ===========================================================================
 // /dev/sys control (privileged, root only). RANGE 0x3500.
