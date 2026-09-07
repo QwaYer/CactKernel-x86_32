@@ -26,7 +26,7 @@ static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 
 static vfs_ops_t file_ops = { .read = _file_read };
 
-// procfs root directory ops (mdls/, self/, virtual files, /proc/<pid>/)
+// procfs root directory ops (mdls/, self/, virtual files)
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     if (streq(name, "mdls"))  return &mdls_dir;
@@ -35,14 +35,6 @@ static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     for (proc_file_t *f = file_list; f; f = f->next)
         if (streq(f->name, name)) return &f->node;
 
-    /* numeric pid dirs: /proc/<pid> */
-    uint32_t pid = 0;
-    int is_num = 1;
-    for (const char *s = name; *s; s++) {
-        if (*s < '0' || *s > '9') { is_num = 0; break; }
-        pid = pid * 10 + (uint32_t)(*s - '0');
-    }
-    if (is_num && pid > 0) return _pid_dir_get(pid);
     return 0;
 }
 
@@ -68,23 +60,7 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
             return &_root_de;
         }
     }
-    /* numeric pid directories follow the fixed files */
-    uint32_t pidx = index - i;
-    uint32_t pid  = _pid_dir_at(pidx);
-    if (pid == 0) return 0;
-    char nb[12];
-    int n = 0;
-    if (pid == 0) nb[n++] = '0';
-    while (pid > 0) { nb[n++] = '0' + (pid % 10); pid /= 10; }
-    for (int k = 0; k < n / 2; k++) {
-        char t = nb[k];
-        nb[k] = nb[n - 1 - k];
-        nb[n - 1 - k] = t;
-    }
-    nb[n] = '\0';
-    strlcpy(_root_de.name, nb, 128);
-    _root_de.inode = 0x4000 + index;
-    return &_root_de;
+    return 0;
 }
 
 static void _root_listdir(vfs_node_t *dir) {
@@ -92,14 +68,6 @@ static void _root_listdir(vfs_node_t *dir) {
     printk("  mdls/\n  self/\n");
     for (proc_file_t *f = file_list; f; f = f->next) {
         printk("  "); printk(f->name); printk("\n");
-    }
-    uint32_t pidx = 0;
-    for (;;) {
-        uint32_t pid = _pid_dir_at(pidx++);
-        if (pid == 0) break;
-        char nb[12];
-        snprintf(nb, sizeof(nb), "%d", (int)pid);
-        printk("  "); printk(nb); printk("/\n");
     }
 }
 
