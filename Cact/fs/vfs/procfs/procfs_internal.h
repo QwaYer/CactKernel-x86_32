@@ -26,11 +26,6 @@ void procfs_mdls_init(void);
 /* procfs_proc.c — per-process /proc service nodes (self/, ...). */
 void procfs_proc_init(void);
 
-/* procfs_pid.c — dynamic /proc/<pid>/ directories. */
-vfs_node_t *_pid_dir_get(uint32_t pid);
-uint32_t    _pid_dir_at(uint32_t idx);
-void        procfs_pid_init(void);
-
 /* procfs_std.c — default /proc file generators. */
 int _cpuinfo_read(uint32_t off, uint32_t size, char *buf);
 int _apic_read(uint32_t off, uint32_t size, char *buf);

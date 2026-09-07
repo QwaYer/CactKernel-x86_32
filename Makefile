@@ -242,7 +242,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/procfs_mdls.o \
       $(BUILD_DIR)/procfs_std.o \
       $(BUILD_DIR)/procfs_proc.o \
-      $(BUILD_DIR)/procfs_pid.o \
       $(BUILD_DIR)/mntfs.o \
       $(BUILD_DIR)/mntfs_ops.o \
       $(BUILD_DIR)/mntfs_mounts.o \
@@ -595,10 +594,6 @@ $(BUILD_DIR)/procfs_std.o: $(FS_PROCFS_DIR)/procfs_std.c $(FS_PROCFS_DIR)/procfs
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/procfs_proc.o: $(FS_PROCFS_DIR)/procfs_proc.c $(FS_PROCFS_DIR)/procfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/procfs_pid.o: $(FS_PROCFS_DIR)/procfs_pid.c $(FS_PROCFS_DIR)/procfs_internal.h $(KERN_SYSCALL_DIR)/ioctl_abi.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
