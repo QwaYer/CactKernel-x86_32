@@ -17,8 +17,7 @@
 #include "memfd.h"
 #include "blkdev.h"
 #include "part.h"
-#include "fs_mod.h"
-#include "mntfs.h"
+#include "vfsdev.h"
 
 // devfs_services.c — kernel-service devices exposed through devfs.
 //
@@ -116,64 +115,8 @@ devfs_driver_t drv_kmsg = { .read = _kmsg_read, .status = _kmsg_status };
 
 // ── /dev/sys ──────────────────────────────────────────────────────────────
 
-// Return the blkdev name embedded in a device path: accepts "sda1",
-// "/dev/sda1" or "/sda1"; returns NULL otherwise.
-static int has_prefix(const char *p, const char *pre) {
-    for (; *pre; pre++, p++)
-        if (*p != *pre) return 0;
-    return 1;
-}
-
-static const char *blk_name_from_arg(const char *p) {
-    if (!p) return 0;
-    if (has_prefix(p, "/dev/"))
-        return p + 5;
-    if (p[0] == '/' && p[1] != '\0')
-        return p + 1;
-    return p;
-}
-
-// Mount a filesystem that lives on a block device (whole disk or partition)
-// through the loaded filesystem modules.
-static int _mount_blkdev(const char *devarg, const char *ktgt, const char *kfs) {
-    const char *nm = blk_name_from_arg(devarg);
-    if (!nm) return -1;
-
-    blkdev_t *bd = blkdev_find(nm);
-    if (!bd) return -1;
-    if (mntfs_device_mounted(bd->name))
-        return -1;   // busy
-
-    vfs_node_t *root = fs_mod_mount_type(bd, kfs);
-    if (!root) return -1;
-
-    if (mntfs_mount_blkdev(bd, root, 0) != 0) {
-        fs_mod_unmount_dev(bd);
-        return -1;
-    }
-
-    // Optional mountpoint alias (e.g. mount("/dev/sda1", "/mnt", "ext4")).
-    // Its parent directory must already exist, exactly like the old alias
-    // bind semantics.
-    if (ktgt && ktgt[0]) {
-        char basename[128];
-        vfs_node_t *parent = vfs_resolve_parent(ktgt, basename, 128);
-        if (!parent || !basename[0]) {
-            mntfs_umount_disk(bd->name);
-            fs_mod_unmount_dev(bd);
-            return -1;
-        }
-        int r = vfs_mount(parent, basename, root);
-        if (r != 0) {
-            mntfs_umount_disk(bd->name);
-            fs_mod_unmount_dev(bd);
-            return r;
-        }
-    }
-    return 0;
-}
-
-// Mount a block device by name (see _sys_mount_ioctl for the dispatch).
+// Mount a block device by name onto an explicit target directory (Linux-style
+// mount /dev/<dev> <dir>). Dispatch handled by vfsdev_mount().
 static int _sys_mount_ioctl(cact_mount_arg_t *a) {
     int r = _root_only();
     if (r) return r;
@@ -193,10 +136,13 @@ static int _sys_mount_ioctl(cact_mount_arg_t *a) {
         if (!kfs) { kfree(ksrc); if (ktgt) kfree(ktgt); return -EFAULT; }
     }
 
-    // With a fstype the mount is a device mount: mount(src=/dev/<name> or
-    // <name>, target=[alias], fstype=<fs module instance | auto>).
+    // Device mount: mount(src=<name|/dev/name>, target=<dir>, fstype=<module>).
     if (kfs && kfs[0]) {
-        r = _mount_blkdev(ksrc, ktgt, kfs);
+        if (!ktgt || !ktgt[0]) {
+            kfree(ksrc); kfree(kfs);
+            return -EINVAL;
+        }
+        r = vfsdev_mount(ksrc, ktgt, kfs);
         kfree(ksrc);
         if (ktgt) kfree(ktgt);
         if (kfs)  kfree(kfs);
@@ -225,32 +171,19 @@ static int _sys_umount_ioctl(char *target) {
     char *ktgt = copy_path_from_user(target);
     if (!ktgt) return -EFAULT;
 
-    char basename[128];
-    vfs_node_t *parent = vfs_resolve_parent(ktgt, basename, 128);
-    int rr;
-    if (parent && basename[0])
-        rr = vfs_umount(parent, basename);
-    else
-        rr = -1;
-
+    // Managed device mount first (target path or device name), then a plain
+    // VFS alias mount.
+    int rr = vfsdev_umount(ktgt);
     if (rr == 0) {
         kfree(ktgt);
         return 0;
     }
 
-    // Not a mount-table alias: maybe an mntfs device mount (/<dev> or
-    // /dev/<dev>). Drop the disk entry and release the fs-module mount.
-    const char *nm = blk_name_from_arg(ktgt);
-    if (nm && nm[0]) {
-        blkdev_t *bd = blkdev_find(nm);
-        if (bd && mntfs_device_mounted(bd->name)) {
-            mntfs_umount_disk(bd->name);
-            fs_mod_unmount_dev(bd);
-            kfree(ktgt);
-            return 0;
-        }
-    }
-
+    char basename[128];
+    vfs_node_t *parent = vfs_resolve_parent(ktgt, basename, 128);
+    rr = -1;
+    if (parent && basename[0])
+        rr = vfs_umount(parent, basename);
     kfree(ktgt);
     return rr;
 }
@@ -332,10 +265,12 @@ static int _sys_ioctl(void *p, uint32_t cmd, void *arg) {
         if (!kname) return -EFAULT;
         blkdev_t *disk = blkdev_find(kname);
         if (!disk || disk->parent) { kfree(kname); return -1; }
-        // Refuse to rescan while any partition of this disk is mounted.
+        // Refuse to rescan while the disk itself or any of its partitions
+        // has a mounted filesystem.
+        if (vfsdev_device_mounted(kname)) { kfree(kname); return -1; }
         for (int i = 0; i < blkdev_part_count(disk); i++) {
             blkdev_t *p = blkdev_part_at(disk, i);
-            if (p && mntfs_device_mounted(p->name)) { kfree(kname); return -1; }
+            if (p && vfsdev_device_mounted(p->name)) { kfree(kname); return -1; }
         }
         int n = part_rescan(kname);
         kfree(kname);

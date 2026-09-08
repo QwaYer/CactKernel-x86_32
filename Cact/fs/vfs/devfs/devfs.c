@@ -5,7 +5,6 @@
 #include "klib.h"
 #include "kernel.h"
 #include "pipe.h"
-#include "blkdev.h"
 #include "pci_driver.h"
 #include "mouse.h"
 #include "fb.h"
@@ -286,10 +285,9 @@ void devfs_init(void) {
     register_chrdev("random",  DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
     register_chrdev("urandom", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
 
-    blkdev_t *boot = blkdev_get_boot();
-    if (boot) {
-        register_chrdev(boot->name, DEVFS_F_BLOCK, &drv_disk, 0);
-    }
+    // Block device nodes (/dev/<disk>, /dev/<part>) are registered by vfsdev,
+    // not by devfs: devfs only owns character and kernel-service devices.
+
     register_chrdev("tty", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_tty, 0);
 
     register_chrdev("keyboard", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_keyboard, 0);
