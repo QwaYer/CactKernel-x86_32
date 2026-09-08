@@ -262,14 +262,28 @@ static int _tmp_rename(vfs_node_t *dir, const char *oldname, const char *newname
     return 0;
 }
 
+// Initialize a root directory node (shared by the /tmp instance and the
+// heap-allocated RAM rootfs instances created by tmpfs_create_root).
+static void _root_init(tmpfs_node_t *n, const char *name) {
+    memset(n, 0, sizeof(tmpfs_node_t));
+    strlcpy(n->name, name, TMPFS_NAME_LEN);
+    n->type  = VFS_DIRECTORY;
+    n->inode = tmpfs_inode_ctr++;
+    _init_vnode(n);
+}
+
+// Heap-allocated RAM filesystem root (used for the nodisk "/" rootfs).
+vfs_node_t *tmpfs_create_root(const char *name) {
+    tmpfs_node_t *n = (tmpfs_node_t *)kmalloc(sizeof(tmpfs_node_t));
+    if (!n) return 0;
+    _root_init(n, name ? name : "rootfs");
+    return &n->vnode;
+}
+
 // Initialize tmpfs root node.
 void tmpfs_init(void) {
     if (tmpfs_ready) return;
-    memset(&tmpfs_root_node, 0, sizeof(tmpfs_node_t));
-    strlcpy(tmpfs_root_node.name, "tmp", TMPFS_NAME_LEN);
-    tmpfs_root_node.type  = VFS_DIRECTORY;
-    tmpfs_root_node.inode = tmpfs_inode_ctr++;
-    _init_vnode(&tmpfs_root_node);
+    _root_init(&tmpfs_root_node, "tmp");
     tmpfs_ready = 1;
 }
 

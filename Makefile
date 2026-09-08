@@ -72,6 +72,7 @@ FS_DEVFS_DIR     = Cact/fs/vfs/devfs
 FS_PG_DIR        = Cact/drivers/block/pagecache
 FS_PROCFS_DIR    = Cact/fs/vfs/procfs
 FS_MNTFS_DIR     = Cact/fs/vfs/mntfs
+FS_VFSDEV_DIR    = Cact/fs/vfs/vfsdev
 FS_ETCFS_DIR     = Cact/fs/vfs/etcfs
 FS_TMPFS_DIR     = Cact/fs/vfs/tmpfs
 FS_BINFS_DIR     = Cact/fs/vfs/binfs
@@ -170,6 +171,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
 		 -I$(FS_PG_DIR) \
          -I$(FS_PROCFS_DIR) \
          -I$(FS_MNTFS_DIR) \
+         -I$(FS_VFSDEV_DIR) \
          -I$(FS_ETCFS_DIR) \
          -I$(FS_TMPFS_DIR) \
          -I$(FS_BINFS_DIR) \
@@ -243,8 +245,8 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/procfs_std.o \
       $(BUILD_DIR)/procfs_proc.o \
       $(BUILD_DIR)/mntfs.o \
-      $(BUILD_DIR)/mntfs_ops.o \
-      $(BUILD_DIR)/mntfs_mounts.o \
+      $(BUILD_DIR)/vfsdev.o \
+      $(BUILD_DIR)/vfsdev_mount.o \
       $(BUILD_DIR)/etcfs.o \
       $(BUILD_DIR)/tmpfs.o \
       $(BUILD_DIR)/binfs.o \
@@ -597,15 +599,15 @@ $(BUILD_DIR)/procfs_proc.o: $(FS_PROCFS_DIR)/procfs_proc.c $(FS_PROCFS_DIR)/proc
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c $(FS_MNTFS_DIR)/mntfs_internal.h
+$(BUILD_DIR)/mntfs.o: $(FS_MNTFS_DIR)/mntfs.c $(FS_MNTFS_DIR)/mntfs.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/mntfs_ops.o: $(FS_MNTFS_DIR)/mntfs_ops.c $(FS_MNTFS_DIR)/mntfs_internal.h
+$(BUILD_DIR)/vfsdev.o: $(FS_VFSDEV_DIR)/vfsdev.c $(FS_VFSDEV_DIR)/vfsdev.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/mntfs_mounts.o: $(FS_MNTFS_DIR)/mntfs_mounts.c $(FS_MNTFS_DIR)/mntfs_internal.h
+$(BUILD_DIR)/vfsdev_mount.o: $(FS_VFSDEV_DIR)/vfsdev_mount.c $(FS_VFSDEV_DIR)/vfsdev.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

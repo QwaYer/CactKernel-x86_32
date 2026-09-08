@@ -1,4 +1,5 @@
 #include "blkdev.h"
+#include "vfsdev.h"
 #include "kernel.h"
 #include "klib.h"
 #include "memory.h"
@@ -94,8 +95,13 @@ void unregister_blkdev(const char *name) {
     if (!d || !blkdev_is_disk(d))
         return;
 
-    // Drop this disk's partitions first (devfs entries are cleaned by the
-    // partition layer; here we only release the blkdev slots).
+    // Drop this disk's /dev nodes and partitions first (refuse while a
+    // partition or the disk itself is mounted), then release the slots.
+    for (int i = 0; i < blkdev_part_count(d); i++) {
+        blkdev_t *p = blkdev_part_at(d, i);
+        if (p) vfsdev_unregister_block_device(p);
+    }
+    vfsdev_unregister_block_device(d);
     blkdev_clear_partitions(d);
 
     int idx = (int)d->id;

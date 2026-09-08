@@ -6,15 +6,13 @@
  * I/O callbacks (blkdev_read), so it works for any storage driver and must
  * run in a task context (reads may sleep on controller IRQs).
  *
- * Each created partition gets:
- *   - a blkdev_t sub-device  (blkdev_add_partition) with start_lba offset,
- *   - a devfs block node     ("/dev/sda1" style) whose data node translates
- *     byte offsets back to partition-relative sectors.
+ * Each created device (whole disk and partition) is exposed as a single
+ * /dev/<name> block node by vfsdev ("/dev/sda", "/dev/sda1" style).
  */
 
 #include "blkdev.h"
 #include "part.h"
-#include "devfs.h"
+#include "vfsdev.h"
 #include "memory.h"
 #include "klib.h"
 #include "kernel.h"
@@ -82,129 +80,26 @@ static int mbr_type_extended(uint8_t t) {
            t == MBR_TYPE_EXTENDED_WIN;
 }
 
-// ── devfs driver for partition block devices ──────────────────────────────
-
-// Byte-range rw on a partition device. Works sector by sector so unaligned
-// read/write offsets behave like the whole-disk drivers do.
-static int part_rw(blkdev_t *bd, uint32_t off, uint32_t size,
-                   char *buf, int wr) {
-    if (!bd || !buf) return -1;
-    if (size == 0) return 0;
-
-    uint8_t sec[512];
-    uint32_t done = 0;
-    uint32_t first = off / 512;
-    uint32_t soff  = off % 512;
-
-    for (uint32_t i = 0; done < size; i++) {
-        uint32_t lba = first + i;
-        uint32_t want = size - done;
-        uint32_t avail = 512 - soff;
-        uint32_t chunk = (want < avail) ? want : avail;
-        int full = (soff == 0 && chunk == 512);
-
-        if (wr) {
-            if (full) {
-                memcpy(sec, buf + done, 512);
-                if (blkdev_write(bd, lba, sec) != 0)
-                    break;
-            } else {
-                memset(sec, 0, 512);
-                if (blkdev_read(bd, lba, sec) != 0) {
-                    memset(sec, 0, 512);
-                }
-                memcpy(sec + soff, buf + done, chunk);
-                if (blkdev_write(bd, lba, sec) != 0)
-                    break;
-            }
-        } else {
-            memset(sec, 0, 512);
-            if (blkdev_read(bd, lba, sec) != 0)
-                break;
-            memcpy(buf + done, sec + soff, chunk);
-        }
-
-        done += chunk;
-        soff  = 0;
-    }
-    return (int)done;
-}
-
-static int part_node_read(void *priv, uint32_t off, uint32_t size, char *buf) {
-    return part_rw((blkdev_t *)priv, off, size, buf, 0);
-}
-
-static int part_node_write(void *priv, uint32_t off, uint32_t size, char *buf) {
-    return part_rw((blkdev_t *)priv, off, size, buf, 1);
-}
-
-static int part_node_status(void *priv, char *buf, uint32_t size) {
-    blkdev_t *bd = (blkdev_t *)priv;
-    if (!bd) return 0;
-    char tmp[256];
-    int n = 0;
-    const char *s;
-    s = "device: ";  for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    for (int i = 0; bd->name[i] && n < (int)sizeof(tmp) - 1; i++) tmp[n++] = bd->name[i];
-    s = "\ntype: partition\n";
-    for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    s = "disk: ";  for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    if (bd->parent)
-        for (int i = 0; bd->parent->name[i] && n < (int)sizeof(tmp) - 1; i++)
-            tmp[n++] = bd->parent->name[i];
-    s = "\nstart_lba: ";
-    for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    {
-        char nb[16];
-        snprintf(nb, sizeof(nb), "%u", (unsigned)(bd->start_lba));
-        for (int i = 0; nb[i] && n < (int)sizeof(tmp) - 1; i++) tmp[n++] = nb[i];
-    }
-    s = "\nsize_lba: ";
-    for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    {
-        char nb[16];
-        snprintf(nb, sizeof(nb), "%u", (unsigned)(bd->max_lba));
-        for (int i = 0; nb[i] && n < (int)sizeof(tmp) - 1; i++) tmp[n++] = nb[i];
-    }
-    s = "\ntable: ";
-    for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    s = (bd->table == PART_TABLE_GPT) ? "gpt" :
-        (bd->table == PART_TABLE_MBR) ? "mbr" : "none";
-    for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    if (n < (int)sizeof(tmp) - 1) tmp[n++] = '\n';
-    tmp[n] = '\0';
-
-    if ((uint32_t)n > size) n = (int)size;
-    memcpy(buf, tmp, (uint32_t)n);
-    return n;
-}
-
-static devfs_driver_t drv_blkpart = {
-    .read   = part_node_read,
-    .write  = part_node_write,
-    .status = part_node_status,
-};
-
-// ── partition registration / teardown ─────────────────────────────────────
+// ── vfsdev block-node registration for partitions ─────────────────────────
 
 static void part_devfs_add(blkdev_t *p) {
     if (p->devfs_registered)
         return;
-    if (register_chrdev(p->name, DEVFS_F_BLOCK, &drv_blkpart, p))
+    if (vfsdev_register_block_device(p) == 0)
         p->devfs_registered = 1;
 }
 
 static void part_devfs_remove(blkdev_t *p) {
     if (!p->devfs_registered)
         return;
-    unregister_chrdev(p->name);
+    vfsdev_unregister_block_device(p);
     p->devfs_registered = 0;
 }
 
 int part_drop_disk(blkdev_t *disk) {
     if (!disk)
         return -1;
-    // Unregister devfs nodes first, then release the blkdev slots.
+    // Unregister vfsdev block nodes first, then release the blkdev slots.
     for (int i = 0; i < blkdev_part_count(disk); i++) {
         blkdev_t *p = blkdev_part_at(disk, i);
         if (p)
@@ -400,6 +295,8 @@ int part_rescan(const char *name) {
 }
 
 static void part_auto_scan(blkdev_t *disk) {
+    // Expose the whole disk itself under /dev first, then probe its label.
+    vfsdev_register_block_device(disk);
     (void)part_scan_disk(disk);
 }
 

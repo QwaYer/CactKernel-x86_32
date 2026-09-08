@@ -40,7 +40,7 @@ struct blkdev {
     uint32_t part_no;          // 1-based partition number (0 = whole disk)
     uint8_t  table;            // PART_TABLE_* for the source label (partitions)
     uint8_t  ptype;            // MBR partition type byte (0 otherwise)
-    int      devfs_registered; // partition node present in devfs
+    int      devfs_registered; // vfsdev block node present for this device
 
     // Whole-disk I/O callbacks (set by register_blkdev only).
     void (*read_sector) (uint32_t lba, uint8_t *buf);

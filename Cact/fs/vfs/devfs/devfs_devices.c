@@ -5,7 +5,6 @@
 #include "klib.h"
 #include "kernel.h"
 #include "pipe.h"
-#include "blkdev.h"
 #include "pci_driver.h"
 #include "mouse.h"
 #include "fb.h"
@@ -33,57 +32,6 @@ static int _rand_read(void *p, uint32_t o, uint32_t s, char *b) {
     return (int)s;
 }
 devfs_driver_t drv_random = { .read=_rand_read, .write=_null_write };
-
-static int _disk_read(void *p, uint32_t off, uint32_t size, char *buf) {
-    (void)p;
-    uint8_t sector_buf[512];
-    uint32_t lba=off/512, written=0;
-    while(written<size){
-        blkdev_read_sector(lba,(uint8_t*)sector_buf);
-        uint32_t c=512; if(c>size-written)c=size-written;
-        memcpy(buf+written,sector_buf,c);
-        written+=c; lba++;
-    }
-    return (int)written;
-}
-static int _disk_write(void *p, uint32_t off, uint32_t size, char *buf) {
-    (void)p;
-    uint8_t sector_buf[512];
-    uint32_t lba=off/512, written=0;
-    while(written<size){
-        blkdev_read_sector(lba,(uint8_t*)sector_buf);
-        uint32_t c=512; if(c>size-written)c=size-written;
-        memcpy(sector_buf,buf+written,c);
-        blkdev_write_sector(lba,(uint8_t*)sector_buf);
-        written+=c; lba++;
-    }
-    return (int)written;
-}
-static int _disk_ctl(void *p, const char *cmd, uint32_t len) {
-    (void)p;
-    if (len < 2) return -1;
-    if(cmd[0]=='f'&&cmd[1]=='l') { printk("[disk] flush (noop)\n"); return 0; }
-    printk("[disk] unknown ctl: "); printk((char*)cmd); printk("\n");
-    return -1;
-}
-static int _disk_status(void *p, char *buf, uint32_t size) {
-    (void)p;
-    blkdev_t *boot = blkdev_get_boot();
-    const char *h = "device: ";
-    uint32_t n=0;
-    while(h[n]&&n<size-1){buf[n]=h[n];n++;}
-    if (boot) { for(int i=0;boot->name[i]&&n<size-1;i++) buf[n++]=boot->name[i]; }
-    else { const char *u="none"; for(int i=0;u[i]&&n<size-1;i++) buf[n++]=u[i]; }
-    if(n<size-1) buf[n++]='\n';
-    const char *t = "type: block (via blkdev)\n";
-    for(int i=0;t[i]&&n<size-1;i++) buf[n++]=t[i];
-    buf[n]='\0';
-    return (int)n;
-}
-devfs_driver_t drv_disk = {
-    .read=_disk_read, .write=_disk_write,
-    .ctl=_disk_ctl,   .status=_disk_status
-};
 
 extern int keyboard_read_char(void);
 
