@@ -15,4 +15,8 @@ volatile uint32_t *apic_lapic_regs(void);
 bool     apic_ioapic_info(uint32_t *base, uint32_t *id, uint32_t *max_redir, uint32_t *gsi_base);
 int      apic_irq_override(int isa_irq);
 
+void apic_ap_online(void);
+void apic_send_init_ipi(uint32_t dest_lapic);
+void apic_send_sipi(uint32_t dest_lapic, uint32_t vector);
+
 #endif

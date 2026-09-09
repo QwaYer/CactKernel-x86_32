@@ -142,6 +142,26 @@ pub fn mlfq_init() {
     }
 }
 
+/// Runnable task count summed over all MLFQ levels (the idle task is never
+/// enqueued, so it is excluded).  Caller must hold the scheduler lock (or be
+/// in a single-threaded/interrupt context).
+pub(crate) fn mlfq_runnable_count() -> u32 {
+    unsafe {
+        let s = &*mlfq_state_mut();
+        s.queues.iter().map(|q| q.count).sum()
+    }
+}
+
+/// Highest-priority (lowest-level) non-empty ready queue, if any.
+pub(crate) fn mlfq_highest_runnable_level() -> Option<u32> {
+    unsafe {
+        let s = &*mlfq_state_mut();
+        (0..MLFQ_LEVELS)
+            .find(|&l| s.queues[l].count > 0)
+            .map(|l| l as u32)
+    }
+}
+
 pub fn mlfq_enqueue_locked(task: *mut TaskStruct, level: u32) {
     if task.is_null() {
         return;
@@ -153,6 +173,7 @@ pub fn mlfq_enqueue_locked(task: *mut TaskStruct, level: u32) {
         t.priority = level as u32;
         s.queues[level].push(t);
     }
+    crate::mlfq_map::on_enqueue(level.min(MLFQ_LEVELS as u32 - 1));
 }
 
 #[no_mangle]
@@ -282,6 +303,8 @@ pub unsafe extern "C" fn schedule() {
     (*next).state = TaskState::Running;
     crate::task::current_task = next;
 
+    crate::energy::observe_schedule(0, (*next).pid);
+
     irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
     let prev_pd = (*prev).page_directory;
@@ -364,6 +387,9 @@ pub unsafe extern "C" fn on_timer_tick() {
         return;
     }
 
+    // Energy governor load sampling (master core, one sample per tick).
+    crate::monitor::sample_tick();
+
     (*cur).ticks_used += 1;
     let quantum = MLFQ_QUANTUM[(*cur).priority.min(MLFQ_LEVELS as u32 - 1) as usize];
 
@@ -393,6 +419,12 @@ pub unsafe extern "C" fn on_timer_tick() {
     if !live.is_null() {
         crate::task::task_handle_signals(live);
     }
+
+    // Energy decision engine pass (master core, once per tick).
+    crate::decision::energy_decision_tick();
+
+    // Load-balancing / migration pass (master core, once per tick).
+    crate::balance::energy_balance_tick();
 
     if need_preempt {
         schedule();

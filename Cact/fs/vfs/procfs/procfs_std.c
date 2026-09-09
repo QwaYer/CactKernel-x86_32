@@ -11,6 +11,7 @@
 #include "cpudev.h"
 #include "apic.h"
 #include "msi.h"
+#include "energy.h"
 
 // Approximate CPU MHz via short TSC busy-wait.
 static uint32_t _tsc_mhz(void) {
@@ -23,131 +24,160 @@ static uint32_t _tsc_mhz(void) {
     return delta / 10000u;
 }
 
-// /proc/cpuinfo generator — uses cpudev.c cached data
+// /proc/cpuinfo generator — uses cpudev.c cached data + the energy core map
 int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
-    char tmp[768];
+    char tmp[1536];
     int  p = 0;
-
-    uint32_t mhz = _tsc_mhz();
-    uint32_t apic_id = apic_lapic_id();
 
     #define _APP(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
     #define _APPN(n) { char _nb[16]; snprintf(_nb, sizeof(_nb), "%d", (int)(n)); _APP(_nb); }
 
-    _APP("processor       : 0\n");
-    _APP("apicid          : "); _APPN(apic_id); _APP("\n");
-    _APP("vendor_id       : "); _APP(cpu_vendor_str(cpu_vendor())); _APP("\n");
-    _APP("model name      : "); _APP(cpu_brand_str()); _APP("\n");
-    _APP("cpu MHz         : "); _APPN(mhz); _APP("\n");
+    uint32_t mhz = _tsc_mhz();
+    uint32_t present = energy_core_count_present();
+    if (present == 0) present = 1;
 
-    _APP("flags           :");
-    uint32_t edx = cpu_features_edx();
-    uint32_t ecx = cpu_features_ecx();
-    uint32_t ext_edx = cpu_features_ext_edx();
-    uint32_t l7_ebx = cpu_features_leaf7_ebx();
-    uint32_t l7_ecx = cpu_features_leaf7_ecx();
-    uint32_t l7_edx = cpu_features_leaf7_edx();
+    for (uint32_t cpu = 0; cpu < present; cpu++) {
+        if (p > (int)sizeof(tmp) - 200)
+            break;
 
-    if (edx & (1u<<0))  _APP(" fpu");
-    if (edx & (1u<<1))  _APP(" vme");
-    if (edx & (1u<<2))  _APP(" de");
-    if (edx & (1u<<3))  _APP(" pse");
-    if (edx & (1u<<4))  _APP(" tsc");
-    if (edx & (1u<<5))  _APP(" msr");
-    if (edx & (1u<<6))  _APP(" pae");
-    if (edx & (1u<<7))  _APP(" mce");
-    if (edx & (1u<<8))  _APP(" cx8");
-    if (edx & (1u<<9))  _APP(" apic");
-    if (edx & (1u<<11)) _APP(" sep");
-    if (edx & (1u<<12)) _APP(" mtrr");
-    if (edx & (1u<<13)) _APP(" pge");
-    if (edx & (1u<<14)) _APP(" mca");
-    if (edx & (1u<<15)) _APP(" cmov");
-    if (edx & (1u<<16)) _APP(" pat");
-    if (edx & (1u<<17)) _APP(" pse36");
-    if (edx & (1u<<19)) _APP(" clflush");
-    if (edx & (1u<<21)) _APP(" ds");
-    if (edx & (1u<<22)) _APP(" acpi");
-    if (edx & (1u<<23)) _APP(" mmx");
-    if (edx & (1u<<24)) _APP(" fxsr");
-    if (edx & (1u<<25)) _APP(" sse");
-    if (edx & (1u<<26)) _APP(" sse2");
-    if (edx & (1u<<28)) _APP(" ht");
-    if (edx & (1u<<29)) _APP(" tm1");
-    if (edx & (1u<<31)) _APP(" pbe");
+        uint32_t apic_id = energy_core_lapic_id(cpu);
+        if (apic_id == 0xFFFFFFFFu && cpu == 0)
+            apic_id = apic_lapic_id();
 
-    if (ecx & (1u<<0))  _APP(" sse3");
-    if (ecx & (1u<<1))  _APP(" pclmulqdq");
-    if (ecx & (1u<<2))  _APP(" dtes64");
-    if (ecx & (1u<<3))  _APP(" monitor");
-    if (ecx & (1u<<4))  _APP(" dscpl");
-    if (ecx & (1u<<5))  _APP(" vmx");
-    if (ecx & (1u<<6))  _APP(" smx");
-    if (ecx & (1u<<7))  _APP(" est");
-    if (ecx & (1u<<8))  _APP(" tm2");
-    if (ecx & (1u<<9))  _APP(" ssse3");
-    if (ecx & (1u<<12)) _APP(" fma");
-    if (ecx & (1u<<13)) _APP(" cx16");
-    if (ecx & (1u<<14)) _APP(" xtpr");
-    if (ecx & (1u<<15)) _APP(" pdcm");
-    if (ecx & (1u<<17)) _APP(" pcid");
-    if (ecx & (1u<<19)) _APP(" sse4_1");
-    if (ecx & (1u<<20)) _APP(" sse4_2");
-    if (ecx & (1u<<21)) _APP(" x2apic");
-    if (ecx & (1u<<22)) _APP(" movbe");
-    if (ecx & (1u<<23)) _APP(" popcnt");
-    if (ecx & (1u<<24)) _APP(" tsc-deadline");
-    if (ecx & (1u<<25)) _APP(" aes");
-    if (ecx & (1u<<26)) _APP(" xsave");
-    if (ecx & (1u<<27)) _APP(" osxsave");
-    if (ecx & (1u<<28)) _APP(" avx");
-    if (ecx & (1u<<29)) _APP(" f16c");
-    if (ecx & (1u<<30)) _APP(" rdrand");
-    if (ecx & (1u<<31)) _APP(" hypervisor");
+        _APP("processor       : "); _APPN(cpu); _APP("\n");
+        _APP("apicid          : "); _APPN(apic_id); _APP("\n");
+        _APP("vendor_id       : "); _APP(cpu_vendor_str(cpu_vendor())); _APP("\n");
+        _APP("model name      : "); _APP(cpu_brand_str()); _APP("\n");
+        _APP("cpu MHz         : "); _APPN(mhz); _APP("\n");
 
-    if (l7_ebx & (1u<<0))  _APP(" fsgsbase");
-    if (l7_ebx & (1u<<1))  _APP(" tsc-adjust");
-    if (l7_ebx & (1u<<2))  _APP(" sgx");
-    if (l7_ebx & (1u<<3))  _APP(" bmi1");
-    if (l7_ebx & (1u<<4))  _APP(" hle");
-    if (l7_ebx & (1u<<5))  _APP(" avx2");
-    if (l7_ebx & (1u<<7))  _APP(" smep");
-    if (l7_ebx & (1u<<8))  _APP(" bmi2");
-    if (l7_ebx & (1u<<9))  _APP(" erms");
-    if (l7_ebx & (1u<<10)) _APP(" invpcid");
-    if (l7_ebx & (1u<<11)) _APP(" rtm");
-    if (l7_ebx & (1u<<14)) _APP(" mpx");
-    if (l7_ebx & (1u<<18)) _APP(" rdseed");
-    if (l7_ebx & (1u<<19)) _APP(" adx");
-    if (l7_ebx & (1u<<20)) _APP(" smap");
-    if (l7_ebx & (1u<<23)) _APP(" clflushopt");
-    if (l7_ebx & (1u<<24)) _APP(" clwb");
-    if (l7_ebx & (1u<<29)) _APP(" sha");
+        switch (energy_core_role(cpu)) {
+        case ENERGY_ROLE_MASTER: _APP("role            : master\n"); break;
+        case ENERGY_ROLE_WORKER: _APP("role            : worker\n"); break;
+        default:                 _APP("role            : none\n");  break;
+        }
+        switch (energy_core_cstate(cpu)) {
+        case ENERGY_CSTATE_C0: _APP("cstate          : C0\n"); break;
+        case ENERGY_CSTATE_C1: _APP("cstate          : C1\n"); break;
+        case ENERGY_CSTATE_C3: _APP("cstate          : C3\n"); break;
+        case ENERGY_CSTATE_C6: _APP("cstate          : C6\n"); break;
+        default:               _APP("cstate          : ?\n");  break;
+        }
+        _APP("online          : "); _APP(energy_core_is_online(cpu) ? "yes\n" : "no\n");
+        _APP("idle            : "); _APP(energy_core_is_idle(cpu) ? "yes\n" : "no\n");
 
-    if (l7_ecx & (1u<<2))  _APP(" umip");
-    if (l7_ecx & (1u<<3))  _APP(" pku");
-    if (l7_ecx & (1u<<4))  _APP(" ospke");
-    if (l7_ecx & (1u<<7))  _APP(" cet-ss");
-    if (l7_ecx & (1u<<9))  _APP(" vaes");
-    if (l7_ecx & (1u<<10)) _APP(" vpclmulqdq");
-    if (l7_ecx & (1u<<16)) _APP(" la57");
+        // Full feature flags are identical on every core; print once (cpu0).
+        if (cpu != 0)
+            continue;
 
-    if (l7_edx & (1u<<10)) _APP(" md-clear");
-    if (l7_edx & (1u<<26)) _APP(" ibrs");
-    if (l7_edx & (1u<<27)) _APP(" stibp");
-    if (l7_edx & (1u<<28)) _APP(" l1d-flush");
-    if (l7_edx & (1u<<29)) _APP(" arch-cap");
-    if (l7_edx & (1u<<30)) _APP(" core-cap");
-    if (l7_edx & (1u<<31)) _APP(" ssbd");
+        _APP("flags           :");
+        uint32_t edx = cpu_features_edx();
+        uint32_t ecx = cpu_features_ecx();
+        uint32_t ext_edx = cpu_features_ext_edx();
+        uint32_t l7_ebx = cpu_features_leaf7_ebx();
+        uint32_t l7_ecx = cpu_features_leaf7_ecx();
+        uint32_t l7_edx = cpu_features_leaf7_edx();
 
-    if (ext_edx & (1u<<11)) _APP(" syscall");
-    if (ext_edx & (1u<<20)) _APP(" nx");
-    if (ext_edx & (1u<<22)) _APP(" mmxext");
-    if (ext_edx & (1u<<25)) _APP(" fxsr-opt");
-    if (ext_edx & (1u<<26)) _APP(" pdpe1gb");
-    if (ext_edx & (1u<<27)) _APP(" rdtscp");
-    if (ext_edx & (1u<<29)) _APP(" lm");
-    _APP("\n");
+        if (edx & (1u<<0))  _APP(" fpu");
+        if (edx & (1u<<1))  _APP(" vme");
+        if (edx & (1u<<2))  _APP(" de");
+        if (edx & (1u<<3))  _APP(" pse");
+        if (edx & (1u<<4))  _APP(" tsc");
+        if (edx & (1u<<5))  _APP(" msr");
+        if (edx & (1u<<6))  _APP(" pae");
+        if (edx & (1u<<7))  _APP(" mce");
+        if (edx & (1u<<8))  _APP(" cx8");
+        if (edx & (1u<<9))  _APP(" apic");
+        if (edx & (1u<<11)) _APP(" sep");
+        if (edx & (1u<<12)) _APP(" mtrr");
+        if (edx & (1u<<13)) _APP(" pge");
+        if (edx & (1u<<14)) _APP(" mca");
+        if (edx & (1u<<15)) _APP(" cmov");
+        if (edx & (1u<<16)) _APP(" pat");
+        if (edx & (1u<<17)) _APP(" pse36");
+        if (edx & (1u<<19)) _APP(" clflush");
+        if (edx & (1u<<21)) _APP(" ds");
+        if (edx & (1u<<22)) _APP(" acpi");
+        if (edx & (1u<<23)) _APP(" mmx");
+        if (edx & (1u<<24)) _APP(" fxsr");
+        if (edx & (1u<<25)) _APP(" sse");
+        if (edx & (1u<<26)) _APP(" sse2");
+        if (edx & (1u<<28)) _APP(" ht");
+        if (edx & (1u<<29)) _APP(" tm1");
+        if (edx & (1u<<31)) _APP(" pbe");
+
+        if (ecx & (1u<<0))  _APP(" sse3");
+        if (ecx & (1u<<1))  _APP(" pclmulqdq");
+        if (ecx & (1u<<2))  _APP(" dtes64");
+        if (ecx & (1u<<3))  _APP(" monitor");
+        if (ecx & (1u<<4))  _APP(" dscpl");
+        if (ecx & (1u<<5))  _APP(" vmx");
+        if (ecx & (1u<<6))  _APP(" smx");
+        if (ecx & (1u<<7))  _APP(" est");
+        if (ecx & (1u<<8))  _APP(" tm2");
+        if (ecx & (1u<<9))  _APP(" ssse3");
+        if (ecx & (1u<<12)) _APP(" fma");
+        if (ecx & (1u<<13)) _APP(" cx16");
+        if (ecx & (1u<<14)) _APP(" xtpr");
+        if (ecx & (1u<<15)) _APP(" pdcm");
+        if (ecx & (1u<<17)) _APP(" pcid");
+        if (ecx & (1u<<19)) _APP(" sse4_1");
+        if (ecx & (1u<<20)) _APP(" sse4_2");
+        if (ecx & (1u<<21)) _APP(" x2apic");
+        if (ecx & (1u<<22)) _APP(" movbe");
+        if (ecx & (1u<<23)) _APP(" popcnt");
+        if (ecx & (1u<<24)) _APP(" tsc-deadline");
+        if (ecx & (1u<<25)) _APP(" aes");
+        if (ecx & (1u<<26)) _APP(" xsave");
+        if (ecx & (1u<<27)) _APP(" osxsave");
+        if (ecx & (1u<<28)) _APP(" avx");
+        if (ecx & (1u<<29)) _APP(" f16c");
+        if (ecx & (1u<<30)) _APP(" rdrand");
+        if (ecx & (1u<<31)) _APP(" hypervisor");
+
+        if (l7_ebx & (1u<<0))  _APP(" fsgsbase");
+        if (l7_ebx & (1u<<1))  _APP(" tsc-adjust");
+        if (l7_ebx & (1u<<2))  _APP(" sgx");
+        if (l7_ebx & (1u<<3))  _APP(" bmi1");
+        if (l7_ebx & (1u<<4))  _APP(" hle");
+        if (l7_ebx & (1u<<5))  _APP(" avx2");
+        if (l7_ebx & (1u<<7))  _APP(" smep");
+        if (l7_ebx & (1u<<8))  _APP(" bmi2");
+        if (l7_ebx & (1u<<9))  _APP(" erms");
+        if (l7_ebx & (1u<<10)) _APP(" invpcid");
+        if (l7_ebx & (1u<<11)) _APP(" rtm");
+        if (l7_ebx & (1u<<14)) _APP(" mpx");
+        if (l7_ebx & (1u<<18)) _APP(" rdseed");
+        if (l7_ebx & (1u<<19)) _APP(" adx");
+        if (l7_ebx & (1u<<20)) _APP(" smap");
+        if (l7_ebx & (1u<<23)) _APP(" clflushopt");
+        if (l7_ebx & (1u<<24)) _APP(" clwb");
+        if (l7_ebx & (1u<<29)) _APP(" sha");
+
+        if (l7_ecx & (1u<<2))  _APP(" umip");
+        if (l7_ecx & (1u<<3))  _APP(" pku");
+        if (l7_ecx & (1u<<4))  _APP(" ospke");
+        if (l7_ecx & (1u<<7))  _APP(" cet-ss");
+        if (l7_ecx & (1u<<9))  _APP(" vaes");
+        if (l7_ecx & (1u<<10)) _APP(" vpclmulqdq");
+        if (l7_ecx & (1u<<16)) _APP(" la57");
+
+        if (l7_edx & (1u<<10)) _APP(" md-clear");
+        if (l7_edx & (1u<<26)) _APP(" ibrs");
+        if (l7_edx & (1u<<27)) _APP(" stibp");
+        if (l7_edx & (1u<<28)) _APP(" l1d-flush");
+        if (l7_edx & (1u<<29)) _APP(" arch-cap");
+        if (l7_edx & (1u<<30)) _APP(" core-cap");
+        if (l7_edx & (1u<<31)) _APP(" ssbd");
+
+        if (ext_edx & (1u<<11)) _APP(" syscall");
+        if (ext_edx & (1u<<20)) _APP(" nx");
+        if (ext_edx & (1u<<22)) _APP(" mmxext");
+        if (ext_edx & (1u<<25)) _APP(" fxsr-opt");
+        if (ext_edx & (1u<<26)) _APP(" pdpe1gb");
+        if (ext_edx & (1u<<27)) _APP(" rdtscp");
+        if (ext_edx & (1u<<29)) _APP(" lm");
+        _APP("\n");
+    }
 
     #undef _APP
     #undef _APPN

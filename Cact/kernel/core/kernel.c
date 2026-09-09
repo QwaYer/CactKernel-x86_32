@@ -25,6 +25,8 @@
 #include "acpi_timer.h"
 #include "acpi_hpet.h"
 #include "apic.h"
+#include "energy.h"
+#include "smp.h"
 #include "msi.h"
 #include "initfs_modblob.h"
 
@@ -218,6 +220,76 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     else
         pr_warn("  %-11s : init failed — interrupts will not work\n", "apic");
 
+    // Master/Worker core map + C-state model (Step 1 of the energy governor).
+    // Implementation is in Rust (sched/src/energy.rs); runs after apic_init so
+    // the BSP LAPIC id and the ACPI MADT are available.
+    energy_init();
+    {
+        uint32_t e_present = energy_core_count_present();
+        uint32_t e_online  = energy_core_count_online();
+        pr_info("  %-11s : %u core(s) present, %u online — cpu0 = master C0\n",
+                "energy", (unsigned)e_present, (unsigned)e_online);
+        for (uint32_t i = 1; i < e_present; i++) {
+            pr_info("  %-11s : cpu%u worker lapic=0x%02x offline (C6)\n",
+                    "energy", (unsigned)i,
+                    (unsigned)energy_core_lapic_id(i));
+        }
+    }
+
+    // C-state controller + master->worker IPI protocol (Step 2 of the energy
+    // governor). Re-arms IDT vectors 0xF8/0xF9 for IPI_HALT/IPI_WAKEUP.
+    energy_cstate_init();
+    energy_ipi_init();
+    pr_info("  %-11s : C-state controller ready (C1 hlt, C3/C6 pending _CST)\n",
+            "energy");
+
+    // Per-tick load monitor on the master core (Step 3 of the energy
+    // governor). Sampled automatically from the scheduler tick.
+    energy_monitor_init();
+    pr_info("  %-11s : load monitor on cpu0 (1 sample / tick, 1 s window)\n",
+            "energy");
+
+    // Decision engine (Step 4): evaluates workers once per scheduler tick
+    // and drives IPI_HALT / IPI_WAKEUP transitions.
+    energy_decision_init();
+    pr_info("  %-11s : decision engine ready (benefit/cost, 1 pass / tick)\n",
+            "energy");
+
+    // MLFQ <-> C-state mapping (Step 5): queue classes bound core idle depth.
+    pr_info("  %-11s : mlfq map: RT=C0 interactive=C1 normal=C3 bg=C6\n",
+            "energy");
+
+    // Load balancing / migration (Step 6). Per-core runqueues are pending SMP;
+    // the scanner and throttle are live, the cross-runqueue move is not.
+    energy_balance_init();
+    pr_info("  %-11s : balancer ready (migration awaits per-core runqueues)\n",
+            "energy");
+
+    // Energy governor self-tests (Step 7, unit-style checks).
+    {
+        int e_st = energy_selftest();
+        if (e_st == 0)
+            pr_info("  %-11s : selftest passed\n", "energy");
+        else
+            pr_warn("  %-11s : selftest: %d check(s) FAILED\n",
+                    "energy", e_st);
+    }
+
+    // SMP: wake worker cores (Step A). Bring-up logic lives in Rust
+    // (sched/src/smp.rs); each AP loads its per-CPU GDT/TSS and idles.
+    smp_init();
+    {
+        uint32_t s_online = 0;
+        for (uint32_t s_cpu = 1; s_cpu < 64; s_cpu++) {
+            if (smp_cpu_online(s_cpu)) {
+                pr_info("  %-11s : cpu%u worker online\n",
+                        "smp", (unsigned)s_cpu);
+                s_online++;
+            }
+        }
+        pr_info("  %-11s : %u worker(s) online\n", "smp", (unsigned)s_online);
+    }
+
     msix_init();
 
     // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
@@ -356,6 +428,6 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     }
 
     while (1) {
-        __asm__ __volatile__("hlt");
+        energy_cstate_idle(energy_master_cpu());
     }
 }
