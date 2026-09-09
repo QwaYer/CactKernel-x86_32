@@ -19,6 +19,10 @@ extern devfs_driver_t drv_net;
 extern devfs_driver_t drv_pipe;
 extern devfs_driver_t drv_kmsg;
 extern devfs_driver_t drv_memfd;
+extern devfs_driver_t drv_eventfd;
+extern devfs_driver_t drv_timerfd;
+extern devfs_driver_t drv_signalfd;
+extern devfs_driver_t drv_epoll;
 
 /* devfs_crypto.c — /dev/crypto kernel crypto service. */
 extern devfs_driver_t drv_crypto;

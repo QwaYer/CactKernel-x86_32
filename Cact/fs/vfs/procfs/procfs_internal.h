@@ -3,8 +3,6 @@
 
 #include "procfs.h"
 
-#define MDLS_MAX_FILES  32
-
 // A read-only virtual file (e.g. cpuinfo, meminfo)
 typedef struct proc_file {
     char            name[64];
@@ -13,15 +11,10 @@ typedef struct proc_file {
     struct proc_file *next;
 } proc_file_t;
 
-/* procfs.c — core state shared with the mdls/ and standard-file modules. */
+/* procfs.c — core state shared with the standard-file modules. */
 extern proc_file_t *file_list;
 extern vfs_node_t   procfs_root;
-extern vfs_node_t   mdls_dir;
 extern vfs_node_t   proc_self_dir;
-extern vfs_ops_t    mdls_dir_ops;
-
-/* procfs_mdls.c */
-void procfs_mdls_init(void);
 
 /* procfs_proc.c — per-process /proc service nodes (self/, ...). */
 void procfs_proc_init(void);
