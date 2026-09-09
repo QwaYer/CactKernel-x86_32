@@ -21,6 +21,10 @@
 //   CACT_PIPECTL_* 0x3600  ioctl on /dev/pipe          -> pipe creation
 //   CACT_CRYPTCTL_* 0x3700 ioctl on /dev/crypto        -> hash/hmac/hkdf/aead/kx/random
 //   CACT_MEMFDCTL_* 0x3800 ioctl on /dev/memfd         -> memfd_create
+//   CACT_EVENTFDCTL_* 0x3900 ioctl on /dev/eventfd      -> eventfd_create
+//   CACT_TIMERFDCTL_* 0x3A00 ioctl on /dev/timerfd      -> timerfd_create
+//   CACT_SIGNALFDCTL_* 0x3B00 ioctl on /dev/signalfd    -> signalfd_create
+//   CACT_EPOLLCTL_*   0x3C00 ioctl on /dev/epoll        -> epoll_create
 // Device-specific ioctls (FB/TIOC, ...) keep their legacy numbers and are
 // routed straight to the node's own ops; they must stay outside 0x3000-0x3FFF.
 //
@@ -434,5 +438,91 @@ typedef struct cact_memfd_create_arg {
     char     *name;      // optional, NUL-terminated (may be NULL)
     uint32_t  flags;     // CACT_MFD_CLOEXEC
 } cact_memfd_create_arg_t;
+
+// ===========================================================================
+// /dev/eventfd control. RANGE 0x3900.
+// ===========================================================================
+#define CACT_EVENTFDCTL_CREATE 0x3901  // arg=cact_eventfd_create_arg_t*; returns new fd
+
+// eventfd(2) flags (create-time only)
+#define CACT_EFD_SEMAPHORE 0x0001
+#define CACT_EFD_NONBLOCK  0x0800      // same bit as O_NONBLOCK
+#define CACT_EFD_CLOEXEC   0x80000     // same bit as O_CLOEXEC
+
+typedef struct cact_eventfd_create_arg {
+    uint32_t initval;   // initial counter value
+    uint32_t flags;     // CACT_EFD_*
+} cact_eventfd_create_arg_t;
+
+// ===========================================================================
+// /dev/timerfd control. RANGE 0x3A00.
+// ===========================================================================
+#define CACT_TIMERFDCTL_CREATE 0x3A01  // arg=cact_timerfd_create_arg_t*; returns new fd
+#define CACT_TIMERFD_SETTIME   0x3A10  // timerfd fd: arg=cact_timerfd_spec_t*
+#define CACT_TIMERFD_GETTIME   0x3A11  // timerfd fd: arg=cact_timerfd_spec_t*
+
+// timerfd_create(2) flags
+#define CACT_TFD_NONBLOCK      0x0800
+#define CACT_TFD_CLOEXEC       0x80000
+#define CACT_TFD_TIMER_ABSTIME 0x0001
+
+typedef struct cact_timerfd_create_arg {
+    int32_t  clockid;   // CLOCK_MONOTONIC / CLOCK_REALTIME (same clock)
+    uint32_t flags;     // CACT_TFD_*
+} cact_timerfd_create_arg_t;
+
+// ms-based timer spec (1 tick = 10 ms, 100 Hz monotonic clock).
+typedef struct cact_timerfd_spec {
+    uint32_t flags;           // in: CACT_TFD_TIMER_ABSTIME for SETTIME
+    uint32_t it_value_ms;     // in/out: first expiry (0 = disarm)
+    uint32_t it_interval_ms;  // in/out: periodic re-arm interval (0 = one-shot)
+    uint32_t old_value_ms;    // out: previous remaining ms to expiry
+    uint32_t old_interval_ms; // out: previous interval ms
+} cact_timerfd_spec_t;
+
+// ===========================================================================
+// /dev/signalfd control. RANGE 0x3B00.
+// ===========================================================================
+#define CACT_SIGNALFDCTL_CREATE 0x3B01 // arg=cact_signalfd_create_arg_t*; returns new fd
+#define CACT_SIGNALFD_SETMASK   0x3B02 // signalfd fd: arg=cact_signalfd_create_arg_t*
+
+#define CACT_SFD_NONBLOCK 0x0800
+#define CACT_SFD_CLOEXEC  0x80000
+
+typedef struct cact_signalfd_create_arg {
+    uint32_t mask;   // sigset_t (kernel bitmask, bits 0..12)
+    uint32_t flags;  // CACT_SFD_*
+} cact_signalfd_create_arg_t;
+
+// ===========================================================================
+// /dev/epoll control. RANGE 0x3C00.
+// ===========================================================================
+#define CACT_EPOLLCTL_CREATE 0x3C01  // arg=cact_epoll_create_arg_t*; returns new fd
+#define CACT_EPOLL_CTL       0x3C10  // epoll fd: arg=cact_epoll_ctl_arg_t*
+#define CACT_EPOLL_WAIT      0x3C11  // epoll fd: arg=cact_epoll_wait_arg_t*
+
+#define CACT_EPOLL_CLOEXEC 0x80000
+
+// EPOLL_CTL_ADD/MOD/DEL (Linux values)
+#define CACT_EPOLL_CTL_ADD 1
+#define CACT_EPOLL_CTL_MOD 2
+#define CACT_EPOLL_CTL_DEL 3
+
+typedef struct cact_epoll_create_arg {
+    uint32_t flags;   // CACT_EPOLL_CLOEXEC
+} cact_epoll_create_arg_t;
+
+typedef struct cact_epoll_ctl_arg {
+    int32_t  op;       // CACT_EPOLL_CTL_*
+    int32_t  fd;       // target fd in the current task
+    uint32_t events;   // interest mask (EPOLLIN/EPOLLOUT/EPOLLERR/EPOLLHUP/...)
+    uint64_t data;     // opaque user data (epoll_data.u64)
+} cact_epoll_ctl_arg_t;
+
+typedef struct cact_epoll_wait_arg {
+    void    *events;      // user buffer: struct epoll_event[]
+    uint32_t maxevents;   // capacity (>= 1)
+    int32_t  timeout_ms;  // -1 = block, 0 = non-blocking, >0 = deadline
+} cact_epoll_wait_arg_t;
 
 #endif

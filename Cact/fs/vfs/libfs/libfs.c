@@ -24,7 +24,7 @@ typedef struct lib_blob {
 static lib_blob_t *lib_blobs;
 static uint32_t    libfs_disk_count;
 
-// Subdirectory file entry (for include/, tcc/, sys/)
+// Subdirectory file entry (for include/, mdls/)
 typedef struct sub_file {
     vfs_node_t        node;
     const uint8_t    *data;
@@ -41,8 +41,7 @@ typedef struct {
 } lib_subdir_t;
 
 static lib_subdir_t lib_inc_dir;
-static lib_subdir_t lib_tcc_dir;
-static lib_subdir_t lib_sys_dir;
+static lib_subdir_t lib_mdls_dir;
 
 static int path_has_prefix(const char *s, const char *pre) {
     while (*pre) {
@@ -111,14 +110,13 @@ static void libfs_count_disk(void) {
 
 // Register cctkfs blobs under /lib/
 // Flat files (libc.so, hello.c, ...) → lib_blobs
-// Subdirectory files (include/*, tcc/*, sys/*) → subdir file lists
+// Subdirectory files (include/*, mdls/*) → subdir file lists
 static void libfs_register_blobs(void) {
     lib_blob_t *head = 0;
     lib_blob_t **tail = &head;
 
     sub_file_t *ih = 0, **it = &ih;
-    sub_file_t *th = 0, **tt = &th;
-    sub_file_t *sh = 0, **st = &sh;
+    sub_file_t *mh = 0, **mt = &mh;
 
     int n = initfs_modblob_count();
     for (int i = 0; i < n; i++) {
@@ -127,8 +125,26 @@ static void libfs_register_blobs(void) {
         uint32_t sz;
         if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
         if (!path_has_prefix(path, "/lib/")) continue;
-        if (has_suffix(path, ".cctk")) continue;
         const char *base = path + 5;
+
+        // Driver modules (*.cctk) are exposed under /lib/mdls/<name>.cctk.
+        if (has_suffix(base, ".cctk")) {
+            if (!basename_only(base)) continue;
+            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
+            if (!slot) continue;
+            memset(slot, 0, sizeof(sub_file_t));
+            strlcpy(slot->node.name, base, 128);
+            slot->node.type = VFS_FILE;
+            slot->node.size = sz;
+            slot->node.mode = 0644;
+            slot->node.ops  = &sub_file_ops;
+            slot->node.priv = slot;
+            slot->data      = data;
+            slot->size      = sz;
+            *mt = slot;
+            mt = &slot->next;
+            continue;
+        }
 
         // Check for known subdirectories
         if (path_has_prefix(base, "include/")) {
@@ -148,40 +164,6 @@ static void libfs_register_blobs(void) {
             slot->size      = sz;
             *it = slot;
             it = &slot->next;
-        } else if (path_has_prefix(base, "tcc/")) {
-            const char *name = base + 4;
-            if (!*name) continue;
-            if (!basename_only(name)) continue;
-            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
-            if (!slot) continue;
-            memset(slot, 0, sizeof(sub_file_t));
-            strlcpy(slot->node.name, name, 128);
-            slot->node.type = VFS_FILE;
-            slot->node.size = sz;
-            slot->node.mode = 0644;
-            slot->node.ops  = &sub_file_ops;
-            slot->node.priv = slot;
-            slot->data      = data;
-            slot->size      = sz;
-            *tt = slot;
-            tt = &slot->next;
-        } else if (path_has_prefix(base, "sys/")) {
-            const char *name = base + 4;
-            if (!*name) continue;
-            if (!basename_only(name)) continue;
-            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
-            if (!slot) continue;
-            memset(slot, 0, sizeof(sub_file_t));
-            strlcpy(slot->node.name, name, 128);
-            slot->node.type = VFS_FILE;
-            slot->node.size = sz;
-            slot->node.mode = 0644;
-            slot->node.ops  = &sub_file_ops;
-            slot->node.priv = slot;
-            slot->data      = data;
-            slot->size      = sz;
-            *st = slot;
-            st = &slot->next;
         } else {
             if (!basename_only(base)) continue;
             lib_blob_t *slot = (lib_blob_t *)kmalloc(sizeof(lib_blob_t));
@@ -213,25 +195,15 @@ static void libfs_register_blobs(void) {
     lib_inc_dir.prefix    = "include/";
     lib_inc_dir.prefix_len = 8;
 
-    // Init tcc subdirectory node
-    lib_tcc_dir.files = th;
-    memset(&lib_tcc_dir.node, 0, sizeof(lib_tcc_dir.node));
-    strlcpy(lib_tcc_dir.node.name, "tcc", 128);
-    lib_tcc_dir.node.type = VFS_DIRECTORY;
-    lib_tcc_dir.node.mode = 0755;
-    lib_tcc_dir.node.priv = &lib_tcc_dir;
-    lib_tcc_dir.prefix    = "tcc/";
-    lib_tcc_dir.prefix_len = 4;
-
-    // Init sys subdirectory node
-    lib_sys_dir.files = sh;
-    memset(&lib_sys_dir.node, 0, sizeof(lib_sys_dir.node));
-    strlcpy(lib_sys_dir.node.name, "sys", 128);
-    lib_sys_dir.node.type = VFS_DIRECTORY;
-    lib_sys_dir.node.mode = 0755;
-    lib_sys_dir.node.priv = &lib_sys_dir;
-    lib_sys_dir.prefix    = "sys/";
-    lib_sys_dir.prefix_len = 4;
+    // Init mdls subdirectory node (bundled driver modules)
+    lib_mdls_dir.files = mh;
+    memset(&lib_mdls_dir.node, 0, sizeof(lib_mdls_dir.node));
+    strlcpy(lib_mdls_dir.node.name, "mdls", 128);
+    lib_mdls_dir.node.type = VFS_DIRECTORY;
+    lib_mdls_dir.node.mode = 0755;
+    lib_mdls_dir.node.priv = &lib_mdls_dir;
+    lib_mdls_dir.prefix    = "mdls/";
+    lib_mdls_dir.prefix_len = 5;
 
     for (lib_blob_t *b = lib_blobs; b; b = b->next) {
         vfs_node_t *lib = _lib_dir();
@@ -287,13 +259,9 @@ static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
         lib_inc_dir.node.ops = &sub_dir_ops;
         return &lib_inc_dir.node;
     }
-    if (streq(name, "tcc")) {
-        lib_tcc_dir.node.ops = &sub_dir_ops;
-        return &lib_tcc_dir.node;
-    }
-    if (streq(name, "sys")) {
-        lib_sys_dir.node.ops = &sub_dir_ops;
-        return &lib_sys_dir.node;
+    if (streq(name, "mdls")) {
+        lib_mdls_dir.node.ops = &sub_dir_ops;
+        return &lib_mdls_dir.node;
     }
     vfs_node_t *lib = _lib_dir();
     if (lib && lib->ops && lib->ops->walk) {
@@ -317,8 +285,8 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     }
     uint32_t j = index - libfs_disk_count;
     // Emit subdirectories first
-    for (int s = 0; s < 3; s++) {
-        const char *dname = s == 0 ? "include" : (s == 1 ? "tcc" : "sys");
+    for (int s = 0; s < 2; s++) {
+        const char *dname = s == 0 ? "include" : "mdls";
         if (j == 0) {
             strlcpy(sup_de.name, dname, 128);
             sup_de.inode = 0;
@@ -347,8 +315,7 @@ static void _root_listdir(vfs_node_t *dir) {
 
     // List subdirectories
     if (lib_inc_dir.files) { printk("  include\n"); any = 1; }
-    if (lib_tcc_dir.files) { printk("  tcc\n"); any = 1; }
-    if (lib_sys_dir.files) { printk("  sys\n"); any = 1; }
+    if (lib_mdls_dir.files) { printk("  mdls\n"); any = 1; }
 
     if (lib && lib->ops && lib->ops->readdir) {
         for (uint32_t i = 0; (de = lib->ops->readdir(lib, i)); i++) {

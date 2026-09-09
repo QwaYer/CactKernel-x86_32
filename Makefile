@@ -68,6 +68,10 @@ DRIVER_QUIRKS_TIMER_DIR = $(DRIVER_QUIRKS_DIR)/timer
 FS_VFS_DIR       = Cact/fs/vfs
 FS_PIPE_DIR      = Cact/fs/pipe
 FS_MEMFD_DIR     = Cact/fs/memfd
+FS_EVENTFD_DIR   = Cact/fs/eventfd
+FS_TIMERFD_DIR   = Cact/fs/timerfd
+FS_SIGNALFD_DIR  = Cact/fs/signalfd
+FS_EPOLL_DIR     = Cact/fs/epoll
 FS_DEVFS_DIR     = Cact/fs/vfs/devfs
 FS_PG_DIR        = Cact/drivers/block/pagecache
 FS_PROCFS_DIR    = Cact/fs/vfs/procfs
@@ -167,6 +171,10 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(FS_VFS_DIR) \
          -I$(FS_PIPE_DIR) \
          -I$(FS_MEMFD_DIR) \
+         -I$(FS_EVENTFD_DIR) \
+         -I$(FS_TIMERFD_DIR) \
+         -I$(FS_SIGNALFD_DIR) \
+         -I$(FS_EPOLL_DIR) \
          -I$(FS_DEVFS_DIR) \
 		 -I$(FS_PG_DIR) \
          -I$(FS_PROCFS_DIR) \
@@ -234,6 +242,10 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/vfs_file.o \
       $(BUILD_DIR)/pipe.o \
       $(BUILD_DIR)/memfd.o \
+      $(BUILD_DIR)/eventfd.o \
+      $(BUILD_DIR)/timerfd.o \
+      $(BUILD_DIR)/signalfd.o \
+      $(BUILD_DIR)/epoll.o \
       $(BUILD_DIR)/devfs.o \
       $(BUILD_DIR)/devfs_devices.o \
       $(BUILD_DIR)/devfs_services.o \
@@ -241,7 +253,6 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/fs_mod.o \
 	  $(BUILD_DIR)/pagecache.o \
       $(BUILD_DIR)/procfs.o \
-      $(BUILD_DIR)/procfs_mdls.o \
       $(BUILD_DIR)/procfs_std.o \
       $(BUILD_DIR)/procfs_proc.o \
       $(BUILD_DIR)/mntfs.o \
@@ -559,6 +570,22 @@ $(BUILD_DIR)/memfd.o: $(FS_MEMFD_DIR)/memfd.c $(FS_MEMFD_DIR)/memfd.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/eventfd.o: $(FS_EVENTFD_DIR)/eventfd.c $(FS_EVENTFD_DIR)/eventfd.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/timerfd.o: $(FS_TIMERFD_DIR)/timerfd.c $(FS_TIMERFD_DIR)/timerfd.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/signalfd.o: $(FS_SIGNALFD_DIR)/signalfd.c $(FS_SIGNALFD_DIR)/signalfd.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/epoll.o: $(FS_EPOLL_DIR)/epoll.c $(FS_EPOLL_DIR)/epoll.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/devfs.o: $(FS_DEVFS_DIR)/devfs.c $(FS_DEVFS_DIR)/devfs_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
@@ -584,10 +611,6 @@ $(BUILD_DIR)/fs_mod.o: $(FS_VFS_DIR)/fs_mod.c $(FS_VFS_DIR)/fs_mod.h
 	gcc $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/procfs.o: $(FS_PROCFS_DIR)/procfs.c $(FS_PROCFS_DIR)/procfs_internal.h
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/procfs_mdls.o: $(FS_PROCFS_DIR)/procfs_mdls.c $(FS_PROCFS_DIR)/procfs_internal.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

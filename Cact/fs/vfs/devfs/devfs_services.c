@@ -15,6 +15,10 @@
 #include "module/kmod.h"
 #include "klog.h"
 #include "memfd.h"
+#include "eventfd.h"
+#include "timerfd.h"
+#include "signalfd.h"
+#include "epoll.h"
 #include "blkdev.h"
 #include "part.h"
 #include "vfsdev.h"
@@ -437,3 +441,95 @@ static int _memfd_ioctl(void *p, uint32_t cmd, void *arg) {
 }
 
 devfs_driver_t drv_memfd = { .ioctl = _memfd_ioctl };
+
+// ── /dev/eventfd ──────────────────────────────────────────────────────────
+
+static int _eventfd_ioctl(void *p, uint32_t cmd, void *arg) {
+    (void)p;
+    if (cmd != CACT_EVENTFDCTL_CREATE) return -EINVAL;
+    if (!arg) return -EINVAL;
+    cact_eventfd_create_arg_t a;
+    if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+    if (!current_task) return -1;
+
+    vfs_node_t *node = eventfd_create_vnode(a.initval, a.flags);
+    if (!node) return -ENOMEM;
+
+    int fd = alloc_fd(node);
+    if (fd < 0) return -EMFILE;   // alloc_fd released the node again
+
+    current_task->proc->fds->files[fd]->cloexec =
+        (a.flags & CACT_EFD_CLOEXEC) ? 1 : 0;
+    return fd;
+}
+
+devfs_driver_t drv_eventfd = { .ioctl = _eventfd_ioctl };
+
+// ── /dev/timerfd ──────────────────────────────────────────────────────────
+
+static int _timerfd_ioctl(void *p, uint32_t cmd, void *arg) {
+    (void)p;
+    if (cmd != CACT_TIMERFDCTL_CREATE) return -EINVAL;
+    if (!arg) return -EINVAL;
+    cact_timerfd_create_arg_t a;
+    if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+    if (!current_task) return -1;
+
+    vfs_node_t *node = timerfd_create_vnode(a.clockid, a.flags);
+    if (!node) return -ENOMEM;
+
+    int fd = alloc_fd(node);
+    if (fd < 0) return -EMFILE;   // alloc_fd released the node again
+
+    current_task->proc->fds->files[fd]->cloexec =
+        (a.flags & CACT_TFD_CLOEXEC) ? 1 : 0;
+    return fd;
+}
+
+devfs_driver_t drv_timerfd = { .ioctl = _timerfd_ioctl };
+
+// ── /dev/signalfd ─────────────────────────────────────────────────────────
+
+static int _signalfd_ioctl(void *p, uint32_t cmd, void *arg) {
+    (void)p;
+    if (cmd != CACT_SIGNALFDCTL_CREATE) return -EINVAL;
+    if (!arg) return -EINVAL;
+    cact_signalfd_create_arg_t a;
+    if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+    if (!current_task) return -1;
+
+    vfs_node_t *node = signalfd_create_vnode(a.mask, a.flags);
+    if (!node) return -ENOMEM;
+
+    int fd = alloc_fd(node);
+    if (fd < 0) return -EMFILE;   // alloc_fd released the node again
+
+    current_task->proc->fds->files[fd]->cloexec =
+        (a.flags & CACT_SFD_CLOEXEC) ? 1 : 0;
+    return fd;
+}
+
+devfs_driver_t drv_signalfd = { .ioctl = _signalfd_ioctl };
+
+// ── /dev/epoll ────────────────────────────────────────────────────────────
+
+static int _epoll_ioctl(void *p, uint32_t cmd, void *arg) {
+    (void)p;
+    if (cmd != CACT_EPOLLCTL_CREATE) return -EINVAL;
+    if (!arg) return -EINVAL;
+    cact_epoll_create_arg_t a;
+    if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+    if (!current_task) return -1;
+
+    vfs_node_t *node = epoll_create_vnode(a.flags);
+    if (!node) return -ENOMEM;
+
+    int fd = alloc_fd(node);
+    if (fd < 0) return -EMFILE;   // alloc_fd released the node again
+
+    current_task->proc->fds->files[fd]->cloexec =
+        (a.flags & CACT_EPOLL_CLOEXEC) ? 1 : 0;
+    return fd;
+}
+
+devfs_driver_t drv_epoll = { .ioctl = _epoll_ioctl };

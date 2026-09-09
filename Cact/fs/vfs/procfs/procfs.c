@@ -26,10 +26,9 @@ static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 
 static vfs_ops_t file_ops = { .read = _file_read };
 
-// procfs root directory ops (mdls/, self/, virtual files)
+// procfs root directory ops (self/, virtual files)
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
-    if (streq(name, "mdls"))  return &mdls_dir;
     if (streq(name, "self"))  return &proc_self_dir;
 
     for (proc_file_t *f = file_list; f; f = f->next)
@@ -43,16 +42,11 @@ static vfs_dirent_t _root_de;
 static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     (void)dir;
     if (index == 0) {
-        strlcpy(_root_de.name, "mdls", 128);
+        strlcpy(_root_de.name, "self", 128);
         _root_de.inode = 0;
         return &_root_de;
     }
-    if (index == 1) {
-        strlcpy(_root_de.name, "self", 128);
-        _root_de.inode = 1;
-        return &_root_de;
-    }
-    uint32_t i = 2;
+    uint32_t i = 1;
     for (proc_file_t *f = file_list; f; f = f->next) {
         if (i++ == index) {
             strlcpy(_root_de.name, f->name, 128);
@@ -65,7 +59,7 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
-    printk("  mdls/\n  self/\n");
+    printk("  self/\n");
     for (proc_file_t *f = file_list; f; f = f->next) {
         printk("  "); printk(f->name); printk("\n");
     }
@@ -124,7 +118,6 @@ int procfs_unregister_file(const char *name) {
 // Initialize procfs root, subdirs, and default files.
 void procfs_init(void) {
     if (procfs_ready) return;
-    procfs_mdls_init();
     procfs_proc_init();
 
     memset(&procfs_root, 0, sizeof(vfs_node_t));

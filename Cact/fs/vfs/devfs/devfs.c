@@ -301,6 +301,10 @@ void devfs_init(void) {
     register_chrdev("net",     DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_net,     0);
     register_chrdev("pipe",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_pipe,    0);
     register_chrdev("memfd",   DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_memfd,   0);
+    register_chrdev("eventfd", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_eventfd, 0);
+    register_chrdev("timerfd", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_timerfd, 0);
+    register_chrdev("signalfd",DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_signalfd,0);
+    register_chrdev("epoll",   DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_epoll,   0);
     register_chrdev("kmsg",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_kmsg,    0);
     register_chrdev("crypto",  DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_crypto,  0);
 
