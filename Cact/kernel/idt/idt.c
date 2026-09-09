@@ -102,3 +102,8 @@ int init_idt(void) {
     __asm__ __volatile__("lidt (%0)" : : "r"(&idtp));
     return 0;
 }
+
+// Reload the (shared) IDT on the current CPU. Called by AP startup.
+void idt_reload(void) {
+    __asm__ __volatile__("lidt (%0)" : : "r"(&idtp));
+}

@@ -301,3 +301,49 @@ int apic_irq_override(int isa_irq)
     if (!apic_enabled || isa_irq < 0 || isa_irq >= 16) return -1;
     return (int)irq_override[isa_irq].gsi;
 }
+
+/* Per-AP local APIC bring-up: ensure IA32_APIC_BASE is enabled and the SVR
+ * points at a valid spurious vector with all LVT entries masked. */
+void apic_ap_online(void)
+{
+    uint64_t msr_val = rdmsr(IA32_APIC_BASE);
+    msr_val &= ~0xFFF;
+    msr_val |= APIC_ENABLE;
+    wrmsr(IA32_APIC_BASE, msr_val);
+
+    if (lapic) {
+        lapic[0x320 / 4] = 0x000100FF; /* LVT Timer */
+        lapic[0x350 / 4] = 0x000100FF; /* LVT Thermal */
+        lapic[0x360 / 4] = 0x000100FF; /* LVT Performance Counter */
+        lapic[0x370 / 4] = 0x000100FF; /* LVT LINT0 */
+        lapic[0x380 / 4] = 0x000100FF; /* LVT LINT1 */
+        lapic[LAPIC_SVR / 4] = LAPIC_SVR_ENABLE | LAPIC_SPURIOUS_VEC;
+    }
+}
+
+static int apic_icr_busy(void)
+{
+    if (!lapic) return 1;
+    return (lapic[0x300 / 4] & (1u << 12)) != 0;
+}
+
+static void apic_icr_send(uint32_t dest_lapic, uint32_t icrlo)
+{
+    if (!lapic) return;
+    for (int i = 0; i < 100000 && apic_icr_busy(); i++)
+        __asm__ __volatile__("pause");
+    lapic[0x310 / 4] = (dest_lapic & 0xFFu) << 24;   /* ICR high */
+    lapic[0x300 / 4] = icrlo;                        /* ICR low  */
+}
+
+/* Send INIT to a target APIC id (level-triggered assert, delivery mode INIT). */
+void apic_send_init_ipi(uint32_t dest_lapic)
+{
+    apic_icr_send(dest_lapic, 0x0000C500u);
+}
+
+/* Send SIPI to a target APIC id; vector = (startup page address >> 12). */
+void apic_send_sipi(uint32_t dest_lapic, uint32_t vector)
+{
+    apic_icr_send(dest_lapic, 0x00000600u | (vector & 0xFFu));
+}

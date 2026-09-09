@@ -118,6 +118,19 @@ unsafe extern "C" {
     pub fn cpu_syscall_mech() -> u32;
     pub fn syscall_set_esp0(esp: u32);
     pub fn elf_load_exec_symtab(path: *const u8, proc: *mut c_void);
+
+    pub fn apic_lapic_id() -> u32;
+    pub fn acpi_available() -> i32;
+    pub fn timer_ticks_get() -> u32;
+
+    pub fn set_idt_gate(n: i32, handler: u32);
+    pub fn apic_lapic_regs() -> *mut u32;
+
+    pub fn gdt_flush(gdt_ptr: u32);
+    pub fn idt_reload();
+    pub fn apic_ap_online();
+    pub fn apic_send_init_ipi(dest_lapic: u32);
+    pub fn apic_send_sipi(dest_lapic: u32, vector: u32);
 }
 
 #[repr(C)]

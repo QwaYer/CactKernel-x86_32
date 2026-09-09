@@ -22,6 +22,8 @@ KERN_SC_NET_DIR  = $(KERN_SYSCALL_DIR)/sock
 KERN_SC_KMOD_DIR = $(KERN_SYSCALL_DIR)/module
 KERN_GDT_DIR     = Cact/kernel/gdt
 KERN_CPUDEV_DIR  = Cact/kernel/cpudev
+KERN_ENERGY_DIR  = Cact/kernel/energy
+KERN_SMP_DIR     = Cact/kernel/smp
 KERN_ELF_DIR     = Cact/kernel/elf
 KERN_MEM_DIR     = Cact/kernel/memory
 KERN_PROC_DIR    = Cact/kernel/proc
@@ -147,6 +149,8 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
 		 -I$(KERN_SYSCALL_DIR) \
          -I$(KERN_GDT_DIR) \
          -I$(KERN_CPUDEV_DIR) \
+         -I$(KERN_ENERGY_DIR) \
+         -I$(KERN_SMP_DIR) \
          -I$(KERN_ELF_DIR) \
          -I$(KERN_MEM_DIR) \
          -I$(KERN_PROC_DIR) \
@@ -308,6 +312,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/part.o \
       $(BUILD_DIR)/stack_guard.o \
       $(BUILD_DIR)/cpudev.o \
+      $(BUILD_DIR)/trampoline.o \
       $(BUILD_DIR)/acpi.o \
       $(BUILD_DIR)/osl.o \
       $(BUILD_DIR)/osl_sync.o \
@@ -848,6 +853,13 @@ $(BUILD_DIR)/stack_guard.o: $(KERN_CORE_DIR)/stack_guard.c
 $(BUILD_DIR)/cpudev.o: $(KERN_CPUDEV_DIR)/cpudev.c $(KERN_CPUDEV_DIR)/cpudev.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/trampoline.bin: $(KERN_SMP_DIR)/trampoline.asm
+	@mkdir -p $(BUILD_DIR)
+	nasm -f bin $< -o $@
+
+$(BUILD_DIR)/trampoline.o: $(BUILD_DIR)/trampoline.bin
+	ld -m elf_i386 -r -b binary $(BUILD_DIR)/trampoline.bin -o $@
 
 
 clean:

@@ -5,6 +5,8 @@ global xhci_isr
 global acpi_sci_isr
 global pci_isr
 global spurious_apic_isr
+global ipi_halt_isr
+global ipi_wake_isr
 
 extern acpi_sci_callback
 extern on_timer_tick
@@ -12,6 +14,8 @@ extern acpi_pm_timer_tick
 extern timer_eoi
 extern irq_apic_eoi
 extern xhci_irq_handler
+extern energy_ipi_halt_handle
+extern energy_ipi_wake_handle
 
 section .text
 
@@ -83,4 +87,36 @@ pci_isr:
 ; doesn't expect EOI for spurious vectors).
 ; ---------------------------------------------------------------------------
 spurious_apic_isr:
+    iretd
+
+; ---------------------------------------------------------------------------
+; Energy C-state controller IPIs (vectors 0xF8/0xF9): master -> worker halt /
+; wakeup protocol. Dispatch handlers live in the Rust energy/cstate modules.
+; ---------------------------------------------------------------------------
+ipi_halt_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    call energy_ipi_halt_handle
+    call irq_apic_eoi
+    pop es
+    pop ds
+    popa
+    iretd
+
+ipi_wake_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    call energy_ipi_wake_handle
+    call irq_apic_eoi
+    pop es
+    pop ds
+    popa
     iretd

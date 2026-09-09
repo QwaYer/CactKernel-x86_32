@@ -7,6 +7,14 @@
 pub mod ffi;
 pub mod task;
 pub mod mlfq;
+pub mod mlfq_map;
+pub mod energy;
+pub mod cstate;
+pub mod monitor;
+pub mod decision;
+pub mod balance;
+pub mod smp;
+pub mod selftest;
 pub mod timer_wheel;
 
 pub mod sync {

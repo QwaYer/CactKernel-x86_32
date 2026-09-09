@@ -20,5 +20,6 @@ struct idt_ptr {
 
 void set_idt_gate(int n, uint32_t handler);
 int  init_idt(void);
+void idt_reload(void);
 
 #endif  

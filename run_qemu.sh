@@ -45,6 +45,7 @@ fi
 exec qemu-system-i386 \
     -accel kvm \
     -cpu host \
+    -smp 4 \
     -m 4G \
     -cdrom "$ISO" \
     -boot d \
