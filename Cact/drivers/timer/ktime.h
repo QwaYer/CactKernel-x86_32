@@ -1,16 +1,21 @@
-#ifndef CACT_ACPI_TIMER_H
-#define CACT_ACPI_TIMER_H
+#ifndef CACT_KTIME_H
+#define CACT_KTIME_H
 
 #include <stdint.h>
 #include <stdbool.h>
 
 #define ACPI_PM_TIMER_FREQ     3579545
 
-int  acpi_pm_timer_init(void);
-bool acpi_pm_timer_is_available(void);
-void acpi_pm_timer_tick(void);
+/* Monotonic wall-clock microseconds for kernel timekeeping.  Uses the TSC
+ * when it is present and could be calibrated, otherwise the ACPI PM timer. */
+int      ktime_init(void);
+bool     ktime_using_tsc(void);
+uint64_t ktime_get_usec(void);
+
+/* ACPI PM timer (3.579545 MHz) — raw counter and microsecond fallback. */
+int      acpi_pm_timer_init(void);
+bool     acpi_pm_timer_is_available(void);
 uint32_t acpi_pm_timer_read(void);
 uint64_t acpi_pm_timer_get_usec(void);
-uint32_t timer_ticks_get(void);
 
 #endif

@@ -22,8 +22,8 @@
 #include "lapic_timer.h"
 #include "pat.h"
 #include "cact_acpi.h"
-#include "acpi_timer.h"
-#include "acpi_hpet.h"
+#include "ktime.h"
+#include "tick.h"
 #include "apic.h"
 #include "energy.h"
 #include "smp.h"
@@ -204,16 +204,15 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
             pr_warn("  %-11s : CMOS reported 0 KB — size unreliable\n", "memory");
     }
 
-    // ACPI subsystem (before PCI — HPET/APIC need ACPI tables)
+    // ACPI subsystem (before PCI — APIC needs ACPI tables)
     if (acpi_init())
         pr_warn("  %-11s : init failed — hardware limited\n", "acpi");
 
-    /* Success (port/width detail) is reported inside acpi_pm_timer_init. */
-    if (acpi_pm_timer_init() != 0)
-        pr_warn("  %-11s : unavailable — timekeeping degraded\n", "pm-timer");
-
-    if (lapic_timer_select_source() != 0)
-        pr_crit("  %-11s : no usable system timer source\n", "timer");
+    /* Timekeeping: TSC when present and calibrated, otherwise the ACPI PM
+     * timer.  The scheduler tick itself is the LAPIC timer, armed in
+     * apic_init() below. */
+    if (ktime_init() != 0)
+        pr_warn("  %-11s : no wall clock — timekeeping degraded\n", "ktime");
 
     if (apic_init() == 0)
         pr_info("  %-11s : LAPIC + IOAPIC operational\n", "apic");
@@ -391,20 +390,17 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
 
     /* Watchdog: on real hardware a dead system timer silently freezes the
      * machine here (no IRQ ever wakes the idle hlt).  Wait for the first
-     * scheduler tick against the ACPI PM timer wall clock; if none comes,
-     * arm the LAPIC timer as a last-resort fallback and only then give up —
-     * some boards expose an HPET that accepts register writes but never
-     * raises its interrupt. */
+     * scheduler tick against the kernel wall clock; if none comes, re-arm
+     * the LAPIC timer as a last resort and only then give up. */
     {
-        extern uint32_t timer_ticks_get(void);
         uint32_t wd_ticks = timer_ticks_get();
         int wd_attempts = 0;
 
         for (;;) {
-            uint64_t wd_usec = acpi_pm_timer_get_usec();
+            uint64_t wd_usec = ktime_get_usec();
             while (timer_ticks_get() == wd_ticks) {
                 __asm__ __volatile__("pause");
-                if (acpi_pm_timer_get_usec() - wd_usec < 2000000ull)
+                if (ktime_get_usec() - wd_usec < 2000000ull)
                     continue;
                 break;   /* 2 s with no scheduler tick */
             }
@@ -412,7 +408,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
                 break;   /* timer alive — normal boot */
 
             if (wd_attempts++ < 1) {
-                printk_color("  timer       : WARNING — no tick for 2 s, arming LAPIC timer\n",
+                printk_color("  timer       : WARNING — no tick for 2 s, re-arming LAPIC timer\n",
                              COLOR_LIGHT_RED);
                 uint32_t per_ms = lapic_timer_calibrate();
                 if (per_ms)
@@ -420,7 +416,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
                 continue;
             }
 
-            printk_color("  timer       : FATAL — no tick for 2 s (HPET/LAPIC dead), "
+            printk_color("  timer       : FATAL — no tick for 2 s (LAPIC timer dead), "
                          "scheduler cannot start\n",
                          COLOR_LIGHT_RED);
             while (1) __asm__ __volatile__("hlt");

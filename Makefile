@@ -66,7 +66,7 @@ DRIVER_USB_HUB_DIR   = Cact/drivers/usb/hub
 DRIVER_QUIRKS_DIR    = Cact/drivers/quirks
 DRIVER_QUIRKS_ACPI_DIR = $(DRIVER_QUIRKS_DIR)/acpi
 DRIVER_QUIRKS_XHCI_DIR = $(DRIVER_QUIRKS_DIR)/xhci
-DRIVER_QUIRKS_TIMER_DIR = $(DRIVER_QUIRKS_DIR)/timer
+DRIVER_TIMER_DIR     = Cact/drivers/timer
 FS_VFS_DIR       = Cact/fs/vfs
 FS_PIPE_DIR      = Cact/fs/pipe
 FS_MEMFD_DIR     = Cact/fs/memfd
@@ -171,7 +171,7 @@ CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib \
          -I$(DRIVER_USB_HUB_DIR) \
          -I$(DRIVER_QUIRKS_ACPI_DIR) \
          -I$(DRIVER_QUIRKS_XHCI_DIR) \
-         -I$(DRIVER_QUIRKS_TIMER_DIR) \
+         -I$(DRIVER_TIMER_DIR) \
          -I$(FS_VFS_DIR) \
          -I$(FS_PIPE_DIR) \
          -I$(FS_MEMFD_DIR) \
@@ -300,6 +300,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/xhci_xfer.o \
       $(BUILD_DIR)/xhci_quirks.o \
       $(BUILD_DIR)/lapic_timer.o \
+      $(BUILD_DIR)/tick.o \
       $(BUILD_DIR)/acpi_quirks.o \
       $(BUILD_DIR)/dmi.o \
       $(BUILD_DIR)/usb_hid.o \
@@ -317,8 +318,7 @@ OBJ = $(BUILD_DIR)/kernel_entry.o \
       $(BUILD_DIR)/osl.o \
       $(BUILD_DIR)/osl_sync.o \
       $(BUILD_DIR)/osl_io.o \
-      $(BUILD_DIR)/acpi_timer.o \
-      $(BUILD_DIR)/acpi_hpet.o \
+      $(BUILD_DIR)/ktime.o \
       $(BUILD_DIR)/apic.o
 
 ACPICA_C_SRCS = $(shell find $(ACPICA_COMP_DIRS) -type f -name '*.c' 2>/dev/null \
@@ -770,7 +770,11 @@ $(BUILD_DIR)/xhci_quirks.o: $(DRIVER_QUIRKS_XHCI_DIR)/xhci_quirks.c $(DRIVER_QUI
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/lapic_timer.o: $(DRIVER_QUIRKS_TIMER_DIR)/lapic_timer.c $(DRIVER_QUIRKS_TIMER_DIR)/lapic_timer.h
+$(BUILD_DIR)/lapic_timer.o: $(DRIVER_TIMER_DIR)/lapic_timer.c $(DRIVER_TIMER_DIR)/lapic_timer.h
+	@mkdir -p $(BUILD_DIR)
+	gcc $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tick.o: $(DRIVER_TIMER_DIR)/tick.c $(DRIVER_TIMER_DIR)/tick.h
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
@@ -826,15 +830,11 @@ $(BUILD_DIR)/osl_io.o: $(DRIVER_ACPI_DIR)/osl_io.c $(DRIVER_ACPI_DIR)/cact_acpi.
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/acpi_timer.o: $(DRIVER_ACPI_DIR)/acpi_timer.c $(DRIVER_ACPI_DIR)/acpi_timer.h $(DRIVER_ACPI_DIR)/cact_acpi.h $(DRIVER_ACPI_DIR)/acpi_hpet.h | $(ACPICA_DIR)
+$(BUILD_DIR)/ktime.o: $(DRIVER_TIMER_DIR)/ktime.c $(DRIVER_TIMER_DIR)/ktime.h $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/acpi_hpet.o: $(DRIVER_ACPI_DIR)/acpi_hpet.c $(DRIVER_ACPI_DIR)/acpi_hpet.h $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
-	@mkdir -p $(BUILD_DIR)
-	gcc $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/apic.o: $(DRIVER_ACPI_DIR)/apic.c $(DRIVER_ACPI_DIR)/apic.h $(DRIVER_ACPI_DIR)/cact_acpi.h $(DRIVER_ACPI_DIR)/acpi_hpet.h | $(ACPICA_DIR)
+$(BUILD_DIR)/apic.o: $(DRIVER_ACPI_DIR)/apic.c $(DRIVER_ACPI_DIR)/apic.h $(DRIVER_ACPI_DIR)/cact_acpi.h | $(ACPICA_DIR)
 	@mkdir -p $(BUILD_DIR)
 	gcc $(CFLAGS) -c $< -o $@
 

@@ -139,9 +139,10 @@ CactKernel-x86_32/
 │   │   ├── elf/         static ELF loader, ksym/sym, dynlink/ for relocatable objects
 │   │   ├── gdt/ idt/
 │   ├── drivers/
-│   │   ├── acpi/        ACPICA engine — AML interpreter, MADT/HPET/APIC tables
+│   │   ├── acpi/        ACPICA engine — AML interpreter, MADT/APIC/FADT tables
 │   │   ├── block/       blkdev, page cache (increased constant limits)
 │   │   ├── input/       USB HID only (PS/2 removed in 2.0)
+│   │   ├── timer/       ktime (TSC primary, ACPI PM timer fallback), LAPIC scheduler tick, tick counter
 │   │   ├── initfs/      cctkfs staging + module blob reader, HMAC signature verify
 │   │   ├── pci/         enumerator, PCIe, ELF module loader,
 │   │   │                HMAC-SHA256 module signature verification
@@ -180,7 +181,7 @@ Boot is split into **three phases**: early `init()` (identity map, no user IRQs 
 | 4 | Magic check (`0x36D76289`) |
 | 5 | **`kernel_setup_hardware()`** — see Phase B |
 | 6 | **`create_task(kernel_bootstrap_main)`** — deferred work that needs the scheduler |
-| 7 | **`sti`** — boot thread becomes the **idle** task (HLT loop); timer IRQ via HPET drives preemption |
+| 7 | **`sti`** — boot thread becomes the **idle** task (HLT loop); the LAPIC timer IRQ drives preemption |
 
 ### Phase B — `kernel_setup_hardware()`
 
@@ -191,8 +192,8 @@ Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register).
 | 1 | **GDT** → **PMM** (from MB2 mmap) → **VMM** → **kmalloc heap** → **paging on** |
 | 2 | **Slab allocator** + **page fault** handler (COW, demand zero, swap markers) |
 | 3 | **I/O APIC** + **IDT** + **COM1 serial** (mirrors part of `kprint` / `klog` to host) |
-| 4 | **ACPI** — parse RSDP, MADT, HPET tables via ACPICA |
-| 5 | **HPET @ 100 Hz** — system timer |
+| 4 | **ACPI** — parse RSDP, MADT, FADT tables via ACPICA |
+| 5 | **TSC timekeeping** (ACPI PM timer fallback) + **LAPIC timer @ 100 Hz** — scheduler tick |
 | 6 | **Linear framebuffer** console, **PAT** write-combining for VRAM, optional **shadow buffer** (WB RAM + batched blit) |
 | 7 | **USB** HID only (PS/2 removed in 2.0) |
 | 8 | **`blkdev_init`** → **PCI bus scan** + **enumeration** (PCIe support) → **MSI-X allocation** → **`usb_init`** (xHCI) |
@@ -298,7 +299,7 @@ The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as
 | **Video** | Linear FB 32 bpp, PSF2 console font from cctkfs (`/lib/consolefont.psf`, ×2 scale), PAT WC + shadow | |
 | **PCI** | Config scan, driver table, **modblob** loader, HMAC-SHA256 signature verification | Loads ET_REL modules from **cctkfs** or path (user-driven via kmod syscalls) |
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
-| **ACPI** | ACPICA — RSDP, MADT, HPET, APIC table parsing | New in 2.0 |
+| **ACPI** | ACPICA — RSDP, MADT, FADT, APIC table parsing | New in 2.0 |
 
 All out-of-tree PCI drivers now use **MSI-X** instead of PIC IRQ lines. Extra PCI drivers live in **`*-for-Cact`** repositories; **`make -C CactOS-x86_32`** (workspace integrator) installs them into **`LocalRepoCactOS/lib/`** and packs **`cctkfs.img`**.
 
