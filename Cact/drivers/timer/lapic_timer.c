@@ -1,17 +1,12 @@
-/* LAPIC timer fallback (manufacturer quirk).
+/* LAPIC timer — the system scheduler tick.
  *
- * The Intel Coffee Lake / B360 chipset HPET is broken — Linux forces it off
- * and uses the TSC/LAPIC timer instead.  This module calibrates the LAPIC
- * timer against the PIT (8254) channel 2 and arms it in periodic mode on the
- * standard timer vector (0x20), so the system keeps ticking even when the
- * HPET cannot be trusted.
+ * Calibrates the LAPIC timer against the PIT (8254) channel 2 and arms it in
+ * periodic mode on the standard timer vector (0x20).  The HPET is not used.
  */
 
 #include "kernel.h"
 #include "klib.h"
-#include "pci.h"
 #include "apic.h"
-#include "acpi_hpet.h"
 #include "lapic_timer.h"
 
 #define LAPIC_LVT_TIMER     0x320
@@ -86,7 +81,7 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
     if (!lapic || ticks_per_ms == 0)
         return;
 
-    /* 100 Hz tick (10 ms) to match the HPET-driven tick rate. */
+    /* 100 Hz tick (10 ms) — the scheduler quantum base. */
     uint32_t count = ticks_per_ms * 10u;
 
     /* Program masked first, then unmask to avoid a spurious edge. */
@@ -102,39 +97,4 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
 bool lapic_timer_active(void)
 {
     return lapic_timer_armed != 0;
-}
-
-bool lapic_timer_force_hpet_off(void)
-{
-    /* Manufacturer quirk: the Intel 300-series PCH HPET is dysfunctional —
-     * Linux forces it off.  Detect the PCH LPC/eSPI device (fixed BDF
-     * 00:1F.0) directly.  The 300-series desktops span two ID families:
-     *   Z370/H370/H310/B360/B365/Q370  → 0xA2C8..0xA2CF (LPC 0xA2CC on B360)
-     *   Z390 and late steppings         → 0xA300..0xA30F
-     * On any other chipset the HPET stays primary and this returns false. */
-    uint32_t id      = pci_read_config_dword(0, 0x1F, 0, 0x00);
-    uint16_t vendor  = (uint16_t)(id & 0xFFFF);
-    uint16_t device  = (uint16_t)(id >> 16);
-
-    if (vendor == 0x8086 &&
-        (((device & 0xFFF0) == 0xA300) ||   /* late 300-series (Z390 etc.) */
-         ((device & 0xFFF8) == 0xA2C8)))    /* Z370/B360/H370/H310/B365 */
-        return 1;
-    return 0;
-}
-
-int lapic_timer_select_source(void)
-{
-    if (lapic_timer_force_hpet_off()) {
-        pr_warn("  %-11s : HPET disabled by board quirk — LAPIC timer used\n", "timer");
-        return 0;
-    }
-
-    if (hpet_init() != 0) {
-        pr_warn("  %-11s : HPET init failed — LAPIC timer fallback used\n", "timer");
-        return 0;
-    }
-
-    pr_info("  %-11s : HPET selected as system clock\n", "timer");
-    return 0;
 }

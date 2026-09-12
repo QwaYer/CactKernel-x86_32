@@ -4,7 +4,6 @@
 #include "acpi.h"
 #include "apic.h"
 #include "cact_acpi.h"
-#include "acpi_hpet.h"
 #include "lapic_timer.h"
 
 #define IA32_APIC_BASE      0x1B
@@ -227,27 +226,17 @@ int apic_init(void)
         }
     }
 
-    unsigned int timer_entry = irq_override[0].gsi;
-    if (timer_entry < global_irq_base) timer_entry = 0;
-    else timer_entry -= global_irq_base;
-    if (timer_entry > ioapic_max_redir) timer_entry = 0;
-
-    uint64_t period = hpet_get_freq() / 100;
-    if (period != 0 && hpet_start_periodic(timer_entry, period) == 0) {
-        pr_info("  %-11s : HPET timer0 -> IOAPIC entry %u\n", "apic",
-                (unsigned)timer_entry);
-    } else {
-        /* Board quirk: the Intel 300/500-series PCH HPET (or an HPET that
-         * accepted our writes but never raises its IRQ) cannot drive the
-         * tick — fall back to the LAPIC timer calibrated against the PIT. */
-        pr_warn("  %-11s : HPET timer unavailable — switching to LAPIC timer\n", "apic");
-        uint32_t per_ms = lapic_timer_calibrate();
-        if (per_ms == 0) {
-            pr_crit("  %-11s : LAPIC timer calibration failed — no system timer\n", "apic");
-            while(1) __asm__ __volatile__("hlt");
-        }
+    /*
+     * Scheduler tick.  The LAPIC timer is the only periodic interrupt
+     * source: calibrate it against the PIT and arm it at 100 Hz on vector
+     * 0x20, which device_isrs.asm dispatches to the scheduler.  A failed
+     * calibration is retried by the boot watchdog in init().
+     */
+    uint32_t per_ms = lapic_timer_calibrate();
+    if (per_ms == 0)
+        pr_crit("  %-11s : LAPIC timer calibration failed — no system tick\n", "apic");
+    else
         lapic_timer_start_periodic(per_ms);
-    }
 
     apic_enabled = 1;
 

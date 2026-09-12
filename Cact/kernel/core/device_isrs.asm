@@ -10,7 +10,7 @@ global ipi_wake_isr
 
 extern acpi_sci_callback
 extern on_timer_tick
-extern acpi_pm_timer_tick
+extern timer_tick
 extern timer_eoi
 extern irq_apic_eoi
 extern xhci_irq_handler
@@ -27,7 +27,7 @@ timer_isr:
     mov ds, ax
     mov es, ax
 
-    call acpi_pm_timer_tick
+    call timer_tick
 
     call timer_eoi
 
