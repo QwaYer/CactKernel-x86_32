@@ -23,6 +23,8 @@ static uint32_t       g_features_ext_edx   = 0;
 static uint32_t       g_features_leaf7_ebx = 0;
 static uint32_t       g_features_leaf7_ecx = 0;
 static uint32_t       g_features_leaf7_edx = 0;
+static uint32_t       g_features_ext7_edx  = 0;
+static int            g_invariant_tsc      = 0;
 static char           g_brand[49]          = {0};
 
 // Return-path selector for sysenter_entry: 1 = SYSEXIT, 0 = IRET.
@@ -180,6 +182,7 @@ int cpu_has_arat(void) {
     cpuid_raw(6, &eax, &(uint32_t){0}, &(uint32_t){0}, &(uint32_t){0});
     return !!(eax & CPU_FEATURE_ARAT);
 }
+int cpu_has_invariant_tsc(void) { return g_invariant_tsc; }
 int cpu_has_hypervisor(void) { return !!(g_features_ecx & CPU_FEATURE_HYPERVISOR); }
 
 const char* cpu_brand_str(void) { return g_brand; }
@@ -218,6 +221,30 @@ static void detect_leaf7(void) {
                        &g_features_leaf7_edx);
 }
 
+// Invariant (constant-rate) TSC detection.  AMD and Intel both report it as
+// CPUID.80000007H:EDX[8]; on Intel the presence of leaf 15H (TSC/crystal
+// ratio) additionally implies an invariant TSC.  This matters for wall-clock
+// use: without it the TSC stops in deep C-states and shifts with P-state
+// changes, so a resumed machine reads a stale value and time jumps backwards.
+static int detect_invariant_tsc(void) {
+    uint32_t max_leaf;
+    cpuid_raw(0, &max_leaf, &(uint32_t){0}, &(uint32_t){0}, &(uint32_t){0});
+
+    uint32_t max_ext;
+    cpuid_raw(0x80000000, &max_ext, &(uint32_t){0}, &(uint32_t){0}, &(uint32_t){0});
+    if (max_ext >= 0x80000007) {
+        cpuid_raw(0x80000007, &(uint32_t){0}, &(uint32_t){0},
+                  &(uint32_t){0}, &g_features_ext7_edx);
+        if (g_features_ext7_edx & CPU_FEATURE_INV_TSC)
+            return 1;
+    }
+
+    if (g_vendor == CPU_VENDOR_INTEL && max_leaf >= 0x15)
+        return 1;
+
+    return 0;
+}
+
 int cpudev_init(void) {
     g_vendor = detect_vendor();
 
@@ -238,6 +265,7 @@ int cpudev_init(void) {
         read_brand();
 
     detect_leaf7();
+    g_invariant_tsc = detect_invariant_tsc();
 
     if (g_brand[0]) {
         if (g_vendor != CPU_VENDOR_UNKNOWN) {

@@ -4,15 +4,28 @@
 #include "acpi.h"
 #include "apic.h"
 #include "cact_acpi.h"
+#include "idt.h"
 #include "lapic_timer.h"
 
 #define IA32_APIC_BASE      0x1B
 #define APIC_ENABLE         (1u << 11)
 
+#define LAPIC_TPR           0x80
 #define LAPIC_SVR           0xF0
 #define LAPIC_EOI           0xB0
 #define LAPIC_SVR_ENABLE    0x100
 #define LAPIC_SPURIOUS_VEC  0xFF
+
+/* LVT register block.  These offsets are fixed by the xAPIC map and must not
+ * be confused: 0x320 timer, 0x330 thermal, 0x340 perf, 0x350 LINT0,
+ * 0x360 LINT1, 0x370 error (0x380 is the timer *initial count*). */
+#define LAPIC_LVT_TIMER     0x320
+#define LAPIC_LVT_THERMAL   0x330
+#define LAPIC_LVT_PERF      0x340
+#define LAPIC_LVT_LINT0     0x350
+#define LAPIC_LVT_LINT1     0x360
+#define LAPIC_LVT_ERROR     0x370
+#define LAPIC_LVT_MASKED    0x000100FFu  /* masked, vector 0xFF (spurious gate) */
 
 #define IOAPIC_IOREGSEL     0x00
 #define IOAPIC_IOWIN        0x10
@@ -23,6 +36,11 @@
 #define REDIR_MASKED        0x00010000u
 #define REDIR_LOW_POL       0x00002000u  // Active low
 #define REDIR_LEVEL         0x00008000u  // Level-triggered
+
+/* Legacy 8254 channel 0 — last-resort tick source (see the watchdog). */
+#define PIT_CH0_DATA        0x40
+#define PIT_CMD             0x43
+#define PIT_BASE_FREQ       1193182u
 
 #define APIC_MMIO_VADDR     0xFE000000u
 #define IOAPIC_MMIO_VADDR   0xFE001000u
@@ -92,14 +110,21 @@ static void lapic_init(uint32_t lapic_base)
             PAGE_PRESENT | PAGE_RW | PAGE_PCD);
     lapic = (volatile uint32_t *)(APIC_MMIO_VADDR + (lapic_base & 0xFFF));
 
+    /* Task Priority 0.  Firmware can leave a non-zero TPR behind, which masks
+     * every interrupt of equal or lower priority — including the LVT timer —
+     * even though the SVR says the APIC is enabled. */
+    lapic[LAPIC_TPR / 4] = 0;
+
     /* Mask the LVT entries with a valid spurious vector (0xFF): any stray
      * delivery then targets the spurious-vector gate instead of tripping a
-     * #GP and cascading into a triple fault. */
-    lapic[0x320 / 4] = 0x000100FF; /* LVT Timer */
-    lapic[0x350 / 4] = 0x000100FF; /* LVT Thermal */
-    lapic[0x360 / 4] = 0x000100FF; /* LVT Performance Counter */
-    lapic[0x370 / 4] = 0x000100FF; /* LVT LINT0 */
-    lapic[0x380 / 4] = 0x000100FF; /* LVT LINT1 */
+     * #GP and cascading into a triple fault.  The offsets are the real LVT
+     * block (the old code wrote 0x380, which is the timer's initial count). */
+    lapic[LAPIC_LVT_TIMER / 4]   = LAPIC_LVT_MASKED;
+    lapic[LAPIC_LVT_THERMAL / 4] = LAPIC_LVT_MASKED;
+    lapic[LAPIC_LVT_PERF / 4]    = LAPIC_LVT_MASKED;
+    lapic[LAPIC_LVT_LINT0 / 4]   = LAPIC_LVT_MASKED;
+    lapic[LAPIC_LVT_LINT1 / 4]   = LAPIC_LVT_MASKED;
+    lapic[LAPIC_LVT_ERROR / 4]   = LAPIC_LVT_MASKED;
 
     uint64_t msr_val = rdmsr(IA32_APIC_BASE);
     msr_val &= ~0xFFF;
@@ -173,7 +198,10 @@ int apic_init(void)
         ioapic_set_redir(i, 0, REDIR_MASKED, 0);
 
     for (unsigned int i = 0; i < 16; i++) {
-        if (i == 2) continue;
+        /* IRQ0 (legacy PIT) and IRQ2 (PIC cascade) stay masked: the LAPIC
+         * timer now owns the scheduler tick, and leaving the PIT routed would
+         * inject a second, differently-rated source into timer_isr(). */
+        if (i == 0 || i == 2) continue;
         unsigned int gsi = irq_override[i].gsi;
         if (gsi < global_irq_base) continue;
         unsigned int entry_idx = gsi - global_irq_base;
@@ -228,10 +256,21 @@ int apic_init(void)
 
     /*
      * Scheduler tick.  The LAPIC timer is the only periodic interrupt
-     * source: calibrate it against the PIT and arm it at 100 Hz on vector
-     * 0x20, which device_isrs.asm dispatches to the scheduler.  A failed
-     * calibration is retried by the boot watchdog in init().
+     * source: calibrate it against the PIT and arm it at 100 Hz on
+     * LAPIC_TIMER_VECTOR, which device_isrs.asm dispatches to the scheduler.
+     * A failed calibration is retried by the boot watchdog in init().
+     *
+     * The IDT gate is (re)asserted here, after ACPI has had its chance to
+     * install the SCI handler: AcpiOsInstallInterruptHandler() writes
+     * 0x20 + FADT.SciInterrupt, and an SCI_INT of 0 would otherwise have
+     * redirected the old 0x20 timer gate to the SCI stub, leaving the
+     * scheduler with no ticks at all.
      */
+    if (idt_gate_handler(LAPIC_TIMER_VECTOR) != (uint32_t)timer_isr)
+        pr_warn("  %-11s : timer vector 0x%x was not the LAPIC ISR — restoring\n",
+                "apic", (unsigned)LAPIC_TIMER_VECTOR);
+    set_idt_gate(LAPIC_TIMER_VECTOR, (uint32_t)timer_isr);
+
     uint32_t per_ms = lapic_timer_calibrate();
     if (per_ms == 0)
         pr_crit("  %-11s : LAPIC timer calibration failed — no system tick\n", "apic");
@@ -301,11 +340,13 @@ void apic_ap_online(void)
     wrmsr(IA32_APIC_BASE, msr_val);
 
     if (lapic) {
-        lapic[0x320 / 4] = 0x000100FF; /* LVT Timer */
-        lapic[0x350 / 4] = 0x000100FF; /* LVT Thermal */
-        lapic[0x360 / 4] = 0x000100FF; /* LVT Performance Counter */
-        lapic[0x370 / 4] = 0x000100FF; /* LVT LINT0 */
-        lapic[0x380 / 4] = 0x000100FF; /* LVT LINT1 */
+        lapic[LAPIC_TPR / 4] = 0;
+        lapic[LAPIC_LVT_TIMER / 4]   = LAPIC_LVT_MASKED;
+        lapic[LAPIC_LVT_THERMAL / 4] = LAPIC_LVT_MASKED;
+        lapic[LAPIC_LVT_PERF / 4]    = LAPIC_LVT_MASKED;
+        lapic[LAPIC_LVT_LINT0 / 4]   = LAPIC_LVT_MASKED;
+        lapic[LAPIC_LVT_LINT1 / 4]   = LAPIC_LVT_MASKED;
+        lapic[LAPIC_LVT_ERROR / 4]   = LAPIC_LVT_MASKED;
         lapic[LAPIC_SVR / 4] = LAPIC_SVR_ENABLE | LAPIC_SPURIOUS_VEC;
     }
 }

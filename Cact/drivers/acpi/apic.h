@@ -19,4 +19,9 @@ void apic_ap_online(void);
 void apic_send_init_ipi(uint32_t dest_lapic);
 void apic_send_sipi(uint32_t dest_lapic, uint32_t vector);
 
+/* Last-resort scheduler tick: program the legacy 8254 channel 0 at 100 Hz and
+ * route its GSI to the timer ISR.  Used by the boot watchdog when the LAPIC
+ * timer produces no ticks. */
+void apic_pit_timer_fallback_enable(void);
+
 #endif

@@ -7,6 +7,7 @@
 #include "process/proc.h"
 #include "acpi.h"
 #include "cact_acpi.h"
+#include "ktime.h"
 #include "idt.h"
 
 #define ACPI_OSL_MAX_MAPPINGS  64
@@ -117,17 +118,12 @@ void acpi_temp_unmap(void *virt, UINT32 size)
     spin_unlock(&acpi_mappings_lock);
 }
 
+/* AcpiOsStall's microsecond delay.  ktime owns the timebase selection so the
+ * delay is derived from a real clock (TSC / ACPI PM timer) rather than an
+ * uncalibrated `pause` count. */
 void osl_udelay(UINT32 us)
 {
-    if (us == 0) return;
-    while (us > 0) {
-        UINT32 chunk = (us > 3598975u) ? 3598975u : us;
-        UINT32 total = chunk * 1193;
-        for (UINT32 i = 0; i < total; i++) {
-            __asm__ __volatile__("pause" ::: "memory");
-        }
-        us -= chunk;
-    }
+    ktime_busy_wait_us((uint64_t)us);
 }
 
 ACPI_STATUS AcpiOsInitialize(void)

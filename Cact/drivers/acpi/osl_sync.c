@@ -115,6 +115,17 @@ ACPI_STATUS AcpiOsInstallInterruptHandler(
     (void)Context;
     extern void (*acpi_sci_callback)(void);
     extern void acpi_sci_isr();
+
+    /* ACPI maps the SCI to 0x20 + FADT.SciInterrupt.  SciInterrupt == 0 is
+     * "no valid SCI IRQ" (the FADT may omit it and leave the SCI to the MADT
+     * override); without this guard the call would install the SCI stub at
+     * vector 0x20 — historically the LAPIC timer vector — and the scheduler
+     * would never see a tick. */
+    if (InterruptNumber == 0) {
+        pr_warn("  %-11s : SCI_INT=0 — SCI interrupt handler not installed\n", "acpi");
+        return AE_OK;
+    }
+
     acpi_sci_callback = (void (*)(void))ServiceRoutine;
     set_idt_gate(0x20 + InterruptNumber, (uint32_t)acpi_sci_isr);
     return AE_OK;

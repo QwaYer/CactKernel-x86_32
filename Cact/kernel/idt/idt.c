@@ -76,7 +76,9 @@ int init_idt(void) {
     set_idt_gate(31, (uint32_t)isr31);
 
     // Install IRQ handlers (hardware interrupts)
-    set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - timer
+    set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - legacy PIT (masked
+                                                    // by apic_init; the real tick
+                                                    // runs on LAPIC_TIMER_VECTOR)
     // ISA IRQ vectors 1-15: safe stubs (IOAPIC still routes here, any
     // stray interrupt must have a valid gate to avoid #GP).
     for (int i = 1; i < 16; i++)
@@ -92,9 +94,11 @@ int init_idt(void) {
     set_idt_gate(0xF5, (uint32_t)pci_isr);
     set_idt_gate(0xF6, (uint32_t)pci_isr);
     set_idt_gate(0xF7, (uint32_t)pci_isr);
-    // Reserved PCI range 0xF8-0xFE + APIC spurious vector 0xFF
-    for (int i = 0xF8; i < 0xFF; i++)
+    // Reserved PCI range 0xF8-0xFD (0xF8/0xF9 become the C-state IPI gates),
+    // the dedicated LAPIC timer vector 0xFE, and the spurious vector 0xFF.
+    for (int i = 0xF8; i < LAPIC_TIMER_VECTOR; i++)
         set_idt_gate(i, (uint32_t)pci_isr);
+    set_idt_gate(LAPIC_TIMER_VECTOR, (uint32_t)timer_isr);
     extern void spurious_apic_isr();
     set_idt_gate(0xFF, (uint32_t)spurious_apic_isr);
 
@@ -106,4 +110,9 @@ int init_idt(void) {
 // Reload the (shared) IDT on the current CPU. Called by AP startup.
 void idt_reload(void) {
     __asm__ __volatile__("lidt (%0)" : : "r"(&idtp));
+}
+
+uint32_t idt_gate_handler(int n) {
+    if (n < 0 || n > 255) return 0;
+    return (uint32_t)idt[n].low_offset | ((uint32_t)idt[n].high_offset << 16);
 }

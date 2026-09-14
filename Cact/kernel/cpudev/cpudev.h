@@ -132,6 +132,11 @@ typedef enum {
 #define CPU_FEATURE_PTM         (1u << 6)
 
 // ============================================================================
+// CPUID leaf 0x80000007, EDX — advanced power management
+// ============================================================================
+#define CPU_FEATURE_INV_TSC     (1u << 8)
+
+// ============================================================================
 // CPUID leaf 0x80000001, EDX — extended features
 // ============================================================================
 #define CPU_FEATURE_SYSCALL     (1u << 11)
@@ -207,6 +212,7 @@ int cpu_has_rdtscp(void);
 int cpu_has_invpcid(void);
 int cpu_has_rdrand(void);
 int cpu_has_arat(void);
+int cpu_has_invariant_tsc(void);
 int cpu_has_hypervisor(void);
 
 const char* cpu_brand_str(void);
