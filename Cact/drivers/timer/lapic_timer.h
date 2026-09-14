@@ -8,12 +8,12 @@
  * LAPIC timer — the system scheduler tick.
  *
  * The LAPIC timer is the only periodic interrupt source: it is calibrated
- * against the PIT (8254) channel 2 and armed in periodic mode on
+ * against the ACPI PM timer (3.579545 MHz) and armed in periodic mode on
  * LAPIC_TIMER_VECTOR (0xFE, see kernel.h), which device_isrs.asm dispatches to
  * the scheduler.  The HPET is not used.
  */
 
-/* Calibrate the LAPIC timer against PIT channel 2.
+/* Calibrate the LAPIC timer against the ACPI PM timer.
  * Returns ticks per millisecond, or 0 on failure. */
 uint32_t lapic_timer_calibrate(void);
 
