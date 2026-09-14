@@ -1,12 +1,13 @@
 /* LAPIC timer — the system scheduler tick.
  *
- * Calibrates the LAPIC timer against the PIT (8254) channel 2 and arms it in
- * periodic mode on the standard timer vector (0x20).  The HPET is not used.
+ * Calibrates the LAPIC timer against the ACPI PM timer (3.579545 MHz) and arms
+ * it in periodic mode on LAPIC_TIMER_VECTOR.  The HPET is not used.
  */
 
 #include "kernel.h"
 #include "klib.h"
 #include "apic.h"
+#include "ktime.h"
 #include "lapic_timer.h"
 
 #define LAPIC_LVT_TIMER     0x320
@@ -17,63 +18,72 @@
 #define LAPIC_LVT_MASK      (1u << 16)
 #define LAPIC_LVT_PERIODIC  (1u << 17)
 
-#define PIT_CH2_DATA        0x42
-#define PIT_CMD             0x43
-#define PIT_CH2_CTRL        0x61
-#define PIT_GATE2           (1u << 0)
-#define PIT_SPKR            (1u << 1)
-#define PIT_OUT2            (1u << 5)
-#define PIT_BASE_FREQ       1193182u
-
 static int lapic_timer_armed = 0;
+
+/* Start a one-shot countdown from the maximum count, divide by 1.  The LVT is
+ * left as-is: masking only gates interrupt delivery, the counter still runs,
+ * which is all the calibration needs. */
+static void lapic_timer_start_oneshot(void)
+{
+    volatile uint32_t *lapic = apic_lapic_regs();
+    lapic[LAPIC_TIMER_DIV / 4] = 0x0B;
+    lapic[LAPIC_TIMER_INITCNT / 4] = 0xFFFFFFFFu;
+}
+
+static void lapic_timer_stop(void)
+{
+    volatile uint32_t *lapic = apic_lapic_regs();
+    lapic[LAPIC_TIMER_INITCNT / 4] = 0;
+}
+
+/* Calibrate against the ACPI PM timer: measure the LAPIC countdown across a
+ * ~50 ms window of the stable 3.579545 MHz reference.  Returns ticks per
+ * millisecond, or 0 on failure. */
+static uint32_t lapic_calibrate_pm(void)
+{
+    volatile uint32_t *lapic = apic_lapic_regs();
+    if (!acpi_pm_timer_is_available())
+        return 0;
+
+    lapic_timer_start_oneshot();
+
+    uint64_t start_us = acpi_pm_timer_get_usec();
+    uint32_t first    = lapic[LAPIC_TIMER_CURCNT / 4];
+
+    uint64_t now_us;
+    do {
+        now_us = acpi_pm_timer_get_usec();
+    } while (now_us - start_us < 50000ull);
+
+    uint32_t last = lapic[LAPIC_TIMER_CURCNT / 4];
+    lapic_timer_stop();
+
+    uint64_t usec    = now_us - start_us;
+    uint32_t elapsed = first - last;    /* 32-bit modulo handles one wrap */
+    if (usec == 0 || elapsed == 0)
+        return 0;
+
+    return (uint32_t)((uint64_t)elapsed * 1000ull / usec);
+}
 
 uint32_t lapic_timer_calibrate(void)
 {
-    volatile uint32_t *lapic = apic_lapic_regs();
-    if (!lapic)
+    if (!apic_lapic_regs())
         return 0;
 
-    /* PIT channel 2: one-shot, count 0xFFFF (~54.9 ms). No IRQ involved.
-     * Lower the gate first so the counter cannot start on a partially loaded
-     * value on real silicon, load mode + count, then raise the gate. */
-    uint8_t ctrl = inb(PIT_CH2_CTRL);
-    outb(PIT_CH2_CTRL, ctrl & ~PIT_GATE2);
-    outb(PIT_CMD, 0xB0);                 /* ch2, lobyte+hibyte, mode 0, binary */
-    outb(PIT_CH2_DATA, 0xFF);
-    outb(PIT_CH2_DATA, 0xFF);
-    outb(PIT_CH2_CTRL, (uint8_t)((ctrl & ~PIT_SPKR) | PIT_GATE2));
-
-    /* LAPIC timer: divide by 1, one-shot with the maximum count. */
-    lapic[LAPIC_TIMER_DIV / 4] = 0x0B;
-    lapic[LAPIC_TIMER_INITCNT / 4] = 0xFFFFFFFFu;
-
-    /* Wait for PIT to reach zero (bit 5 = OUT2 high), bounded. */
-    uint32_t guard = 10000000u;
-    while (!(inb(PIT_CH2_CTRL) & PIT_OUT2) && guard--)
-        __asm__ __volatile__("pause");
-
-    uint32_t remaining = lapic[LAPIC_TIMER_CURCNT / 4];
-    lapic[LAPIC_TIMER_INITCNT / 4] = 0;             /* stop */
-
-    if (guard == 0) {
-        pr_warn("  %-11s : PIT calibration timed out\n", "timer");
-        return 0;
-    }
-
-    uint64_t elapsed   = 0xFFFFFFFFull - remaining;
-    uint64_t period_us = (65535ull * 1000000ull) / PIT_BASE_FREQ;   /* ~54931 */
-    uint32_t per_ms    = (uint32_t)((elapsed * 1000ull) / period_us);
-
+    uint32_t per_ms = lapic_calibrate_pm();
     if (per_ms == 0) {
-        pr_warn("  %-11s : calibration failed\n", "timer");
+        pr_warn("  %-11s : calibration failed (ACPI PM timer unavailable)\n",
+                "timer");
         return 0;
     }
 
     {
-        char buf[64]; char num[32];
+        char buf[80]; char num[32];
         strcpy(buf, "LAPIC timer: calibrated at ");
-        snprintf(num, sizeof(num), "%d", (int)(per_ms * 1000)); strcat(buf, num);
-        strcat(buf, " Hz");
+        snprintf(num, sizeof(num), "%llu", (unsigned long long)per_ms * 1000ull);
+        strcat(buf, num);
+        strcat(buf, " Hz (ACPI PM timer)");
         pr_info("%s", buf);
     }
     return per_ms;

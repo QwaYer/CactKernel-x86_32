@@ -256,7 +256,7 @@ int apic_init(void)
 
     /*
      * Scheduler tick.  The LAPIC timer is the only periodic interrupt
-     * source: calibrate it against the PIT and arm it at 100 Hz on
+     * source: calibrate it against the ACPI PM timer and arm it at 100 Hz on
      * LAPIC_TIMER_VECTOR, which device_isrs.asm dispatches to the scheduler.
      * A failed calibration is retried by the boot watchdog in init().
      *
