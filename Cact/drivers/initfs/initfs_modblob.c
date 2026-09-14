@@ -138,12 +138,8 @@ static int validate_header(uint32_t size) {
     if (h->checksum != 0) {
         uint32_t expected = compute_image_crc32(cctkfs_stage, size);
         if (h->checksum != expected) {
-            printk("[INITFS] cctkfs checksum mismatch: got 0x");
-            char nb[12];
-            printk("0x%x", (unsigned)(h->checksum));
-            printk(", expected 0x");
-            printk("0x%x", (unsigned)(expected));
-            printk("\n");
+            pr_err("[INITFS] cctkfs checksum mismatch: got 0x0x%x, expected 0x0x%x",
+                   (unsigned)(h->checksum), (unsigned)(expected));
             return -8;
         }
     }
@@ -152,12 +148,14 @@ static int validate_header(uint32_t size) {
 }
 
 int initfs_modblob_load(uint32_t phys_addr, uint32_t size) {
+    pr_debug("[INITFS] staging cctkfs module from phys 0x%x (%u bytes)",
+             (unsigned)phys_addr, (unsigned)size);
     if (!phys_addr || !size) {
-        printk("[INITFS] no cctkfs module supplied by bootloader\n");
+        pr_err("[INITFS] no cctkfs module supplied by bootloader\n");
         return -1;
     }
     if (size > INITFS_MODBLOB_MAX_IMAGE) {
-        printk("[INITFS] cctkfs image too large for stage buffer\n");
+        pr_err("[INITFS] cctkfs image too large for stage buffer\n");
         return -2;
     }
 
@@ -168,21 +166,15 @@ int initfs_modblob_load(uint32_t phys_addr, uint32_t size) {
 
     int rc = validate_header(size);
     if (rc != 0) {
-        printk("[INITFS] cctkfs header invalid (rc=");
-        char nb[8]; printk("%d", (int)(rc));
-        printk(")\n");
+        pr_err("[INITFS] cctkfs header invalid (rc=%d)", (int)(rc));
         cctkfs_size = 0;
         return rc;
     }
 
     cctkfs_ready = 1;
 
-    char nb[16];
-    snprintf(nb, sizeof(nb), "%d", (int)((int)hdr_ptr()->count));
-    printk("[INITFS] ready: ");
-    printk(nb);
-    printk(" mods, ");
-    printk("%d", (int)((int)size)); printk(" B\n");
+    pr_info("[INITFS] ready: %d mods, %d B",
+            (int)((int)hdr_ptr()->count), (int)((int)size));
     return 0;
 }
 
@@ -227,7 +219,11 @@ int initfs_modblob_get(const char *path, const uint8_t **out_data,
         if (name_end < e[i].name_off || name_end > h->names_size) continue;
         if (!name_eq(path, n, e[i].name_off, e[i].name_len)) continue;
         uint32_t data_end = e[i].data_off + e[i].data_size;
-        if (data_end < e[i].data_off || data_end > cctkfs_size) return -1;
+        if (data_end < e[i].data_off || data_end > cctkfs_size) {
+            pr_err("[INITFS] entry %u data range invalid (off 0x%x size 0x%x)",
+                   (unsigned)i, (unsigned)e[i].data_off, (unsigned)e[i].data_size);
+            return -1;
+        }
         *out_data = cctkfs_stage + e[i].data_off;
         *out_size = e[i].data_size;
         return 0;
@@ -245,6 +241,7 @@ int initfs_modblob_get(const char *path, const uint8_t **out_data,
         *out_size = e[i].data_size;
         return 0;
     }
+    pr_debug("[INITFS] module not found: %s", path);
     return -1;
 }
 

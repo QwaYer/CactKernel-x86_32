@@ -184,7 +184,7 @@ static void _load_all(void) {
         if (!ext4_root || !ext4_root->ops || !ext4_root->ops->mkdir) return;
         ext4_root->ops->mkdir(ext4_root, "etc");
         etc_dir = _ext4_etc_dir();
-        if (!etc_dir) { printk("[etcfs] mkdir /etc failed\n"); return; }
+        if (!etc_dir) { pr_err("[etcfs] mkdir /etc failed\n"); return; }
     }
 
     if (!etc_dir->ops || !etc_dir->ops->readdir) return;
@@ -196,7 +196,7 @@ static void _load_all(void) {
         if (_find(de->name)) continue;   // already loaded
 
         etc_entry_t *slot = (etc_entry_t *)kmalloc(sizeof(etc_entry_t));
-        if (!slot) { printk("[etcfs] kmalloc failed\n"); break; }
+        if (!slot) { pr_err("[etcfs] kmalloc failed\n"); break; }
         memset(slot, 0, sizeof(etc_entry_t));
 
         slot->data = (char *)kmalloc(ETCFS_INIT_SIZE);
@@ -243,6 +243,12 @@ void etcfs_init(vfs_node_t *ext4_node) {
         etcfs_create("mounts");
 
     etcfs_seed_users();
+
+    uint32_t nfiles = 0;
+    for (etc_entry_t *e = etc_list; e; e = e->next) nfiles++;
+
+    pr_info("  %-11s : root ready (%u file(s), ext4 %s)\n", "etcfs",
+            nfiles, ext4_root ? "/etc" : "unavailable");
 }
 
 // Read a file from etcfs by name; returns bytes read, 0 if not found

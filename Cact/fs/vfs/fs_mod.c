@@ -138,14 +138,14 @@ static void instance_name(const char *path, char *out, int out_sz) {
 
 static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
     if (*file_size <= CACT_HMAC_TAG_SIZE) {
-        printk("[FSMOD] HMAC: unsigned module (no signature) — rejected\n");
+        pr_err("[FSMOD] HMAC: unsigned module (no signature) — rejected\n");
         return -1;
     }
     uint32_t  data_len = *file_size - CACT_HMAC_TAG_SIZE;
     uint8_t  *tag      = elf_data + data_len;
     int       rc       = cact_hmac_verify(elf_data, data_len, tag, CACT_HMAC_TAG_SIZE);
     if (rc != 0) {
-        printk("[FSMOD] HMAC: signature mismatch — rejected\n");
+        pr_err("[FSMOD] HMAC: signature mismatch — rejected\n");
         return -1;
     }
     *file_size = data_len;
@@ -162,7 +162,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
     const uint8_t *blob_data = NULL;
     uint32_t       blob_size = 0;
     if (initfs_modblob_get(path, &blob_data, &blob_size) != 0 || !blob_size) {
-        printk("[FSMOD] module not found: "); printk((char *)path); printk("\n");
+        pr_err("[FSMOD] module not found: %s\n", path);
         return -1;
     }
 
@@ -178,7 +178,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
     if (eh->e_magic != ELF_MAGIC || eh->e_type != ET_REL || eh->e_machine != EM_386) {
-        printk("[FSMOD] not a valid ELF32 relocatable\n");
+        pr_err("[FSMOD] not a valid ELF32 relocatable\n");
         kfree(elf_data);
         return -2;
     }
@@ -187,7 +187,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
     if (__builtin_umul_overflow(eh->e_shnum, eh->e_shentsize, &sh_tab_end) ||
         __builtin_uadd_overflow(eh->e_shoff, sh_tab_end, &sh_tab_end) ||
         eh->e_shentsize < sizeof(Elf32_Shdr) || sh_tab_end > file_size) {
-        printk("[FSMOD] corrupted section header table\n");
+        pr_err("[FSMOD] corrupted section header table\n");
         kfree(elf_data);
         return -3;
     }
@@ -213,7 +213,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
         Elf32_Shdr *sh = get_shdr(eh, i);
         if (!sh || !(sh->sh_flags & SHF_ALLOC) || sh->sh_type != SHT_PROGBITS) continue;
         if (sh->sh_offset + sh->sh_size > file_size) {
-            printk("[FSMOD] section offset exceeds file\n");
+            pr_err("[FSMOD] section offset exceeds file\n");
             kfree(image); kfree(elf_data);
             return -8;
         }
@@ -232,7 +232,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
         }
     }
     if (!symtab_sh) {
-        printk("[FSMOD] no .symtab found\n");
+        pr_err("[FSMOD] no .symtab found\n");
         kfree(image); kfree(elf_data);
         return -4;
     }
@@ -259,7 +259,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
         for (uint32_t r = 0; r < rel_cnt; r++) {
             uint32_t   sym_idx = ELF32_R_SYM(rels[r].r_info);
             if (sym_idx >= sym_cnt) {
-                printk("[FSMOD] relocation symbol index out of bounds\n");
+                pr_err("[FSMOD] relocation symbol index out of bounds\n");
                 kfree(image); kfree(elf_data);
                 return -7;
             }
@@ -271,21 +271,21 @@ static int load_module_image(const char *path, uint8_t **image_out,
                 if (!sym_name) { kfree(image); kfree(elf_data); return -7; }
                 S = ksym_resolve(sym_name);
                 if (S == 0 && ELF32_ST_BIND(sym->st_info) != STB_WEAK) {
-                    printk("[FSMOD] unresolved symbol: "); printk((char *)sym_name); printk("\n");
+                    pr_err("[FSMOD] unresolved symbol: %s\n", sym_name);
                     kfree(image); kfree(elf_data);
                     return -7;
                 }
             } else {
                 Elf32_Shdr *sym_sh = get_shdr(eh, sym->st_shndx);
                 if (!sym_sh || !(sym_sh->sh_flags & SHF_ALLOC)) {
-                    printk("[FSMOD] bad symbol section\n");
+                    pr_err("[FSMOD] bad symbol section\n");
                     kfree(image); kfree(elf_data);
                     return -7;
                 }
                 S = (uint32_t)(image + sym_sh->sh_addr + sym->st_value);
             }
             if (rels[r].r_offset + sizeof(uint32_t) > target_sh->sh_size) {
-                printk("[FSMOD] relocation offset out of bounds\n");
+                pr_err("[FSMOD] relocation offset out of bounds\n");
                 kfree(image); kfree(elf_data);
                 return -7;
             }
@@ -313,7 +313,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
             unm = (fs_unmount_fn_t)addr;
     }
     if (!mnt) {
-        printk("[FSMOD] symbol 'fs_mount' not found\n");
+        pr_err("[FSMOD] symbol 'fs_mount' not found\n");
         kfree(image); kfree(elf_data);
         return -5;
     }
@@ -337,7 +337,7 @@ int fs_mod_load(const char *path) {
         }
     }
     if (free_slot < 0) {
-        printk("[FSMOD] no free filesystem-module slot\n");
+        pr_err("[FSMOD] no free filesystem-module slot\n");
         return -1;
     }
 
@@ -345,7 +345,7 @@ int fs_mod_load(const char *path) {
     instance_name(path, inst, sizeof(inst));
     for (int i = 0; i < FS_MOD_MAX; i++) {
         if (slots[i].used && strcmp(slots[i].instance, inst) == 0) {
-            printk("[FSMOD] filesystem module already loaded: "); printk(inst); printk("\n");
+            pr_warn("[FSMOD] filesystem module already loaded: %s\n", inst);
             return -1;
         }
     }
@@ -368,9 +368,7 @@ int fs_mod_load(const char *path) {
     s->unmount = unm;
     s->mount_count = 0;
 
-    printk("[FSMOD] module loaded: "); printk(inst);
-    printk(" (slot "); { char b[8]; snprintf(b, sizeof(b), "%d", free_slot); printk(b); }
-    printk(")\n");
+    pr_info("[FSMOD] module loaded: %s (slot %d)\n", inst, free_slot);
     return 0;
 }
 
@@ -387,9 +385,8 @@ static int slot_unload(fs_slot_t *s) {
     if (!s || !s->used)
         return -1;
     if (s->mount_count > 0) {
-        printk("[FSMOD] module busy (still mounted), not unloading: ");
-        printk(s->instance);
-        printk("\n");
+        pr_warn("[FSMOD] module busy (still mounted), not unloading: %s\n",
+                s->instance);
         return -1;
     }
     if (s->image)
@@ -410,9 +407,7 @@ int fs_mod_unload(const char *instance) {
         return -1;
     int rc = slot_unload(s);
     if (rc == 0) {
-        printk("[FSMOD] module unloaded: ");
-        printk((char *)instance);
-        printk("\n");
+        pr_info("[FSMOD] module unloaded: %s\n", instance);
     }
     return rc;
 }

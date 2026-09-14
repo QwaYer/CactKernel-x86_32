@@ -19,7 +19,7 @@ int xhci_enable_slot(xhci_priv_t *priv, uint8_t *slot_id) {
     }
     *slot_id = (uint8_t)((priv->cmd_result >> 24) & 0xFF);
     if (*slot_id == 0 || *slot_id > priv->max_slots || *slot_id > XHCI_MAX_SLOTS) {
-        printk("xHCI: bad slot id %d", (int)*slot_id);
+        pr_err("xHCI: bad slot id %d", (int)*slot_id);
         return -1;
     }
     return 0;

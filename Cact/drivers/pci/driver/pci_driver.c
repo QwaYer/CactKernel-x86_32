@@ -32,6 +32,8 @@ int pci_driver_modinfo_read(uint32_t off, uint32_t size, char *buf)
     for (pci_driver_t *d = pcidev_driver_list; d; d = d->next) {
         idx++;
         if (p >= PCI_MODINFO_MAX - 520) {
+            pr_debug("  %-11s : modinfo driver section truncated (%d drivers)\n",
+                     "pci-drv", idx);
             p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n# ... A truncated ...\n");
             break;
         }
@@ -97,6 +99,8 @@ int pci_driver_modinfo_read(uint32_t off, uint32_t size, char *buf)
     for (pci_device_t *dv = pci_device_list; dv; dv = dv->next) {
         bidx++;
         if (p >= PCI_MODINFO_MAX - 400) {
+            pr_debug("  %-11s : modinfo device section truncated (%d devices)\n",
+                     "pci-drv", bidx);
             p = buf_append(tmp, p, PCI_MODINFO_MAX, "\n# ... B truncated ...\n");
             break;
         }

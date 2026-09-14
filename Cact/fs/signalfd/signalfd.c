@@ -2,6 +2,7 @@
 #include "task.h"
 #include "sync.h"
 #include "klib.h"
+#include "kernel.h"
 #include "helper.h"
 #include "ioctl_abi.h"
 #include "validate.h"
@@ -150,12 +151,16 @@ static int _signalfd_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
 
 vfs_node_t *signalfd_create_vnode(uint32_t mask, uint32_t flags) {
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
-    if (!node) return 0;
+    if (!node) {
+        pr_err("  %-11s : cannot allocate node\n", "signalfd");
+        return 0;
+    }
     memset(node, 0, sizeof(vfs_node_t));
 
     signalfd_state_t *s = (signalfd_state_t *)kmalloc(sizeof(signalfd_state_t));
     if (!s) {
         kfree(node);
+        pr_err("  %-11s : cannot allocate state\n", "signalfd");
         return 0;
     }
     memset(s, 0, sizeof(signalfd_state_t));

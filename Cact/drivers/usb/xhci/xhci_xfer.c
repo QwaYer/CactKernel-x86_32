@@ -13,10 +13,18 @@ int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
                           void *data, uint16_t len) {
     xhci_priv_t *priv = (xhci_priv_t *)hc->priv;
     uint8_t slot = dev->address;
-    if (!slot || slot > XHCI_MAX_SLOTS) return -1;
+    if (!slot || slot > XHCI_MAX_SLOTS) {
+        pr_err("  %-11s : control transfer: bad slot %u (setup failure)\n",
+               "xhci-xfer", (unsigned)slot);
+        return -1;
+    }
 
     xhci_ring_t *ring = &priv->ep_rings[slot][0];
-    if (!ring->ring) return -1;
+    if (!ring->ring) {
+        pr_err("  %-11s : control transfer: EP0 ring not set up (slot %u)\n",
+               "xhci-xfer", (unsigned)slot);
+        return -1;
+    }
 
     xhci_trb_t trb;
 
@@ -67,7 +75,11 @@ int xhci_interrupt_transfer(usb_hc_t *hc, usb_device_t *dev,
     uint8_t dci = (ep_num * 2) + 1;
 
     xhci_ring_t *ring = &priv->ep_rings[slot][dci - 1];
-    if (!ring->ring) return -1;
+    if (!ring->ring) {
+        pr_err("  %-11s : interrupt transfer: ring not set up (slot %u dci %u)\n",
+               "xhci-xfer", (unsigned)slot, (unsigned)dci);
+        return -1;
+    }
 
     xhci_trb_t trb;
     memset(&trb, 0, sizeof(trb));
@@ -93,7 +105,11 @@ int xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
     uint8_t dci = (ep_num * 2) + (dir == USB_DIR_IN ? 1 : 0);
 
     xhci_ring_t *ring = &priv->ep_rings[slot][dci - 1];
-    if (!ring->ring) return -1;
+    if (!ring->ring) {
+        pr_err("  %-11s : bulk transfer: ring not set up (slot %u dci %u)\n",
+               "xhci-xfer", (unsigned)slot, (unsigned)dci);
+        return -1;
+    }
 
     xhci_trb_t trb;
     memset(&trb, 0, sizeof(trb));

@@ -75,7 +75,11 @@ static int _console_write(void *p, uint32_t off, uint32_t size, char *buf) {
         if (c >= sizeof(tmp)) c = sizeof(tmp) - 1;
         memcpy(tmp, buf + i, c);
         tmp[c] = '\0';
-        printk(tmp);
+        /* Render straight to the console.  Userspace console output must NOT
+         * go through printk(): that would feed it into /dev/kmsg and make a
+         * reader that echoes the log back to the console re-log its own
+         * output, growing the log without bound. */
+        console_puts(tmp, COLOR_WHITE);
         i += c;
     }
     return (int)size;
@@ -84,12 +88,21 @@ static int _console_write(void *p, uint32_t off, uint32_t size, char *buf) {
 devfs_driver_t drv_console = { .read = _console_read, .write = _console_write };
 
 // ── /dev/kmsg ─────────────────────────────────────────────────────────────
-// Kernel message log: the plain-text boot log captured by klog (all printk
-// console output).  Offset-based reads: cat /dev/kmsg dumps the whole log.
+// Kernel message log.  Records are stored in the Linux /dev/kmsg read format
+// ("<level>,<seq>,<usec>,<flags>;<text>\n"); reads are offset-based, so
+// cat /dev/kmsg dumps the whole transcript.  Writes append a record from
+// userspace (KLOG_F_USER); the level comes from the leading "<N>" or
+// "N,seq,usec,flags,facility;" prefix.
 
 static int _kmsg_read(void *p, uint32_t off, uint32_t size, char *buf) {
     (void)p;
     return klog_read(off, size, buf);
+}
+
+static int _kmsg_write(void *p, uint32_t off, uint32_t size, char *buf) {
+    (void)p; (void)off;
+    if (!buf || !validate_user_ptr(buf, size)) return -1;
+    return klog_write_user(buf, size);
 }
 
 static int _kmsg_status(void *p, char *buf, uint32_t size) {
@@ -98,9 +111,13 @@ static int _kmsg_status(void *p, char *buf, uint32_t size) {
     uint32_t n = 0;
     const char *s = "device: kmsg\ntype: kernel message log\n";
     while (s[n] && n < size - 1) { buf[n] = s[n]; n++; }
-    s = "lines: ";
+    s = "records: ";
     for (int i = 0; s[i] && n < size - 1; i++) buf[n++] = s[i];
     snprintf(nb, sizeof(nb), "%d", (int)klog_line_count());
+    for (int i = 0; nb[i] && n < size - 1; i++) buf[n++] = nb[i];
+    s = "\nseq: ";
+    for (int i = 0; s[i] && n < size - 1; i++) buf[n++] = s[i];
+    snprintf(nb, sizeof(nb), "%d", (int)klog_seq());
     for (int i = 0; nb[i] && n < size - 1; i++) buf[n++] = nb[i];
     s = "\nbytes: ";
     for (int i = 0; s[i] && n < size - 1; i++) buf[n++] = s[i];
@@ -115,7 +132,9 @@ static int _kmsg_status(void *p, char *buf, uint32_t size) {
     return (int)n;
 }
 
-devfs_driver_t drv_kmsg = { .read = _kmsg_read, .status = _kmsg_status };
+devfs_driver_t drv_kmsg = {
+    .read = _kmsg_read, .write = _kmsg_write, .status = _kmsg_status
+};
 
 // ── /dev/sys ──────────────────────────────────────────────────────────────
 
@@ -193,6 +212,10 @@ static int _sys_umount_ioctl(char *target) {
 }
 
 static void _do_reboot(uint32_t cmd) {
+    pr_notice("  %-11s : %s requested by pid %d\n", "reboot",
+              (cmd == CACT_REBOOT_POWEROFF) ? "poweroff" : "reboot",
+              current_task ? current_task->pid : 0);
+
     __asm__ volatile ("cli");
 
     if (cmd == CACT_REBOOT_POWEROFF) {

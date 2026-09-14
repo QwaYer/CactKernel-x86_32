@@ -10,7 +10,10 @@
 file_t *file_alloc(vfs_node_t *node) {
     if (!node) return 0;
     file_t *f = (file_t *)kmalloc(sizeof(file_t));
-    if (!f) return 0;
+    if (!f) {
+        pr_err("  %-11s : cannot allocate file for '%s'\n", "vfs", node->name);
+        return 0;
+    }
     f->node     = node;
     f->offset   = 0;
     f->flags    = 0;

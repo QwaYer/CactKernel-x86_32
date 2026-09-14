@@ -352,5 +352,12 @@ void usrfs_init(vfs_node_t *ext4_node) {
     usrfs_register_blobs();
     usrfs_count_disk();
 
+    uint32_t overlay = 0;
+    for (usr_blob_t *b = usr_blobs; b; b = b->next)
+        if (!b->shadowed) overlay++;
+
+    pr_info("  %-11s : root ready (%u on disk, %u cctkfs overlay)\n",
+            "usrfs", usrfs_disk_count, overlay);
+
     usrfs_ready = 1;
 }

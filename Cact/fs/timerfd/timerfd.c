@@ -2,6 +2,7 @@
 #include "task.h"
 #include "sync.h"
 #include "klib.h"
+#include "kernel.h"
 #include "helper.h"
 #include "ioctl_abi.h"
 #include "validate.h"
@@ -249,12 +250,16 @@ vfs_node_t *timerfd_create_vnode(int32_t clockid, uint32_t flags) {
     (void)clockid;   /* single monotonic clock */
 
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
-    if (!node) return 0;
+    if (!node) {
+        pr_err("  %-11s : cannot allocate node\n", "timerfd");
+        return 0;
+    }
     memset(node, 0, sizeof(vfs_node_t));
 
     timerfd_state_t *s = (timerfd_state_t *)kmalloc(sizeof(timerfd_state_t));
     if (!s) {
         kfree(node);
+        pr_err("  %-11s : cannot allocate state\n", "timerfd");
         return 0;
     }
     memset(s, 0, sizeof(timerfd_state_t));

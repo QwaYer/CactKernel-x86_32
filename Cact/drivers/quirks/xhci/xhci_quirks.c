@@ -9,6 +9,7 @@
 #include "xhci_quirks.h"
 #include "pci_enum.h"
 #include "pci_driver.h"
+#include "kernel.h"
 
 struct xhci_quirk_entry {
     uint16_t vendor_id;
@@ -31,8 +32,13 @@ uint32_t xhci_quirks_for(pci_device_t *pdev)
          i < sizeof(xhci_quirk_table) / sizeof(xhci_quirk_table[0]); i++) {
         const struct xhci_quirk_entry *e = &xhci_quirk_table[i];
         if ((e->vendor_id == PCI_ANY_ID || e->vendor_id == pdev->vendor_id) &&
-            (e->device_id == PCI_ANY_ID || e->device_id == pdev->device_id))
+            (e->device_id == PCI_ANY_ID || e->device_id == pdev->device_id)) {
+            if (e->quirks && e->vendor_id != PCI_ANY_ID)
+                pr_notice("  %-11s : quirk entry %04x:%04x applied (0x%x)\n",
+                          "xhci-quirk", (unsigned)pdev->vendor_id,
+                          (unsigned)pdev->device_id, (unsigned)e->quirks);
             return e->quirks;
+        }
     }
     return 0;
 }

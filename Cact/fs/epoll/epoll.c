@@ -2,6 +2,7 @@
 #include "task.h"
 #include "sync.h"
 #include "klib.h"
+#include "kernel.h"
 #include "helper.h"
 #include "ioctl_abi.h"
 #include "validate.h"
@@ -343,12 +344,16 @@ static int _epoll_poll(vfs_node_t *node, uint32_t events) {
 
 vfs_node_t *epoll_create_vnode(uint32_t flags) {
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
-    if (!node) return 0;
+    if (!node) {
+        pr_err("  %-11s : cannot allocate node\n", "epoll");
+        return 0;
+    }
     memset(node, 0, sizeof(vfs_node_t));
 
     epoll_state_t *s = (epoll_state_t *)kmalloc(sizeof(epoll_state_t));
     if (!s) {
         kfree(node);
+        pr_err("  %-11s : cannot allocate state\n", "epoll");
         return 0;
     }
     memset(s, 0, sizeof(epoll_state_t));

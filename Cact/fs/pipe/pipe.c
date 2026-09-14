@@ -2,6 +2,7 @@
 #include "memory.h"
 #include "task.h"
 #include "klib.h"
+#include "kernel.h"
 #include "validate.h"
 
 // Helper macros for buffer state checks
@@ -72,13 +73,24 @@ static vfs_node_t *_make_node(pipe_t *p, const char *name, int is_write) {
 // Public API: Create anonymous pipe, returns two vfs_node pointers (read, write)
 int pipe_create(vfs_node_t *pipefd[2], int flags) {
     pipe_t *p = _pipe_alloc(flags);
-    if (!p) return -1;
+    if (!p) {
+        pr_err("  %-11s : cannot allocate pipe state\n", "pipe");
+        return -1;
+    }
 
     pipefd[0] = _make_node(p, "pipe:r", 0);   // Read end
-    if (!pipefd[0]) { kfree(p); return -1; }
+    if (!pipefd[0]) {
+        kfree(p);
+        pr_err("  %-11s : cannot allocate read-end node\n", "pipe");
+        return -1;
+    }
 
     pipefd[1] = _make_node(p, "pipe:w", 1);   // Write end
-    if (!pipefd[1]) { kfree(pipefd[0]); kfree(p); return -1; }
+    if (!pipefd[1]) {
+        kfree(pipefd[0]); kfree(p);
+        pr_err("  %-11s : cannot allocate write-end node\n", "pipe");
+        return -1;
+    }
 
     mutex_lock(&p->lock);
     p->write_open = 1;
@@ -90,10 +102,17 @@ int pipe_create(vfs_node_t *pipefd[2], int flags) {
 // Public API: Create named FIFO, returns single vfs_node
 vfs_node_t *fifo_create(const char *name, int flags) {
     pipe_t *p = _pipe_alloc(flags);
-    if (!p) return 0;
+    if (!p) {
+        pr_err("  %-11s : cannot allocate FIFO '%s' state\n", "pipe", name);
+        return 0;
+    }
 
     vfs_node_t *n = _make_node(p, name, 0);
-    if (!n) { kfree(p); return 0; }
+    if (!n) {
+        kfree(p);
+        pr_err("  %-11s : cannot allocate FIFO '%s' node\n", "pipe", name);
+        return 0;
+    }
 
     // Store FIFO name inside pipe_t to avoid dangling pointer if vfs_node is freed first
     int i = 0;

@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "klog.h"
 #include "multiboot2.h"
 #include "pci.h"
 #include "pcidev.h"
@@ -408,7 +409,8 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
                 break;   /* timer alive — normal boot */
 
             if (wd_attempts++ < 1) {
-                printk_color("  timer       : WARNING — no tick for 2 s, re-arming LAPIC timer\n",
+                printk_color_level(KLOG_LEVEL_WARN,
+                             "  timer       : WARNING — no tick for 2 s, re-arming LAPIC timer\n",
                              COLOR_LIGHT_RED);
                 uint32_t per_ms = lapic_timer_calibrate();
                 if (per_ms)
@@ -416,7 +418,8 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
                 continue;
             }
 
-            printk_color("  timer       : FATAL — no tick for 2 s (LAPIC timer dead), "
+            printk_color_level(KLOG_LEVEL_CRIT,
+                         "  timer       : FATAL — no tick for 2 s (LAPIC timer dead), "
                          "scheduler cannot start\n",
                          COLOR_LIGHT_RED);
             while (1) __asm__ __volatile__("hlt");

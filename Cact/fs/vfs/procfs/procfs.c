@@ -134,5 +134,11 @@ void procfs_init(void) {
     procfs_register_file("time",    _time_read);
     procfs_register_file("uname",   _uname_read);
 
+    uint32_t nfiles = 0;
+    for (proc_file_t *f = file_list; f; f = f->next) nfiles++;
+
+    pr_info("  %-11s : root ready (%u virtual file(s) + /proc/self)\n",
+            "procfs", nfiles);
+
     procfs_ready = 1;
 }
