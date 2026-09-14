@@ -22,4 +22,7 @@ void set_idt_gate(int n, uint32_t handler);
 int  init_idt(void);
 void idt_reload(void);
 
+/* Handler address currently installed in gate `n` (0 if out of range). */
+uint32_t idt_gate_handler(int n);
+
 #endif  

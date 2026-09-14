@@ -50,8 +50,8 @@ void acpi_osc_pcie_init(void);
 void acpi_power_off(void);
 void acpi_reboot(void);
 
-/* Shared OSL helpers (osl.c): temporary physical->virtual mapping window and
- * a busy-loop microsecond delay. */
+/* Shared OSL helpers (osl.c): a temporary physical->virtual mapping window and
+ * a microsecond delay backed by ktime (TSC / ACPI PM timer). */
 void *acpi_temp_map(uint32_t phys, uint32_t size);
 void  acpi_temp_unmap(void *virt, uint32_t size);
 void  osl_udelay(uint32_t us);

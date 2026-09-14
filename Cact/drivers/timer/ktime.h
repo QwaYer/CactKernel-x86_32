@@ -7,10 +7,17 @@
 #define ACPI_PM_TIMER_FREQ     3579545
 
 /* Monotonic wall-clock microseconds for kernel timekeeping.  Uses the TSC
- * when it is present and could be calibrated, otherwise the ACPI PM timer. */
+ * when it is present, invariant and could be calibrated, otherwise the ACPI
+ * PM timer. */
 int      ktime_init(void);
 bool     ktime_using_tsc(void);
 uint64_t ktime_get_usec(void);
+
+/* Busy-wait for at least `us` microseconds with interrupts enabled or
+ * disabled (used by the ACPI OSL stall).  Prefers the calibrated TSC, then the
+ * ACPI PM timer, and only in early boot — before either is ready — a `pause`
+ * loop measured against PIT channel 2. */
+void     ktime_busy_wait_us(uint64_t us);
 
 /* ACPI PM timer (3.579545 MHz) — raw counter and microsecond fallback. */
 int      acpi_pm_timer_init(void);

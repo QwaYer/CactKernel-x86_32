@@ -85,6 +85,14 @@ extern uint32_t inl (uint16_t port);
 
 // Interrupt Service Routine stubs (defined in isr.S)
 extern void timer_isr();
+
+/* LAPIC timer vector.  It is deliberately NOT 0x20: that vector is claimed by
+ * AcpiOsInstallInterruptHandler() for the ACPI SCI (0x20 + FADT.SciInterrupt),
+ * which would silently redirect every scheduler tick to the SCI stub when the
+ * FADT reports SCI_INT = 0.  0xFE also gives the tick the highest hardware
+ * priority class, so a level-triggered SCI/GPE storm at vector 0x29 (same
+ * priority class as 0x20) cannot starve it. */
+#define LAPIC_TIMER_VECTOR  0xFE
 extern void syscall_isr();
 extern void isr0();  extern void isr1();  extern void isr2();
 extern void isr3();  extern void isr4();  extern void isr5();

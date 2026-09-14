@@ -21,6 +21,7 @@
 #define PIT_CMD             0x43
 #define PIT_CH2_CTRL        0x61
 #define PIT_GATE2           (1u << 0)
+#define PIT_SPKR            (1u << 1)
 #define PIT_OUT2            (1u << 5)
 #define PIT_BASE_FREQ       1193182u
 
@@ -32,12 +33,15 @@ uint32_t lapic_timer_calibrate(void)
     if (!lapic)
         return 0;
 
-    /* PIT channel 2: one-shot, count 0xFFFF (~54.9 ms). No IRQ involved. */
+    /* PIT channel 2: one-shot, count 0xFFFF (~54.9 ms). No IRQ involved.
+     * Lower the gate first so the counter cannot start on a partially loaded
+     * value on real silicon, load mode + count, then raise the gate. */
     uint8_t ctrl = inb(PIT_CH2_CTRL);
-    outb(PIT_CH2_CTRL, ctrl | PIT_GATE2);
+    outb(PIT_CH2_CTRL, ctrl & ~PIT_GATE2);
     outb(PIT_CMD, 0xB0);                 /* ch2, lobyte+hibyte, mode 0, binary */
     outb(PIT_CH2_DATA, 0xFF);
     outb(PIT_CH2_DATA, 0xFF);
+    outb(PIT_CH2_CTRL, (uint8_t)((ctrl & ~PIT_SPKR) | PIT_GATE2));
 
     /* LAPIC timer: divide by 1, one-shot with the maximum count. */
     lapic[LAPIC_TIMER_DIV / 4] = 0x0B;
@@ -85,13 +89,59 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
     uint32_t count = ticks_per_ms * 10u;
 
     /* Program masked first, then unmask to avoid a spurious edge. */
-    lapic[LAPIC_LVT_TIMER / 4] = 0x20 | LAPIC_LVT_PERIODIC | LAPIC_LVT_MASK;
+    lapic[LAPIC_LVT_TIMER / 4] =
+        LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC | LAPIC_LVT_MASK;
     lapic[LAPIC_TIMER_DIV / 4] = 0x0B;
     lapic[LAPIC_TIMER_INITCNT / 4] = count;
-    lapic[LAPIC_LVT_TIMER / 4] = 0x20 | LAPIC_LVT_PERIODIC;
+    lapic[LAPIC_LVT_TIMER / 4] = LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC;
 
     lapic_timer_armed = 1;
     pr_info("LAPIC timer: periodic 100 Hz armed");
+}
+
+void lapic_timer_mask(void)
+{
+    volatile uint32_t *lapic = apic_lapic_regs();
+    if (!lapic)
+        return;
+    lapic[LAPIC_LVT_TIMER / 4] =
+        LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC | LAPIC_LVT_MASK;
+    lapic_timer_armed = 0;
+}
+
+int lapic_timer_selftest(void)
+{
+    volatile uint32_t *lapic = apic_lapic_regs();
+    if (!lapic) {
+        pr_warn("  %-11s : selftest: no LAPIC mapping\n", "timer");
+        return -1;
+    }
+
+    /* Vector + periodic + unmasked. */
+    const uint32_t fields = 0xFFu | LAPIC_LVT_MASK | LAPIC_LVT_PERIODIC;
+    const uint32_t expect = LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC;
+    uint32_t lvt = lapic[LAPIC_LVT_TIMER / 4];
+    if ((lvt & fields) != expect) {
+        pr_warn("  %-11s : selftest: LVT=0x%x (expected 0x%x) — vector/mask wrong\n",
+                "timer", (unsigned)lvt, (unsigned)expect);
+        return -1;
+    }
+
+    /* The counter must be moving.  Periodic mode reloads, so a stuck value
+     * means the timer is not running at all. */
+    uint32_t a = lapic[LAPIC_TIMER_CURCNT / 4];
+    for (volatile uint32_t i = 0; i < 1000000u; i++)
+        __asm__ __volatile__("pause");
+    uint32_t b = lapic[LAPIC_TIMER_CURCNT / 4];
+    if (a == b) {
+        pr_warn("  %-11s : selftest: LAPIC counter stuck at 0x%x — timer not running\n",
+                "timer", (unsigned)a);
+        return -1;
+    }
+
+    pr_info("  %-11s : selftest OK (vector 0x%x, CURCNT 0x%x->0x%x)\n",
+            "timer", (unsigned)LAPIC_TIMER_VECTOR, (unsigned)a, (unsigned)b);
+    return 0;
 }
 
 bool lapic_timer_active(void)

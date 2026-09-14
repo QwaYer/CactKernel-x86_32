@@ -3,6 +3,7 @@
 #include "acpi.h"
 #include "ktime.h"
 #include "cact_acpi.h"
+#include "cpudev.h"
 #include "sync.h"
 
 /* ---------------------------------------------------------------------------
@@ -13,8 +14,12 @@ static uint16_t pm_timer_port = 0;
 static int      pm_timer_32bit = 0;
 static int      pm_timer_available = 0;
 
-static uint32_t  last_pm_count = 0;
-static volatile uint32_t  pm_overflow_count = 0;
+/* Delta accumulation instead of "count + overflow flag": subtracting the last
+ * sample from the current one modulo the counter width handles a single wrap
+ * with no polling-rate assumption at all.  The exact count total is kept in
+ * 64 bits so microsecond conversion only truncates once, on read. */
+static uint32_t  pm_last_count = 0;
+static uint64_t  pm_total_counts = 0;
 static irq_spinlock_t pm_timer_lock;
 
 #define PM_TIMER_24BIT_MASK  0x00FFFFFFu
@@ -60,8 +65,8 @@ int acpi_pm_timer_init(void)
     uint32_t val = pm_timer_read_port();
     val &= pm_timer_get_max();
 
-    last_pm_count = val;
-    pm_overflow_count = 0;
+    pm_last_count = val;
+    pm_total_counts = 0;
     irq_spinlock_init(&pm_timer_lock);
     pm_timer_available = 1;
 
@@ -89,21 +94,24 @@ uint64_t acpi_pm_timer_get_usec(void)
 {
     if (!pm_timer_available) return 0;
 
-    irq_spinlock_acquire(&pm_timer_lock);
-
-    uint32_t val = acpi_pm_timer_read();
     uint32_t max_val = pm_timer_get_max();
 
-    if (val < last_pm_count && (last_pm_count - val) > (max_val / 2)) {
-        pm_overflow_count++;
-    }
-    last_pm_count = val;
+    irq_spinlock_acquire(&pm_timer_lock);
 
-    uint64_t total_counts = (uint64_t)pm_overflow_count * (uint64_t)(max_val + 1) + val;
+    uint32_t val   = pm_timer_read_port() & max_val;
+    uint32_t delta = (val - pm_last_count) & max_val;   /* wrap-safe */
+    pm_last_count = val;
+    pm_total_counts += delta;
+
+    uint64_t total = pm_total_counts;
 
     irq_spinlock_release(&pm_timer_lock);
 
-    return (total_counts * 1000000ull) / ACPI_PM_TIMER_FREQ;
+    /* Split the conversion so `total * 1000000` cannot overflow even after
+     * months of uptime (a single 64-bit multiply wraps after ~58 days). */
+    uint64_t secs = total / ACPI_PM_TIMER_FREQ;
+    uint64_t rem  = total % ACPI_PM_TIMER_FREQ;
+    return secs * 1000000ull + (rem * 1000000ull) / ACPI_PM_TIMER_FREQ;
 }
 
 /* ---------------------------------------------------------------------------
@@ -119,6 +127,7 @@ uint64_t acpi_pm_timer_get_usec(void)
 #define PIT_CMD             0x43
 #define PIT_CH2_CTRL        0x61
 #define PIT_GATE2           (1u << 0)
+#define PIT_SPKR            (1u << 1)
 #define PIT_OUT2            (1u << 5)
 #define PIT_BASE_FREQ       1193182u
 
@@ -177,11 +186,14 @@ static int calibrate_tsc_pm(void)
 /* Calibrate the TSC against one PIT channel 2 one-shot (~54.9 ms). */
 static int calibrate_tsc_pit(void)
 {
+    /* Gate low FIRST so the counter cannot run on a half-programmed value on
+     * real silicon; load mode + count, then raise the gate to start it. */
     uint8_t ctrl = inb(PIT_CH2_CTRL);
-    outb(PIT_CH2_CTRL, ctrl | PIT_GATE2);
+    outb(PIT_CH2_CTRL, ctrl & ~PIT_GATE2);
     outb(PIT_CMD, 0xB0);                 /* ch2, lobyte+hibyte, mode 0, binary */
     outb(PIT_CH2_DATA, 0xFF);
     outb(PIT_CH2_DATA, 0xFF);
+    outb(PIT_CH2_CTRL, (uint8_t)((ctrl & ~PIT_SPKR) | PIT_GATE2));
 
     uint64_t t0 = read_tsc();
     uint32_t guard = 10000000u;
@@ -214,9 +226,26 @@ int ktime_init(void)
         return pm_ok ? 0 : -1;
     }
 
+    /* A non-invariant TSC stops in deep C-states and shifts with P-state
+     * changes, so a resume can read a stale value and time jumps backwards.
+     * Keep it for the calibrated busy-wait, but only make it the wall clock
+     * when firmware reports it as constant-rate. */
+    int invariant = cpu_has_invariant_tsc();
+
+    if (!invariant && pm_ok) {
+        tsc_available = 0;
+        pr_warn("  %-11s : %u MHz, no invariant TSC — ACPI PM timer is the wall clock\n",
+                "tsc", (unsigned)(tsc_hz / 1000000ull));
+        return 0;
+    }
+
     tsc_available = 1;
-    pr_info("  %-11s : %u MHz, calibrated against %s\n", "tsc",
-            (unsigned)(tsc_hz / 1000000ull), pm_ok ? "PM timer" : "PIT");
+    if (!invariant)
+        pr_warn("  %-11s : %u MHz, no invariant TSC and no PM timer — TSC is the only clock\n",
+                "tsc", (unsigned)(tsc_hz / 1000000ull));
+    else
+        pr_info("  %-11s : %u MHz, invariant, calibrated against %s\n", "tsc",
+                (unsigned)(tsc_hz / 1000000ull), pm_ok ? "PM timer" : "PIT");
     return 0;
 }
 
@@ -234,4 +263,85 @@ uint64_t ktime_get_usec(void)
     uint64_t secs = t / tsc_hz;
     uint64_t rem  = t % tsc_hz;
     return secs * 1000000ull + (rem * 1000000ull) / tsc_hz;
+}
+
+/* ---------------------------------------------------------------------------
+ * Busy-wait — the OSL delay primitive behind AcpiOsStall.
+ *
+ * The TSC gives an exact cycle count independent of CPU frequency changes, so
+ * it is preferred whenever calibrated (a busy loop keeps the core awake, so a
+ * non-invariant TSC is still fine here).  Next comes the PM timer.  Only very
+ * early — before either exists — is a `pause` loop used, and its
+ * iterations-per-microsecond is measured against PIT channel 2 once instead
+ * of being guessed, which is what made the old fixed multiplier drift by
+ * orders of magnitude from one CPU to the next.
+ * ------------------------------------------------------------------------ */
+
+static uint32_t pause_per_us = 0;
+
+static void pause_calibrate(void)
+{
+    /* ~10 ms one-shot on PIT channel 2; count `pause` iterations in that window. */
+    uint8_t ctrl = inb(PIT_CH2_CTRL);
+    outb(PIT_CH2_CTRL, ctrl & ~PIT_GATE2);
+    outb(PIT_CMD, 0xB0);                              /* ch2, lobyte+hibyte, mode 0 */
+    uint16_t count = (uint16_t)(PIT_BASE_FREQ / 100); /* 11931 ticks ≈ 10 ms */
+    outb(PIT_CH2_DATA, (uint8_t)(count & 0xFF));
+    outb(PIT_CH2_DATA, (uint8_t)(count >> 8));
+    outb(PIT_CH2_CTRL, (uint8_t)((ctrl & ~PIT_SPKR) | PIT_GATE2));
+
+    uint32_t n = 0;
+    while (!(inb(PIT_CH2_CTRL) & PIT_OUT2)) {
+        __asm__ __volatile__("pause" ::: "memory");
+        n++;
+    }
+
+    uint32_t usec = (uint32_t)(((uint64_t)count * 1000000ull) / PIT_BASE_FREQ);
+    if (usec == 0)
+        usec = 1;
+    /* Round up: overshooting a stall is harmless, undershooting is not. */
+    pause_per_us = (n + usec - 1) / usec;
+    if (pause_per_us == 0)
+        pause_per_us = 1;
+}
+
+static void pause_delay_us(uint64_t us)
+{
+    if (pause_per_us == 0)
+        pause_calibrate();
+
+    uint64_t total = us * (uint64_t)pause_per_us;
+    while (total) {
+        uint32_t chunk = (total > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)total;
+        for (uint32_t i = 0; i < chunk; i++)
+            __asm__ __volatile__("pause" ::: "memory");
+        total -= chunk;
+    }
+}
+
+void ktime_busy_wait_us(uint64_t us)
+{
+    if (us == 0)
+        return;
+
+    if (tsc_hz != 0) {
+        /* Split the product so `us * tsc_hz` cannot overflow 64 bits. */
+        uint64_t ticks = (us / 1000000ull) * tsc_hz
+                       + ((us % 1000000ull) * tsc_hz) / 1000000ull;
+        if (ticks == 0)
+            ticks = 1;
+        uint64_t start = read_tsc();
+        while (read_tsc() - start < ticks)
+            __asm__ __volatile__("pause" ::: "memory");
+        return;
+    }
+
+    if (pm_timer_available) {
+        uint64_t start = acpi_pm_timer_get_usec();
+        while (acpi_pm_timer_get_usec() - start < us)
+            __asm__ __volatile__("pause" ::: "memory");
+        return;
+    }
+
+    pause_delay_us(us);
 }
