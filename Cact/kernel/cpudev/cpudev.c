@@ -68,15 +68,17 @@ void syscall_set_esp0(uint32_t esp) {
 uint8_t cpu_syscall_use_sysexit(void) { return g_syscall_use_sysexit; }
 void   cpu_syscall_set_use_sysexit(uint8_t v) { g_syscall_use_sysexit = v ? 1 : 0; }
 
+// CPUID leaf 0 lays the 12-byte vendor ID out as EBX, then EDX, then ECX
+// (e.g. "GenuineIntel" = EBX "Genu", EDX "ineI", ECX "ntel").
 static int vendor_match(uint32_t ebx, uint32_t ecx, uint32_t edx,
                          const char* s) {
     const unsigned char* b = (const unsigned char*)&ebx;
-    const unsigned char* c = (const unsigned char*)&ecx;
     const unsigned char* d = (const unsigned char*)&edx;
+    const unsigned char* c = (const unsigned char*)&ecx;
     for (int i = 0; i < 4; i++) {
         if (b[i] != (unsigned char)s[i])   return 0;
-        if (c[i] != (unsigned char)s[i+4]) return 0;
-        if (d[i] != (unsigned char)s[i+8]) return 0;
+        if (d[i] != (unsigned char)s[i+4]) return 0;
+        if (c[i] != (unsigned char)s[i+8]) return 0;
     }
     return 1;
 }
@@ -221,15 +223,16 @@ static void detect_leaf7(void) {
                        &g_features_leaf7_edx);
 }
 
-// Invariant (constant-rate) TSC detection.  AMD and Intel both report it as
-// CPUID.80000007H:EDX[8]; on Intel the presence of leaf 15H (TSC/crystal
-// ratio) additionally implies an invariant TSC.  This matters for wall-clock
-// use: without it the TSC stops in deep C-states and shifts with P-state
-// changes, so a resumed machine reads a stale value and time jumps backwards.
+// Invariant (constant-rate) TSC detection.  The CPU must advertise this
+// explicitly as CPUID.80000007H:EDX[8] — the architectural bit, which Intel
+// implements too.  Nothing else substitutes for it: in particular the mere
+// presence of CPUID leaf 15H says nothing about invariance under a
+// hypervisor, which may expose the leaf with all-zero fields while masking
+// the invtsc bit (QEMU does exactly that with -cpu host).  This matters for
+// wall-clock use: without the bit the TSC stops in deep C-states and shifts
+// with P-state changes, so a resumed machine reads a stale value and time
+// jumps backwards.
 static int detect_invariant_tsc(void) {
-    uint32_t max_leaf;
-    cpuid_raw(0, &max_leaf, &(uint32_t){0}, &(uint32_t){0}, &(uint32_t){0});
-
     uint32_t max_ext;
     cpuid_raw(0x80000000, &max_ext, &(uint32_t){0}, &(uint32_t){0}, &(uint32_t){0});
     if (max_ext >= 0x80000007) {
@@ -238,10 +241,6 @@ static int detect_invariant_tsc(void) {
         if (g_features_ext7_edx & CPU_FEATURE_INV_TSC)
             return 1;
     }
-
-    if (g_vendor == CPU_VENDOR_INTEL && max_leaf >= 0x15)
-        return 1;
-
     return 0;
 }
 
