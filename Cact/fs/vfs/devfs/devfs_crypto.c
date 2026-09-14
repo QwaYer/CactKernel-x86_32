@@ -221,6 +221,7 @@ static int _crypto_ioctl(void *p, uint32_t cmd, void *arg) {
     }
 
     default:
+        pr_err("  %-11s : unknown ioctl 0x%x\n", "crypto", cmd);
         return -EINVAL;
     }
 }

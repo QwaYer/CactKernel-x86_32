@@ -228,5 +228,12 @@ void sbinfs_init(vfs_node_t *ext4_node) {
     sbinfs_register_init_sbin_blobs();
     sbinfs_count_disk_sbin();
 
+    uint32_t overlay = 0;
+    for (sbin_blob_t *b = sbin_blobs; b; b = b->next)
+        if (!b->shadowed) overlay++;
+
+    pr_info("  %-11s : root ready (%u on disk, %u cctkfs overlay)\n",
+            "sbinfs", sbinfs_disk_sbin_count, overlay);
+
     sbinfs_ready = 1;
 }

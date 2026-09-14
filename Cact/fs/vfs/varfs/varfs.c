@@ -112,5 +112,8 @@ void varfs_init(vfs_node_t *ext4_node) {
         }
     }
 
+    pr_info("  %-11s : root ready%s\n", "varfs",
+            ext4_root ? " (ext4 /var, /var/log ensured)" : " (no disk backing)");
+
     varfs_ready = 1;
 }

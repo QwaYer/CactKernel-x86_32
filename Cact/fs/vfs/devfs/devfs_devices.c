@@ -55,7 +55,9 @@ static int _tty_write(void *p, uint32_t off, uint32_t size, char *buf) {
     while(i<size){
         uint32_t c=size-i; if(c>=sizeof(tmp))c=sizeof(tmp)-1;
         memcpy(tmp,buf+i,c); tmp[c]='\0';
-        printk(tmp); i+=c;
+        /* Direct console render — see _console_write(): a tty write must not
+         * re-enter the kernel message log. */
+        console_puts(tmp, COLOR_WHITE); i+=c;
     }
     return (int)size;
 }

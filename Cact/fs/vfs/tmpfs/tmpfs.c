@@ -2,6 +2,7 @@
 #include "vfs.h"
 #include "memory.h"
 #include "klib.h"
+#include "kernel.h"
 
 #define TMPFS_NAME_LEN  128
 #define TMPFS_INIT_CAP  256    // initial file capacity
@@ -87,7 +88,10 @@ static int _ensure_cap(tmpfs_node_t *n, uint32_t needed) {
     uint32_t nc = n->cap ? n->cap * 2 : TMPFS_INIT_CAP;
     while (nc < needed) nc *= 2;
     char *nd = (char*)kmalloc(nc);
-    if (!nd) return -1;
+    if (!nd) {
+        pr_err("  %-11s : cannot grow '%s' to %u bytes\n", "tmpfs", n->name, nc);
+        return -1;
+    }
     memset(nd, 0, nc);
     if (n->data && n->size) memcpy(nd, n->data, n->size);
     if (n->data) kfree(n->data);
@@ -284,6 +288,9 @@ vfs_node_t *tmpfs_create_root(const char *name) {
 void tmpfs_init(void) {
     if (tmpfs_ready) return;
     _root_init(&tmpfs_root_node, "tmp");
+
+    pr_info("  %-11s : root ready\n", "tmpfs");
+
     tmpfs_ready = 1;
 }
 

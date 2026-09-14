@@ -222,13 +222,13 @@ int part_scan_disk(blkdev_t *disk) {
     memset(lba0, 0, 512);
     memset(lba1, 0, 512);
     if (blkdev_read(disk, 0, lba0) != 0) {
-        printk("[part] "); printk(disk->name);
-        printk(": read LBA0 failed, partition scan skipped\n");
+        pr_err("[part] %s: read LBA0 failed, partition scan skipped\n",
+               disk->name);
         return -2;
     }
     if (blkdev_read(disk, 1, lba1) != 0) {
-        printk("[part] "); printk(disk->name);
-        printk(": read LBA1 failed, partition scan skipped\n");
+        pr_err("[part] %s: read LBA1 failed, partition scan skipped\n",
+               disk->name);
         return -2;
     }
 
@@ -240,14 +240,7 @@ int part_scan_disk(blkdev_t *disk) {
         int found = 0;
         part_parse_gpt(disk, lba1, &found);
         disk->table = PART_TABLE_GPT;
-        printk("[part] "); printk(disk->name);
-        printk(" GPT: ");
-        {
-            char b[16];
-            snprintf(b, sizeof(b), "%d", found);
-            printk(b);
-        }
-        printk(" partition(s)\n");
+        pr_info("[part] %s GPT: %d partition(s)\n", disk->name, found);
         return found;
     }
 
@@ -256,32 +249,28 @@ int part_scan_disk(blkdev_t *disk) {
         int found = 0;
         part_parse_mbr(disk, lba0, &found);
         disk->table = PART_TABLE_MBR;
-        printk("[part] "); printk(disk->name);
-        printk(" MBR: ");
-        {
-            char b[16];
-            snprintf(b, sizeof(b), "%d", found);
-            printk(b);
-        }
-        printk(" partition(s)\n");
+        pr_info("[part] %s MBR: %d partition(s)\n", disk->name, found);
         return found;
     }
 
-    printk("[part] "); printk(disk->name);
-    printk(": no partition table (whole-disk volume)\n");
+    pr_info("[part] %s: no partition table (whole-disk volume)\n", disk->name);
     return 0;
 }
 
 int part_scan_all(void) {
     int total = 0;
+    int disks = 0;
     for (int i = 0; i < BLKDEV_SLOTS; i++) {
         blkdev_t *d = blkdev_by_id((uint32_t)i);
         if (!d || d->parent != 0)
             continue;
+        disks++;
         int n = part_scan_disk(d);
         if (n > 0)
             total += n;
     }
+    pr_info("  %-11s : %d disk(s) scanned, %d partition(s) exposed\n",
+            "blkdev", disks, total);
     return total;
 }
 

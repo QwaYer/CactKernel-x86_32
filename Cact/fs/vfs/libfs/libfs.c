@@ -405,5 +405,14 @@ void libfs_init(vfs_node_t *ext4_node) {
     libfs_register_blobs();
     libfs_count_disk();
 
+    uint32_t overlay = 0, headers = 0, modules = 0;
+    for (lib_blob_t *b = lib_blobs; b; b = b->next)
+        if (!b->shadowed) overlay++;
+    for (sub_file_t *f = lib_inc_dir.files; f; f = f->next) headers++;
+    for (sub_file_t *f = lib_mdls_dir.files; f; f = f->next) modules++;
+
+    pr_info("  %-11s : root ready (%u on disk, %u cctkfs, %u headers, %u modules)\n",
+            "libfs", libfs_disk_count, overlay, headers, modules);
+
     libfs_ready = 1;
 }

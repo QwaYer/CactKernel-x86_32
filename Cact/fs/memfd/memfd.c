@@ -1,5 +1,6 @@
 #include "memfd.h"
 #include "task.h"
+#include "kernel.h"
 #include "klib.h"
 
 // memfd.c — VFS node glue for anonymous RAM-backed files.
@@ -118,11 +119,15 @@ vfs_node_t *memfd_create_vnode(const char *name, int flags) {
     while (n[nlen] && nlen < 127) nlen++;
 
     int h = memfd_create(name, nlen, flags);
-    if (h < 0) return 0;
+    if (h < 0) {
+        pr_err("  %-11s : create '%s' failed (%d)\n", "memfd", name, h);
+        return 0;
+    }
 
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
     if (!node) {
         memfd_close(h);
+        pr_err("  %-11s : cannot allocate node for '%s'\n", "memfd", name);
         return 0;
     }
     memset(node, 0, sizeof(vfs_node_t));

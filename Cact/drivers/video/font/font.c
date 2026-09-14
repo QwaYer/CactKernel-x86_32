@@ -1,4 +1,5 @@
 #include "font.h"
+#include "kernel.h"
 
 #define PSF2_MAGIC0 0x72u
 #define PSF2_MAGIC1 0xB5u
@@ -95,8 +96,12 @@ int font_parse_psf2(const uint8_t *blob, uint32_t blob_size,
         return FONT_ERR_BAD_SIZE;
 
     if (blob[0] != PSF2_MAGIC0 || blob[1] != PSF2_MAGIC1 ||
-        blob[2] != PSF2_MAGIC2 || blob[3] != PSF2_MAGIC3)
+        blob[2] != PSF2_MAGIC2 || blob[3] != PSF2_MAGIC3) {
+        pr_err("  %-11s : not a PSF2 blob (magic %02x %02x %02x %02x)\n",
+               "font", (unsigned)blob[0], (unsigned)blob[1],
+               (unsigned)blob[2], (unsigned)blob[3]);
         return FONT_ERR_NOT_PSF2;
+    }
 
     uint32_t version       = rd32(blob + 4);
     uint32_t headersize    = rd32(blob + 8);
@@ -106,18 +111,33 @@ int font_parse_psf2(const uint8_t *blob, uint32_t blob_size,
     uint32_t height        = rd32(blob + 24);
     uint32_t width         = rd32(blob + 28);
 
-    if (version != PSF2_MAXVERSION)                     return FONT_ERR_BAD_VERSION;
+    if (version != PSF2_MAXVERSION) {
+        pr_err("  %-11s : unsupported PSF2 version %u\n",
+               "font", (unsigned)version);
+        return FONT_ERR_BAD_VERSION;
+    }
     if (headersize < PSF2_HEADER_SIZE ||
         headersize > blob_size)                         return FONT_ERR_BAD_HEADER;
     if (width == 0 || width > CONSOLE_FONT_MAX_WIDTH)   return FONT_ERR_BAD_HEADER;
     if (height == 0 || height > CONSOLE_FONT_MAX_HEIGHT) return FONT_ERR_BAD_HEADER;
-    if (numglyph == 0 || numglyph > CONSOLE_FONT_MAX_GLYPHS)
-                                                        return FONT_ERR_BAD_HEADER;
+    if (numglyph == 0 || numglyph > CONSOLE_FONT_MAX_GLYPHS) {
+        pr_err("  %-11s : bad glyph count %u (limit %u)\n",
+               "font", (unsigned)numglyph, (unsigned)CONSOLE_FONT_MAX_GLYPHS);
+        return FONT_ERR_BAD_HEADER;
+    }
 
     uint32_t bpr = (width + 7u) / 8u;
-    if (bytesperglyph != height * bpr)                  return FONT_ERR_BAD_HEADER;
-    if ((blob_size - headersize) < numglyph * bytesperglyph)
-                                                        return FONT_ERR_GLYPHS;
+    if (bytesperglyph != height * bpr) {
+        pr_err("  %-11s : bytes/glyph %u does not match %ux%u\n",
+               "font", (unsigned)bytesperglyph, (unsigned)width, (unsigned)height);
+        return FONT_ERR_BAD_HEADER;
+    }
+    if ((blob_size - headersize) < numglyph * bytesperglyph) {
+        pr_err("  %-11s : glyph table truncated (%u needed, %u available)\n",
+               "font", (unsigned)(numglyph * bytesperglyph),
+               (unsigned)(blob_size - headersize));
+        return FONT_ERR_GLYPHS;
+    }
 
     console_font_t f;
     f.width           = width;
@@ -133,9 +153,16 @@ int font_parse_psf2(const uint8_t *blob, uint32_t blob_size,
 
     if (flags & PSF2_HAS_UNICODE_TABLE) {
         f.unicodes_off = headersize + numglyph * bytesperglyph;
-        if (f.unicodes_off >= blob_size) return FONT_ERR_UNICODE;
+        if (f.unicodes_off >= blob_size) {
+            pr_err("  %-11s : unicode table offset 0x%x past blob end (0x%x)\n",
+                   "font", (unsigned)f.unicodes_off, (unsigned)blob_size);
+            return FONT_ERR_UNICODE;
+        }
         int rc = fill_unicode_map(&f);
-        if (rc != FONT_OK) return rc;
+        if (rc != FONT_OK) {
+            pr_err("  %-11s : malformed unicode table (rc=%d)\n", "font", rc);
+            return rc;
+        }
     } else {
         f.unicodes_off = 0;
         uint32_t m = numglyph < 256u ? numglyph : 256u;

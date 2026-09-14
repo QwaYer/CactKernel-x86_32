@@ -178,7 +178,7 @@ void xhci_handle_irq(usb_hc_t *hc) {
              * is not enough, further register access just hangs the bus.
              * Run a bounded software reset to bring it back to a halted,
              * re-initialisable state instead of touching a dead controller. */
-            printk("[XHCI] Host System Error! resetting controller\n");
+            pr_err("[XHCI] Host System Error! resetting controller\n");
             xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
             for (int i = 0; i < 100; i++) {
                 if (!(xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)) break;

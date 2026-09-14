@@ -120,15 +120,14 @@ static const uint32_t ansi_colors[16] = {
     COLOR_LIGHT_BLUE, COLOR_LIGHT_MAGENTA, COLOR_LIGHT_CYAN, COLOR_WHITE,
 };
 
-void printk_color(char* message, uint32_t color) {
+/* Raw console renderer: framebuffer (or, with no display, serial) only.
+ * The kernel message log is fed by printk()/printk_color(), not from here. */
+void console_puts(char* message, uint32_t color) {
     uint32_t w = fb_get_width();
     uint32_t h = fb_get_height();
     int have_fb = (w != 0 && h != 0);
 
     current_fb_color = color;
-
-    /* Mirror every console line into the kernel message log (/dev/kmsg). */
-    klog_feed(message, strlen(message));
 
     if (unlikely(!have_fb)) {
         for (int i = 0; message[i] != '\0'; i++) {
@@ -247,15 +246,31 @@ void printk_color(char* message, uint32_t color) {
     fb_flush();
 }
 
+/* Console line with no explicit level: render it and log it at the default
+ * level.  Kept for callers that already have a rendered string. */
+void printk_color(char* message, uint32_t color) {
+    klog_feed(KLOG_LEVEL_DEFAULT, message, strlen(message));
+    console_puts(message, color);
+}
+
+/* Same as printk_color(), but the text enters the log at `level`. */
+void printk_color_level(int level, char* message, uint32_t color) {
+    klog_feed(level, message, strlen(message));
+    console_puts(message, color);
+}
+
 // Linux-style printk: format string with optional KERN_<level> prefix.
-// Level prefixes (KERN_SOH + digit) set the console colour.
+// The level sets the console colour and travels into the kernel log; without
+// a prefix the message is logged at KLOG_LEVEL_DEFAULT (KERN_INFO).
 void printk(const char* fmt, ...) {
     char buf[1024];
     va_list args;
     va_start(args, fmt);
 
     uint32_t color = COLOR_WHITE;
+    int level = KLOG_LEVEL_DEFAULT;
     if (fmt[0] == '\x01' && fmt[1] >= '0' && fmt[1] <= '7') {
+        level = fmt[1] - '0';
         switch (fmt[1]) {
         case '0': color = COLOR_LIGHT_RED;    break; // KERN_EMERG
         case '1': color = COLOR_LIGHT_RED;    break; // KERN_ALERT
@@ -271,7 +286,8 @@ void printk(const char* fmt, ...) {
 
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
-    printk_color(buf, color);
+    klog_feed(level, buf, strlen(buf));
+    console_puts(buf, color);
 }
 
 void printk_at(char* message, int x, int y) {

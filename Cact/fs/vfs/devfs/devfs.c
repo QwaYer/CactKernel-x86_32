@@ -232,12 +232,12 @@ devfs_entry_t *register_chrdev(const char *name, uint32_t flags,
                                devfs_driver_t *drv, void *drv_priv) {
     if (!name || !drv) return 0;
     if (devfs_find(name)) {
-        printk("[devfs] already registered: "); printk((char*)name); printk("\n");
+        pr_warn("[devfs] already registered: %s\n", name);
         return 0;
     }
 
     devfs_entry_t *e = (devfs_entry_t *)kmalloc(sizeof(devfs_entry_t));
-    if (!e) { printk("[devfs] kmalloc failed\n"); return 0; }
+    if (!e) { pr_err("[devfs] kmalloc failed\n"); return 0; }
     memset(e, 0, sizeof(devfs_entry_t));
 
     strlcpy(e->name, name, 64);
@@ -307,6 +307,12 @@ void devfs_init(void) {
     register_chrdev("epoll",   DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_epoll,   0);
     register_chrdev("kmsg",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_kmsg,    0);
     register_chrdev("crypto",  DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_crypto,  0);
+
+    uint32_t ndev = 0;
+    for (devfs_entry_t *e = dev_list; e; e = e->next) ndev++;
+
+    pr_info("  %-11s : root ready (%u device node(s) + /dev/modinfo)\n",
+            "devfs", ndev);
 
     devfs_ready = 1;
 }

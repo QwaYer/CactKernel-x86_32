@@ -231,5 +231,12 @@ void binfs_init(vfs_node_t *ext4_node) {
     binfs_register_init_bin_blobs();
     binfs_count_disk_bin();
 
+    uint32_t overlay = 0;
+    for (bin_blob_t *b = bin_blobs; b; b = b->next)
+        if (!b->shadowed) overlay++;
+
+    pr_info("  %-11s : root ready (%u on disk, %u cctkfs overlay)\n",
+            "binfs", binfs_disk_bin_count, overlay);
+
     binfs_ready = 1;
 }

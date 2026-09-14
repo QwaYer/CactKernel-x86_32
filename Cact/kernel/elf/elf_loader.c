@@ -72,7 +72,7 @@ static int _map_image(struct vfs_node* file, uint32_t* pd,
 
             for (uint32_t va = seg_start; va < seg_end; va += PAGE_SIZE) {
                 void* phys = kalloc();
-                if (!phys) { printk("[ELF-I] ERR: OOM\n"); return -1; }
+                if (!phys) { pr_err("[ELF-I] ERR: OOM\n"); return -1; }
                 if (proc_tracker_add(tracker, phys) < 0) {
                     free_page(phys); return -1;
                 }
@@ -115,7 +115,7 @@ static int _map_image(struct vfs_node* file, uint32_t* pd,
             copy_sz = PAGE_SIZE - page_off;
 
         void* phys = kalloc();
-        if (!phys) { printk("[ELF-I] ERR: OOM (phdr page)\n"); return -1; }
+        if (!phys) { pr_err("[ELF-I] ERR: OOM (phdr page)\n"); return -1; }
         if (proc_tracker_add(tracker, phys) < 0) { free_page(phys); return -1; }
         uint8_t* p = (uint8_t*)phys;
         for (int k = 0; k < (int)PAGE_SIZE; k++) p[k] = 0;
@@ -143,47 +143,47 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
     vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
     struct vfs_node* file = vfs_walk_path(base, path);
     if (!file) {
-        printk("[ELF] ERR: file not found: "); printk(path); printk("\n");
+        pr_warn("[ELF] file not found: %s\n", path);
         return 0;
     }
 
     Elf32_Ehdr hdr;
     if (read_vfs(file, 0, sizeof(Elf32_Ehdr), (char*)&hdr) <= 0) {
-        printk("[ELF] ERR: cannot read header\n");
+        pr_err("[ELF] ERR: cannot read header\n");
         return 0;
     }
 
     if (*(uint32_t*)hdr.e_ident != ELF_MAGIC) {
-        printk("[ELF] ERR: bad magic\n");
+        pr_err("[ELF] ERR: bad magic\n");
         return 0;
     }
     if (hdr.e_ident[EI_CLASS] != ELFCLASS32) {
-        printk("[ELF] ERR: not 32-bit\n");
+        pr_err("[ELF] ERR: not 32-bit\n");
         return 0;
     }
     if (hdr.e_ident[EI_DATA] != ELFDATA2LSB) {
-        printk("[ELF] ERR: not little-endian\n");
+        pr_err("[ELF] ERR: not little-endian\n");
         return 0;
     }
     if (hdr.e_ident[EI_VERSION] != EV_CURRENT) {
-        printk("[ELF] ERR: bad ident version\n");
+        pr_err("[ELF] ERR: bad ident version\n");
         return 0;
     }
     if (hdr.e_machine != 3) {
-        printk("[ELF] ERR: not i386\n");
+        pr_err("[ELF] ERR: not i386\n");
         return 0;
     }
     if (hdr.e_phentsize < sizeof(Elf32_Phdr)) {
-        printk("[ELF] ERR: phentsize too small\n");
+        pr_err("[ELF] ERR: phentsize too small\n");
         return 0;
     }
     if ((uint32_t)hdr.e_phnum > 65535u) {
-        printk("[ELF] ERR: too many program headers\n");
+        pr_err("[ELF] ERR: too many program headers\n");
         return 0;
     }
     uint64_t ph_end_check = (uint64_t)hdr.e_phoff + (uint64_t)hdr.e_phnum * hdr.e_phentsize;
     if (ph_end_check > file->size) {
-        printk("[ELF] ERR: program headers overflow file\n");
+        pr_err("[ELF] ERR: program headers overflow file\n");
         return 0;
     }
 
@@ -193,7 +193,7 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
                      hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr),
                      (char*)&ph) <= 0) {
-            printk("[ELF] ERR: cannot read phdr\n");
+            pr_err("[ELF] ERR: cannot read phdr\n");
             proc_free_pages(tracker);
             return 0;
         }
@@ -211,12 +211,12 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
             if (va < file_end) {
                 void* phys = kalloc();
                 if (!phys) {
-                    printk("[ELF] ERR: OOM\n");
+                    pr_err("[ELF] ERR: OOM\n");
                     proc_free_pages(tracker);
                     return 0;
                 }
                 if (proc_tracker_add(tracker, phys) < 0) {
-                    printk("[ELF] ERR: tracker_add failed\n");
+                    pr_err("[ELF] ERR: tracker_add failed\n");
                     free_page(phys);
                     proc_free_pages(tracker);
                     return 0;
@@ -235,7 +235,7 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
 
                     int rd = read_vfs(file, file_offset, copy_sz, (char*)phys + page_offset);
                     if (rd <= 0) {
-                        printk("[ELF] ERR: read_vfs failed at off=%d sz=%d ret=%d\n",
+                        pr_err("[ELF] ERR: read_vfs failed at off=%d sz=%d ret=%d\n",
                                (int)file_offset, (int)copy_sz, (int)rd);
                         proc_free_pages(tracker);
                         return 0;
@@ -247,12 +247,12 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
                 /* p_memsz > p_filesz: .bss / zero tail — need present mappings (not demand-only). */
                 void* zphys = kalloc();
                 if (!zphys) {
-                    printk("[ELF] ERR: OOM (bss)\n");
+                    pr_err("[ELF] ERR: OOM (bss)\n");
                     proc_free_pages(tracker);
                     return 0;
                 }
                 if (proc_tracker_add(tracker, zphys) < 0) {
-                    printk("[ELF] ERR: tracker_add failed (bss)\n");
+                    pr_err("[ELF] ERR: tracker_add failed (bss)\n");
                     free_page(zphys);
                     proc_free_pages(tracker);
                     return 0;
@@ -311,18 +311,18 @@ void* load_elf_interp(char* path, char* interp_path, uint32_t* pd,
 
     vfs_node_t* main_file = vfs_walk_path(vfs_root, path);
     if (!main_file) {
-        printk("[ELF-I] main not found: "); printk(path); printk("\n");
+        pr_warn("[ELF-I] main not found: %s\n", path);
         return 0;
     }
     vfs_node_t* interp_file = vfs_walk_path(vfs_root, interp_path);
     if (!interp_file) {
-        printk("[ELF-I] interpreter not found: "); printk(interp_path); printk("\n");
+        pr_warn("[ELF-I] interpreter not found: %s\n", interp_path);
         return 0;
     }
 
     uint32_t m_entry = 0, m_min = 0, m_phdr = 0, m_phnum = 0;
     if (_map_image(main_file, pd, tracker, &m_entry, &m_min, &m_phdr, &m_phnum) != 0) {
-        printk("[ELF-I] failed to map main image: "); printk(path); printk("\n");
+        pr_err("[ELF-I] failed to map main image: %s\n", path);
         proc_free_pages(tracker);
         return 0;
     }
@@ -333,7 +333,7 @@ void* load_elf_interp(char* path, char* interp_path, uint32_t* pd,
 
     uint32_t i_entry = 0, i_min = 0, i_phdr = 0, i_phnum = 0;
     if (_map_image(interp_file, pd, tracker, &i_entry, &i_min, &i_phdr, &i_phnum) != 0) {
-        printk("[ELF-I] failed to map interpreter: "); printk(interp_path); printk("\n");
+        pr_err("[ELF-I] failed to map interpreter: %s\n", interp_path);
         proc_free_pages(tracker);
         return 0;
     }

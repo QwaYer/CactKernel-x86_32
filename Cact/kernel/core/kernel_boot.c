@@ -51,7 +51,10 @@ static void kernel_bootstrap_main(void) {
 
     struct task_struct* init = create_elf_task("bin/init");
     if (!init) {
-        printk_color("  boot        : FAILED — /bin/init not found\n", COLOR_LIGHT_RED);
+        pr_err("  boot        : FAILED — /bin/init not found\n");
+    } else {
+        pr_info("  boot        : /bin/init spawned as pid %d\n",
+                (int)init->pid);
     }
 
     /* Bootstrap thread is done. Yield forever so scheduler keeps running. */

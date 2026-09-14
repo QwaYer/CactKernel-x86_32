@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "klog.h"
 #include "multiboot2.h"
 #include "memory.h"
 #include "gdt.h"
@@ -20,84 +21,84 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
         "??", "??", "??", "??", "??", "??", "??", "??"
     };
 
-    printk_color("\n=== ", COLOR_LIGHT_RED);
+    printk_color_level(KLOG_LEVEL_CRIT, "\n=== ", COLOR_LIGHT_RED);
     if (signal && current_task && !current_task->is_kernel) {
-        printk_color("SIGNAL ", COLOR_LIGHT_RED);
-        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(signal)); printk_color(buf, COLOR_LIGHT_RED);
-        printk_color(" (pid=", COLOR_LIGHT_RED);
-        snprintf(buf, sizeof(buf), "%d", (int)((int)current_task->pid)); printk_color(buf, COLOR_LIGHT_RED);
-        printk_color(")", COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, "SIGNAL ", COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(signal)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, " (pid=", COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "%d", (int)((int)current_task->pid)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, ")", COLOR_LIGHT_RED);
     } else {
-        printk_color("PANIC", COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, "PANIC", COLOR_LIGHT_RED);
     }
-    printk_color(" ===\n", COLOR_LIGHT_RED);
+    printk_color_level(KLOG_LEVEL_CRIT, " ===\n", COLOR_LIGHT_RED);
 
-    printk_color("Exception: ", COLOR_LIGHT_RED);
+    printk_color_level(KLOG_LEVEL_CRIT, "Exception: ", COLOR_LIGHT_RED);
     snprintf(buf, sizeof(buf), "%d", (int)((int)regs->int_no)); printk(buf);
     printk(" ("); printk((char*)exc_names[regs->int_no < 32 ? regs->int_no : 31]);
     printk(")\n");
 
     if (regs->int_no == 14) {
-        printk_color("Fault address: 0x", COLOR_LIGHT_RED);
-        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(fault_addr)); printk_color(buf, COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, "Fault address: 0x", COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(fault_addr)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_RED);
 
         uint32_t err = regs->err_code;
-        printk_color("  Error code: 0x", COLOR_LIGHT_RED);
-        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(err)); printk_color(buf, COLOR_LIGHT_RED);
-        printk_color(" [", COLOR_LIGHT_RED);
-        if (err & 1) printk_color("PROT", COLOR_LIGHT_RED);
-        else         printk_color("NP ", COLOR_LIGHT_RED);
-        if (err & 2) printk_color(" W", COLOR_LIGHT_RED);
-        else         printk_color(" R", COLOR_LIGHT_RED);
-        if (err & 4) printk_color(" U", COLOR_LIGHT_RED);
-        else         printk_color(" S", COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, "  Error code: 0x", COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(err)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, " [", COLOR_LIGHT_RED);
+        if (err & 1) printk_color_level(KLOG_LEVEL_CRIT, "PROT", COLOR_LIGHT_RED);
+        else         printk_color_level(KLOG_LEVEL_CRIT, "NP ", COLOR_LIGHT_RED);
+        if (err & 2) printk_color_level(KLOG_LEVEL_CRIT, " W", COLOR_LIGHT_RED);
+        else         printk_color_level(KLOG_LEVEL_CRIT, " R", COLOR_LIGHT_RED);
+        if (err & 4) printk_color_level(KLOG_LEVEL_CRIT, " U", COLOR_LIGHT_RED);
+        else         printk_color_level(KLOG_LEVEL_CRIT, " S", COLOR_LIGHT_RED);
         if (err & 8) printk(" RSVD");
         if (err & 16) printk(" IF");
-        printk_color(" ]\n", COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, " ]\n", COLOR_LIGHT_RED);
     } else {
-        printk_color("Error code: 0x", COLOR_LIGHT_RED);
-        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->err_code)); printk_color(buf, COLOR_LIGHT_RED);
+        printk_color_level(KLOG_LEVEL_CRIT, "Error code: 0x", COLOR_LIGHT_RED);
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->err_code)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_RED);
         printk("\n");
     }
 
-    printk_color(" EIP: 0x", COLOR_LIGHT_RED);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eip)); printk_color(buf, COLOR_LIGHT_RED);
-    printk_color("  CS: 0x", COLOR_LIGHT_RED);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->cs)); printk_color(buf, COLOR_LIGHT_RED);
-    printk_color(" EFLAGS: 0x", COLOR_LIGHT_RED);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eflags)); printk_color(buf, COLOR_LIGHT_RED);
+    printk_color_level(KLOG_LEVEL_CRIT, " EIP: 0x", COLOR_LIGHT_RED);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eip)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_RED);
+    printk_color_level(KLOG_LEVEL_CRIT, "  CS: 0x", COLOR_LIGHT_RED);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->cs)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_RED);
+    printk_color_level(KLOG_LEVEL_CRIT, " EFLAGS: 0x", COLOR_LIGHT_RED);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eflags)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_RED);
     printk("\n");
 
-    printk_color("EAX: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eax)); printk_color(buf, COLOR_LIGHT_GREEN);
-    printk_color(" EBX: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ebx)); printk_color(buf, COLOR_LIGHT_GREEN);
-    printk_color(" ECX: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ecx)); printk_color(buf, COLOR_LIGHT_GREEN);
-    printk_color(" EDX: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->edx)); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, "EAX: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->eax)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " EBX: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ebx)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " ECX: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ecx)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " EDX: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->edx)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
     printk("\n");
 
-    printk_color("ESI: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->esi)); printk_color(buf, COLOR_LIGHT_GREEN);
-    printk_color(" EDI: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->edi)); printk_color(buf, COLOR_LIGHT_GREEN);
-    printk_color(" EBP: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ebp)); printk_color(buf, COLOR_LIGHT_GREEN);
-    printk_color(" ESP: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->useresp)); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, "ESI: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->esi)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " EDI: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->edi)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " EBP: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ebp)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " ESP: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->useresp)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
     printk("\n");
 
-    printk_color(" DS: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ds)); printk_color(buf, COLOR_LIGHT_GREEN);
-    printk_color(" ES: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->es)); printk_color(buf, COLOR_LIGHT_GREEN);
-    printk_color(" SS: 0x", COLOR_LIGHT_GREEN);
-    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ss)); printk_color(buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " DS: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ds)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " ES: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->es)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
+    printk_color_level(KLOG_LEVEL_CRIT, " SS: 0x", COLOR_LIGHT_GREEN);
+    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(regs->ss)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_GREEN);
     printk("\n");
 
     // Stack trace — walk EBP chain
-    printk_color("Call trace:\n", COLOR_LIGHT_BROWN);
+    printk_color_level(KLOG_LEVEL_CRIT, "Call trace:\n", COLOR_LIGHT_BROWN);
     int frames = 0;
     uint32_t ebp = regs->ebp;
     int is_kernel_fault = (regs->cs == 0x08);
@@ -106,33 +107,33 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
         while (ebp >= 0xC0000000 && ebp < 0xC0100000 && frames < 16) {
             uint32_t ret_eip = ((uint32_t*)ebp)[1];
             uint32_t next_ebp = ((uint32_t*)ebp)[0];
-            printk_color("  [", COLOR_LIGHT_BROWN);
-            snprintf(buf, sizeof(buf), "%d", (int)(frames)); printk_color(buf, COLOR_LIGHT_BROWN);
-            printk_color("] 0x", COLOR_LIGHT_BROWN);
-            snprintf(buf, sizeof(buf), "0x%x", (unsigned)(ret_eip)); printk_color(buf, COLOR_LIGHT_BROWN);
+            printk_color_level(KLOG_LEVEL_CRIT, "  [", COLOR_LIGHT_BROWN);
+            snprintf(buf, sizeof(buf), "%d", (int)(frames)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_BROWN);
+            printk_color_level(KLOG_LEVEL_CRIT, "] 0x", COLOR_LIGHT_BROWN);
+            snprintf(buf, sizeof(buf), "0x%x", (unsigned)(ret_eip)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_LIGHT_BROWN);
             {
                 uint32_t sym_off;
                 const char* sym = sym_resolve_addr(ret_eip, &sym_off);
                 if (sym) {
-                    printk_color(" (", COLOR_DARK_GREY);
+                    printk_color_level(KLOG_LEVEL_CRIT, " (", COLOR_DARK_GREY);
                     printk((char*)sym);
-                    printk_color("+", COLOR_DARK_GREY);
-                    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(sym_off)); printk_color(buf, COLOR_DARK_GREY);
-                    printk_color(")", COLOR_DARK_GREY);
+                    printk_color_level(KLOG_LEVEL_CRIT, "+", COLOR_DARK_GREY);
+                    snprintf(buf, sizeof(buf), "0x%x", (unsigned)(sym_off)); printk_color_level(KLOG_LEVEL_CRIT, buf, COLOR_DARK_GREY);
+                    printk_color_level(KLOG_LEVEL_CRIT, ")", COLOR_DARK_GREY);
                 }
             }
-            printk_color("\n", COLOR_LIGHT_BROWN);
+            printk_color_level(KLOG_LEVEL_CRIT, "\n", COLOR_LIGHT_BROWN);
             if (next_ebp <= ebp) break;
             ebp = next_ebp;
             frames++;
         }
     }
     if (frames == 0) {
-        printk_color("  (no trace)\n", COLOR_DARK_GREY);
+        printk_color_level(KLOG_LEVEL_CRIT, "  (no trace)\n", COLOR_DARK_GREY);
     }
 
     // Print EIP instruction bytes
-    printk_color("Code: ", COLOR_LIGHT_BROWN);
+    printk_color_level(KLOG_LEVEL_CRIT, "Code: ", COLOR_LIGHT_BROWN);
     if (is_kernel_fault) {
         uint32_t* pd = is_kernel_fault ? get_current_pd() : current_task->page_directory;
         // Read instruction bytes at EIP
@@ -147,9 +148,9 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
             uint32_t phys = (pt[pti] & ~0xFFFu) + (addr & 0xFFFu);
             uint8_t byte = *(volatile uint8_t*)(uintptr_t)phys;
             snprintf(buf, sizeof(buf), "0x%x", (unsigned)byte);
-            if (i == 0) printk_color("<", COLOR_LIGHT_GREEN);
+            if (i == 0) printk_color_level(KLOG_LEVEL_CRIT, "<", COLOR_LIGHT_GREEN);
             printk(buf);
-            if (i == 0) printk_color(">", COLOR_LIGHT_GREEN);
+            if (i == 0) printk_color_level(KLOG_LEVEL_CRIT, ">", COLOR_LIGHT_GREEN);
             printk(" ");
         }
     }
@@ -174,7 +175,7 @@ void exception_handler(struct context_frame* regs) {
         return;
     }
 
-    printk_color("System halted.", COLOR_LIGHT_RED);
+    printk_color_level(KLOG_LEVEL_CRIT, "System halted.", COLOR_LIGHT_RED);
     while(1);
 }
 

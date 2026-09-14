@@ -147,6 +147,12 @@ typedef enum {
 // Framebuffer console I/O
 void printk      (const char* fmt, ...);
 void printk_color(char* message, uint32_t color);
+/* Colored console line that also enters the kernel log at `level` (the level
+ * is latched for the whole line, so raw printk() spans of the same line
+ * inherit it).  Used by paths that render multicolor output such as the
+ * exception dump, which must be logged at a panic level. */
+void printk_color_level(int level, char* message, uint32_t color);
+void console_puts(char* message, uint32_t color);
 void printk_at   (char* message, int x, int y);
 void clear_screen(void);
 void scroll      (void);
