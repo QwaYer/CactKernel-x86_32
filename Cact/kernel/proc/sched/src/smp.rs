@@ -22,16 +22,18 @@ const TSS_SLOT: usize = 5;
 // Copy destination + SIPI vector of the trampoline.
 const TRAMP_ADDR: u32 = 0x8000;
 const TRAMP_VECTOR: u32 = TRAMP_ADDR >> 12;
-// Info block offsets inside the trampoline page.
-const INFO_CR3: usize = 0x00;
-const INFO_STACK: usize = 0x04;
-const INFO_ENTRY: usize = 0x08;
-const INFO_CPU: usize = 0x0C;
+// Info block offsets inside the trampoline page (INFO_BASE in trampoline.asm).
+// The vector lands an AP on offset 0, which trampoline.asm must keep as entry
+// code, so the BSP-patched block sits at a fixed offset near the top instead.
+const INFO_CR3: usize = 0x0F00;
+const INFO_STACK: usize = 0x0F04;
+const INFO_ENTRY: usize = 0x0F08;
+const INFO_CPU: usize = 0x0F0C;
 // AP sets INFO_ACK = AP_STAGE_TRAMP_READ once it consumed the info block.
 // The BSP must not re-stamp 0x8000 for the next worker until it is set (or
 // the worker is confirmed lost), otherwise the AP could read a stale/mixed
 // stack/cpu pair while still executing from the shared page.
-const INFO_ACK: usize = 0x10;
+const INFO_ACK: usize = 0x0F10;
 const AP_STAGE_TRAMP_READ: u32 = 1;
 
 const IDLE_STACK_SIZE: usize = 8192;
