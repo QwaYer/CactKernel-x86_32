@@ -47,18 +47,29 @@ static uint32_t lapic_calibrate_pm(void)
 
     lapic_timer_start_oneshot();
 
-    uint64_t start_us = acpi_pm_timer_get_usec();
-    uint32_t first    = lapic[LAPIC_TIMER_CURCNT / 4];
+    uint32_t first = lapic[LAPIC_TIMER_CURCNT / 4];
 
-    uint64_t now_us;
-    do {
-        now_us = acpi_pm_timer_get_usec();
-    } while (now_us - start_us < 50000ull);
+    /* Poll the raw counter, not acpi_pm_timer_get_usec(): the latter takes the
+     * shared timekeeping spinlock, and this loop samples thousands of times,
+     * which would contend with the wall clock for no benefit. */
+    uint32_t target = ACPI_PM_TIMER_FREQ / 20;   /* ~50 ms worth of counts */
+    uint32_t prev   = acpi_pm_timer_read();
+    uint64_t counts = 0;
+    uint32_t guard  = 200000000u;
+    while (counts < target && guard != 0) {
+        uint32_t now = acpi_pm_timer_read();
+        counts += acpi_pm_timer_delta(prev, now);
+        prev = now;
+        guard--;
+    }
 
     uint32_t last = lapic[LAPIC_TIMER_CURCNT / 4];
     lapic_timer_stop();
 
-    uint64_t usec    = now_us - start_us;
+    if (guard == 0 || counts == 0)
+        return 0;
+
+    uint64_t usec = counts * 1000000ull / ACPI_PM_TIMER_FREQ;
     uint32_t elapsed = first - last;    /* 32-bit modulo handles one wrap */
     if (usec == 0 || elapsed == 0)
         return 0;

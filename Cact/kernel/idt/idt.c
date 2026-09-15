@@ -76,11 +76,11 @@ int init_idt(void) {
     set_idt_gate(31, (uint32_t)isr31);
 
     // Install IRQ handlers (hardware interrupts)
-    set_idt_gate(0x20, (uint32_t)timer_isr);        // IRQ0  - legacy PIT (masked
-                                                    // by apic_init; the real tick
-                                                    // runs on LAPIC_TIMER_VECTOR)
     // ISA IRQ vectors 1-15: safe stubs (IOAPIC still routes here, any
-    // stray interrupt must have a valid gate to avoid #GP).
+    // stray interrupt must have a valid gate to avoid #GP).  Vector 0x20
+    // (legacy IRQ0/PIT) is deliberately left unpopulated: IRQ0 is never
+    // routed (masked in apic_init) and LINT0 is masked in lapic_init, so the
+    // 8259 PIC cannot deliver it either.
     for (int i = 1; i < 16; i++)
         set_idt_gate(0x20 + i, (uint32_t)pci_isr);
     // ACPI SCI vector set dynamically by AcpiOsInstallInterruptHandler.
