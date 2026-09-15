@@ -179,10 +179,6 @@ void exception_handler(struct context_frame* regs) {
     while(1);
 }
 
-void timer_eoi(void) {
-    apic_eoi();
-}
-
 void irq_apic_eoi(void) {
     apic_eoi();
 }

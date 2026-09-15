@@ -171,7 +171,6 @@ void exception_handler(struct context_frame* regs);
 void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_t signal);
 
 // EOI dispatcher — always APIC
-void timer_eoi(void);
 void irq_apic_eoi(void);
 
 // Read CR2 (page fault linear address)
