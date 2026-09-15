@@ -11,7 +11,6 @@ global ipi_wake_isr
 extern acpi_sci_callback
 extern on_timer_tick
 extern timer_tick
-extern timer_eoi
 extern irq_apic_eoi
 extern xhci_irq_handler
 extern energy_ipi_halt_handle
@@ -29,7 +28,7 @@ timer_isr:
 
     call timer_tick
 
-    call timer_eoi
+    call irq_apic_eoi
 
     call on_timer_tick
 
