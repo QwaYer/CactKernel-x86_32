@@ -37,11 +37,6 @@
 #define REDIR_LOW_POL       0x00002000u  // Active low
 #define REDIR_LEVEL         0x00008000u  // Level-triggered
 
-/* Legacy 8254 channel 0 — last-resort tick source (see the watchdog). */
-#define PIT_CH0_DATA        0x40
-#define PIT_CMD             0x43
-#define PIT_BASE_FREQ       1193182u
-
 #define APIC_MMIO_VADDR     0xFE000000u
 #define IOAPIC_MMIO_VADDR   0xFE001000u
 

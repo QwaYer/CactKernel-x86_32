@@ -90,18 +90,28 @@ uint32_t acpi_pm_timer_read(void)
     return pm_timer_read_port() & pm_timer_get_max();
 }
 
+/* Wrap-safe distance from `last` to `now` on the PM counter. */
+uint32_t acpi_pm_timer_delta(uint32_t last, uint32_t now)
+{
+    uint32_t max_val = pm_timer_get_max();
+
+    /* A 32-bit counter wraps at max_val + 1 == 0, so the `+ 1` below would
+     * overflow; plain modular subtraction already gives the right distance. */
+    if (max_val == PM_TIMER_32BIT_MASK)
+        return now - last;
+
+    return (now >= last) ? (now - last) : (max_val - last + now + 1);
+}
+
 uint64_t acpi_pm_timer_get_usec(void)
 {
     if (!pm_timer_available) return 0;
 
-    uint32_t max_val = pm_timer_get_max();
-
     irq_spinlock_acquire(&pm_timer_lock);
 
-    uint32_t val   = pm_timer_read_port() & max_val;
-    uint32_t delta = (val - pm_last_count) & max_val;   /* wrap-safe */
+    uint32_t val = pm_timer_read_port() & pm_timer_get_max();
+    pm_total_counts += acpi_pm_timer_delta(pm_last_count, val);
     pm_last_count = val;
-    pm_total_counts += delta;
 
     uint64_t total = pm_total_counts;
 
@@ -117,19 +127,12 @@ uint64_t acpi_pm_timer_get_usec(void)
 /* ---------------------------------------------------------------------------
  * TSC timekeeping — the primary wall clock.
  *
- * The TSC is calibrated at boot against the ACPI PM timer when it exists,
- * otherwise against PIT channel 2 (one-shot, no IRQ).  If the CPU has no
- * TSC (or calibration fails) every ktime_* call falls back to the PM timer.
+ * The TSC is calibrated at boot against the ACPI PM timer when it exists.
+ * When the FADT exposes no PM timer block, the nominal TSC frequency from
+ * CPUID (leaves 0x15/0x16) is used instead: no hardware timer is driven.
+ * If the CPU has no TSC (or calibration fails) every ktime_* call falls back
+ * to the PM timer.
  * ------------------------------------------------------------------------ */
-
-/* PIT (8254) channel 2, used for calibration when the PM timer is missing. */
-#define PIT_CH2_DATA        0x42
-#define PIT_CMD             0x43
-#define PIT_CH2_CTRL        0x61
-#define PIT_GATE2           (1u << 0)
-#define PIT_SPKR            (1u << 1)
-#define PIT_OUT2            (1u << 5)
-#define PIT_BASE_FREQ       1193182u
 
 static uint64_t tsc_hz = 0;
 static int      tsc_available = 0;
@@ -165,7 +168,7 @@ static int calibrate_tsc_pm(void)
     uint32_t guard = 200000000u;
     do {
         uint32_t now = pm_timer_read_port() & max;
-        elapsed = (now - start) & max;   /* delta modulo (max + 1) */
+        elapsed = acpi_pm_timer_delta(start, now);
         if (elapsed >= target) break;
         __asm__ __volatile__("pause");
     } while (guard--);
@@ -183,32 +186,6 @@ static int calibrate_tsc_pm(void)
     return tsc_hz ? 0 : -1;
 }
 
-/* Calibrate the TSC against one PIT channel 2 one-shot (~54.9 ms). */
-static int calibrate_tsc_pit(void)
-{
-    /* Gate low FIRST so the counter cannot run on a half-programmed value on
-     * real silicon; load mode + count, then raise the gate to start it. */
-    uint8_t ctrl = inb(PIT_CH2_CTRL);
-    outb(PIT_CH2_CTRL, ctrl & ~PIT_GATE2);
-    outb(PIT_CMD, 0xB0);                 /* ch2, lobyte+hibyte, mode 0, binary */
-    outb(PIT_CH2_DATA, 0xFF);
-    outb(PIT_CH2_DATA, 0xFF);
-    outb(PIT_CH2_CTRL, (uint8_t)((ctrl & ~PIT_SPKR) | PIT_GATE2));
-
-    uint64_t t0 = read_tsc();
-    uint32_t guard = 10000000u;
-    while (!(inb(PIT_CH2_CTRL) & PIT_OUT2) && guard--)
-        __asm__ __volatile__("pause");
-    uint64_t t1 = read_tsc();
-
-    if (guard == 0)
-        return -1;
-
-    uint64_t period_us = (65535ull * 1000000ull) / PIT_BASE_FREQ;   /* ~54931 */
-    tsc_hz = (t1 - t0) * 1000000ull / period_us;
-    return tsc_hz ? 0 : -1;
-}
-
 int ktime_init(void)
 {
     int pm_ok = (acpi_pm_timer_init() == 0);
@@ -219,7 +196,18 @@ int ktime_init(void)
         return pm_ok ? 0 : -1;
     }
 
-    int calib = pm_ok ? calibrate_tsc_pm() : calibrate_tsc_pit();
+    int calib = -1;
+    const char *reference = "CPUID";
+    if (pm_ok && calibrate_tsc_pm() == 0) {
+        calib = 0;
+        reference = "PM timer";
+    } else {
+        /* No PM timer (or its calibration failed): trust the frequency
+         * firmware enumerates in CPUID rather than driving the 8254 PIT. */
+        tsc_hz = cpu_tsc_hz_from_cpuid();
+        if (tsc_hz != 0)
+            calib = 0;
+    }
     if (calib != 0) {
         pr_warn("  %-11s : calibration failed — using ACPI PM timer\n", "tsc");
         tsc_available = 0;
@@ -245,7 +233,7 @@ int ktime_init(void)
                 "tsc", (unsigned)(tsc_hz / 1000000ull));
     else
         pr_info("  %-11s : %u MHz, invariant, calibrated against %s\n", "tsc",
-                (unsigned)(tsc_hz / 1000000ull), pm_ok ? "PM timer" : "PIT");
+                (unsigned)(tsc_hz / 1000000ull), reference);
     return 0;
 }
 
@@ -270,47 +258,18 @@ uint64_t ktime_get_usec(void)
  *
  * The TSC gives an exact cycle count independent of CPU frequency changes, so
  * it is preferred whenever calibrated (a busy loop keeps the core awake, so a
- * non-invariant TSC is still fine here).  Next comes the PM timer.  Only very
- * early — before either exists — is a `pause` loop used, and its
- * iterations-per-microsecond is measured against PIT channel 2 once instead
- * of being guessed, which is what made the old fixed multiplier drift by
- * orders of magnitude from one CPU to the next.
+ * non-invariant TSC is still fine here).  Next comes the PM timer.  Only when
+ * neither is usable — no TSC and no PM timer — is a raw `pause` loop used,
+ * and then there is no reference clock left to calibrate it against.
  * ------------------------------------------------------------------------ */
 
-static uint32_t pause_per_us = 0;
-
-static void pause_calibrate(void)
-{
-    /* ~10 ms one-shot on PIT channel 2; count `pause` iterations in that window. */
-    uint8_t ctrl = inb(PIT_CH2_CTRL);
-    outb(PIT_CH2_CTRL, ctrl & ~PIT_GATE2);
-    outb(PIT_CMD, 0xB0);                              /* ch2, lobyte+hibyte, mode 0 */
-    uint16_t count = (uint16_t)(PIT_BASE_FREQ / 100); /* 11931 ticks ≈ 10 ms */
-    outb(PIT_CH2_DATA, (uint8_t)(count & 0xFF));
-    outb(PIT_CH2_DATA, (uint8_t)(count >> 8));
-    outb(PIT_CH2_CTRL, (uint8_t)((ctrl & ~PIT_SPKR) | PIT_GATE2));
-
-    uint32_t n = 0;
-    while (!(inb(PIT_CH2_CTRL) & PIT_OUT2)) {
-        __asm__ __volatile__("pause" ::: "memory");
-        n++;
-    }
-
-    uint32_t usec = (uint32_t)(((uint64_t)count * 1000000ull) / PIT_BASE_FREQ);
-    if (usec == 0)
-        usec = 1;
-    /* Round up: overshooting a stall is harmless, undershooting is not. */
-    pause_per_us = (n + usec - 1) / usec;
-    if (pause_per_us == 0)
-        pause_per_us = 1;
-}
+/* `pause` iterations per microsecond for the degenerate no-clock case.  The
+ * count is deliberately high so a stall overshoots rather than undershoots. */
+#define PAUSE_PER_US_FALLBACK  2000u
 
 static void pause_delay_us(uint64_t us)
 {
-    if (pause_per_us == 0)
-        pause_calibrate();
-
-    uint64_t total = us * (uint64_t)pause_per_us;
+    uint64_t total = us * (uint64_t)PAUSE_PER_US_FALLBACK;
     while (total) {
         uint32_t chunk = (total > 0xFFFFFFFFull) ? 0xFFFFFFFFu : (uint32_t)total;
         for (uint32_t i = 0; i < chunk; i++)

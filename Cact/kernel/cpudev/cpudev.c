@@ -187,6 +187,32 @@ int cpu_has_arat(void) {
 int cpu_has_invariant_tsc(void) { return g_invariant_tsc; }
 int cpu_has_hypervisor(void) { return !!(g_features_ecx & CPU_FEATURE_HYPERVISOR); }
 
+// Leaf 0x15H gives the exact TSC:core-crystal ratio, from which the TSC
+// frequency follows once the crystal is known; leaf 0x16H reports the base
+// frequency, which is the rate an invariant TSC counts at.  Prefer the exact
+// ratio, fall back to the base frequency.  Returns 0 if firmware enumerates
+// neither, leaving the caller to use a different clock.
+uint64_t cpu_tsc_hz_from_cpuid(void) {
+    uint32_t max_leaf;
+    cpuid_raw(0, &max_leaf, &(uint32_t){0}, &(uint32_t){0}, &(uint32_t){0});
+
+    if (max_leaf >= 0x15) {
+        uint32_t denom, numer, crystal;
+        cpuid_raw(0x15, &denom, &numer, &crystal, &(uint32_t){0});
+        if (denom && numer && crystal)
+            return (uint64_t)crystal * numer / denom;
+    }
+
+    if (max_leaf >= 0x16) {
+        uint32_t base_mhz;
+        cpuid_raw(0x16, &base_mhz, &(uint32_t){0}, &(uint32_t){0}, &(uint32_t){0});
+        if (base_mhz)
+            return (uint64_t)base_mhz * 1000000ull;
+    }
+
+    return 0;
+}
+
 const char* cpu_brand_str(void) { return g_brand; }
 
 static void read_brand(void) {

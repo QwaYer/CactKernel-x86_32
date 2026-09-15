@@ -215,6 +215,11 @@ int cpu_has_arat(void);
 int cpu_has_invariant_tsc(void);
 int cpu_has_hypervisor(void);
 
+/* Nominal TSC frequency in Hz as enumerated by CPUID (leaves 0x15/0x16), or 0
+ * when firmware does not report it.  Used to calibrate the TSC when no other
+ * reference clock (ACPI PM timer) is available. */
+uint64_t cpu_tsc_hz_from_cpuid(void);
+
 const char* cpu_brand_str(void);
 
 int cpu_syscall_commit(void);
