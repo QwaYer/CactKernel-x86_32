@@ -25,15 +25,13 @@ static int lapic_timer_armed = 0;
  * which is all the calibration needs. */
 static void lapic_timer_start_oneshot(void)
 {
-    volatile uint32_t *lapic = apic_lapic_regs();
-    lapic[LAPIC_TIMER_DIV / 4] = 0x0B;
-    lapic[LAPIC_TIMER_INITCNT / 4] = 0xFFFFFFFFu;
+    apic_lapic_write(LAPIC_TIMER_DIV, 0x0B);
+    apic_lapic_write(LAPIC_TIMER_INITCNT, 0xFFFFFFFFu);
 }
 
 static void lapic_timer_stop(void)
 {
-    volatile uint32_t *lapic = apic_lapic_regs();
-    lapic[LAPIC_TIMER_INITCNT / 4] = 0;
+    apic_lapic_write(LAPIC_TIMER_INITCNT, 0);
 }
 
 /* Calibrate against the ACPI PM timer: measure the LAPIC countdown across a
@@ -41,13 +39,12 @@ static void lapic_timer_stop(void)
  * millisecond, or 0 on failure. */
 static uint32_t lapic_calibrate_pm(void)
 {
-    volatile uint32_t *lapic = apic_lapic_regs();
     if (!acpi_pm_timer_is_available())
         return 0;
 
     lapic_timer_start_oneshot();
 
-    uint32_t first = lapic[LAPIC_TIMER_CURCNT / 4];
+    uint32_t first = apic_lapic_read(LAPIC_TIMER_CURCNT);
 
     /* Poll the raw counter, not acpi_pm_timer_get_usec(): the latter takes the
      * shared timekeeping spinlock, and this loop samples thousands of times,
@@ -63,7 +60,7 @@ static uint32_t lapic_calibrate_pm(void)
         guard--;
     }
 
-    uint32_t last = lapic[LAPIC_TIMER_CURCNT / 4];
+    uint32_t last = apic_lapic_read(LAPIC_TIMER_CURCNT);
     lapic_timer_stop();
 
     if (guard == 0 || counts == 0)
@@ -79,7 +76,7 @@ static uint32_t lapic_calibrate_pm(void)
 
 uint32_t lapic_timer_calibrate(void)
 {
-    if (!apic_lapic_regs())
+    if (!apic_lapic_ready())
         return 0;
 
     uint32_t per_ms = lapic_calibrate_pm();
@@ -102,19 +99,18 @@ uint32_t lapic_timer_calibrate(void)
 
 void lapic_timer_start_periodic(uint32_t ticks_per_ms)
 {
-    volatile uint32_t *lapic = apic_lapic_regs();
-    if (!lapic || ticks_per_ms == 0)
+    if (!apic_lapic_ready() || ticks_per_ms == 0)
         return;
 
     /* 100 Hz tick (10 ms) — the scheduler quantum base. */
     uint32_t count = ticks_per_ms * 10u;
 
     /* Program masked first, then unmask to avoid a spurious edge. */
-    lapic[LAPIC_LVT_TIMER / 4] =
-        LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC | LAPIC_LVT_MASK;
-    lapic[LAPIC_TIMER_DIV / 4] = 0x0B;
-    lapic[LAPIC_TIMER_INITCNT / 4] = count;
-    lapic[LAPIC_LVT_TIMER / 4] = LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC;
+    apic_lapic_write(LAPIC_LVT_TIMER,
+                     LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC | LAPIC_LVT_MASK);
+    apic_lapic_write(LAPIC_TIMER_DIV, 0x0B);
+    apic_lapic_write(LAPIC_TIMER_INITCNT, count);
+    apic_lapic_write(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC);
 
     lapic_timer_armed = 1;
     pr_info("LAPIC timer: periodic 100 Hz armed");
@@ -122,26 +118,24 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
 
 void lapic_timer_mask(void)
 {
-    volatile uint32_t *lapic = apic_lapic_regs();
-    if (!lapic)
+    if (!apic_lapic_ready())
         return;
-    lapic[LAPIC_LVT_TIMER / 4] =
-        LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC | LAPIC_LVT_MASK;
+    apic_lapic_write(LAPIC_LVT_TIMER,
+                     LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC | LAPIC_LVT_MASK);
     lapic_timer_armed = 0;
 }
 
 int lapic_timer_selftest(void)
 {
-    volatile uint32_t *lapic = apic_lapic_regs();
-    if (!lapic) {
-        pr_warn("  %-11s : selftest: no LAPIC mapping\n", "timer");
+    if (!apic_lapic_ready()) {
+        pr_warn("  %-11s : selftest: LAPIC not mapped\n", "timer");
         return -1;
     }
 
     /* Vector + periodic + unmasked. */
     const uint32_t fields = 0xFFu | LAPIC_LVT_MASK | LAPIC_LVT_PERIODIC;
     const uint32_t expect = LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC;
-    uint32_t lvt = lapic[LAPIC_LVT_TIMER / 4];
+    uint32_t lvt = apic_lapic_read(LAPIC_LVT_TIMER);
     if ((lvt & fields) != expect) {
         pr_warn("  %-11s : selftest: LVT=0x%x (expected 0x%x) — vector/mask wrong\n",
                 "timer", (unsigned)lvt, (unsigned)expect);
@@ -150,10 +144,10 @@ int lapic_timer_selftest(void)
 
     /* The counter must be moving.  Periodic mode reloads, so a stuck value
      * means the timer is not running at all. */
-    uint32_t a = lapic[LAPIC_TIMER_CURCNT / 4];
+    uint32_t a = apic_lapic_read(LAPIC_TIMER_CURCNT);
     for (volatile uint32_t i = 0; i < 1000000u; i++)
         __asm__ __volatile__("pause");
-    uint32_t b = lapic[LAPIC_TIMER_CURCNT / 4];
+    uint32_t b = apic_lapic_read(LAPIC_TIMER_CURCNT);
     if (a == b) {
         pr_warn("  %-11s : selftest: LAPIC counter stuck at 0x%x — timer not running\n",
                 "timer", (unsigned)a);

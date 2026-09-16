@@ -9,12 +9,25 @@
 
 #define IA32_APIC_BASE      0x1B
 #define APIC_ENABLE         (1u << 11)
+#define APIC_X2APIC_ENABLE  (1u << 10)
+#define APIC_BASE_ADDR_MASK 0xFFFFF000ull
 
+/* x2APIC moves the LAPIC register file into MSRs: the register at byte offset
+ * `off` of the xAPIC map lives at MSR 0x800 + off/16.  The ICR is the one
+ * register that changes shape — a single 64-bit MSR with the destination in
+ * the high half, instead of the two 32-bit MMIO registers. */
+#define X2APIC_MSR(off)     (0x800u + ((off) >> 4))
+#define X2APIC_ICR          0x830
+
+#define LAPIC_ID            0x20
 #define LAPIC_TPR           0x80
 #define LAPIC_SVR           0xF0
 #define LAPIC_EOI           0xB0
+#define LAPIC_ICR           0x300
+#define LAPIC_ICR_HIGH      0x310
 #define LAPIC_SVR_ENABLE    0x100
 #define LAPIC_SPURIOUS_VEC  0xFF
+#define ICR_DELIVERY_PENDING (1u << 12)
 
 /* LVT register block.  These offsets are fixed by the xAPIC map and must not
  * be confused: 0x320 timer, 0x330 thermal, 0x340 perf, 0x350 LINT0,
@@ -44,6 +57,7 @@ static volatile uint32_t *lapic = NULL;
 static volatile uint32_t *ioapic_regsel = NULL;
 static volatile uint32_t *ioapic_win = NULL;
 static int apic_enabled = 0;
+static int apic_x2apic = 0;
 static unsigned int ioapic_max_redir = 0;
 static unsigned int ioapic_global_irq_base = 0;
 static unsigned int ioapic_id = 0;
@@ -99,34 +113,101 @@ static void ioapic_set_redir(unsigned int entry, uint8_t vector,
     ioapic_write(IOAPIC_REDIR_LO(entry), vector | flags);
 }
 
-static void lapic_init(uint32_t lapic_base)
+/* LAPIC register access, mode-agnostic.  `reg` is the byte offset in the xAPIC
+ * register map (0x80 TPR, 0xF0 SVR, ...) and is translated to the corresponding
+ * MSR in x2APIC mode, so callers never have to know which mode is active. */
+uint32_t apic_lapic_read(uint32_t reg)
 {
-    vmm_map(get_current_pd(), APIC_MMIO_VADDR, lapic_base & ~0xFFF,
-            PAGE_PRESENT | PAGE_RW | PAGE_PCD);
-    lapic = (volatile uint32_t *)(APIC_MMIO_VADDR + (lapic_base & 0xFFF));
+    if (apic_x2apic)
+        return (uint32_t)rdmsr(X2APIC_MSR(reg));
+    if (!lapic)
+        return 0;
+    return lapic[reg / 4];
+}
 
+void apic_lapic_write(uint32_t reg, uint32_t val)
+{
+    if (apic_x2apic) {
+        wrmsr(X2APIC_MSR(reg), val);
+        return;
+    }
+    if (!lapic)
+        return;
+    lapic[reg / 4] = val;
+}
+
+/* Program the mandatory LAPIC state: TPR 0, all LVT entries masked with a
+ * spurious vector, and the APIC enabled through the SVR. */
+static void lapic_common_setup(void)
+{
     /* Task Priority 0.  Firmware can leave a non-zero TPR behind, which masks
      * every interrupt of equal or lower priority — including the LVT timer —
      * even though the SVR says the APIC is enabled. */
-    lapic[LAPIC_TPR / 4] = 0;
+    apic_lapic_write(LAPIC_TPR, 0);
 
     /* Mask the LVT entries with a valid spurious vector (0xFF): any stray
      * delivery then targets the spurious-vector gate instead of tripping a
      * #GP and cascading into a triple fault.  The offsets are the real LVT
      * block (the old code wrote 0x380, which is the timer's initial count). */
-    lapic[LAPIC_LVT_TIMER / 4]   = LAPIC_LVT_MASKED;
-    lapic[LAPIC_LVT_THERMAL / 4] = LAPIC_LVT_MASKED;
-    lapic[LAPIC_LVT_PERF / 4]    = LAPIC_LVT_MASKED;
-    lapic[LAPIC_LVT_LINT0 / 4]   = LAPIC_LVT_MASKED;
-    lapic[LAPIC_LVT_LINT1 / 4]   = LAPIC_LVT_MASKED;
-    lapic[LAPIC_LVT_ERROR / 4]   = LAPIC_LVT_MASKED;
+    apic_lapic_write(LAPIC_LVT_TIMER,   LAPIC_LVT_MASKED);
+    apic_lapic_write(LAPIC_LVT_THERMAL, LAPIC_LVT_MASKED);
+    apic_lapic_write(LAPIC_LVT_PERF,    LAPIC_LVT_MASKED);
+    apic_lapic_write(LAPIC_LVT_LINT0,   LAPIC_LVT_MASKED);
+    apic_lapic_write(LAPIC_LVT_LINT1,   LAPIC_LVT_MASKED);
+    apic_lapic_write(LAPIC_LVT_ERROR,   LAPIC_LVT_MASKED);
 
+    apic_lapic_write(LAPIC_SVR, LAPIC_SVR_ENABLE | LAPIC_SPURIOUS_VEC);
+}
+
+/* Bring up the BSP local APIC, preferring x2APIC when the CPU offers it.
+ *
+ * The x2APIC transition is one-way until reset, so it is taken only after a
+ * successful read-back of IA32_APIC_BASE[10] — a CPU (or hypervisor) that
+ * advertises the CPUID bit without implementing the MSRs leaves us in xAPIC
+ * mode with the MMIO window intact.  Once in x2APIC mode the MMIO window is
+ * neither mapped nor touched: the base address field is ignored by hardware
+ * and every access goes through an MSR. */
+static void lapic_init(uint32_t lapic_base)
+{
     uint64_t msr_val = rdmsr(IA32_APIC_BASE);
-    msr_val &= ~0xFFF;
-    msr_val |= (uint64_t)(uint32_t)lapic_base | APIC_ENABLE;
-    wrmsr(IA32_APIC_BASE, msr_val);
 
-    lapic[LAPIC_SVR / 4] = LAPIC_SVR_ENABLE | LAPIC_SPURIOUS_VEC;
+    if (msr_val & APIC_X2APIC_ENABLE) {
+        /* Firmware already switched: MMIO access would not reach the LAPIC. */
+        apic_x2apic = 1;
+    } else if (cpu_has_x2apic()) {
+        apic_x2apic = 1;
+        wrmsr(IA32_APIC_BASE, msr_val | APIC_ENABLE | APIC_X2APIC_ENABLE);
+        if (!(rdmsr(IA32_APIC_BASE) & APIC_X2APIC_ENABLE)) {
+            pr_warn("  %-11s : x2APIC enable did not take — staying on xAPIC\n",
+                    "apic");
+            apic_x2apic = 0;
+        }
+    }
+
+    if (apic_x2apic) {
+        lapic_base_addr = 0xFEE00000u;   /* architectural LAPIC address */
+    } else {
+        /* In xAPIC mode the base comes from the MADT; a MADT that omits it
+         * (legal when x2APIC is in use) must not make us map page zero. */
+        if (lapic_base == 0)
+            lapic_base = 0xFEE00000u;
+
+        vmm_map(get_current_pd(), APIC_MMIO_VADDR, lapic_base & ~0xFFF,
+                PAGE_PRESENT | PAGE_RW | PAGE_PCD);
+        lapic = (volatile uint32_t *)(APIC_MMIO_VADDR + (lapic_base & 0xFFF));
+
+        msr_val = (msr_val & ~APIC_BASE_ADDR_MASK) |
+                  (uint64_t)(lapic_base & APIC_BASE_ADDR_MASK) | APIC_ENABLE;
+        wrmsr(IA32_APIC_BASE, msr_val);
+
+        lapic_base_addr = lapic_base;
+    }
+
+    lapic_common_setup();
+
+    pr_info("  %-11s : %s, LAPIC ID %u\n", "apic",
+            apic_x2apic ? "x2APIC (MSR access)" : "xAPIC (MMIO)",
+            (unsigned)apic_lapic_id());
 }
 
 int apic_init(void)
@@ -140,7 +221,6 @@ int apic_init(void)
     }
 
     lapic_init(madt->Address);
-    lapic_base_addr = madt->Address;
 
     uint32_t ioapic_base = 0;
     uint32_t global_irq_base = 0;
@@ -279,10 +359,16 @@ int apic_init(void)
 
 bool apic_is_enabled(void) { return apic_enabled; }
 
+bool apic_x2apic_mode(void) { return apic_x2apic != 0; }
+
+/* True once the LAPIC can be talked to — either mode qualifies.  Distinct from
+ * apic_is_enabled(), which only flips after the whole APIC/IOAPIC bring-up. */
+bool apic_lapic_ready(void) { return apic_x2apic != 0 || lapic != NULL; }
+
 void apic_eoi(void)
 {
-    if (apic_enabled && lapic)
-        lapic[LAPIC_EOI / 4] = 0;
+    if (apic_enabled && apic_lapic_ready())
+        apic_lapic_write(LAPIC_EOI, 0);
 }
 
 int apic_pci_vector(uint8_t irq_pin)
@@ -298,11 +384,13 @@ int apic_pci_vector(uint8_t irq_pin)
 
 uint32_t apic_lapic_base(void)       { return lapic_base_addr; }
 
-/* Expose the mapped LAPIC MMIO window (used by the LAPIC-timer quirk). */
-volatile uint32_t *apic_lapic_regs(void) { return lapic; }
-
 uint32_t apic_lapic_id(void)
 {
+    /* x2APIC IDs are 32 bits and CPUID.01H:EBX[31:24] is documented as stale
+     * in that mode, so read the LAPIC ID register itself. */
+    if (apic_x2apic)
+        return apic_lapic_read(LAPIC_ID);
+
     uint32_t ebx, eax, ecx, edx;
     __asm__ __volatile__("cpuid"
         : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
@@ -330,35 +418,53 @@ int apic_irq_override(int isa_irq)
 void apic_ap_online(void)
 {
     uint64_t msr_val = rdmsr(IA32_APIC_BASE);
-    msr_val &= ~0xFFF;
-    msr_val |= APIC_ENABLE;
-    wrmsr(IA32_APIC_BASE, msr_val);
 
-    if (lapic) {
-        lapic[LAPIC_TPR / 4] = 0;
-        lapic[LAPIC_LVT_TIMER / 4]   = LAPIC_LVT_MASKED;
-        lapic[LAPIC_LVT_THERMAL / 4] = LAPIC_LVT_MASKED;
-        lapic[LAPIC_LVT_PERF / 4]    = LAPIC_LVT_MASKED;
-        lapic[LAPIC_LVT_LINT0 / 4]   = LAPIC_LVT_MASKED;
-        lapic[LAPIC_LVT_LINT1 / 4]   = LAPIC_LVT_MASKED;
-        lapic[LAPIC_LVT_ERROR / 4]   = LAPIC_LVT_MASKED;
-        lapic[LAPIC_SVR / 4] = LAPIC_SVR_ENABLE | LAPIC_SPURIOUS_VEC;
+    if (apic_x2apic) {
+        /* IA32_APIC_BASE is per logical processor: an AP starts in xAPIC mode
+         * even when the BSP has already switched, so it must switch here too
+         * before the first MSR-addressed register write below. */
+        wrmsr(IA32_APIC_BASE, msr_val | APIC_ENABLE | APIC_X2APIC_ENABLE);
+    } else {
+        msr_val = (msr_val & ~APIC_BASE_ADDR_MASK) |
+                  (uint64_t)(lapic_base_addr & APIC_BASE_ADDR_MASK) | APIC_ENABLE;
+        wrmsr(IA32_APIC_BASE, msr_val);
     }
+
+    lapic_common_setup();
 }
 
 static int apic_icr_busy(void)
 {
-    if (!lapic) return 1;
-    return (lapic[0x300 / 4] & (1u << 12)) != 0;
+    return (apic_lapic_read(LAPIC_ICR) & ICR_DELIVERY_PENDING) != 0;
 }
 
 static void apic_icr_send(uint32_t dest_lapic, uint32_t icrlo)
 {
-    if (!lapic) return;
+    if (!apic_lapic_ready())
+        return;
+
     for (int i = 0; i < 100000 && apic_icr_busy(); i++)
         __asm__ __volatile__("pause");
-    lapic[0x310 / 4] = (dest_lapic & 0xFFu) << 24;   /* ICR high */
-    lapic[0x300 / 4] = icrlo;                        /* ICR low  */
+
+    if (apic_x2apic) {
+        /* One 64-bit MSR: destination in the high half, delivery status still
+         * bit 12 of the low half. */
+        wrmsr(X2APIC_ICR, ((uint64_t)dest_lapic << 32) | icrlo);
+        return;
+    }
+
+    apic_lapic_write(LAPIC_ICR_HIGH, (dest_lapic & 0xFFu) << 24);
+    apic_lapic_write(LAPIC_ICR, icrlo);
+}
+
+/* Fixed-delivery IPI to one destination (physical mode).  Returns 0 when the
+ * interrupt was issued, -1 when the LAPIC is not up. */
+int apic_send_ipi(uint32_t dest_lapic, uint32_t vector)
+{
+    if (!apic_lapic_ready())
+        return -1;
+    apic_icr_send(dest_lapic, vector & 0xFFu);
+    return 0;
 }
 
 /* Send INIT to a target APIC id (level-triggered assert, delivery mode INIT). */

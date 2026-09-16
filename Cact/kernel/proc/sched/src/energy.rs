@@ -122,8 +122,11 @@ fn core_index(cpu: u32) -> Option<usize> {
 
 const AE_OK: u32 = 0;
 const MADT_TYPE_LOCAL_APIC: u8 = 0;
+const MADT_TYPE_LOCAL_X2APIC: u8 = 9;
 const MADT_ENABLED: u32 = 1;
 const MADT_LOCAL_APIC_LEN: usize = 8;
+// Processor Local x2APIC: 2 + 2 reserved + 4 x2APIC ID + 4 flags + 4 UID.
+const MADT_LOCAL_X2APIC_LEN: usize = 16;
 // ACPI_TABLE_MADT = table header (36) + UINT32 Address + UINT32 Flags (44).
 const MADT_HEADER_LEN: usize = 44;
 
@@ -139,6 +142,7 @@ unsafe fn enumerate_madt_workers(st: &mut EnergyState, bsp_lapic: u32) {
 
     let base = table as *const u8;
     let length = ptr::read_unaligned(base.add(4) as *const u32) as usize;
+    let x2apic = ffi::apic_x2apic_mode();
     let mut off = MADT_HEADER_LEN;
 
     while off + 2 <= length && (st.present_count as usize) < MAX_CORES {
@@ -147,21 +151,50 @@ unsafe fn enumerate_madt_workers(st: &mut EnergyState, bsp_lapic: u32) {
         if sub_len == 0 {
             break;
         }
-        if sub_type == MADT_TYPE_LOCAL_APIC && sub_len >= MADT_LOCAL_APIC_LEN {
-            let apic_id = *base.add(off + 3) as u32;
-            let flags = ptr::read_unaligned(base.add(off + 4) as *const u32);
-            if (flags & MADT_ENABLED) != 0 && apic_id != bsp_lapic {
-                let slot = st.present_count as usize;
-                let worker = &mut st.cores[slot];
-                worker.lapic_id = apic_id;
-                worker.role = Role::Worker;
-                worker.cstate = CState::C6;
-                worker.present = true;
-                worker.online = false;
-                st.present_count += 1;
-            }
-        }
+
+        /* Both encodings may be present for the same processor; take the id
+         * and flags from whichever this entry carries. */
+        let entry = if sub_type == MADT_TYPE_LOCAL_APIC && sub_len >= MADT_LOCAL_APIC_LEN {
+            Some((
+                *base.add(off + 3) as u32,
+                ptr::read_unaligned(base.add(off + 4) as *const u32),
+            ))
+        } else if sub_type == MADT_TYPE_LOCAL_X2APIC && sub_len >= MADT_LOCAL_X2APIC_LEN {
+            Some((
+                ptr::read_unaligned(base.add(off + 4) as *const u32),
+                ptr::read_unaligned(base.add(off + 8) as *const u32),
+            ))
+        } else {
+            None
+        };
         off += sub_len;
+
+        let (apic_id, flags) = match entry {
+            Some(e) => e,
+            None => continue,
+        };
+        if (flags & MADT_ENABLED) == 0 || apic_id == bsp_lapic {
+            continue;
+        }
+        /* xAPIC addresses 8-bit ids only, so a processor that is described
+         * solely by a >255 x2APIC entry cannot be woken in that mode. */
+        if !x2apic && apic_id > 0xFF {
+            continue;
+        }
+        /* The two entry types carry the same id for ids < 256 — count the
+         * processor once. */
+        let slot = st.present_count as usize;
+        if st.cores[..slot].iter().any(|c| c.lapic_id == apic_id) {
+            continue;
+        }
+
+        let worker = &mut st.cores[slot];
+        worker.lapic_id = apic_id;
+        worker.role = Role::Worker;
+        worker.cstate = CState::C6;
+        worker.present = true;
+        worker.online = false;
+        st.present_count += 1;
     }
 }
 
