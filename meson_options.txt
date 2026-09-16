@@ -1,0 +1,17 @@
+option('kern_debug', type: 'boolean', value: false,
+  description: 'Build the kernel with -g -Og for QEMU+GDB debugging (make KERN_DEBUG=1)')
+
+option('linker', type: 'combo', choices: ['lld', 'ld'], value: 'ld',
+  description: 'Linker for the final kernel link; lld needs BLOCK(4K) removed from linker.ld')
+
+option('local_repo', type: 'string', value: '',
+  description: 'Directory holding cctkfs.img for the iso-full target (default: ../LocalRepoCactOS)')
+
+option('acpica_fetch', type: 'boolean', value: true,
+  description: 'Clone ACPICA during configure if it is missing (needs network)')
+
+option('acpica_repo', type: 'string', value: 'https://github.com/acpica/acpica.git',
+  description: 'ACPICA git repository used by the configure-time fetch')
+
+option('iso_grub_cfg', type: 'string', value: 'grub.cfg.kernelonly',
+  description: 'GRUB config used by the cact.iso target (grub.cfg.kernelonly | grub.cfg | grub.cfg.ramroot)')

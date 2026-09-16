@@ -6,6 +6,7 @@
 *.elf
 
 build/
+build-meson/
 **/target/
 Cact/drivers/acpi/acpica/
 
@@ -14,5 +15,6 @@ Cact/drivers/acpi/acpica/
 *~
 *.log
 
-# HMAC signing key — generate with: make $(CRYPTO_KEY)  or  python3 tools/gen_hmac_key.py
+# HMAC signing key — generate with: ninja -C build-meson (configure does it)
+# or directly: python3 tools/gen_hmac_key.py
 Cact/crypto/hmac_ffi/hmac_key.bin
