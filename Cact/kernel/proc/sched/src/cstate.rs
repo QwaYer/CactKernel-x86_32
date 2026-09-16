@@ -34,10 +34,6 @@ const CSTATE_COUNT: usize = 4;
 pub const IPI_HALT_VECTOR: u32 = 0xF8;
 pub const IPI_WAKE_VECTOR: u32 = 0xF9;
 
-const LAPIC_ICRLO: usize = 0x300;
-const LAPIC_ICRHI: usize = 0x310;
-const ICR_DELIVERY_PENDING: u32 = 1 << 12;
-
 #[derive(Copy, Clone)]
 struct CStateInfo {
     available: bool,
@@ -222,27 +218,9 @@ fn ipi_send(dst_cpu: u32, vector: u32) -> i32 {
         return -1;
     }
 
-    let regs = unsafe { ffi::apic_lapic_regs() };
-    if regs.is_null() {
-        return -1;
-    }
-
-    unsafe {
-        let icrlo = regs.add(LAPIC_ICRLO / 4);
-        let icrhi = regs.add(LAPIC_ICRHI / 4);
-        // Wait for the previous IPI to drain (delivery status bit 12).
-        for _ in 0..100000 {
-            if icrlo.read_volatile() & ICR_DELIVERY_PENDING == 0 {
-                break;
-            }
-        }
-        if icrlo.read_volatile() & ICR_DELIVERY_PENDING != 0 {
-            return -1;
-        }
-        icrhi.write_volatile(lapic_id << 24);
-        icrlo.write_volatile(vector);
-    }
-    0
+    // The C side owns the ICR encoding (two MMIO registers in xAPIC mode,
+    // one 64-bit MSR in x2APIC mode).
+    unsafe { ffi::apic_send_ipi(lapic_id, vector) }
 }
 
 /// Ask worker `cpu` to (re-)enter its deepest eligible idle state.
