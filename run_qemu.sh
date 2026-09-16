@@ -7,7 +7,7 @@
 #
 # Отладка GDB:  QEMU_GDB=1 ./run_qemu.sh  или  ./run_qemu_gdb.sh
 #   QEMU слушает tcp::1234, гость стоит до "continue" в gdb.
-#   Сборка с символами:  KERN_DEBUG=1 make   (или в config/local.mk)
+#   Сборка с символами:  meson configure build-meson -Dkern_debug=true && ninja -C build-meson
 #   Сессия:  gdb -x gdb/cact.gdb
 
 set -euo pipefail
@@ -34,11 +34,18 @@ if [[ -n "${QEMU_GDB:-}" ]]; then
 fi
 
 ISO="${CACT_ISO:-}"
-if [[ -z "$ISO" && -f "$SCRIPT_DIR/build/cact.iso" ]]; then
-  ISO="$SCRIPT_DIR/build/cact.iso"
+if [[ -z "$ISO" ]]; then
+  # Meson build dir. The full ISO is preferred: the kernel-only image panics
+  # without the cctkfs module (see README).
+  for cand in build-meson/cact-full.iso build-meson/cact.iso; do
+    if [[ -f "$SCRIPT_DIR/$cand" ]]; then
+      ISO="$SCRIPT_DIR/$cand"
+      break
+    fi
+  done
 fi
 if [[ -z "$ISO" || ! -f "$ISO" ]]; then
-  echo "[run_qemu] Укажите CACT_ISO на собранный cact.iso" >&2
+  echo "[run_qemu] Соберите ISO: ninja -C build-meson (iso-full для загрузочного) — или задайте CACT_ISO" >&2
   exit 1
 fi
 

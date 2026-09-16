@@ -42,7 +42,7 @@ CactKernel is one piece of a larger workspace. Typical pieces:
 |-----------|------|
 | **[CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32)** | Userspace **`libc.a`** / **`libc.so`**. Every `SYS_*` number must match the kernel’s [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) and `ioctl_abi.h`. After any syscall change: rebuild libc and **re-link all ELFs** (init, shell, demos). |
 | **[LocalRepoCactOS](../LocalRepoCactOS)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
-| **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`make`** in this tree → **`build/cact.iso`**. |
+| **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`ninja -C build-meson`** in this tree → **`build-meson/cact.iso`**. |
 
 **Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs** overlay files from that archive on top of ext4 (e.g. **`/bin/init`**, **`libc.so`**, optional **`*.cctk`** drivers). PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with **HMAC-SHA256** against the kernel's embedded static key before loading.
 
@@ -51,10 +51,10 @@ From the workspace root (QEMU-oriented full rebuild):
 ```sh
 ./build-cact-qemu.sh
 # Kernel only (expects ../LocalRepoCactOS/cctkfs.img already packed):
-cd CactKernel-x86_32 && make -j"$(nproc)"
+cd CactKernel-x86_32 && meson setup build-meson --cross-file cross/i686-cact-clang.ini && ninja -C build-meson
 ```
 
-Hardware-focused ISO without relying on a root disk layout: `make GRUB_CFG=grub.cfg.ramroot`.
+Hardware-focused ISO without relying on a root disk layout: `meson configure build-meson -Diso_grub_cfg=grub.cfg.ramroot` before building `cact.iso`.
 
 ---
 
@@ -62,7 +62,7 @@ Hardware-focused ISO without relying on a root disk layout: `make GRUB_CFG=grub.
 
 **Recommended — full workspace**
 
-Use sibling **[CactOS-x86_32](https://github.com/QwaYer/CactOS-x86_32)**: from the common parent directory run **`make`** or **`make -C CactOS-x86_32 iso`** — **CactOS** drives **CactLib**, user programs, **LocalRepo**, this kernel, and **CactBridge**.
+Use sibling **[CactOS-x86_32](https://github.com/QwaYer/CactOS-x86_32)**: from the common parent directory run **`ninja -C CactOS-x86_32/build-meson stage`** (or **`… iso`**) — **CactOS** drives **CactLibc**, user programs, **LocalRepoCactOS**, this kernel, and **CactBridge**.
 
 **Standalone — this repository**
 
@@ -70,59 +70,65 @@ Use sibling **[CactOS-x86_32](https://github.com/QwaYer/CactOS-x86_32)**: from t
 
 | Tool | Notes |
 |------|-------|
-| `gcc -m32` | Multilib on amd64 — e.g. `gcc-multilib` (Debian/Ubuntu) |
+| `clang -m32` | Compiles the kernel; freestanding, so no 32-bit libc is needed |
 | `nasm` | Multiboot2 entry + interrupt stubs |
-| `ld -m elf_i386` | GNU binutils |
+| `ld -m elf_i386` | GNU binutils — the default linker (`-Dlinker=lld` works once `BLOCK(4K)` leaves `linker.ld`) |
+| `meson` + `ninja` | Drive the build; every source directory owns a `meson.build` |
 | `cargo +nightly` | Builds `rust_mm`, `sched`, `cact_net`, `rustls` with **`-Z build-std=core,compiler_builtins`** and the **`i686-cact`** JSON target |
-| `grub-mkrescue` + `xorriso` | Kernel **`Makefile`** can produce **`build/cact.iso`** |
+| `grub-mkrescue` + `xorriso` | produces **`build-meson/cact.iso`** |
 | `qemu-img`, `mkfs.ext4`, `e2fsck` | For [`build_disk.sh`](build_disk.sh) |
 
-**Common targets**
+**Build (Meson + Ninja)**
+
+Every source directory owns a `meson.build` and produces its own static library; the C sources are compiled by `clang -m32` (freestanding) and linked against [`linker.ld`](linker.ld).
 
 ```sh
-make -j"$(nproc)"     # kernel + default ISO (kernel-only GRUB, grub.cfg.kernelonly)
-make sched            # Rust scheduler crate only
-make clean            # wipe build/ and Rust artifacts used by the Makefile
-make iso-full         # full ISO with cctkfs.img (auto-detects ../LocalRepoCactOS)
-./build_disk.sh       # create empty ext4 nvme.img for ./run_qemu.sh
+meson setup build-meson --cross-file cross/i686-cact-clang.ini
+ninja -C build-meson             # kernel.bin + cact.iso (kernel-only GRUB)
+ninja -C build-meson iso-full    # cact-full.iso with cctkfs.img
+ninja -C build-meson clean
+ninja -C build-meson rust-clean  # cargo clean in the four crates
+ninja -C build-meson acpica-clean
+./build_disk.sh                  # empty ext4 build/nvme.img for ./run_qemu.sh
 ```
+
+Useful options: `-Dkern_debug=true` (`-g -Og`, for GDB), `-Dlinker=ld|lld`, `-Dlocal_repo=/path` (where `cctkfs.img` lives), `-Dacpica_fetch=false` (never clone ACPICA during configure).
 
 **ISO with bundled `cctkfs.img` (`iso-full`)**
 
 ```sh
-make iso-full   # auto-detects ../LocalRepoCactOS; signs cctkfs.img via tools/cact_sign_cctkfs.py
+meson configure build-meson -Dlocal_repo=../LocalRepoCactOS-x86_32
+ninja -C build-meson iso-full   # signs cctkfs.img via tools/cact_sign_cctkfs.py
 ```
 
-Override if needed: `make iso-full LOCAL_REPO=/path/to/LocalRepoCactOS`.
+`iso-full` is a run_target: it always regenerates, and fails loudly when `cctkfs.img` is missing.
 
-**QEMU:** set **`CACT_ISO`** to your **`cact.iso`**, or drop **`cact.iso`** into **`build/`**, then [`./run_qemu.sh`](./run_qemu.sh).
+**QEMU:** [`./run_qemu.sh`](./run_qemu.sh) picks up **`build-meson/cact-full.iso`** (then **`build-meson/cact.iso`**); override with **`CACT_ISO`**.
 
-> 🧩 **`python3`** is only needed in **LocalRepoCactOS** to pack **`cctkfs.img`** and for **`tools/cact_sign_cctkfs.py`** — not for the default kernel **`make`** (`grub.cfg.kernelonly`).
+> 🧩 **`python3`** is only needed to pack **`cctkfs.img`** in LocalRepoCactOS and for **`tools/cact_sign_cctkfs.py`** — not for the default kernel build (`grub.cfg.kernelonly`).
 
-**Successful build footer** (version from [`VERSION`](VERSION), commit from `git`):
+**Successful build footer** (version from [`VERSION`](VERSION), commit from `git`) — printed by `meson setup`:
 
 ```
---------------------------------------------------
-Cact kernel build complete!
-  Version: 2.0.0
-  Commit:  <short>
-  Built:   <timestamp>
-  Kernel:  build/kernel.bin
-  Image:   build/cact.iso
---------------------------------------------------
+  Cact kernel 2.0.0 (<short>)
+  compiler: clang 22.1.8
+  linker  : /usr/bin/ld
+
+  ninja -C build-meson          -> kernel.bin + cact.iso
+  ninja -C build-meson iso-full -> cact-full.iso
 ```
 
-**Version macros** (from [`Makefile`](Makefile)):
+**Version macros** (from [`meson.build`](meson.build)):
 
-```makefile
-VERSION_DEFS = -DCACT_VERSION=$(CACT_VERSION) \
-               -DCACT_COMMIT_HASH=$(CACT_COMMIT) \
-               -DCACT_BUILD_TIME="$(CACT_BUILD_TIME)"
+```meson
+'-DCACT_VERSION=' + cact_version,
+'-DCACT_COMMIT_HASH=' + cact_commit,
+'-DCACT_BUILD_TIME=' + cact_build_time,   # version.c stringifies it with STR()
 ```
 
 **Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3) + **`libcact_hmac_ffi.a`** (HMAC-SHA256 module signing). Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
 
-Optional: `KERN_DEBUG=1 make` for richer symbols; QEMU GDB: see [`run_qemu.sh`](run_qemu.sh).
+Optional: `meson configure build-meson -Dkern_debug=true` for richer symbols; QEMU GDB: see [`run_qemu.sh`](run_qemu.sh).
 
 ---
 
@@ -154,11 +160,11 @@ CactKernel-x86_32/
 │   │   │                binfs, sbinfs, libfs, usrfs, varfs
 │   │   └── pipe/        kernel pipe implementation
 │   └── net/             rust_net/ — pure-Rust stack (smoltcp: Ethernet/ARP/IP/ICMP/TCP/UDP/DNS) + rustls TLS + HTTP(S) client, C FFI header
-├── Makefile
+├── meson.build
 ├── VERSION
 ├── linker.ld
 ├── grub.cfg              # multiboot2 kernel + cctkfs module
-├── grub.cfg.kernelonly   # kernel-only multiboot (default make target)
+├── grub.cfg.kernelonly   # kernel-only multiboot (the cact.iso default, -Diso_grub_cfg)
 ├── grub.cfg.ramroot      # RAM-first userland variant
 ├── build_disk.sh         # raw ext4 image for QEMU AHCI/NVMe
 ├── tools/                # utility scripts (gen_hmac_key.py, cact_sign_cctkfs.py, …)
@@ -301,7 +307,7 @@ The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
 | **ACPI** | ACPICA — RSDP, MADT, FADT, APIC table parsing | New in 2.0 |
 
-All out-of-tree PCI drivers now use **MSI-X** instead of PIC IRQ lines. Extra PCI drivers live in **`*-for-Cact`** repositories; **`make -C CactOS-x86_32`** (workspace integrator) installs them into **`LocalRepoCactOS/lib/`** and packs **`cctkfs.img`**.
+All out-of-tree PCI drivers now use **MSI-X** instead of PIC IRQ lines. Extra PCI drivers live in **`*-for-Cact-x86_32`** repositories; **`ninja -C CactOS-x86_32/build-meson drivers`** (workspace integrator) installs them into **`LocalRepoCactOS-x86_32/lib/`** and packs **`cctkfs.img`**.
 
 ---
 
