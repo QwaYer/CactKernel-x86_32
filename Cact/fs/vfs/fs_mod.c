@@ -19,6 +19,37 @@
 #include "memory.h"
 #include "kernel.h"
 
+// Linux i386 errno values, returned negated to the /dev/sys module ioctl so
+// that modload/modunload can report a real reason (see kmod.c).  The userspace
+// wrapper folds a negative result into errno.
+#ifndef EPERM
+#define EPERM  1
+#endif
+#ifndef ENOENT
+#define ENOENT 2
+#endif
+#ifndef ENOMEM
+#define ENOMEM 12
+#endif
+#ifndef EACCES
+#define EACCES 13
+#endif
+#ifndef EBUSY
+#define EBUSY  16
+#endif
+#ifndef EEXIST
+#define EEXIST 17
+#endif
+#ifndef ENODEV
+#define ENODEV 19
+#endif
+#ifndef EINVAL
+#define EINVAL 22
+#endif
+#ifndef ENOSPC
+#define ENOSPC 28
+#endif
+
 // HMAC-SHA256 module signing — implemented in cact_crypto (Rust, no_std)
 extern int cact_hmac_verify(const uint8_t *data, uint32_t data_len,
                             const uint8_t *tag, uint32_t tag_len);
@@ -163,17 +194,17 @@ static int load_module_image(const char *path, uint8_t **image_out,
     uint32_t       blob_size = 0;
     if (initfs_modblob_get(path, &blob_data, &blob_size) != 0 || !blob_size) {
         pr_err("[FSMOD] module not found: %s\n", path);
-        return -1;
+        return -ENOENT;
     }
 
     uint8_t *elf_data = (uint8_t *)kmalloc(blob_size);
-    if (!elf_data) return -1;
+    if (!elf_data) return -ENOMEM;
     memcpy(elf_data, blob_data, blob_size);
     uint32_t file_size = blob_size;
 
     if (hmac_verify_module(elf_data, &file_size) != 0) {
         kfree(elf_data);
-        return -8;
+        return -EACCES;
     }
 
     Elf32_Ehdr *eh = (Elf32_Ehdr *)elf_data;
@@ -205,7 +236,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
     }
 
     uint8_t *image = (uint8_t *)kmalloc(total);
-    if (!image) { kfree(elf_data); return -3; }
+    if (!image) { kfree(elf_data); return -ENOMEM; }
     memset(image, 0, total);
 
     // Copy PROGBITS sections into image
@@ -326,8 +357,18 @@ static int load_module_image(const char *path, uint8_t **image_out,
     return 0;
 }
 
+// load_module_image() codes -> errno for the /dev/sys module ioctl.
+static int fs_mod_image_errno(int rc) {
+    switch (rc) {
+    case -ENOENT: return -ENOENT;   // no such module in the cctkfs image
+    case -ENOMEM: return -ENOMEM;   // relocation image too large
+    case -EACCES: return -EACCES;   // HMAC signature rejected
+    default:      return -EINVAL;   // not ET_REL / corrupt / unresolved symbol
+    }
+}
+
 int fs_mod_load(const char *path) {
-    if (!path) return -1;
+    if (!path) return -EINVAL;
 
     int free_slot = -1;
     for (int i = 0; i < FS_MOD_MAX; i++) {
@@ -338,7 +379,7 @@ int fs_mod_load(const char *path) {
     }
     if (free_slot < 0) {
         pr_err("[FSMOD] no free filesystem-module slot\n");
-        return -1;
+        return -ENOSPC;
     }
 
     char inst[64];
@@ -346,7 +387,7 @@ int fs_mod_load(const char *path) {
     for (int i = 0; i < FS_MOD_MAX; i++) {
         if (slots[i].used && strcmp(slots[i].instance, inst) == 0) {
             pr_warn("[FSMOD] filesystem module already loaded: %s\n", inst);
-            return -1;
+            return -EEXIST;
         }
     }
 
@@ -356,7 +397,7 @@ int fs_mod_load(const char *path) {
     fs_unmount_fn_t unm   = NULL;
     int rc = load_module_image(path, &image, &size, &mnt, &unm);
     if (rc != 0)
-        return rc;
+        return fs_mod_image_errno(rc);
 
     fs_slot_t *s = &slots[free_slot];
     memset(s, 0, sizeof(*s));
@@ -383,11 +424,11 @@ static fs_slot_t *slot_by_instance(const char *instance) {
 
 static int slot_unload(fs_slot_t *s) {
     if (!s || !s->used)
-        return -1;
+        return -EINVAL;
     if (s->mount_count > 0) {
         pr_warn("[FSMOD] module busy (still mounted), not unloading: %s\n",
                 s->instance);
-        return -1;
+        return -EBUSY;
     }
     if (s->image)
         kfree(s->image);
@@ -397,14 +438,14 @@ static int slot_unload(fs_slot_t *s) {
 
 int fs_mod_unload_slot(int slot) {
     if (slot < 0 || slot >= FS_MOD_MAX)
-        return -1;
+        return -EINVAL;
     return slot_unload(&slots[slot]);
 }
 
 int fs_mod_unload(const char *instance) {
     fs_slot_t *s = slot_by_instance(instance);
     if (!s)
-        return -1;
+        return -ENOENT;
     int rc = slot_unload(s);
     if (rc == 0) {
         pr_info("[FSMOD] module unloaded: %s\n", instance);
