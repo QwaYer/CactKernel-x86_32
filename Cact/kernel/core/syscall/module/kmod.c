@@ -7,6 +7,37 @@
 #include "klib.h"
 #include "kernel.h"
 
+// Linux i386 errno values.  The /dev/sys ioctl returns these negated and the
+// userspace wrapper (CactLibc nio_map) folds a negative result into errno, so
+// modload/modunload can report *why* a transfer failed.  Returning the raw
+// -1..-8 codes the callers used to invent is not an option: every one of them
+// collapses to -1 (EPERM) on the way out, which is why every failure used to
+// print "permission denied (need root)".
+#ifndef EPERM
+#define EPERM  1
+#endif
+#ifndef ENOENT
+#define ENOENT 2
+#endif
+#ifndef EACCES
+#define EACCES 13
+#endif
+#ifndef EBUSY
+#define EBUSY  16
+#endif
+#ifndef EEXIST
+#define EEXIST 17
+#endif
+#ifndef ENODEV
+#define ENODEV 19
+#endif
+#ifndef EINVAL
+#define EINVAL 22
+#endif
+#ifndef EOPNOTSUPP
+#define EOPNOTSUPP 95
+#endif
+
 // Module load/unload core.  These are reached through the /dev/sys node
 // ioctls (CACT_SYSCTL_MODULE_LOAD/UNLOAD); the old sys_module_* trap
 // wrappers were removed.
@@ -47,23 +78,32 @@ static int require_root(void) {
     return 0;
 }
 
+// pci_peek_module_manifest() codes -> errno.
+static int peek_errno(int pr) {
+    if (pr == -1)
+        return -ENOENT;   // file not found / unreadable
+    if (pr == -5)
+        return -EACCES;   // HMAC signature rejected
+    return -EINVAL;       // not ET_REL, corrupted, or no cact_pci_* manifest
+}
+
 // Kernel-string core: load a module whose image path is a kernel buffer.
 int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
     if (require_root() != 0)
-        return -1;
+        return -EPERM;
     if (!path || !path[0])
-        return -2;
+        return -EINVAL;
 
     // Filesystem modules (export fs_mount instead of a PCI manifest) are
     // loaded through the multi-slot fs_mod loader. Detection is a cheap
     // non-destructive symbol scan; the real HMAC verification happens in
-    // fs_mod_load().
+    // fs_mod_load().  fs_mod_* already returns -errno.
     if (fs_mod_detect(path) == 1)
         return fs_mod_load(path);
 
     if (usermod_slot_active) {
         pr_warn("kmod slot busy");
-        return -3;
+        return -EBUSY;
     }
 
     _kstrcpy(usermod_path_store, path, (int)sizeof(usermod_path_store));
@@ -76,13 +116,14 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
         (vendor_id == CACT_MODLOAD_ID_AUTO && device_id == CACT_MODLOAD_ID_AUTO);
 
     if (auto_ids) {
-        if (pci_peek_module_manifest(usermod_path_store, &v, &d, &cc, &ss) != 0)
-            return -2;
+        int pr = pci_peek_module_manifest(usermod_path_store, &v, &d, &cc, &ss);
+        if (pr != 0)
+            return peek_errno(pr);
     } else {
         if (vendor_id > 0xFFFFu || device_id > 0xFFFFu)
-            return -2;
+            return -EINVAL;
         if (vendor_id == PCI_ANY_ID || device_id == PCI_ANY_ID)
-            return -2;
+            return -EINVAL;
         v = (uint16_t)vendor_id;
         d = (uint16_t)device_id;
     }
@@ -98,15 +139,18 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
     usermod_pci_drv.probe       = NULL;
 
     if (pci_register_driver(&usermod_pci_drv) != 0)
-        return -2;
+        return -EEXIST;   // "usermod" already registered / driver table full
 
     for (pci_device_t* d = pci_device_list; d; d = d->next)
         pci_driver_match(d);
 
     if (!usermod_pci_drv.probe) {
+        // Manifest parsed fine, but no enumerated PCI function matched its
+        // VID/DID (or the image failed to relocate and the probe was never
+        // linked).  Look for the "[LDR]" lines in the kernel log.
         pr_warn("kmod probe not linked");
         pci_unregister_driver(&usermod_pci_drv);
-        return -4;
+        return -ENODEV;
     }
 
     usermod_slot_active = 1;
@@ -117,7 +161,7 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
 // |name| is a kernel buffer or NULL (NULL clears the usermod slot).
 int kmod_unload_kname(const char *name) {
     if (require_root() != 0)
-        return -1;
+        return -EPERM;
 
     if (!name) {
         if (!usermod_slot_active)
@@ -138,17 +182,17 @@ int kmod_unload_kname(const char *name) {
         int idx;
         if (parse_pci_modinfo_index(name, &idx) != 0) {
             pr_warn("kmod invalid pci index");
-            return -2;
+            return -EINVAL;
         }
         pci_device_t *dev = pci_device_by_index(idx);
         if (!dev) {
             pr_warn("kmod pci function index not found");
-            return -7;
+            return -ENOENT;
         }
         pci_driver_t *rdrv = pci_driver_find_reloc_for_device(dev);
         if (!rdrv) {
             pr_warn("kmod no relocatable module for pci function");
-            return -8;
+            return -ENODEV;
         }
         pci_unload_module(rdrv);
         pci_unregister_driver(rdrv);
@@ -163,11 +207,11 @@ int kmod_unload_kname(const char *name) {
     pci_driver_t *drv = pci_driver_find_by_name(name);
     if (!drv) {
         pr_warn("kmod driver not found");
-        return -5;
+        return -ENOENT;
     }
     if (!(drv->flags & PCI_DRV_F_RELOC_MODULE)) {
         pr_warn("kmod driver is built-in");
-        return -6;
+        return -EOPNOTSUPP;
     }
 
     pci_unload_module(drv);
