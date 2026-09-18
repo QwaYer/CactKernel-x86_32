@@ -90,18 +90,18 @@ int sys_select(struct syscall_frame *regs) {
             file_t *f = t->proc->fds->files[fd];
 
             if (urfds && SEL_ISSET(fd, &orig_r)) {
-                if (f && f->node && (poll_vfs(f->node, VFS_POLLIN) & VFS_POLLIN)) {
+                if (f && f->node && (poll_file_vfs(f, VFS_POLLIN) & VFS_POLLIN)) {
                     SEL_SET(fd, &res_r); ready++;
                 }
             }
             if (uwfds && SEL_ISSET(fd, &orig_w)) {
-                if (f && f->node && (poll_vfs(f->node, VFS_POLLOUT) & VFS_POLLOUT)) {
+                if (f && f->node && (poll_file_vfs(f, VFS_POLLOUT) & VFS_POLLOUT)) {
                     SEL_SET(fd, &res_w); ready++;
                 }
             }
             if (uefds && SEL_ISSET(fd, &orig_e)) {
                 if (f && f->node) {
-                    uint32_t rev = poll_vfs(f->node, VFS_POLLHUP | VFS_POLLERR);
+                    uint32_t rev = poll_file_vfs(f, VFS_POLLHUP | VFS_POLLERR);
                     if (rev & (VFS_POLLHUP | VFS_POLLERR)) {
                         SEL_SET(fd, &res_e); ready++;
                     }
@@ -175,7 +175,7 @@ int sys_poll(struct syscall_frame *regs) {
             if (fds[i].events & POLLIN)  events |= VFS_POLLIN;
             if (fds[i].events & POLLOUT) events |= VFS_POLLOUT;
 
-            uint32_t revents = (uint32_t)poll_vfs(f->node, events);
+            uint32_t revents = (uint32_t)poll_file_vfs(f, events);
 
             short ev = 0;
             if (revents & VFS_POLLIN)  ev |= POLLIN;

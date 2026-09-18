@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "task.h"
 #include "memory.h"
+#include "memfd.h"
 
 // Generic VFS I/O wrappers.
 int read_vfs(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
@@ -30,6 +31,78 @@ void close_vfs(vfs_node_t *node) {
 int ioctl_vfs(vfs_node_t *node, uint32_t cmd, void *arg) {
     if (!node || !node->ops || !node->ops->ioctl) return -1;
     return node->ops->ioctl(node, cmd, arg);
+}
+
+// ── File-aware wrappers ─────────────────────────────────────────────────
+//
+// A node with fops keeps per-open state in file_t.priv; the syscall layer
+// reaches it through these wrappers.  Nodes without fops behave exactly as
+// before, so every existing filesystem is unaffected.
+
+int read_file_vfs(file_t *f, uint32_t off, uint32_t size, char *buf) {
+    if (!f || !f->node) return -1;
+    if (f->node->fops && f->node->fops->read)
+        return f->node->fops->read(f->node, f->priv, off, size, buf);
+    return read_vfs(f->node, off, size, buf);
+}
+
+int write_file_vfs(file_t *f, uint32_t off, uint32_t size, char *buf) {
+    if (!f || !f->node) return -1;
+    if (f->node->fops && f->node->fops->write)
+        return f->node->fops->write(f->node, f->priv, off, size, buf);
+    return write_vfs(f->node, off, size, buf);
+}
+
+int ioctl_file_vfs(file_t *f, uint32_t cmd, void *arg) {
+    if (!f || !f->node) return -1;
+    if (f->node->fops && f->node->fops->ioctl)
+        return f->node->fops->ioctl(f->node, f->priv, cmd, arg);
+    return ioctl_vfs(f->node, cmd, arg);
+}
+
+int poll_file_vfs(file_t *f, uint32_t events) {
+    if (!f || !f->node) return 0;
+    if (f->node->fops && f->node->fops->poll)
+        return f->node->fops->poll(f->node, f->priv, events);
+    return poll_vfs(f->node, events);
+}
+
+// Resolve an open fd + mapping offset to the shared backing object that holds
+// the bytes, if the node has one.  do_mmap() uses this to install the object's
+// own frames instead of copying the file through read().
+//
+// Two sources, in order:
+//   1. node->ops->mmap_backing — self-describing nodes (a DRM card node
+//      handing out GEM buffers at faked mmap offsets, …).
+//   2. memfd — a memfd maps its own storage, so the object offset is the
+//      file offset.
+// Returns 0 with *backing_out > 0 on success, -1 when nothing backs the fd.
+int vfs_mmap_resolve(int fd, uint32_t off, uint32_t len,
+                     int *backing_out, uint32_t *obj_off_out) {
+    if (!backing_out || !obj_off_out) return -1;
+    *backing_out = 0;
+    *obj_off_out = 0;
+
+    if (fd < 0 || fd >= MAX_FD) return -1;
+    if (!current_task || !current_task->proc || !current_task->proc->fds) return -1;
+    file_t *f = current_task->proc->fds->files[fd];
+    if (!f || !f->node) return -1;
+
+    vfs_node_t *node = f->node;
+
+    if (node->ops && node->ops->mmap_backing) {
+        int rc = node->ops->mmap_backing(node, off, len, backing_out, obj_off_out);
+        if (rc == 0 && *backing_out > 0) return 0;
+        *backing_out = 0;
+    }
+
+    int h = memfd_node_handle(node);
+    if (h > 0) {
+        *backing_out = h;
+        *obj_off_out = off;
+        return 0;
+    }
+    return -1;
 }
 
 // Directory operations

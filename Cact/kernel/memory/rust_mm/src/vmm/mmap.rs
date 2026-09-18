@@ -230,8 +230,12 @@ pub extern "C" fn do_mmap(
     let page_flags = prot_to_page_flags(prot, true);
     let pages = length / PAGE_SIZE;
 
-    // memfd backing handle for the mapped fd (0 = not a memfd mapping).
+    // Shared backing object for the mapped fd (0 = no shared backing) and the
+    // byte offset of this mapping inside it.  The C helper resolves both: a
+    // memfd answers with its own handle at the file offset, a DRM card node
+    // answers with the GEM buffer's handle at a driver-chosen object offset.
     let mut shobj: i32 = 0;
+    let mut obj_off: u32 = 0;
 
     if flags & MAP_ANON != 0 {
         if vmm_map_zero(pd, va, length, page_flags) != 0 {
@@ -242,22 +246,31 @@ pub extern "C" fn do_mmap(
         if fd < 0 {
             return MAP_FAILED as *mut u8;
         }
-        // SAFETY: memfd_fd_handle is a C helper that only inspects the fd table.
+        // SAFETY: vfs_mmap_resolve only inspects the fd table and the node's
+        // ops table; it never dereferences user memory.
         if flags & MAP_SHARED != 0 {
-            shobj = unsafe { memfd_fd_handle(fd) };
+            let mut backing: i32 = 0;
+            let mut backing_off: u32 = 0;
+            let rc = unsafe {
+                vfs_mmap_resolve(fd, offset, length, &mut backing, &mut backing_off)
+            };
+            if rc == 0 && backing > 0 {
+                shobj = backing;
+                obj_off = backing_off;
+            }
         }
 
         if shobj > 0 && flags & MAP_SHARED != 0 {
-            // Shared memfd mapping: map the object's own frames so that fd I/O,
+            // Shared backing: map the object's own frames so that fd I/O,
             // truncate, fork, and other MAP_SHARED mappings see one storage.
-            if offset % PAGE_SIZE != 0 {
+            if offset % PAGE_SIZE != 0 || obj_off % PAGE_SIZE != 0 {
                 return MAP_FAILED as *mut u8;
             }
             if memfd_map_inc(shobj) != 0 {
                 return MAP_FAILED as *mut u8;
             }
-            let first_page = offset / PAGE_SIZE;
-            if memfd_grow_to(shobj, offset + length) != 0 {
+            let first_page = obj_off / PAGE_SIZE;
+            if memfd_grow_to(shobj, obj_off + length) != 0 {
                 memfd_map_dec(shobj);
                 return MAP_FAILED as *mut u8;
             }
@@ -284,8 +297,8 @@ pub extern "C" fn do_mmap(
                 return MAP_FAILED as *mut u8;
             }
         } else if shobj > 0 {
-            // MAP_PRIVATE over a memfd: take a private snapshot copy.
-            if offset % PAGE_SIZE != 0 {
+            // MAP_PRIVATE over a backed object: take a private snapshot copy.
+            if offset % PAGE_SIZE != 0 || obj_off % PAGE_SIZE != 0 {
                 return MAP_FAILED as *mut u8;
             }
             for i in 0..pages {
@@ -297,7 +310,7 @@ pub extern "C" fn do_mmap(
                     return MAP_FAILED as *mut u8;
                 }
                 zero_page(phys);
-                let src = memfd_get_page(shobj, offset / PAGE_SIZE + i);
+                let src = memfd_get_page(shobj, obj_off / PAGE_SIZE + i);
                 if !src.is_null() {
                     // SAFETY: both page pointers are valid 4 KiB frames.
                     unsafe { core::ptr::copy_nonoverlapping(src, phys, PAGE_SIZE as usize); }

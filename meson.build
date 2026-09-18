@@ -142,6 +142,8 @@ cact_includes = include_directories(
   'Cact/net/socket',
   'Cact/drivers/video/fb',
   'Cact/drivers/video/font',
+  'Cact/drivers/gpu/drm',
+  'Cact/drivers/gpu/drm/uapi',
   'Cact/drivers/acpi',
   'Cact/drivers/acpi/include',
   'Cact/drivers/acpi/acpica/source/include',
@@ -255,6 +257,7 @@ subdir('Cact/drivers/usb/hub')
 subdir('Cact/drivers/usb/xhci')
 subdir('Cact/drivers/video/fb')
 subdir('Cact/drivers/video/font')
+subdir('Cact/drivers/gpu')
 
 # ------------------------------------------------------------------------------
 # Rust
@@ -263,6 +266,7 @@ subdir('Cact/drivers/video/font')
 subdir('Cact/kernel/proc/sched')
 subdir('Cact/kernel/memory/rust_mm')
 subdir('Cact/net/rust_net')
+subdir('Cact/drivers/gpu/drm/rust_drm')
 subdir('Cact/crypto/hmac_ffi')
 
 # ------------------------------------------------------------------------------
@@ -299,7 +303,11 @@ isodir = build_root / 'isodir'
 if get_option('local_repo') == ''
   local_repo = src_root / '..' / 'LocalRepoCactOS'
 else
-  local_repo = get_option('local_repo')
+  # A relative value is relative to the source root, matching the default
+  # above: run_targets execute from the build directory, so a bare
+  # "../LocalRepoCactOS-x86_32" would otherwise resolve one level too deep.
+  _lr = get_option('local_repo')
+  local_repo = _lr.startswith('/') ? _lr : src_root / _lr
 endif
 cctkfs_img = local_repo / 'cctkfs.img'
 

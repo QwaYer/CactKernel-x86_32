@@ -111,6 +111,27 @@ static int _memfd_stat(vfs_node_t *node, uint32_t *buf) {
     return 0;
 }
 
+vfs_node_t *memfd_vnode_from_handle(int handle, const char *name, uint32_t size) {
+    if (handle < 0) return 0;
+    if (!name) name = "memfd";
+
+    vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
+    if (!node) {
+        pr_err("  %-11s : cannot allocate node for '%s'\n", "memfd", name);
+        return 0;
+    }
+    memset(node, 0, sizeof(vfs_node_t));
+
+    strlcpy(node->name, name, 128);
+    node->type     = VFS_FILE;
+    node->size     = size;
+    node->inode    = (uint32_t)handle;
+    node->refcount = 0;
+    node->ops      = &memfd_ops;
+    node->priv     = (void *)(intptr_t)handle;
+    return node;
+}
+
 vfs_node_t *memfd_create_vnode(const char *name, int flags) {
     if (!name) name = "memfd";
 
@@ -123,21 +144,5 @@ vfs_node_t *memfd_create_vnode(const char *name, int flags) {
         pr_err("  %-11s : create '%s' failed (%d)\n", "memfd", name, h);
         return 0;
     }
-
-    vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
-    if (!node) {
-        memfd_close(h);
-        pr_err("  %-11s : cannot allocate node for '%s'\n", "memfd", name);
-        return 0;
-    }
-    memset(node, 0, sizeof(vfs_node_t));
-
-    strlcpy(node->name, name, 128);
-    node->type     = VFS_FILE;
-    node->size     = 0;
-    node->inode    = (uint32_t)h;
-    node->refcount = 0;
-    node->ops      = &memfd_ops;
-    node->priv     = (void *)(intptr_t)h;
-    return node;
+    return memfd_vnode_from_handle(h, name, 0);
 }
