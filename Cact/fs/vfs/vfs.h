@@ -42,7 +42,27 @@ typedef struct file {
     uint32_t         flags;     // open flags (O_RDWR, O_NONBLOCK, etc.)
     uint32_t         cloexec;
     uint32_t         refcount;
+    void            *priv;      // per-open state owned by node->fops (see below)
 } file_t;
+
+// Per-open (fd) node operations — the file-description counterpart of vfs_ops.
+//
+// Most nodes are stateless: read/write/ioctl/poll only need the node, so they
+// live in vfs_ops_t.  Some nodes are not: a DRM card fd, for instance, carries
+// a client (GEM handle table, authentication, event queue) that belongs to one
+// open() and is shared by dup()d descriptors but not by a second open().
+// Such a node provides this table instead, and the file-aware wrappers below
+// pass file_t.priv through.  Lifetime:
+//   open()    — called by file_alloc() once per open(), creates priv
+//   release() — called by file_free() when the last reference goes away
+typedef struct vfs_file_ops {
+    int  (*read)   (struct vfs_node *node, void *priv, uint32_t off, uint32_t size, char *buf);
+    int  (*write)  (struct vfs_node *node, void *priv, uint32_t off, uint32_t size, char *buf);
+    int  (*ioctl)  (struct vfs_node *node, void *priv, uint32_t cmd, void *arg);
+    int  (*poll)   (struct vfs_node *node, void *priv, uint32_t events);
+    void (*open)   (struct vfs_node *node, struct file *f);
+    void (*release)(struct vfs_node *node, struct file *f);
+} vfs_file_ops_t;
 
 // Per-filesystem operations table — each method may be NULL if unsupported
 typedef struct vfs_ops {
@@ -68,6 +88,17 @@ typedef struct vfs_ops {
 
     int (*ioctl)   (struct vfs_node *node, uint32_t cmd, void *arg);
 
+    // Shared-mapping backing.  do_mmap() asks the node where the bytes for
+    // [off, off+len) really live: a node that answers installs the backing
+    // object's own physical frames into the mapping, so userspace I/O, kernel
+    // access and every other mapping of the same object see one storage.
+    //   returns 0 and *backing_out > 0 : use object *backing_out, starting at
+    //                                    byte *obj_off_out (page aligned)
+    //   returns < 0 (or leaves *backing_out == 0) : no shared backing, the
+    //                                    region falls back to a private copy
+    int (*mmap_backing)(struct vfs_node *node, uint32_t off, uint32_t len,
+                        int *backing_out, uint32_t *obj_off_out);
+
     // New VFS operations — pull logic out of syscall layer
     int (*truncate)(struct vfs_node *node, uint32_t length);
     int (*chmod)   (struct vfs_node *node, uint32_t mode);
@@ -89,6 +120,7 @@ typedef struct vfs_node {
     uint32_t      uid;        // owner user id
     uint32_t      gid;        // owner group id
     vfs_ops_t    *ops;        // per-type operations
+    vfs_file_ops_t *fops;     // optional per-open operations (see above)
     void         *priv;       // filesystem-private data
 } vfs_node_t;
 
@@ -141,6 +173,20 @@ int           write_vfs    (vfs_node_t *node, uint32_t off, uint32_t size, char 
 void          open_vfs     (vfs_node_t *node);
 void          close_vfs    (vfs_node_t *node);
 int           ioctl_vfs    (vfs_node_t *node, uint32_t cmd, void *arg);
+
+// File-aware wrappers: pass file_t.priv to node->fops when the node has them,
+// and fall back to the node-level ops otherwise.  The syscall layer uses these
+// so per-open node state (DRM clients) reaches the right handler.
+int           read_file_vfs (file_t *f, uint32_t off, uint32_t size, char *buf);
+int           write_file_vfs(file_t *f, uint32_t off, uint32_t size, char *buf);
+int           ioctl_file_vfs(file_t *f, uint32_t cmd, void *arg);
+int           poll_file_vfs (file_t *f, uint32_t events);
+
+// Resolve an fd + mapping offset to a shared backing object (memfd-style
+// handle) so do_mmap() can install the object's real frames.  Implemented in
+// vfs_ops.c; consumed by rust_mm::vmm::mmap::do_mmap.
+int           vfs_mmap_resolve(int fd, uint32_t off, uint32_t len,
+                               int *backing_out, uint32_t *obj_off_out);
 
 // Directory operations
 vfs_dirent_t *readdir_vfs  (vfs_node_t *dir, uint32_t index);

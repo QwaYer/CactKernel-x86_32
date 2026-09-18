@@ -390,6 +390,18 @@ unsafe extern "C" {
     /// C memfd glue: returns the memfd object handle for an open fd, or -1.
     pub fn memfd_fd_handle(fd: i32) -> i32;
 
+    /// C VFS glue (vfs_ops.c): resolve an fd + mmap offset to a shared backing
+    /// object.  Returns 0 and writes the object handle + in-object byte offset
+    /// when the fd is backed (memfd, DRM GEM, …); < 0 when it is not, in which
+    /// case do_mmap() falls back to a private copy through read().
+    pub fn vfs_mmap_resolve(
+        fd: i32,
+        off: u32,
+        len: u32,
+        backing_out: *mut i32,
+        obj_off_out: *mut u32,
+    ) -> i32;
+
     pub static current_task: SyncMut<*mut TaskStruct>;
     pub static task_list_head: SyncMut<*mut TaskStruct>;
     pub static scheduler_lock: SyncMut<IrqSpinlock>;

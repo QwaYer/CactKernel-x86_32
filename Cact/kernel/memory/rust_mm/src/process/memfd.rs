@@ -256,7 +256,12 @@ pub(crate) fn memfd_grow_to(handle: i32, end: u32) -> i32 {
 }
 
 /// Fetch the frame pointer for page index `idx` (caller must have grown).
-pub(crate) fn memfd_get_page(handle: i32, idx: u32) -> *mut u8 {
+/// Exported so kernel subsystems can touch a shared object's storage directly
+/// (DRM GEM buffers, framebuffer blits) instead of copying through
+/// memfd_read/memfd_write.  Frames are identity-mapped, so the returned
+/// pointer is usable as a plain kernel pointer.
+#[unsafe(no_mangle)]
+pub extern "C" fn memfd_get_page(handle: i32, idx: u32) -> *mut u8 {
     memfd_ensure_init();
     lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
     let page = if handle_valid(handle) {

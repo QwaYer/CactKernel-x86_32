@@ -11,12 +11,21 @@ typedef struct devfs_driver {
     int  (*ctl)   (void *drv_priv, const char *cmd, uint32_t len);
     int  (*status)(void *drv_priv, char *buf, uint32_t size);
     int  (*ioctl) (void *drv_priv, uint32_t cmd, void *arg);
+
+    /* DEVFS_F_DIR entries only: resolve and enumerate the children of this
+     * device's directory (e.g. /dev/dri -> card0, renderD128).  The returned
+     * nodes belong to the driver, which supplies their ops table — that is how
+     * a subsystem gets its own ioctl/mmap behaviour without devfs knowing
+     * anything about it. */
+    vfs_node_t   *(*walk)   (void *drv_priv, const char *name);
+    vfs_dirent_t *(*readdir)(void *drv_priv, uint32_t index);
 } devfs_driver_t;
 
 // entry flags
 #define DEVFS_F_SIMPLE   0x01   // expose only the data node (no ctl/status subdir)
 #define DEVFS_F_BLOCK    0x02   // block device
 #define DEVFS_F_CHAR     0x04   // character device
+#define DEVFS_F_DIR      0x08   // directory whose children come from drv->walk/readdir
 
 typedef struct devfs_entry devfs_entry_t;
 

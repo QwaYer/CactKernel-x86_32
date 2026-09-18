@@ -19,12 +19,19 @@ file_t *file_alloc(vfs_node_t *node) {
     f->flags    = 0;
     f->cloexec  = 0;
     f->refcount = 1;
+    f->priv     = 0;
     open_vfs(node);
+    // Per-open node state (DRM client, …): one instance per open(), shared by
+    // dup()ed descriptors because they share this file_t.
+    if (node->fops && node->fops->open)
+        node->fops->open(node, f);
     return f;
 }
 
 void file_free(file_t *f) {
     if (!f) return;
+    if (f->node && f->node->fops && f->node->fops->release)
+        f->node->fops->release(f->node, f);
     close_vfs(f->node);
     kfree(f);
 }

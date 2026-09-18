@@ -107,7 +107,7 @@ static file_t *_resolve_fd(int fd) {
  * EPOLLIN/EPOLLOUT, which share bit values with the kernel's VFS_POLL*. */
 static uint32_t _ready_of(file_t *f, uint32_t interest) {
     if (!f || !f->node) return EPOLLERR;
-    int r = poll_vfs(f->node, interest & (EPOLLIN | EPOLLOUT));
+    int r = poll_file_vfs(f, interest & (EPOLLIN | EPOLLOUT));
     uint32_t rev = (r < 0) ? 0 : (uint32_t)r;
     uint32_t out = 0;
     if (rev & EPOLLIN)  out |= EPOLLIN;

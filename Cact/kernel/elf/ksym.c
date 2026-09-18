@@ -9,6 +9,8 @@
 #include "blkdev.h"
 #include "pagecache.h"
 #include "msi.h"
+#include "drm_drv.h"
+#include "validate.h"
 
 typedef struct {
     const char* name;
@@ -32,6 +34,14 @@ static const ksym_entry_t ksym_table[] = {
     { "free_page",      (uint32_t)free_page },
     { "kfree",          (uint32_t)kfree },
     { "kmalloc",        (uint32_t)kmalloc },
+
+    /* User-memory access.  A driver module decodes its own ioctl payloads
+     * (DRM_COMMAND_BASE and above are passed through to it untouched), so it
+     * needs the same validate/copy primitives the core uses.  Modules are
+     * HMAC-verified at load time, i.e. trusted kernel code. */
+    { "validate_user_ptr", (uint32_t)validate_user_ptr },
+    { "copy_from_user",     (uint32_t)copy_from_user },
+    { "copy_to_user",       (uint32_t)copy_to_user },
     { "snprintf",       (uint32_t)snprintf },
     { "memcpy",         (uint32_t)memcpy },
     { "memset",         (uint32_t)memset },
@@ -101,6 +111,43 @@ static const ksym_entry_t ksym_table[] = {
     { "skb_put",        (uint32_t)skb_put },
     { "vmm_get_phys",   (uint32_t)vmm_get_phys },
     { "vmm_map",        (uint32_t)vmm_map },
+
+    /* DRM/KMS core — the generic API a GPU module (e.g. virtio-gpu) drives.
+     * Everything behind these entry points is hardware-agnostic: the module
+     * builds KMS objects, GEM buffers and framebuffers, and implements the
+     * drm_driver_ops_t callbacks; ioctl decoding stays in the kernel. */
+    { "drm_dev_alloc",               (uint32_t)drm_dev_alloc },
+    { "drm_dev_free",                (uint32_t)drm_dev_free },
+    { "drm_dev_priv",                (uint32_t)drm_dev_priv },
+    { "drm_dev_ops",                 (uint32_t)drm_dev_ops },
+    { "drm_dev_register",            (uint32_t)drm_dev_register },
+    { "drm_dev_unregister",          (uint32_t)drm_dev_unregister },
+    { "drm_dev_create",              (uint32_t)drm_dev_create },
+    { "drm_mode_crtc_init",          (uint32_t)drm_mode_crtc_init },
+    { "drm_mode_encoder_init",       (uint32_t)drm_mode_encoder_init },
+    { "drm_mode_connector_init",     (uint32_t)drm_mode_connector_init },
+    { "drm_mode_plane_init",         (uint32_t)drm_mode_plane_init },
+    { "drm_crtc_find",               (uint32_t)drm_crtc_find },
+    { "drm_connector_find",          (uint32_t)drm_connector_find },
+    { "drm_encoder_find",            (uint32_t)drm_encoder_find },
+    { "drm_plane_find",              (uint32_t)drm_plane_find },
+    { "drm_connector_add_mode",      (uint32_t)drm_connector_add_mode },
+    { "drm_connector_set_edid",      (uint32_t)drm_connector_set_edid },
+    { "drm_connector_attach_encoder", (uint32_t)drm_connector_attach_encoder },
+    { "drm_encoder_attach_crtc",     (uint32_t)drm_encoder_attach_crtc },
+    { "drm_crtc_handle_vblank",      (uint32_t)drm_crtc_handle_vblank },
+    { "drm_gem_create",              (uint32_t)drm_gem_create },
+    { "drm_gem_vaddr",               (uint32_t)drm_gem_vaddr },
+    { "drm_gem_size",                (uint32_t)drm_gem_size },
+    { "drm_gem_ref",                 (uint32_t)drm_gem_ref },
+    { "drm_gem_unref",               (uint32_t)drm_gem_unref },
+    { "drm_gem_memfd",               (uint32_t)drm_gem_memfd },
+    { "drm_gem_map_offset",          (uint32_t)drm_gem_map_offset },
+    { "drm_gem_handle_create",       (uint32_t)drm_gem_handle_create },
+    { "drm_gem_handle_lookup",       (uint32_t)drm_gem_handle_lookup },
+    { "drm_gem_handle_close",        (uint32_t)drm_gem_handle_close },
+    { "drm_gem_prime_handle_to_fd",  (uint32_t)drm_gem_prime_handle_to_fd },
+    { "drm_gem_prime_fd_to_handle",  (uint32_t)drm_gem_prime_fd_to_handle },
 };
 
 uint32_t ksym_resolve(const char* name) {

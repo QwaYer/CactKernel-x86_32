@@ -118,7 +118,7 @@ int sys_read(int fd, char *buf, unsigned int size) {
     file_t *f = _get_file(fd);
     if (!f || !f->node) return -1;
 
-    int ret = read_vfs(f->node, f->offset, size, buf);
+    int ret = read_file_vfs(f, f->offset, size, buf);
     if (ret > 0) f->offset += (uint32_t)ret;
     return ret;
 }
@@ -130,7 +130,7 @@ int sys_write(int fd, char *buf, unsigned int size) {
     file_t *f = _get_file(fd);
     if (!f || !f->node) return -1;
 
-    int ret = write_vfs(f->node, f->offset, size, buf);
+    int ret = write_file_vfs(f, f->offset, size, buf);
     if (ret > 0) f->offset += (uint32_t)ret;
     return ret;
 }
@@ -626,7 +626,7 @@ int sys_ioctl(struct syscall_frame *regs) {
     if (!f || !f->node) return -1;
 
     if (arg && !validate_user_ptr(arg, 1)) return -1;
-    return ioctl_vfs(f->node, cmd, arg);
+    return ioctl_file_vfs(f, cmd, arg);
 }
 
 int sys_fcntl(int fd, int cmd, int arg) {

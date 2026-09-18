@@ -126,6 +126,27 @@ static vfs_ops_t dev_dir_ops = {
     .listdir = _dev_dir_listdir,
 };
 
+// Directory-entry ops (DEVFS_F_DIR): the registered driver owns the children,
+// so walk/readdir just forward to it.  This is how e.g. /dev/dri exposes
+// card0 / renderD128 nodes whose ioctl and mmap behaviour is entirely the
+// driver's own.
+static vfs_node_t *_subdir_walk(vfs_node_t *dir, const char *name) {
+    devfs_entry_t *e = (devfs_entry_t *)dir->priv;
+    if (!e || !e->drv || !e->drv->walk) return 0;
+    return e->drv->walk(e->drv_priv, name);
+}
+
+static vfs_dirent_t *_subdir_readdir(vfs_node_t *dir, uint32_t index) {
+    devfs_entry_t *e = (devfs_entry_t *)dir->priv;
+    if (!e || !e->drv || !e->drv->readdir) return 0;
+    return e->drv->readdir(e->drv_priv, index);
+}
+
+static vfs_ops_t dev_subdir_ops = {
+    .walk    = _subdir_walk,
+    .readdir = _subdir_readdir,
+};
+
 // devfs root directory ops
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
@@ -185,6 +206,12 @@ static void _fill_entry(devfs_entry_t *e) {
     memset(&e->dir_node, 0, sizeof(vfs_node_t));
     strlcpy(e->dir_node.name, e->name, 128);
     e->dir_node.priv = e;
+
+    if (e->flags & DEVFS_F_DIR) {
+        e->dir_node.type = VFS_DIRECTORY;
+        e->dir_node.ops  = &dev_subdir_ops;
+        return;
+    }
 
     if (e->flags & DEVFS_F_SIMPLE) {
         e->dir_node.type = (e->flags & DEVFS_F_BLOCK)
