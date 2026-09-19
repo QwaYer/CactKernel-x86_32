@@ -281,7 +281,10 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         /* signum — индекс сигнала ядра (бит маски). 0 = SIGKILL (принудительно). */
         if (a.signum == 0) { task_kill(a.pid); return 0; }
         if (a.signum >= NSIG) return -EINVAL;
-        task_signal(a.pid, a.signum);
+        /* task_signal() takes the pending_signals *mask*, not the bit index:
+         * passing the index raw set SIGKILL|SIGTERM for kill(SIGCONT), so
+         * every userspace kill() killed the target instead of signalling it. */
+        task_signal(a.pid, 1u << a.signum);
         return 0;
     }
 

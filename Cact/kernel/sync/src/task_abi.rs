@@ -14,6 +14,9 @@ pub enum TaskState {
     Sleeping = 2,
     Zombie   = 3,
     Waiting  = 4,
+    /// Held by a SIGSTOP (Ctrl-Z in the console); only SIGCONT releases it.
+    /// Distinct from `Sleeping` so `waitpid(WUNTRACED)` can report the stop.
+    Stopped  = 5,
 }
 
 #[repr(C)]

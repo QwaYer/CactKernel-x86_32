@@ -108,11 +108,12 @@ int sys_exit(struct syscall_frame* regs) {
 int sys_waitpid(struct syscall_frame* regs) {
     int  target_pid = (int)regs->ebx;
     int* status     = (int*)regs->ecx;
+    int  options    = (int)regs->edx;
 
     if (!current_task) return -1;
     if (status && !validate_user_ptr(status, sizeof(int))) return -1;
 
-    return sched_waitpid(target_pid, status);
+    return sched_waitpid(target_pid, status, options);
 }
 
 // sleep() — sleep for a given number of milliseconds

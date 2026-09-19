@@ -165,6 +165,7 @@ pub const TASK_RUNNING: u32 = 1;
 pub const TASK_SLEEPING: u32 = 2;
 pub const TASK_ZOMBIE: u32 = 3;
 pub const TASK_WAITING: u32 = 4;
+pub const TASK_STOPPED: u32 = 5;
 
 pub const PROC_INITIAL_PAGES: u32 = 256;
 pub const PROC_GROW_STEP: u32 = 256;
