@@ -12,7 +12,10 @@
  * together with the existing PCD (bit 4) and PWT (bit 3) to select one of
  * eight memory types programmed in the IA32_PAT MSR (0x277).
  *
- * Default IA32_PAT reset mapping (used as-is — no MSR reprogramming):
+ * Entry 4 — the one the framebuffer PTEs select — is programmed to WC.
+ * The architectural reset value of that entry is WB, firmware is not required
+ * to have changed it, and an S3 resume resets the MSR, so pat_init() sets it
+ * explicitly on every (re)initialisation:
  *
  *   Index  PAT:PCD:PWT   Type    Encoding
  *   ------ ------------  ------- ---------
@@ -25,11 +28,15 @@
  *   6      1:1:0         UC-     0x07
  *   7      1:1:1         UC      0x00
  *
- * Usage:
- *   1. Call pat_init() early during boot to detect support.
- *   2. Call pat_enable_wc_for_framebuffer() to set PAT|~PCD|~PWT on FB PTEs.
+ * A variable-range MTRR still overrides PAT for the uncacheable case, so the
+ * MTRR block firmware programmed is snapshotted and restored across S3 as
+ * well (see mtrr.h): otherwise a device range the reset left uncacheable
+ * could not be made write-combining by any PTE bit.
  *
- * No MTRR ranges are programmed; no global cache flush is needed.
+ * Usage:
+ *   1. Call pat_init() early during boot, and again on resume, to program
+ *      the MSR.
+ *   2. Call pat_enable_wc_for_framebuffer() to set PAT|~PCD|~PWT on FB PTEs.
  */
 
 /* CPUID leaf 1 EDX bit 16 = PAT support. */
@@ -39,8 +46,9 @@
 #define PAGE_PAT           0x80
 
 /*
- * Detect PAT support via CPUID. Logs the result.
- * Safe to call before any framebuffer activity; only reads CPUID.
+ * Detect PAT support via CPUID, program PAT entry 4 to Write-Combining, and
+ * log the capability once.  Safe to call before any framebuffer activity, and
+ * again after a resume (which silently restores the MSR).
  */
 void pat_init(void);
 
@@ -50,9 +58,10 @@ int  pat_available(void);
 /*
  * Mark the framebuffer range as Write-Combining by setting the PAT bit
  * and clearing PCD|PWT on every PTE in [fb_phys, fb_phys + pitch*height).
+ * That selects PAT entry 4, which pat_init() programs to WC.
  *
- * With the default PAT MSR mapping, (PAT=1, PCD=0, PWT=0) selects
- * PAT entry 4 = WC (Write-Combining).
+ * Also used after a resume to re-apply the bits and flush the stale
+ * translations, so the framebuffer is not left write-back.
  *
  * Returns 0 on success, negative on error:
  *   -1  PAT not supported

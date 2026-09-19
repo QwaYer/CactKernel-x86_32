@@ -22,6 +22,19 @@ static inline void cpu_invlpg(uint32_t va) {
     __asm__ __volatile__("invlpg (%0)" :: "r"(va) : "memory");
 }
 
+#define MSR_IA32_PAT 0x277u
+
+static inline uint64_t rdmsr64(uint32_t msr) {
+    uint32_t lo, hi;
+    __asm__ __volatile__("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static inline void wrmsr64(uint32_t msr, uint64_t val) {
+    uint32_t lo = (uint32_t)val, hi = (uint32_t)(val >> 32);
+    __asm__ __volatile__("wrmsr" :: "c"(msr), "a"(lo), "d"(hi));
+}
+
 void pat_init(void) {
     uint32_t a, b, c, d;
     cpuid_raw(1, &a, &b, &c, &d);
@@ -30,6 +43,22 @@ void pat_init(void) {
                 "pat");
         return;
     }
+
+    /* Program PAT entry 4 = Write-Combining.  pat_enable_wc_for_framebuffer()
+     * selects entry 4 (PTE.PAT=1, PCD=0, PWT=0), but the architectural reset
+     * value for that entry is Write-Back and firmware is not required to have
+     * changed it — an S3 resume resets the MSR again.  Without this the
+     * framebuffer would be mapped write-back, and the 3 MB shadow->FB copy in
+     * fb_flush() degrades from cache-line writebacks to per-line read-for-
+     * ownership traffic against the device. */
+    uint64_t pat = rdmsr64(MSR_IA32_PAT);
+    uint64_t want = (pat & ~(0x7ull << 32)) | (0x1ull << 32);   /* WC */
+    if (want != pat)
+        wrmsr64(MSR_IA32_PAT, want);
+
+    /* Report once: a resume re-runs this to restore the MSR. */
+    if (g_pat_present)
+        return;
     g_pat_present = 1;
     pr_info("  %-11s : per-PTE memory types (WC) available\n", "pat");
 }

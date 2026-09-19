@@ -322,6 +322,7 @@ typedef struct cact_module_arg { char *path; uint32_t vendor_id; uint32_t device
 #define CACT_REBOOT_RESTART  0x01234567u
 #define CACT_REBOOT_HALT     0xCDEF0123u
 #define CACT_REBOOT_POWEROFF 0x4321FEDCu
+#define CACT_REBOOT_SUSPEND  0x53555350u  // suspend-to-RAM (S3, S1 fallback)
 
 // ===========================================================================
 // /dev/pipe control. RANGE 0x3600.

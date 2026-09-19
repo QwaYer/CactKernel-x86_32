@@ -31,6 +31,11 @@ typedef struct {
     uint8_t  is_io;      // 1 = I/O port, 0 = MMIO
 } pci_bar_t;
 
+// Prefix of the configuration space kept across an S3 suspend: the standard
+// header plus every capability (MSI/MSI-X/PM live below 0x100).
+#define PCI_CFG_SNAPSHOT_BYTES   0x100
+#define PCI_CFG_SNAPSHOT_DWORDS  (PCI_CFG_SNAPSHOT_BYTES / 4)
+
 // Enumerated PCI device — populated during bus scan
 typedef struct pci_device {
     uint8_t   bus, dev, fn;
@@ -50,6 +55,13 @@ typedef struct pci_device {
     uint8_t   drv_probe_state; // 0=pending,1=queued,2=ok,3=failed/no-driver
 
     int8_t    pcie_type;  // -1 = legacy PCI, 0..0xA = PCIe device type
+
+    // Configuration-space snapshot taken on suspend and (optionally) a
+    // driver-resume callback, so an S3 resume can put the device back the way
+    // the driver left it (the platform reset clears BARs and the command
+    // register, and disables the chipset's ECAM window).
+    uint8_t   cfg_saved;
+    uint32_t  cfg_snapshot[PCI_CFG_SNAPSHOT_DWORDS];
 
     struct pci_device *next;   // global device list
 } pci_device_t;

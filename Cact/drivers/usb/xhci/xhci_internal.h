@@ -78,7 +78,8 @@ static inline void xhci_portsc_clear_change(xhci_priv_t *p, uint8_t port, uint32
 void xhci_ring_init(xhci_ring_t *ring, xhci_trb_t *mem, uint32_t size);
 void xhci_ring_enqueue(xhci_ring_t *ring, xhci_trb_t *trb);
 int  xhci_send_cmd(xhci_priv_t *priv, xhci_trb_t *trb);
-int  xhci_wait_cmd(xhci_priv_t *priv, uint32_t timeout_ms);
+/* Wait for the outstanding data transfer (not for a command completion). */
+int  xhci_wait_transfer(xhci_priv_t *priv, uint32_t timeout_ms);
 void xhci_handle_irq(usb_hc_t *hc);
 
 /* Device/context management (xhci_dev.c). */
@@ -105,5 +106,8 @@ int  xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
 
 /* Host bring-up (xhci_hw.c). */
 int  xhci_init_one(uint32_t phys_base, uint32_t quirks);
+
+/* Post-resume bring-up of a controller that is already registered. */
+int  xhci_resume(usb_hc_t *hc);
 
 #endif

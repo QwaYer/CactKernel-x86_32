@@ -21,6 +21,13 @@ uint32_t lapic_timer_calibrate(void);
  * LAPIC_TIMER_VECTOR. */
 void lapic_timer_start_periodic(uint32_t ticks_per_ms);
 
+/* Ticks per millisecond of the last successful calibration, i.e. the value
+ * lapic_timer_start_periodic() was last armed with.  0 before the first
+ * calibration — a caller that gets 0 must calibrate, anyone else can re-arm
+ * the timer directly (the LAPIC tick rate does not change across a resume,
+ * while the PM-timer reference used to calibrate it may). */
+uint32_t lapic_timer_ticks_per_ms(void);
+
 /* Stop delivering LAPIC timer interrupts (LVT masked, counter left running). */
 void lapic_timer_mask(void);
 

@@ -19,6 +19,7 @@
 #define LAPIC_LVT_PERIODIC  (1u << 17)
 
 static int lapic_timer_armed = 0;
+static uint32_t lapic_ticks_per_ms = 0;
 
 /* Start a one-shot countdown from the maximum count, divide by 1.  The LVT is
  * left as-is: masking only gates interrupt delivery, the counter still runs,
@@ -112,8 +113,14 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
     apic_lapic_write(LAPIC_TIMER_INITCNT, count);
     apic_lapic_write(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC);
 
+    lapic_ticks_per_ms = ticks_per_ms;
     lapic_timer_armed = 1;
     pr_info("LAPIC timer: periodic 100 Hz armed");
+}
+
+uint32_t lapic_timer_ticks_per_ms(void)
+{
+    return lapic_ticks_per_ms;
 }
 
 void lapic_timer_mask(void)

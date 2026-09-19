@@ -74,4 +74,11 @@ void fb_enable_shadow(void);
  */
 void fb_flush(void);
 
+/*
+ * Mark the whole shadow dirty and push it out.  Used after a resume, when the
+ * display device's own memory was cleared by the platform reset and the screen
+ * has to be rebuilt from the shadow.
+ */
+void fb_repaint(void);
+
 #endif

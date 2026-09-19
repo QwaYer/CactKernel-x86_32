@@ -74,37 +74,53 @@ static void xhci_drain_events(xhci_priv_t *priv) {
     }
 }
 
-int xhci_wait_cmd(xhci_priv_t *priv, uint32_t timeout_ms) {
+/* Wait for one specific completion flag.
+ *
+ * Commands and transfers must not release each other's wait.  The interrupt
+ * endpoints stay armed for as long as the driver is up, so a transfer event
+ * can arrive while a command is in flight — and a command wait released early
+ * is a command the controller never confirmed.  When that happens to Configure
+ * Endpoint the endpoint is not in the controller yet while the doorbell that
+ * starts it has already been rung, and the endpoint is then never polled:
+ * exactly the shape of "the keyboard re-enumerates but no report ever
+ * arrives".  Both submission paths therefore clear the flag they are not
+ * waiting on before they start. */
+static int xhci_wait_flag(xhci_priv_t *priv, volatile uint8_t *flag,
+                          uint32_t timeout_ms)
+{
     uint32_t loops = timeout_ms * 100;
     while (loops--) {
-        if (priv->cmd_done || priv->transfer_done) {
-            priv->cmd_done = 0;
-            priv->transfer_done = 0;
+        if (*flag) {
+            *flag = 0;
             return priv->cmd_error ? -1 : 0;
         }
         irq_spinlock_acquire(&xhci_evt_lock);
         xhci_drain_events(priv);
         irq_spinlock_release(&xhci_evt_lock);
-        if (priv->cmd_done || priv->transfer_done) {
-            priv->cmd_done = 0;
-            priv->transfer_done = 0;
+        if (*flag) {
+            *flag = 0;
             return priv->cmd_error ? -1 : 0;
         }
         xhci_udelay(10);
     }
-    pr_warn("xHCI command timeout");
-    priv->cmd_done = 0;
-    priv->transfer_done = 0;
+    pr_warn("xHCI event timeout");
+    *flag = 0;
     return -1;
 }
 
+int xhci_wait_transfer(xhci_priv_t *priv, uint32_t timeout_ms) {
+    return xhci_wait_flag(priv, &priv->transfer_done, timeout_ms);
+}
+
 int xhci_send_cmd(xhci_priv_t *priv, xhci_trb_t *trb) {
-    priv->cmd_done   = 0;
     priv->cmd_error  = 0;
     priv->cmd_result = 0;
+    priv->cmd_done   = 0;
+    /* A command is only ever submitted with no transfer in flight. */
+    priv->transfer_done = 0;
     xhci_ring_enqueue(&priv->cmd_ring, trb);
     xhci_db_write32(priv, 0, 0);
-    return xhci_wait_cmd(priv, 500);
+    return xhci_wait_flag(priv, &priv->cmd_done, 500);
 }
 
 static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {

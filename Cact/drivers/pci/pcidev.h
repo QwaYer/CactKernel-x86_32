@@ -18,6 +18,19 @@ extern uint32_t      pcidev_driver_count;
  * Call once after ACPI + APIC are up, before USB or any PCI driver init. */
 void pcidev_init(void);
 
+/* PCI configuration state across an S3 suspend.
+ *
+ * The wake performs a platform reset that clears the chipset's PCI setup:
+ * the Q35 PCIEXBAR (which disables the ECAM window) and the BAR and command
+ * registers of every device, so no device decodes its memory window any more.
+ * Firmware does not re-run PCI setup on the resume path, so the OS restores
+ * it, the same way Linux's PCI resume does.  Save from the suspend path (after
+ * the drivers have configured their devices), restore after the wake — the
+ * restore goes through the legacy 0xCF8/0xCFC mechanism, because the ECAM
+ * window is itself part of what has to be restored. */
+void pcidev_save_state(void);
+void pcidev_restore_state(void);
+
 /* Probe all devices that were deferred during enumeration.
  * Call from the bootstrap thread once the scheduler is live. */
 void pcidev_probe_all(void);

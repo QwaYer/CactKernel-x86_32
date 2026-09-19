@@ -44,6 +44,13 @@ int  pci_msix_table_map(pci_device_t *dev,
 int  pci_msix_pba_map(pci_device_t *dev,
                       volatile uint32_t **pba_out);
 
+/* Re-program the device-side MSI-X tables after a resume.
+ *
+ * The MSI-X enable bit travels with the configuration snapshot, but the table
+ * itself lives in device MMIO and is cleared by the platform reset, so every
+ * enabled entry has to be written again with the LAPIC address and vector. */
+void msix_restore(void);
+
 int msix_used_vectors(void);
 
 extern uint32_t msix_stub_table[];

@@ -242,6 +242,44 @@ bool ktime_using_tsc(void)
     return tsc_available != 0;
 }
 
+/* Re-establish the timebase after an S3 resume.
+ *
+ * The platform reset takes the ACPI PM timer down with it: it stops counting,
+ * so a PM-timer wall clock would freeze and the LAPIC-timer calibration loop
+ * would never see its window advance.  Probe the timer over a TSC-timed
+ * millisecond — tsc_hz survives in RAM, and the TSC itself keeps counting
+ * across the sleep — and when it is dead promote the TSC to the wall clock.
+ * The suspended interval is then accounted for correctly, because the TSC
+ * never stopped. */
+void ktime_resume(void)
+{
+    if (tsc_hz == 0)
+        return;                       /* no better reference to fall back on */
+
+    if (pm_timer_available) {
+        uint32_t first = acpi_pm_timer_read();
+        uint64_t start = read_tsc();
+        while (read_tsc() - start < tsc_hz / 1000ull)
+            __asm__ __volatile__("pause");
+        uint32_t last = acpi_pm_timer_read();
+
+        if (acpi_pm_timer_delta(first, last) >= 100) {
+            /* Still counting (the reset may have restarted it from 0).  Move
+             * the anchor to the current value so the frozen interval is not
+             * replayed as one enormous delta. */
+            irq_spinlock_acquire(&pm_timer_lock);
+            pm_last_count = last;
+            irq_spinlock_release(&pm_timer_lock);
+            return;
+        }
+
+        pr_warn("  %-11s : ACPI PM timer stopped by the sleep — TSC is the wall clock\n",
+                "ktime");
+    }
+
+    tsc_available = 1;
+}
+
 uint64_t ktime_get_usec(void)
 {
     if (!tsc_available)

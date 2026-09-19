@@ -13,6 +13,8 @@
 #include "sync.h"
 #include "msi.h"
 
+static void xhci_scan_ports(xhci_priv_t *priv, usb_hc_t *hc);
+
 int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
     extern uint32_t page_directory[1024];
     uint32_t map_size = 0x10000;
@@ -172,6 +174,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
     hc->port_reset         = xhci_port_reset;
     hc->port_get_status    = xhci_port_get_status;
     hc->device_removed     = xhci_device_removed;
+    hc->resume             = xhci_resume;
     hc->num_ports          = priv->max_ports;
     hc->priv               = priv;
 
@@ -180,8 +183,21 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
 
     usb_hc_register(hc);
 
+    xhci_scan_ports(priv, hc);
+
+    return 0;
+}
+
+/* Walk every port of the controller and bring up whatever is attached.
+ * Shared by the initial bring-up and the post-resume re-enumeration. */
+static void xhci_scan_ports(xhci_priv_t *priv, usb_hc_t *hc)
+{
     for (uint8_t p = 0; p < priv->max_ports; p++) {
         uint32_t sc = xhci_portsc_read(priv, p);
+        if (sc & XHCI_PORTSC_CCS)
+            pr_info("  %-11s : port %u connected (PED=%u speed=%u)\n", "xhci",
+                    (unsigned)p, (unsigned)((sc >> 1) & 1),
+                    (unsigned)((sc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT));
         if (sc & XHCI_PORTSC_CCS) {
             if (!(sc & XHCI_PORTSC_PED)) {
                 xhci_portsc_set(priv, p, XHCI_PORTSC_PR);
@@ -264,6 +280,10 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
                                 }
 
                                 usb_register_device(dev);
+                                pr_info("  %-11s : port %u device %04x:%04x registered\n",
+                                        "xhci", (unsigned)p,
+                                        (unsigned)dev->dev_desc.idVendor,
+                                        (unsigned)dev->dev_desc.idProduct);
                             }
                         }
                     }
@@ -271,6 +291,103 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
             }
         }
     }
+}
+
+int xhci_resume(usb_hc_t *hc)
+{
+    xhci_priv_t *priv = hc ? (xhci_priv_t *)hc->priv : NULL;
+    if (!priv)
+        return -1;
+
+    /* Halt the controller.  The platform reset that woke us has already
+     * stopped it and cleared its registers, so only a controller that is
+     * somehow still running needs the extra HCRST. */
+    uint32_t usbcmd = xhci_op_read32(priv, XHCI_OP_USBCMD);
+    uint32_t usbsts = xhci_op_read32(priv, XHCI_OP_USBSTS);
+
+    xhci_op_write32(priv, XHCI_OP_USBCMD, usbcmd & ~XHCI_CMD_RS);
+    for (int i = 0; i < 100; i++) {
+        if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) break;
+        xhci_udelay(1000);
+    }
+
+    if (!(usbsts & XHCI_STS_HCH) || (usbcmd & XHCI_CMD_RS)) {
+        xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
+        for (int i = 0; i < 100; i++) {
+            if (!(xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)) break;
+            xhci_udelay(1000);
+        }
+    }
+    for (int i = 0; i < 100; i++) {
+        if (!(xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_CNR)) break;
+        xhci_udelay(1000);
+    }
+    xhci_op_write32(priv, XHCI_OP_USBSTS, xhci_op_read32(priv, XHCI_OP_USBSTS));
+
+    if (priv->quirks & XHCI_QUIRK_INTEL_HOST)
+        xhci_udelay(5000);
+
+    /* Point the controller back at the structures that survived in RAM, with
+     * fresh rings: the controller's own producer/consumer state restarted. */
+    xhci_ring_init(&priv->cmd_ring, priv->cmd_ring.ring, XHCI_CMD_RING_SIZE);
+    memset(priv->evt_ring, 0, XHCI_EVT_RING_SIZE * sizeof(xhci_trb_t));
+    memset(priv->dcbaa, 0, (size_t)(priv->max_slots + 1) * sizeof(uint64_t));
+    memset(priv->slot_used, 0, sizeof(priv->slot_used));
+    memset(priv->slot_port, 0, sizeof(priv->slot_port));
+
+    /* The endpoint rings belong to the devices that just went away; their
+     * controllers are gone, so releasing the rings here is all that is left
+     * to do (the table itself is reused by the new enumeration). */
+    for (unsigned s = 0; s <= XHCI_MAX_SLOTS; s++)
+        for (unsigned d = 0; d < 31; d++)
+            if (priv->ep_rings[s][d].ring)
+                kfree(priv->ep_rings[s][d].ring);
+    memset(priv->ep_rings,  0, sizeof(priv->ep_rings));
+    memset(priv->intr_slots, 0, sizeof(priv->intr_slots));
+    priv->intr_ep_count  = 0;
+    priv->evt_dequeue    = 0;
+    priv->evt_cycle      = 1;
+    priv->cmd_done       = 0;
+    priv->cmd_error      = 0;
+    priv->transfer_done  = 0;
+
+    xhci_op_write32(priv, XHCI_OP_DNCTRL, 0x2);
+    xhci_op_write32(priv, XHCI_OP_CONFIG, priv->max_slots);
+    xhci_op_write32(priv, XHCI_OP_DCBAAP, xhci_va_to_pa(priv->dcbaa));
+    xhci_op_write32(priv, XHCI_OP_DCBAAP + 4, 0);
+    xhci_op_write32(priv, XHCI_OP_CRCR, xhci_va_to_pa(priv->cmd_ring.ring) | 1);
+    xhci_op_write32(priv, XHCI_OP_CRCR + 4, 0);
+
+    priv->erst[0].seg_addr_lo = xhci_va_to_pa(priv->evt_ring);
+    priv->erst[0].seg_addr_hi = 0;
+    priv->erst[0].seg_size    = XHCI_EVT_RING_SIZE;
+    xhci_rt_write32(priv, 0x20 + XHCI_ERSTSZ, XHCI_ERST_SIZE);
+    xhci_rt_write32(priv, 0x20 + XHCI_ERDP, xhci_va_to_pa(priv->evt_ring) | (1u << 3));
+    xhci_rt_write32(priv, 0x20 + XHCI_ERDP + 4, 0);
+    xhci_rt_write32(priv, 0x20 + XHCI_ERSTBA, xhci_va_to_pa(priv->erst));
+    xhci_rt_write32(priv, 0x20 + XHCI_ERSTBA + 4, 0);
+    xhci_rt_write32(priv, 0x20 + XHCI_IMOD, 0x000003F8);
+    xhci_rt_write32(priv, 0x20 + XHCI_IMAN, 0x3);
+
+    uint32_t run_cmd = XHCI_CMD_RS | XHCI_CMD_INTE;
+    if (!(priv->quirks & XHCI_QUIRK_SPURIOUS_REBOOT))
+        run_cmd |= XHCI_CMD_HSEE;
+    xhci_op_write32(priv, XHCI_OP_USBCMD, run_cmd);
+
+    for (int i = 0; i < 100; i++) {
+        if (!(xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH)) break;
+        xhci_udelay(1000);
+    }
+    if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) {
+        pr_warn("  %-11s : host controller did not start after resume\n", "xhci");
+        return -1;
+    }
+
+    /* The devices hanging off the controller did not survive the reset. */
+    usb_drop_devices_on(hc);
+    xhci_scan_ports(priv, hc);
 
     return 0;
 }
+
+

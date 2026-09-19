@@ -362,3 +362,73 @@ pci_driver_t *pci_driver_find_reloc_for_device(const pci_device_t *dev)
     }
     return found;
 }
+
+/* ---------------------------------------------------------------------------
+ * PCI configuration state across an S3 suspend
+ * ------------------------------------------------------------------------- */
+
+/* Replay one device's saved configuration through the legacy configuration
+ * mechanism.  The decode windows are switched off first so a half-written BAR
+ * set can never be decoded, and the command register is written last. */
+static void pcidev_restore_one(pci_device_t *d)
+{
+    uint8_t bus = d->bus, dev = d->dev, fn = d->fn;
+
+    pci_legacy_write(bus, dev, fn, 0x04, 0);          /* decode off */
+
+    /* BARs, ascending: the upper half of a 64-bit BAR lives in the next dword
+     * and must be written after the lower half. */
+    for (uint16_t off = 0x10; off <= 0x24; off += 4)
+        pci_legacy_write(bus, dev, fn, off, d->cfg_snapshot[off / 4u]);
+
+    pci_legacy_write(bus, dev, fn, 0x0C, d->cfg_snapshot[0x0C / 4u]);
+    pci_legacy_write(bus, dev, fn, 0x30, d->cfg_snapshot[0x30 / 4u]);
+
+    /* Capability block: this is where MSI/MSI-X enable and the power state
+     * live, so it has to be back before the command register re-opens the
+     * device's windows. */
+    for (uint16_t off = 0x40; off < PCI_CFG_SNAPSHOT_BYTES; off += 4)
+        pci_legacy_write(bus, dev, fn, off, d->cfg_snapshot[off / 4u]);
+
+    pci_legacy_write(bus, dev, fn, 0x3C, d->cfg_snapshot[0x3C / 4u]);
+    pci_legacy_write(bus, dev, fn, 0x04, d->cfg_snapshot[0x04 / 4u] & 0xFFFFu);
+}
+
+void pcidev_save_state(void)
+{
+    uint32_t n = 0;
+
+    for (pci_device_t *d = pci_device_list; d; d = d->next) {
+        d->cfg_saved = 0;
+        for (uint32_t i = 0; i < PCI_CFG_SNAPSHOT_DWORDS; i++)
+            d->cfg_snapshot[i] = pcidev_cfg_read32(d, (uint16_t)(i * 4u));
+        d->cfg_saved = 1;
+        n++;
+    }
+    pr_info("  %-11s : configuration saved for %u device(s)\n",
+            "pci-pm", (unsigned)n);
+}
+
+void pcidev_restore_state(void)
+{
+    uint32_t n = 0;
+
+    /* The host bridge first: its PCIEXBAR is what brings the ECAM window back
+     * for every configuration access after this point. */
+    for (pci_device_t *d = pci_device_list; d; d = d->next) {
+        if (!d->cfg_saved || d->bus || d->dev || d->fn)
+            continue;
+        pcidev_restore_one(d);
+        n++;
+    }
+
+    for (pci_device_t *d = pci_device_list; d; d = d->next) {
+        if (!d->cfg_saved || (d->bus == 0 && d->dev == 0 && d->fn == 0))
+            continue;
+        pcidev_restore_one(d);
+        n++;
+    }
+
+    pr_info("  %-11s : configuration restored for %u device(s)\n",
+            "pci-pm", (unsigned)n);
+}

@@ -174,8 +174,19 @@ bool pcie_init(void)
         region_size = bus_count * 32 * 8 * 4096;
         uint32_t pages       = (region_size + 0xFFF) >> 12;
 
-        uint32_t seg_shift = pcie_ecam_count * 0x10000000;
+        uint32_t seg_shift = pcie_ecam_count * PCIE_ECAM_SEG_SHIFT;
         uint32_t vaddr     = PCIE_ECAM_VADDR + seg_shift;
+
+        /* A segment that would run past the top of the 32-bit VA space must be
+         * refused: the window address would wrap into the identity-mapped low
+         * memory and remap real kernel/RAM pages. */
+        if ((uint64_t)vaddr + (uint64_t)pages * 4096 > 0x100000000ull) {
+            pr_warn("  %-11s : ECAM window for segment %u exceeds 4 GB, skipping\n",
+                    "pcie", (unsigned)entry->PciSegment);
+            entry++;
+            offset += sizeof(ACPI_MCFG_ALLOCATION);
+            continue;
+        }
 
         for (uint32_t i = 0; i < pages; i++)
             vmm_map(get_current_pd(), vaddr + i * 4096, base + i * 4096,

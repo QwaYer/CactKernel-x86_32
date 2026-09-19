@@ -22,6 +22,7 @@
 #include "serial.h"
 #include "lapic_timer.h"
 #include "pat.h"
+#include "mtrr.h"
 #include "cact_acpi.h"
 #include "ktime.h"
 #include "tick.h"
@@ -30,6 +31,8 @@
 #include "smp.h"
 #include "msi.h"
 #include "initfs_modblob.h"
+#include "usb.h"
+
 
 // Kernel page directory (defined in paging.c)
 extern uint32_t page_directory[1024];
@@ -170,6 +173,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // strictly UC).  PAT lets us override individual FB PTEs to WC by
     // setting the PAT bit and clearing PCD|PWT — no MTRR ranges needed.
     pat_init();
+    mtrr_save();
     if (fb_get_width() != 0) {
         int fbwc = pat_enable_wc_for_framebuffer(
             (uint32_t)(uintptr_t)fb_get_buffer(),
@@ -219,6 +223,11 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         pr_info("  %-11s : LAPIC + IOAPIC operational\n", "apic");
     else
         pr_warn("  %-11s : init failed — interrupts will not work\n", "apic");
+
+    // ACPI power path: S5 soft-off, reset register and S1/S3 suspend.  Runs
+    // after the namespace is loaded (acpi_init) so \_Sx can be evaluated.
+    if (acpi_pm_init() == 0)
+        pr_info("  %-11s : power transitions ready\n", "power");
 
     // Master/Worker core map + C-state model (Step 1 of the energy governor).
     // Implementation is in Rust (sched/src/energy.rs); runs after apic_init so
@@ -337,6 +346,43 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     task_init();
     init_scheduler();
     pr_info("  %-11s : hardware setup complete — scheduler live\n", "boot");
+}
+
+/* ---------------------------------------------------------------------------
+ * Device state across an S3 suspend
+ * ------------------------------------------------------------------------- */
+
+/* Snapshot the device state that an S3 wake does not preserve.  Runs from the
+ * suspend path while the system is still fully alive, so drivers can still be
+ * talked to through their normal (ECAM) configuration access. */
+void kernel_suspend_hardware(void) {
+    pcidev_save_state();
+}
+
+/* Bring the devices back after an S3 wake.  Ready to be called once the
+ * resume path has restored the CPU, the interrupt controller and the memory
+ * type state (see acpi_resume_entry); runs in task context, so drivers may
+ * sleep and take locks. */
+void kernel_resume_hardware(void) {
+    /* Configuration space first: the wake reset the chipset's PCIEXBAR, which
+     * disabled the ECAM window every later configuration access goes through,
+     * and cleared every device's BARs. */
+    pcidev_restore_state();
+
+    /* Device-side state that lives in MMIO: the MSI-X tables were cleared
+     * with the rest of the controller registers. */
+    msix_restore();
+
+    /* Controller-level re-initialisation for the devices whose drivers keep
+     * runtime state: a reset host controller has to be brought up and
+     * re-enumerated before its devices exist again. */
+    usb_resume();
+
+    /* The display's memory was cleared too (and its BAR only just started
+     * decoding again), so rebuild the screen from the shadow. */
+    fb_repaint();
+
+    pr_info("  %-11s : devices back up\n", "resume");
 }
 
 // Kernel entry point (called from boot.S)

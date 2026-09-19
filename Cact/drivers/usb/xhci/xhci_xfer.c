@@ -65,7 +65,7 @@ int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
     priv->transfer_done = 0;
     xhci_db_write32(priv, slot, 1);
 
-    return xhci_wait_cmd(priv, 500);
+    return xhci_wait_transfer(priv, 500);
 }
 
 int xhci_interrupt_transfer(usb_hc_t *hc, usb_device_t *dev,
@@ -94,7 +94,7 @@ int xhci_interrupt_transfer(usb_hc_t *hc, usb_device_t *dev,
     priv->transfer_done = 0;
     xhci_db_write32(priv, slot, dci);
 
-    return xhci_wait_cmd(priv, 500);
+    return xhci_wait_transfer(priv, 500);
 }
 
 int xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
@@ -124,5 +124,5 @@ int xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
     priv->transfer_done = 0;
     xhci_db_write32(priv, slot, dci);
 
-    return xhci_wait_cmd(priv, 1000) == 0 ? len : -1;
+    return xhci_wait_transfer(priv, 1000) == 0 ? len : -1;
 }

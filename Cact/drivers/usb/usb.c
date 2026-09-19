@@ -241,6 +241,45 @@ void usb_init(void) {
 }
 
 
+/* Bring the host controllers back after an S3 wake.
+ *
+ * The platform reset halted every controller and cleared its registers; the
+ * driver-level structures (host controller objects, drivers, rings) all live in
+ * RAM and survived, so each controller is reset and re-programmed in place and
+ * then walks its ports again.  Only the devices are gone. */
+void usb_resume(void) {
+    for (usb_hc_t *hc = hc_list; hc; hc = hc->next) {
+        if (!hc->resume)
+            continue;
+        if (hc->resume(hc) == 0)
+            pr_info("  %-11s : %s controller re-enumerated\n", "usb", hc->name);
+        else
+            pr_warn("  %-11s : %s controller did not come back\n", "usb", hc->name);
+    }
+}
+
+void usb_drop_devices_on(usb_hc_t *hc) {
+    if (!hc) return;
+
+    usb_device_t **pp = &device_list;
+    while (*pp) {
+        usb_device_t *dev = *pp;
+        if (dev->hc != hc) {
+            pp = &dev->next;
+            continue;
+        }
+        if (hc->device_removed)
+            hc->device_removed(hc, dev);
+        usb_driver_t *drv = usb_find_driver(dev);
+        if (drv && drv->remove) drv->remove(dev);
+        usb_free_address(dev->address);
+        *pp = dev->next;
+        kfree(dev);
+        device_count--;
+    }
+}
+
+
 int usb_register_device(usb_device_t *dev) {
     if (!dev) return -1;
     dev->next   = device_list;

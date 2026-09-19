@@ -38,6 +38,31 @@ uint32_t pci_read_config_long(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg)
     return pci_read_config_dword(bus, dev, fn, reg);
 }
 
+/* Config-space access through the legacy 0xCF8/0xCFC mechanism only.
+ * Needed on resume: ECAM is itself PCI config space (the Q35 PCIEXBAR in the
+ * host bridge), so it cannot be used to bring PCI back after a reset that
+ * cleared it, while the port-I/O mechanism is part of the chipset. */
+uint32_t pci_legacy_read(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg) {
+    uint32_t addr = (1u << 31)
+                  | ((uint32_t)bus  << 16)
+                  | ((uint32_t)dev  << 11)
+                  | ((uint32_t)fn   <<  8)
+                  | (reg & 0xFC);
+    port_dword_out(PCI_CONFIG_ADDRESS, addr);
+    return port_dword_in(PCI_CONFIG_DATA);
+}
+
+void pci_legacy_write(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg,
+                      uint32_t val) {
+    uint32_t addr = (1u << 31)
+                  | ((uint32_t)bus  << 16)
+                  | ((uint32_t)dev  << 11)
+                  | ((uint32_t)fn   <<  8)
+                  | (reg & 0xFC);
+    port_dword_out(PCI_CONFIG_ADDRESS, addr);
+    port_dword_out(PCI_CONFIG_DATA, val);
+}
+
 void pci_write_config_long(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg,
                            uint32_t val) {
     pci_write_config_dword(bus, dev, fn, reg, val);

@@ -2,9 +2,10 @@
 #define CACT_ACPI_H
 
 #include <stdint.h>
+#include "memory.h"   /* KERNEL_MMIO_WINDOW_BASE/SIZE */
 
-#define ACPI_TEMP_MAP_BASE   0xC01C0000u
-#define ACPI_TEMP_MAP_PAGES  256
+#define ACPI_TEMP_MAP_BASE   KERNEL_MMIO_WINDOW_BASE
+#define ACPI_TEMP_MAP_PAGES  (KERNEL_MMIO_WINDOW_SIZE / 4096u)
 #define ACPI_TEMP_MAP_SIZE   (ACPI_TEMP_MAP_PAGES * 4096u)
 
 #define RSDP_SIG_LEN   8
@@ -47,8 +48,17 @@ struct acpi_sdt_header {
 int  acpi_init(void);
 int  acpi_available(void);
 void acpi_osc_pcie_init(void);
-void acpi_power_off(void);
-void acpi_reboot(void);
+
+/* System power transitions (power.c).  The transition helpers never return;
+ * acpi_suspend() returns 0 after a successful resume and -state if the
+ * platform refused to enter the requested sleep state. */
+int  acpi_pm_init(void);
+void acpi_power_off(void);           /* ACPI S5 soft-off / QEMU ports / halt */
+void acpi_reboot(void);              /* ACPI reset register / KBC / triple fault */
+void acpi_halt(void);                /* stop the CPU with interrupts off */
+int  acpi_suspend(uint32_t state);   /* S1/S3 suspend-to-RAM; 0 after resume */
+int  acpi_sleep_states(uint32_t *mask);  /* bit Sx set when \_Sx is present */
+
 
 /* Shared OSL helpers (osl.c): a temporary physical->virtual mapping window and
  * a microsecond delay backed by ktime (TSC / ACPI PM timer). */
