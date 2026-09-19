@@ -199,7 +199,11 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
             }
         }
         if (ret < 0) return ret;
-        return copy_to_user(arg, &a, sizeof(a));
+        /* The payload was already written into a.buf by the protocol receive;
+         * copying `a` back only hands the caller the source address/port.  The
+         * syscall result must stay the byte count, not copy_to_user's status. */
+        if (copy_to_user(arg, &a, sizeof(a)) != 0) return -EFAULT;
+        return ret;
     }
 
     default:

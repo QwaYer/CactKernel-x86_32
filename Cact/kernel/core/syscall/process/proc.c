@@ -44,9 +44,11 @@ int sys_exec(struct syscall_frame* regs) {
     char** argv = (char**)regs->ecx;
     char** envp = (char**)regs->edx;
 
-    // Validate argv array and each string pointer
+    // Validate argv array and each string pointer. The array ends at its first
+    // NULL entry, so only the slots up to that terminator may be required to
+    // live in userspace: a fixed-length window would reject a perfectly valid
+    // argv sitting near the top of the user stack (which ends at KERNEL_BASE).
     if (argv) {
-        if (!validate_user_ptr(argv, EXEC_VALIDATE_MAX * sizeof(char*))) return -1;
         for (int i = 0; i < EXEC_VALIDATE_MAX; i++) {
             if ((uint32_t)&argv[i] < USER_SPACE_START || (uint32_t)&argv[i] >= KERNEL_BASE) return -1;
             if (!argv[i]) break;
@@ -54,9 +56,8 @@ int sys_exec(struct syscall_frame* regs) {
         }
     }
 
-    // Validate envp array and each string pointer
+    // Validate envp array and each string pointer (same NULL-terminated rule).
     if (envp) {
-        if (!validate_user_ptr(envp, EXEC_VALIDATE_MAX * sizeof(char*))) return -1;
         for (int i = 0; i < EXEC_VALIDATE_MAX; i++) {
             if ((uint32_t)&envp[i] < USER_SPACE_START || (uint32_t)&envp[i] >= KERNEL_BASE) return -1;
             if (!envp[i]) break;

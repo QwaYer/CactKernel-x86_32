@@ -339,12 +339,17 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // Virtual filesystem (mntfs_init is deferred — needs the scheduler).
     vfs_init();
 
-    // Network stack
-    net_init();
-
     // Multitasking
     task_init();
     init_scheduler();
+
+    // Network stack.  net_init() spawns net_poll_task/net_timer_task, so it
+    // must run after the scheduler exists: task_init() resets the task list
+    // and mlfq_init() clears the run queues, which would otherwise silently
+    // discard both tasks and leave the smoltcp interface unpolled (no egress,
+    // no DHCP replies).
+    net_init();
+
     pr_info("  %-11s : hardware setup complete — scheduler live\n", "boot");
 }
 

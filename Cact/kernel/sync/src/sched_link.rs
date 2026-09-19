@@ -14,6 +14,7 @@ use crate::task_abi::{TaskState, TaskStruct};
 unsafe extern "C" {
     fn schedule();
     fn sched_mlfq_enqueue_locked(task: *mut TaskStruct, priority: u32);
+    fn sched_mlfq_wake_task_locked(task: *mut TaskStruct);
     fn printk(s: *const u8);
     static mut current_task: *mut TaskStruct;
     #[link_name = "scheduler_lock"]
@@ -28,6 +29,13 @@ pub(crate) fn schedule_yield() {
 #[inline]
 pub(crate) fn mlfq_enqueue(task: *mut TaskStruct, priority: u32) {
     unsafe { sched_mlfq_enqueue_locked(task, priority) }
+}
+
+/// State-aware wake (unlinks a Sleeping task from the sleep queue first).
+/// Requires [`SCHEDULER_LOCK`] to be held by the caller.
+#[inline]
+pub(crate) fn mlfq_wake_locked(task: *mut TaskStruct) {
+    unsafe { sched_mlfq_wake_task_locked(task) }
 }
 
 #[inline]

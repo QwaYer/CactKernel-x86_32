@@ -67,6 +67,7 @@ exec qemu-system-i386 \
     -device ide-hd,drive=sata0,bus=ide.0 \
     -netdev user,id=u1 \
     -device virtio-net-pci,disable-modern=on,netdev=u1 \
+    -object filter-dump,id=dump0,netdev=u1,file=/tmp/net.pcap \
     -device qemu-xhci,id=xhci -device usb-kbd \
     -no-reboot \
     -no-shutdown \
