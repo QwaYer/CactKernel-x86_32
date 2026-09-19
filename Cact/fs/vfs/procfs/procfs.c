@@ -26,7 +26,7 @@ static int _file_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) 
 
 static vfs_ops_t file_ops = { .read = _file_read };
 
-// procfs root directory ops (self/, virtual files)
+// procfs root directory ops (self/, per-pid dirs, virtual files)
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     if (streq(name, "self"))  return &proc_self_dir;
@@ -34,7 +34,7 @@ static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     for (proc_file_t *f = file_list; f; f = f->next)
         if (streq(f->name, name)) return &f->node;
 
-    return 0;
+    return procfs_proc_pid_dir(name);
 }
 
 static vfs_dirent_t _root_de;
@@ -54,7 +54,11 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
             return &_root_de;
         }
     }
-    return 0;
+    uint32_t pid;
+    if (procfs_proc_pid_at(index - i, &pid) != 0) return 0;
+    snprintf(_root_de.name, sizeof(_root_de.name), "%u", pid);
+    _root_de.inode = pid;
+    return &_root_de;
 }
 
 static void _root_listdir(vfs_node_t *dir) {
@@ -62,6 +66,11 @@ static void _root_listdir(vfs_node_t *dir) {
     printk("  self/\n");
     for (proc_file_t *f = file_list; f; f = f->next) {
         printk("  "); printk(f->name); printk("\n");
+    }
+    for (uint32_t k = 0; ; k++) {
+        uint32_t pid;
+        if (procfs_proc_pid_at(k, &pid) != 0) break;
+        printk("  %u/\n", pid);
     }
 }
 
@@ -130,14 +139,13 @@ void procfs_init(void) {
     procfs_register_file("meminfo", _meminfo_read);
     procfs_register_file("uptime",  _uptime_read);
     procfs_register_file("version", _version_read);
-    procfs_register_file("tasks",   _tasks_read);
     procfs_register_file("time",    _time_read);
     procfs_register_file("uname",   _uname_read);
 
     uint32_t nfiles = 0;
     for (proc_file_t *f = file_list; f; f = f->next) nfiles++;
 
-    pr_info("  %-11s : root ready (%u virtual file(s) + /proc/self)\n",
+    pr_info("  %-11s : root ready (%u virtual file(s) + /proc/self + /proc/<pid>)\n",
             "procfs", nfiles);
 
     procfs_ready = 1;
