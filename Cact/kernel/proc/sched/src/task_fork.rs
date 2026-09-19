@@ -285,7 +285,14 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32 {
+pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32, options: i32) -> i32 {
+    // WNOHANG: report instead of blocking while a matching child is still alive.
+    const WNOHANG: i32 = 1;
+    // WUNTRACED: report a child that a SIGSTOP has parked, not only deaths.
+    const WUNTRACED: i32 = 2;
+    // SIGSTOP's bit index, reported as the stopping signal (WSTOPSIG).
+    const SIGSTOP_INDEX: i32 = 2;
+
     let cur = current_task;
     if cur.is_null() { return -1; }
 
@@ -320,9 +327,21 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
                     reap_task_free(to_free);
 
                     if !status.is_null() {
-                        *status = child_exit;
+                        // POSIX layout: exit code in bits 8-15, low byte clear.
+                        // A raw code here would alias WIFSTOPPED for exit(127).
+                        *status = (child_exit & 0xff) << 8;
                     }
                     return child_pid as i32;
+                }
+                if matches!((*t).state, TaskState::Stopped) && options & WUNTRACED != 0 {
+                    let stopped_pid = (*t).pid;
+                    irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+
+                    if !status.is_null() {
+                        // WIFSTOPPED: low byte 0x7f, stopping signal in bits 8-15.
+                        *status = (SIGSTOP_INDEX << 8) | 0x7f;
+                    }
+                    return stopped_pid as i32;
                 }
                 found_child = true;
             }
@@ -335,6 +354,11 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32) -> i32
             }
             irq_spinlock_release(&raw mut SCHEDULER_LOCK);
             return -1;
+        }
+
+        if options & WNOHANG != 0 {
+            irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+            return 0;
         }
 
         if TRACE_PROC_LOGS {

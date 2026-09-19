@@ -304,7 +304,7 @@ pub unsafe extern "C" fn schedule() {
                 mlfq_sleep_locked(prev);
             }
         }
-        TaskState::Waiting | TaskState::Zombie => {}
+        TaskState::Waiting | TaskState::Zombie | TaskState::Stopped => {}
         TaskState::Ready => {}
     }
 
@@ -464,7 +464,7 @@ pub unsafe fn mlfq_wake_task_locked(task: *mut TaskStruct) {
             (*task).state = TaskState::Ready;
             mlfq_enqueue_locked(task, (*task).priority);
         }
-        TaskState::Waiting => {
+        TaskState::Waiting | TaskState::Stopped => {
             (*task).state = TaskState::Ready;
             mlfq_enqueue_locked(task, (*task).priority);
         }

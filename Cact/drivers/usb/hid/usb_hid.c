@@ -10,8 +10,9 @@
 #include "tty.h"
 
 /* HID usage IDs for Ctrl-combo keys */
-#define HID_KEY_C      0x06   /* 'c'  — Ctrl-C → SIGINT  */
-#define HID_KEY_BSLASH 0x31   /* '\'  — Ctrl-\ → SIGQUIT */
+#define HID_KEY_C      0x06   /* 'c'  — Ctrl-C → SIGINT   */
+#define HID_KEY_Z      0x1D   /* 'z'  — Ctrl-Z → SIGSTOP  */
+#define HID_KEY_BSLASH 0x31   /* '\'  — Ctrl-\ → SIGQUIT  */
 
 
 volatile char usb_last_char    = 0;
@@ -72,11 +73,17 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
             continue;
         }
 
-        /* Ctrl+letter → control characters 0x01-0x1A, plus SIGINT/SIGQUIT */
+        /* Ctrl+letter → control characters 0x01-0x1A, plus SIGINT/SIGSTOP/SIGQUIT */
         if (ctrl && kc >= 0x04 && kc <= 0x1D) {
             uint32_t fg = terminal_fg_pid;
             if (kc == HID_KEY_C && fg) {
                 task_signal(fg, SIGINT);
+                continue;
+            }
+            /* Ctrl-Z parks the foreground job; the shell's waitpid(WUNTRACED)
+             * reports the stop and gives the prompt back. */
+            if (kc == HID_KEY_Z && fg) {
+                task_signal(fg, SIGSTOP);
                 continue;
             }
             char ctrl_char = kc - 0x04 + 1;  /* HID 0x04='a' → 0x01 SOH */

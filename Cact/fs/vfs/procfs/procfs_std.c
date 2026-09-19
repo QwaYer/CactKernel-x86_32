@@ -403,6 +403,7 @@ int _tasks_read(uint32_t off, uint32_t size, char *buf) {
             case TASK_RUNNING:  _A("running   "); break;
             case TASK_SLEEPING: _A("sleeping  "); break;
             case TASK_ZOMBIE:   _A("zombie    "); break;
+            case TASK_STOPPED:  _A("stopped   "); break;
             default:            _A("unknown   "); break;
         }
 

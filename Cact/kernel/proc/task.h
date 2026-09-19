@@ -65,7 +65,8 @@ typedef enum {
     TASK_RUNNING,
     TASK_SLEEPING,
     TASK_ZOMBIE,
-    TASK_WAITING
+    TASK_WAITING,
+    TASK_STOPPED
 } task_state;
 
 struct context_frame {

@@ -35,18 +35,14 @@ pub unsafe extern "C" fn task_signal_locked(pid: u32, signal: u32) {
     (*p).pending_signals |= signal;
 
     if signal & (SIGKILL | SIGSTOP) != 0 {
-        match (*t).state {
-            TaskState::Sleeping => {
-                mlfq::mlfq_remove_from_sleep(t);
-                (*t).state = TaskState::Ready;
-                mlfq::mlfq_enqueue_locked(t, (*t).priority);
-            }
-            TaskState::Waiting => {
-                (*t).state = TaskState::Ready;
-                mlfq::mlfq_enqueue_locked(t, (*t).priority);
-            }
-            _ => {}
-        }
+        mlfq::mlfq_wake_task_locked(t);
+        return;
+    }
+
+    // SIGCONT must release a stopped task directly: a stopped task is never
+    // picked by the scheduler, so a pending SIGCONT could never be delivered.
+    if signal & SIGCONT != 0 && matches!((*t).state, TaskState::Stopped) {
+        mlfq::mlfq_wake_task_locked(t);
         return;
     }
 
@@ -82,7 +78,9 @@ pub unsafe extern "C" fn task_handle_signals(t: *mut TaskStruct) {
 
     if (*p).pending_signals & SIGSTOP != 0 {
         (*p).pending_signals &= !SIGSTOP;
-        (*t).state = TaskState::Sleeping;
+        (*t).state = TaskState::Stopped;
+        notify_parent_of_stop(t);
+        crate::mlfq::schedule();
         return;
     }
 
@@ -99,6 +97,25 @@ pub unsafe extern "C" fn task_handle_signals(t: *mut TaskStruct) {
     handle_signal_bit(t, deliverable, SIGHUP,   10, true);
     handle_signal_bit(t, deliverable, SIGINT,   11, true);
     handle_signal_bit(t, deliverable, SIGQUIT,  12, true);
+}
+
+/// A stopped child must be reported to its parent or `waitpid(…, WUNTRACED)`
+/// would sleep forever: the child is not a zombie, so nothing else wakes it.
+unsafe fn notify_parent_of_stop(t: *mut TaskStruct) {
+    if t.is_null() || (*t).proc.is_null() {
+        return;
+    }
+    irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+    let parent_pid = (*(*t).proc).parent_pid;
+    if parent_pid != 0 {
+        task_signal_locked(parent_pid, SIGCHLD);
+        let parent = find_task_by_pid(parent_pid);
+        if !parent.is_null() && matches!((*parent).state, TaskState::Waiting) {
+            (*parent).state = TaskState::Ready;
+            mlfq::mlfq_enqueue_locked(parent, (*parent).priority);
+        }
+    }
+    irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 }
 
 fn handle_signal_bit(
