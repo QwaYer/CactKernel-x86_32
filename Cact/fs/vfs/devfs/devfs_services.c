@@ -22,6 +22,7 @@
 #include "blkdev.h"
 #include "part.h"
 #include "vfsdev.h"
+#include "cact_acpi.h"
 
 // devfs_services.c — kernel-service devices exposed through devfs.
 //
@@ -51,6 +52,9 @@
 #endif
 #ifndef EMFILE
 #define EMFILE 24
+#endif
+#ifndef EOPNOTSUPP
+#define EOPNOTSUPP 95
 #endif
 
 static int _root_only(void) {
@@ -212,24 +216,25 @@ static int _sys_umount_ioctl(char *target) {
 }
 
 static void _do_reboot(uint32_t cmd) {
-    pr_notice("  %-11s : %s requested by pid %d\n", "reboot",
-              (cmd == CACT_REBOOT_POWEROFF) ? "poweroff" : "reboot",
-              current_task ? current_task->pid : 0);
+    int pid = current_task ? current_task->pid : 0;
 
-    __asm__ volatile ("cli");
+    switch (cmd) {
+    case CACT_REBOOT_POWEROFF:
+        pr_notice("  %-11s : poweroff requested by pid %d\n", "power", pid);
+        acpi_power_off();
+        break;
 
-    if (cmd == CACT_REBOOT_POWEROFF) {
-        __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x2000), "Nd"((uint16_t)0x604));
-        __asm__ volatile ("outw %0, %1" : : "a"((uint16_t)0x2000), "Nd"((uint16_t)0xB004));
+    case CACT_REBOOT_HALT:
+        pr_notice("  %-11s : halt requested by pid %d\n", "power", pid);
+        acpi_halt();
+        break;
+
+    case CACT_REBOOT_RESTART:
+    default:
+        pr_notice("  %-11s : reboot requested by pid %d\n", "power", pid);
+        acpi_reboot();
+        break;
     }
-
-    uint8_t tmp;
-    do {
-        __asm__ volatile ("inb %1, %0" : "=a"(tmp) : "Nd"((uint16_t)0x64));
-    } while (tmp & 0x02);
-    __asm__ volatile ("outb %0, %1" : : "a"((uint8_t)0xFE), "Nd"((uint16_t)0x64));
-
-    for (;;) __asm__ volatile ("hlt");
 }
 
 static int _sys_ioctl(void *p, uint32_t cmd, void *arg) {
@@ -254,6 +259,24 @@ static int _sys_ioctl(void *p, uint32_t cmd, void *arg) {
         if (copy_from_user(&c, arg, sizeof(c)) != 0) return -EFAULT;
         int r = _root_only();
         if (r) return r;
+
+        /* Suspend is the only power command that returns to the caller: the
+         * ioctl blocks until the platform resumes.  S3 first, S1 as fallback.
+         * Only the S3 wake resets the platform, so the device save/restore
+         * pair brackets that path alone — S1 leaves the devices alone. */
+        if (c == CACT_REBOOT_SUSPEND) {
+            pr_notice("  %-11s : suspend requested by pid %d\n", "power",
+                      current_task ? current_task->pid : 0);
+            kernel_suspend_hardware();
+            if (acpi_suspend(3) != 0) {
+                if (acpi_suspend(1) != 0)
+                    return -EOPNOTSUPP;
+                return 0;
+            }
+            kernel_resume_hardware();
+            return 0;
+        }
+
         _do_reboot(c);
         return 0;   // never reached
     }

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "memory.h"   /* KERNEL_MMIO_WINDOW_END */
 
 #define PCIE_CAP_ID             0x10
 
@@ -19,7 +20,10 @@
 
 #define PCIE_CONFIG_SPACE_SIZE  4096
 
-#define PCIE_ECAM_VADDR         0xC0000000u
+/* ECAM virtual window: starts above the fixed kernel MMIO windows (see
+ * memory.h) so it can never alias the ACPI temporary-map window. */
+#define PCIE_ECAM_VADDR         KERNEL_MMIO_WINDOW_END
+#define PCIE_ECAM_SEG_SHIFT     0x10000000u   /* 256 MB of VA per segment */
 #define PCIE_MAX_SEGMENTS       4
 
 #define PCIE_TYPE_ENDPOINT          0x0

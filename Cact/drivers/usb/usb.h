@@ -190,6 +190,11 @@ typedef struct usb_hc {
     int  (*port_get_status)   (struct usb_hc *hc, uint8_t port);
     void (*device_removed)    (struct usb_hc *hc, struct usb_device *dev);
 
+    /* Bring a controller the platform reset halted back up and re-enumerate
+     * its devices.  Optional: a controller with no state to restore may leave
+     * it NULL.  Returns 0 when the controller is usable again. */
+    int  (*resume)            (struct usb_hc *hc);
+
     uint8_t  num_ports;
     void    *priv;
 
@@ -212,6 +217,14 @@ typedef struct usb_driver {
 
 
 void usb_init(void);
+
+/* Bring every host controller back after an S3 wake (see usb_hc_t.resume). */
+void usb_resume(void);
+
+/* Detach every device on one host controller.  Used on resume: the reset took
+ * the whole device tree with it, and the port scan re-registers whatever is
+ * still attached. */
+void usb_drop_devices_on(usb_hc_t *hc);
 
 int  usb_hc_register    (usb_hc_t    *hc);
 int  usb_driver_register(usb_driver_t *drv);

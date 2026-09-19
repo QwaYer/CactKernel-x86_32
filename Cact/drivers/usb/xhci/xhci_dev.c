@@ -226,6 +226,10 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     if (len > mps) len = mps;
     uint8_t interval = ep ? ep->interval : 8;
 
+    pr_info("  %-11s : ep%u slot %u dci %u mps %u interval %u len %u\n",
+            "xhci-ep", (unsigned)ep_num, (unsigned)slot, (unsigned)dci,
+            (unsigned)mps, (unsigned)interval, (unsigned)len);
+
     if (xhci_configure_endpoint(priv, slot, dci, XHCI_EP_CTX_TYPE_INTR_IN, mps, interval) < 0)
         return -1;
 

@@ -223,6 +223,10 @@ extern void blkdev_write_sector(uint32_t lba, uint8_t* buf);
 // Hardware setup entry
 void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap);
 
+// Device bring-up after an S3 resume (task context, interrupts on)
+void kernel_suspend_hardware(void);
+void kernel_resume_hardware(void);
+
 // ELF loader types
 struct proc_page_tracker_t;
 struct vfs_node;

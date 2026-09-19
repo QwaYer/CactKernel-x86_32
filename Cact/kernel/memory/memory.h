@@ -21,6 +21,20 @@
 #define BITMAP_SIZE     (TOTAL_PAGES / 8)       /* ~96 KB */
 
 /*
+ * Fixed kernel windows carved out of the PCI-hole VA space (>= PCI_HOLE_START).
+ *
+ * The first 4 GiB are identity-mapped and every mapping at or above
+ * PCI_HOLE_START is written into the *shared* kernel page tables, so a window
+ * placed here is valid under any CR3.  Because of that sharing, two subsystems
+ * that pick the same VA silently alias each other's physical pages — so the
+ * fixed windows live in one place and drivers must allocate above
+ * KERNEL_MMIO_WINDOW_END.
+ */
+#define KERNEL_MMIO_WINDOW_BASE 0xC0000000u              /* ACPI temp maps */
+#define KERNEL_MMIO_WINDOW_SIZE (256u * PAGE_SIZE)       /* 1 MB            */
+#define KERNEL_MMIO_WINDOW_END  (KERNEL_MMIO_WINDOW_BASE + KERNEL_MMIO_WINDOW_SIZE)
+
+/*
  * Heap window.  The heap allocator starts right after the hard-reserved
  * low-memory zone so kmalloc() never overlaps kernel-reserved pages.
  */

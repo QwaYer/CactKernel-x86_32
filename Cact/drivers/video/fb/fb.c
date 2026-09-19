@@ -253,6 +253,11 @@ void fb_flush(void) {
     fb_dirty_y_max = 0;
 }
 
+void fb_repaint(void) {
+    fb_mark_dirty_rows(0, fb_height);
+    fb_flush();
+}
+
 uint32_t fb_get_width(void) {
     return fb_width;
 }

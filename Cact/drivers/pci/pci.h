@@ -67,6 +67,13 @@ void     pci_write_config_long(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg
 /* Sets PCI command register bus-master bit (required for DMA). */
 void pci_set_master(uint8_t bus, uint8_t dev, uint8_t fn);
 
+/* Configuration access through the legacy 0xCF8/0xCFC mechanism only,
+ * bypassing ECAM.  Used to bring PCI back after a resume, when the ECAM
+ * window itself (the Q35 PCIEXBAR) has been reset. */
+uint32_t pci_legacy_read(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg);
+void     pci_legacy_write(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg,
+                          uint32_t val);
+
 // Return 0 if PCI Mechanism #1 is detected.
 int search_pci(void);
 

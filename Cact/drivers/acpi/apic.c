@@ -331,9 +331,12 @@ int apic_init(void)
 
     /*
      * Scheduler tick.  The LAPIC timer is the only periodic interrupt
-     * source: calibrate it against the ACPI PM timer and arm it at 100 Hz on
-     * LAPIC_TIMER_VECTOR, which device_isrs.asm dispatches to the scheduler.
-     * A failed calibration is retried by the boot watchdog in init().
+     * source: arm it at 100 Hz on LAPIC_TIMER_VECTOR, which device_isrs.asm
+     * dispatches to the scheduler.  The tick rate is calibrated against the
+     * ACPI PM timer once, at boot; an S3 resume re-arms from that saved value
+     * because the PM-timer reference does not come back after the sleep (and
+     * polling it for a calibration window would stall for minutes).  A failed
+     * calibration is retried by the boot watchdog in init().
      *
      * The IDT gate is (re)asserted here, after ACPI has had its chance to
      * install the SCI handler: AcpiOsInstallInterruptHandler() writes
@@ -346,7 +349,9 @@ int apic_init(void)
                 "apic", (unsigned)LAPIC_TIMER_VECTOR);
     set_idt_gate(LAPIC_TIMER_VECTOR, (uint32_t)timer_isr);
 
-    uint32_t per_ms = lapic_timer_calibrate();
+    uint32_t per_ms = lapic_timer_ticks_per_ms();
+    if (per_ms == 0)
+        per_ms = lapic_timer_calibrate();   /* first bring-up only */
     if (per_ms == 0)
         pr_crit("  %-11s : LAPIC timer calibration failed — no system tick\n", "apic");
     else
