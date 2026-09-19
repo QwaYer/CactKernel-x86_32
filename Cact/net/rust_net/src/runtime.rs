@@ -13,6 +13,7 @@ pub static mut my_mac: MacAddr = MacAddr { b: [0; 6] };
 #[no_mangle]
 pub static mut net_sema: Semaphore = Semaphore {
     guard: crate::types::Spinlock { locked: 0 },
+    count: core::sync::atomic::AtomicI32::new(0),
     waiters: [core::ptr::null_mut(); 64],
     waiter_count: 0,
 };

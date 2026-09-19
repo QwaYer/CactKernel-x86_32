@@ -57,3 +57,17 @@ pub extern "C" fn rust_net_parse_ipv4(input: *const c_char, out_host_ip: *mut u3
 pub extern "C" fn rust_net_ping_echo_host(dst_ip_host: u32, id: u16, seq: u16) -> c_int {
     ping::send_echo_request_host(dst_ip_host, id, seq)
 }
+
+/// Send one echo request and block until the matching reply arrives.
+/// Returns the round-trip time in microseconds, or -1 on timeout.
+#[no_mangle]
+pub extern "C" fn rust_net_ping_wait(
+    dst_ip_host: u32,
+    id: u16,
+    seq: u16,
+    timeout_ms: u32,
+    src_ip_out: *mut u32,
+    bytes_out: *mut u32,
+) -> c_int {
+    ping::ping_wait_host(dst_ip_host, id, seq, timeout_ms, src_ip_out, bytes_out)
+}

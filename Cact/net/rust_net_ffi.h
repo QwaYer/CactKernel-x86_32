@@ -14,6 +14,9 @@
  */
 int rust_net_parse_ipv4(const char* input, uint32_t* out_host_ip);
 int rust_net_ping_echo_host(uint32_t dst_ip_host, uint16_t id, uint16_t seq);
+/* Send one echo request and block for the reply: RTT in microseconds, or -1 on timeout. */
+int rust_net_ping_wait(uint32_t dst_ip_host, uint16_t id, uint16_t seq, uint32_t timeout_ms,
+                       uint32_t* src_ip_out, uint32_t* bytes_out);
 int rust_net_set_ipv4_config(uint32_t ip_h, uint32_t mask_h, uint32_t gw_h, uint32_t dns_h);
 uint32_t rust_net_get_dns_host(void);
 uint32_t rust_net_get_ip_host(void);
