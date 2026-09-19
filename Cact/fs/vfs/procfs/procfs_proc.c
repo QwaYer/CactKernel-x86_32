@@ -38,31 +38,31 @@ static int _emit(const void *src, uint32_t len, uint32_t off, uint32_t size,
     return (int)n;
 }
 
-// Fill the info struct from the calling process.
-static void _fill_self_info(cact_proc_info_t *info) {
+// Fill the info struct from |t| (NULL when there is no such process).
+static void _fill_info(const struct task_struct *t, cact_proc_info_t *info) {
     memset(info, 0, sizeof(cact_proc_info_t));
-    if (!current_task) return;
+    if (!t) return;
 
-    info->pid  = current_task->pid;
-    info->ppid = current_task->proc ? current_task->proc->parent_pid : 0;
-    info->state = (uint32_t)current_task->state;
-    info->flags = current_task->is_kernel ? 1u : 0u;
+    info->pid  = t->pid;
+    info->ppid = t->proc ? t->proc->parent_pid : 0;
+    info->state = (uint32_t)t->state;
+    info->flags = t->is_kernel ? 1u : 0u;
 
-    if (!current_task->proc) return;
-    info->pgid  = current_task->proc->pgid;
-    info->sid   = current_task->proc->sid;
-    info->uid   = current_task->proc->uid;
-    info->gid   = current_task->proc->gid;
-    info->euid  = current_task->proc->euid;
-    info->egid  = current_task->proc->egid;
-    info->umask = current_task->proc->umask;
+    if (!t->proc) return;
+    info->pgid  = t->proc->pgid;
+    info->sid   = t->proc->sid;
+    info->uid   = t->proc->uid;
+    info->gid   = t->proc->gid;
+    info->euid  = t->proc->euid;
+    info->egid  = t->proc->egid;
+    info->umask = t->proc->umask;
 }
 
 static int _info_read(vfs_node_t *node, uint32_t off, uint32_t size,
                       char *buf) {
     (void)node;
     cact_proc_info_t info;
-    _fill_self_info(&info);
+    _fill_info(current_task, &info);
     return _emit(&info, sizeof(info), off, size, buf);
 }
 
@@ -80,6 +80,9 @@ static int _cwd_read(vfs_node_t *node, uint32_t off, uint32_t size,
 
 #ifndef EPERM
 #define EPERM 1
+#endif
+#ifndef ENOENT
+#define ENOENT 2
 #endif
 #ifndef ESRCH
 #define ESRCH 3
@@ -458,8 +461,228 @@ static vfs_ops_t self_dir_ops = {
     .listdir = _self_listdir,
 };
 
+// ---- /proc/<pid> -------------------------------------------------------
+//
+// Linux-shaped numeric process directories: one /proc/<pid>/ per live task,
+// exposing the same read-only view as /proc/self — `info` (binary
+// cact_proc_info_t) and `cwd`.  Process *control* is deliberately not
+// published here: every CACT_PROCCTL_* command mutates the caller's own
+// process state, so it stays on /proc/self/ctl.
+//
+// Slots are recycled.  dir/info/cwd carry the pid they were built for in
+// `inode`, and the slot's own `pid` changes when the owner dies and the slot
+// is handed to a new task; walks and reads compare the two, so a node (or an
+// fd) that outlives its process reports -ENOENT instead of the new owner's
+// data.
+//
+// scheduler_lock guards both the task list and this table, so a lookup never
+// races a reap (task_reap unlinks under the same lock, then frees).
+
+#define PROC_PID_SLOTS 64
+
+typedef struct proc_pid_slot {
+    uint32_t   pid;        // 0 = slot never used
+    vfs_node_t dir;
+    vfs_node_t info;
+    vfs_node_t cwd;
+} proc_pid_slot_t;
+
+static proc_pid_slot_t _pid_slots[PROC_PID_SLOTS];
+static vfs_dirent_t    _pid_de;
+
+// All-digits, non-zero, <= 2^31-1.
+static int _parse_pid(const char *s, uint32_t *out) {
+    if (!s || !*s) return -1;
+    uint32_t v = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p < '0' || *p > '9') return -1;
+        v = v * 10u + (uint32_t)(*p - '0');
+        if (v > 0x7FFFFFFFu) return -1;
+    }
+    if (v == 0) return -1;
+    *out = v;
+    return 0;
+}
+
+// Caller must hold scheduler_lock.
+static struct task_struct *_find_task_locked(uint32_t pid) {
+    struct task_struct *head = (struct task_struct *)task_list_head;
+    struct task_struct *t    = head;
+    if (!t) return 0;
+    do {
+        if (t->pid == pid) return t;
+        t = t->next;
+    } while (t && t != head);
+    return 0;
+}
+
+// May |t|'s /proc view be read by the caller?  Root and the owner (or the task
+// itself) may — the ptrace-style default, and no stricter than the flat
+// /proc/tasks file this replaces, which was readable by everyone.
+static int _may_read(const struct task_struct *t) {
+    if (!current_task || !current_task->proc) return 1;
+    if (current_task->is_kernel) return 1;
+    if (current_task->proc->euid == 0) return 1;
+    if (t->pid == current_task->pid) return 1;
+    return t->proc && t->proc->uid == current_task->proc->uid;
+}
+
+static int _pid_info_read(vfs_node_t *node, uint32_t off, uint32_t size,
+                          char *buf) {
+    proc_pid_slot_t *s = (proc_pid_slot_t *)node->priv;
+    if (!s || s->pid != node->inode) return -ENOENT;
+
+    cact_proc_info_t info;
+    int rc = 0;
+
+    irq_spinlock_acquire(&scheduler_lock);
+    struct task_struct *t = _find_task_locked(s->pid);
+    if (!t)                  rc = -ENOENT;
+    else if (!_may_read(t))  rc = -EPERM;
+    else                     _fill_info(t, &info);
+    irq_spinlock_release(&scheduler_lock);
+
+    if (rc) return rc;
+    return _emit(&info, sizeof(info), off, size, buf);
+}
+
+static int _pid_cwd_read(vfs_node_t *node, uint32_t off, uint32_t size,
+                         char *buf) {
+    proc_pid_slot_t *s = (proc_pid_slot_t *)node->priv;
+    if (!s || s->pid != node->inode) return -ENOENT;
+
+    char path[256];
+    uint32_t len = 0;
+    int rc = 0;
+
+    irq_spinlock_acquire(&scheduler_lock);
+    struct task_struct *t = _find_task_locked(s->pid);
+    if (!t || !t->proc)      rc = -ENOENT;
+    else if (!_may_read(t))  rc = -EPERM;
+    else {
+        // Snapshot under the lock: the owner may be inside chdir().
+        memcpy(path, t->proc->cwd, sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
+        while (path[len]) len++;
+    }
+    irq_spinlock_release(&scheduler_lock);
+
+    if (rc) return rc;
+    return _emit(path, len, off, size, buf);
+}
+
+static vfs_node_t *_pid_walk(vfs_node_t *dir, const char *name) {
+    proc_pid_slot_t *s = (proc_pid_slot_t *)dir->priv;
+    if (!s || s->pid != dir->inode) return 0;   // dir node recycled under us
+    if (streq(name, "info")) return &s->info;
+    if (streq(name, "cwd"))  return &s->cwd;
+    return 0;
+}
+
+static vfs_dirent_t *_pid_readdir(vfs_node_t *dir, uint32_t index) {
+    (void)dir;
+    const char *name = 0;
+    switch (index) {
+    case 0:  name = "info"; break;
+    case 1:  name = "cwd";  break;
+    default: return 0;
+    }
+    strlcpy(_pid_de.name, name, 128);
+    _pid_de.inode = index + 1;
+    return &_pid_de;
+}
+
+static void _pid_listdir(vfs_node_t *dir) {
+    (void)dir;
+    printk("  info\n  cwd\n");
+}
+
+static vfs_ops_t _pid_dir_ops  = {
+    .walk    = _pid_walk,
+    .readdir = _pid_readdir,
+    .listdir = _pid_listdir,
+};
+static vfs_ops_t _pid_info_ops = { .read = _pid_info_read };
+static vfs_ops_t _pid_cwd_ops  = { .read = _pid_cwd_read };
+
+// Caller must hold scheduler_lock.
+static void _slot_init(proc_pid_slot_t *s, uint32_t pid) {
+    memset(s, 0, sizeof(*s));
+    s->pid = pid;
+
+    s->dir.type  = VFS_DIRECTORY;
+    s->dir.ops   = &_pid_dir_ops;
+    s->dir.priv  = s;
+    s->dir.inode = pid;
+    snprintf(s->dir.name, sizeof(s->dir.name), "%u", pid);
+
+    s->info.type  = VFS_FILE;
+    s->info.ops   = &_pid_info_ops;
+    s->info.priv  = s;
+    s->info.inode = pid;
+    strlcpy(s->info.name, "info", 128);
+
+    s->cwd.type  = VFS_FILE;
+    s->cwd.ops   = &_pid_cwd_ops;
+    s->cwd.priv  = s;
+    s->cwd.inode = pid;
+    strlcpy(s->cwd.name, "cwd", 128);
+}
+
+// Caller must hold scheduler_lock.  The slot for |pid|, recycling one whose
+// owner has left the task list when it has to.  NULL only when all 64 slots
+// are held by live tasks.
+static proc_pid_slot_t *_slot_locked(uint32_t pid) {
+    proc_pid_slot_t *victim = 0;
+    for (int i = 0; i < PROC_PID_SLOTS; i++) {
+        proc_pid_slot_t *s = &_pid_slots[i];
+        if (s->pid == pid) return s;
+        if (!victim && (s->pid == 0 || !_find_task_locked(s->pid)))
+            victim = s;
+    }
+    if (!victim) return 0;
+    _slot_init(victim, pid);
+    return victim;
+}
+
+// procfs.c: map a /proc entry name to that process's directory.
+vfs_node_t *procfs_proc_pid_dir(const char *name) {
+    uint32_t pid;
+    if (_parse_pid(name, &pid) != 0) return 0;
+
+    vfs_node_t *node = 0;
+    irq_spinlock_acquire(&scheduler_lock);
+    if (_find_task_locked(pid)) {
+        proc_pid_slot_t *s = _slot_locked(pid);
+        if (s) node = &s->dir;
+    }
+    irq_spinlock_release(&scheduler_lock);
+    return node;
+}
+
+// procfs.c: k-th live pid in task-list order, for readdir/listdir.  pid 0 is
+// the scheduler's idle task — Linux keeps the swapper out of /proc, so skip it
+// (it has no proc metadata anyway, and /proc/0 would not resolve).
+int procfs_proc_pid_at(uint32_t index, uint32_t *pid_out) {
+    int rc = -1;
+    uint32_t i = 0;
+
+    irq_spinlock_acquire(&scheduler_lock);
+    struct task_struct *head = (struct task_struct *)task_list_head;
+    struct task_struct *t    = head;
+    if (t) do {
+        if (t->pid != 0 && i++ == index) { *pid_out = t->pid; rc = 0; break; }
+        t = t->next;
+    } while (t && t != head);
+    irq_spinlock_release(&scheduler_lock);
+
+    return rc;
+}
+
 // Register the per-process service subtree.
 void procfs_proc_init(void) {
+    memset(_pid_slots, 0, sizeof(_pid_slots));
+
     memset(&proc_self_dir, 0, sizeof(vfs_node_t));
     strlcpy(proc_self_dir.name, "self", 128);
     proc_self_dir.type = VFS_DIRECTORY;
@@ -482,4 +705,5 @@ void procfs_proc_init(void) {
     self_ctl_node.ops  = &self_ctl_ops;
 
     pr_info("  %-11s : /proc/self ready (info, cwd, ctl)\n", "proc");
+    pr_info("  %-11s : /proc/<pid> ready (info, cwd)\n", "proc");
 }

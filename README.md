@@ -423,13 +423,13 @@ Syscall dispatch uses the **`sysenter`** CPU instruction (legacy `int 0x80` gate
 | **`SYS_*`** 0–14 | Core traps: `open` `close` `read` `write` `ioctl` `poll` `fork` `exec` `exit` `waitpid` `brk` `mmap` `munmap` `mprotect` `sigreturn` |
 | **`CACT_FDCTL_*`** 0x3000 | ioctl on any fd — `dup` `dup2` `fcntl` `lseek` `fstat` `ftruncate` `getdents` `fsync` |
 | **`CACT_DIRCTL_*`** 0x3100 | ioctl on a directory fd — `openat` `create` `mkdir` `rmdir` `unlink` `link` `symlink` `readlink` `rename` `stat` `access` `chmod` `chown` `truncate` `mknod` |
-| **`CACT_PROCCTL_*`** 0x3200 | ioctl on `/proc/self\|pid/ctl` — `setsid` `setpgid` `setuid` `setgid` `umask` `chdir` `chroot` signals/itimers, `shmget` `shmat` `shmdt` `shmctl` |
+| **`CACT_PROCCTL_*`** 0x3200 | ioctl on `/proc/self/ctl` — `setsid` `setpgid` `setuid` `setgid` `umask` `chdir` `chroot` signals/itimers, `shmget` `shmat` `shmdt` `shmctl` |
 | **`CACT_SOCKCTL_*`** 0x3300 | ioctl on a socket fd — `bind` `connect` `listen` `accept` `shutdown` `setsockopt` `getsockopt` `sendto` `recvfrom` (data path: `read`/`write`) |
 | **`CACT_NETCTL_*`** 0x3400 | ioctl on `/dev/net` — `socket` creation, ping, DNS resolve, netcfg |
 | **`CACT_SYSCTL_*`** 0x3500 | ioctl on `/dev/sys` (root) — `mount` `umount` `reboot`, kernel module load/unload |
 | **`CACT_PIPECTL_*`** 0x3600 | ioctl on `/dev/pipe` — `pipe` creation |
 
-Identity/process info: `/proc/self/info`; cwd: `/proc/self/cwd`; time: `/proc/time`; `uname`: `/proc/uname`.
+Identity/process info: `/proc/self/info`; cwd: `/proc/self/cwd`; time: `/proc/time`; `uname`: `/proc/uname` `/proc/<pid>`.
 
 ---
 
