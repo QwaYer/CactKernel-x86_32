@@ -139,10 +139,8 @@ fn mutex_unlock_impl(m: &mut mutex_t) {
 
         let sched = sched_link::scheduler_lock_mut();
         sched.acquire();
-        if !woken.is_null() && sched_link::task_state_get(woken) == TaskState::Sleeping {
-            sched_link::task_state_set(woken, TaskState::Ready);
-            sched_link::mlfq_enqueue(woken, sched_link::task_priority_get(woken));
-        }
+        // State-aware wake: also unlinks a Sleeping task from the sleep queue.
+        sched_link::mlfq_wake_locked(woken);
         sched.release();
     } else {
         m.locked.store(0, Ordering::Release);

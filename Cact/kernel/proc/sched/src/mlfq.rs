@@ -294,7 +294,15 @@ pub unsafe extern "C" fn schedule() {
             mlfq_enqueue_locked(prev, (*prev).priority);
         }
         TaskState::Sleeping => {
-            mlfq_sleep_locked(prev);
+            // A task sleeping *with a deadline* is owned by the timer wheel,
+            // which wakes it and enqueues it itself.  Only a task with no
+            // deadline (blocked on a semaphore/mutex) belongs to the sleep
+            // queue: pushing a wheel-tracked task there as well would leave it
+            // in two intrusive lists chained through `queue_next`, and
+            // `wake_expired_sleepers()` then walks the corrupted chain.
+            if (*prev).proc.is_null() || (*(*prev).proc).sleep_until == 0 {
+                mlfq_sleep_locked(prev);
+            }
         }
         TaskState::Waiting | TaskState::Zombie => {}
         TaskState::Ready => {}
@@ -437,6 +445,19 @@ pub unsafe extern "C" fn mlfq_wake_task(task: *mut TaskStruct) {
         return;
     }
     irq_spinlock_acquire(&raw mut SCHEDULER_LOCK);
+    mlfq_wake_task_locked(task);
+    irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+}
+
+/// State-aware wake for a task the caller has just decided to release.
+/// A Sleeping task is *unlinked from the sleep queue first* — otherwise it ends
+/// up in the sleep queue and a ready queue at once, both chained through
+/// `queue_next`, and `wake_expired_sleepers()` walks the corrupted list.
+/// Caller must hold [`SCHEDULER_LOCK`].
+pub unsafe fn mlfq_wake_task_locked(task: *mut TaskStruct) {
+    if task.is_null() {
+        return;
+    }
     match (*task).state {
         TaskState::Sleeping => {
             mlfq_remove_from_sleep(task);
@@ -449,7 +470,13 @@ pub unsafe extern "C" fn mlfq_wake_task(task: *mut TaskStruct) {
         }
         _ => {}
     }
-    irq_spinlock_release(&raw mut SCHEDULER_LOCK);
+}
+
+/// `mlfq_wake_task_locked` for callers outside this crate that already hold
+/// [`SCHEDULER_LOCK`] (the kernel sync primitives).
+#[no_mangle]
+pub unsafe extern "C" fn sched_mlfq_wake_task_locked(task: *mut TaskStruct) {
+    mlfq_wake_task_locked(task);
 }
 
 pub fn task_voluntary_block(task: *mut TaskStruct, new_state: TaskState) {

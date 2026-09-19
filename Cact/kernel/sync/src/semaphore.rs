@@ -100,12 +100,16 @@ fn sema_up_impl(s: &mut semaphore_t) {
         }
         s.waiter_count -= 1;
 
+        // Hand the token over: the woken task re-checks `count` in
+        // `sema_down_impl` and must find it incremented, otherwise it blocks
+        // again and the wake-up is lost (the caller waits forever).
+        s.count.fetch_add(1, Ordering::Release);
+
         s.guard.release();
 
-        if !woken.is_null() && sched_link::task_state_get(woken) == TaskState::Sleeping {
-            sched_link::task_state_set(woken, TaskState::Ready);
-            sched_link::mlfq_enqueue(woken, sched_link::task_priority_get(woken));
-        }
+        // `mlfq_wake_locked` unlinks a Sleeping task from the sleep queue
+        // before enqueuing it; a plain enqueue would leave it in both lists.
+        sched_link::mlfq_wake_locked(woken);
     } else {
         s.count.fetch_add(1, Ordering::Release);
         s.guard.release();
