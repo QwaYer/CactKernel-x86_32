@@ -7,6 +7,7 @@
 #include "memory.h"
 #include "klib.h"
 #include "keyboard.h"
+#include "tty.h"
 
 /* HID usage IDs for Ctrl-combo keys */
 #define HID_KEY_C      0x06   /* 'c'  — Ctrl-C → SIGINT  */
@@ -44,6 +45,7 @@ static const char hid_keymap_shift[0x80] = {
 static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
     uint8_t shift = (rep->modifier & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) ? 1 : 0;
     uint8_t ctrl  = (rep->modifier & (HID_MOD_LCTRL  | HID_MOD_RCTRL))  ? 1 : 0;
+    uint8_t alt   = (rep->modifier & (HID_MOD_LALT   | HID_MOD_RALT))   ? 1 : 0;
 
     for (int i = 0; i < 6; i++) {
         if (rep->keycode[i] != HID_KEY_CAPSLOCK) continue;
@@ -61,6 +63,14 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         for (int j = 0; j < 6; j++)
             if (priv->prev_kbd.keycode[j] == kc) { already = 1; break; }
         if (already) continue;
+
+        /* Alt+F1..F12 -> switch virtual terminal, as on a Linux console.
+         * HID 0x3A..0x45 are F1..F12; tty_activate() ignores VTs that do not
+         * exist, so the higher F-keys are simply no-ops. */
+        if (alt && kc >= 0x3A && kc <= 0x45) {
+            tty_activate(kc - 0x3A + 1);
+            continue;
+        }
 
         /* Ctrl+letter → control characters 0x01-0x1A, plus SIGINT/SIGQUIT */
         if (ctrl && kc >= 0x04 && kc <= 0x1D) {

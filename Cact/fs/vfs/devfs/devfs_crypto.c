@@ -226,20 +226,6 @@ static int _crypto_ioctl(void *p, uint32_t cmd, void *arg) {
     }
 }
 
-static int _crypto_status(void *p, char *buf, uint32_t size) {
-    (void)p;
-    const char *s =
-        "device: crypto\n"
-        "type: kernel crypto service\n"
-        "algorithms: sha256 sha384 hmac-sha256 hmac-sha384 hkdf-sha256 hkdf-sha384\n"
-        "             aes-128-gcm aes-256-gcm x25519 p-256 rdrand\n";
-    uint32_t n = 0;
-    while (s[n] && n < size - 1) { buf[n] = s[n]; n++; }
-    buf[n] = '\0';
-    return (int)n;
-}
-
 devfs_driver_t drv_crypto = {
     .ioctl  = _crypto_ioctl,
-    .status = _crypto_status,
 };

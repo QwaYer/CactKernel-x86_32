@@ -69,38 +69,9 @@ static int _blk_write(void *priv, uint32_t off, uint32_t size, char *buf) {
     return blk_byte_rw((blkdev_t *)priv, off, size, buf, 1);
 }
 
-static int _blk_status(void *priv, char *buf, uint32_t size) {
-    blkdev_t *bd = (blkdev_t *)priv;
-    if (!bd || !buf || size == 0) return 0;
-    char tmp[192];
-    int n = 0;
-    const char *s;
-    s = "device: "; for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    for (int i = 0; bd->name[i] && n < (int)sizeof(tmp) - 1; i++) tmp[n++] = bd->name[i];
-    s = bd->parent ? "\ntype: partition\n" : "\ntype: block device\n";
-    for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-    if (bd->parent) {
-        s = "disk: "; for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-        for (int i = 0; bd->parent->name[i] && n < (int)sizeof(tmp) - 1; i++)
-            tmp[n++] = bd->parent->name[i];
-    }
-    {
-        char nb[16];
-        s = "\nsize_lba: "; for (; *s && n < (int)sizeof(tmp) - 1; s++) tmp[n++] = *s;
-        snprintf(nb, sizeof(nb), "%u", (unsigned)(bd->max_lba));
-        for (int i = 0; nb[i] && n < (int)sizeof(tmp) - 1; i++) tmp[n++] = nb[i];
-    }
-    if (n < (int)sizeof(tmp) - 1) tmp[n++] = '\n';
-    tmp[n] = '\0';
-    if ((uint32_t)n > size) n = (int)size;
-    memcpy(buf, tmp, (uint32_t)n);
-    return n;
-}
-
 static devfs_driver_t drv_blk = {
     .read   = _blk_read,
     .write  = _blk_write,
-    .status = _blk_status,
 };
 
 // Return the device node size in bytes (saturating to 32-bit range).
@@ -114,10 +85,10 @@ int vfsdev_register_block_device(blkdev_t *bd) {
     if (devfs_find(bd->name)) return 0;   // already exposed
 
     devfs_entry_t *e = register_chrdev(bd->name,
-                                       DEVFS_F_SIMPLE | DEVFS_F_BLOCK,
+                                       DEVFS_F_BLOCK,
                                        &drv_blk, bd);
     if (!e) return -1;
-    e->dir_node.size = blk_node_size(bd);
+    e->node.size = blk_node_size(bd);
     blk_node_count++;
     return 0;
 }

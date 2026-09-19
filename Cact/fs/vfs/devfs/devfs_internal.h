@@ -27,4 +27,9 @@ extern devfs_driver_t drv_epoll;
 /* devfs_crypto.c — /dev/crypto kernel crypto service. */
 extern devfs_driver_t drv_crypto;
 
+/* devfs_proc.c — per-process nodes (/dev/tty, /dev/stdin, /dev/fd, /dev/core)
+ * and the pty namespace (/dev/ptmx, /dev/pts).  Called once from devfs_init();
+ * the nodes it publishes must outlive the call. */
+void devfs_proc_init(void);
+
 #endif

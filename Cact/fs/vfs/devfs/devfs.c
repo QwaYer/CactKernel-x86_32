@@ -9,6 +9,7 @@
 #include "mouse.h"
 #include "fb.h"
 #include "validate.h"
+#include "tty.h"
 
 // Global devfs state
 static vfs_node_t    devfs_root;
@@ -17,6 +18,15 @@ static int            devfs_ready = 0;
 
 // /dev/modinfo — virtual file, PCI driver list (see pci_driver_modinfo_read)
 static vfs_node_t modinfo_node;
+
+// Ready-made nodes published straight into the root (per-process nodes, /dev/fd
+// and /dev/pts directories, ...).  See devfs_add_node().
+#define DEVFS_MAX_EXTRA 24
+static struct {
+    const char *name;
+    vfs_node_t *node;
+} extra_nodes[DEVFS_MAX_EXTRA];
+static int extra_count = 0;
 
 // data node ops (read/write/ioctl)
 static int _data_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
@@ -41,89 +51,6 @@ static vfs_ops_t data_ops = {
     .read  = _data_read,
     .write = _data_write,
     .ioctl = _data_ioctl,
-};
-
-// ctl node ops (write-only control channel)
-static int _ctl_write(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
-    (void)off;
-    devfs_entry_t *e = (devfs_entry_t *)node->priv;
-    if (!e || !e->drv || !e->drv->ctl) return -1;
-    return e->drv->ctl(e->drv_priv, buf, size);
-}
-
-static vfs_ops_t ctl_ops = {
-    .write = _ctl_write,
-};
-
-// status node ops (read-only diagnostic text)
-static int _status_read(vfs_node_t *node, uint32_t off, uint32_t size, char *buf) {
-    devfs_entry_t *e = (devfs_entry_t *)node->priv;
-    if (!e || !e->drv || !e->drv->status) return 0;
-    if (off > 0) return 0;
-    char tmp[256];
-    int n = e->drv->status(e->drv_priv, tmp, sizeof(tmp));
-    if (n <= 0) return 0;
-    if ((uint32_t)n > size) n = (int)size;
-    memcpy(buf, tmp, (uint32_t)n);
-    return n;
-}
-
-static vfs_ops_t status_ops = {
-    .read = _status_read,
-};
-
-// per-device directory ops (data, ctl, status sub-nodes)
-static vfs_node_t *_dev_dir_walk(vfs_node_t *dir, const char *name) {
-    devfs_entry_t *e = (devfs_entry_t *)dir->priv;
-    if (!e) return 0;
-    if (streq(name, "data"))   return &e->data_node;
-    if (streq(name, "ctl")   && e->drv && e->drv->ctl)    return &e->ctl_node;
-    if (streq(name, "status") && e->drv && e->drv->status) return &e->status_node;
-    return 0;
-}
-
-static vfs_dirent_t _dev_dir_de;
-
-static vfs_dirent_t *_dev_dir_readdir(vfs_node_t *dir, uint32_t index) {
-    devfs_entry_t *e = (devfs_entry_t *)dir->priv;
-    if (!e) return 0;
-
-    uint32_t i = 0;
-
-    if (i++ == index) {
-        strlcpy(_dev_dir_de.name, "data", 128);
-        _dev_dir_de.inode = 0;
-        return &_dev_dir_de;
-    }
-    if (e->drv && e->drv->ctl) {
-        if (i++ == index) {
-            strlcpy(_dev_dir_de.name, "ctl", 128);
-            _dev_dir_de.inode = 1;
-            return &_dev_dir_de;
-        }
-    }
-    if (e->drv && e->drv->status) {
-        if (i++ == index) {
-            strlcpy(_dev_dir_de.name, "status", 128);
-            _dev_dir_de.inode = 2;
-            return &_dev_dir_de;
-        }
-    }
-    return 0;
-}
-
-static void _dev_dir_listdir(vfs_node_t *dir) {
-    devfs_entry_t *e = (devfs_entry_t *)dir->priv;
-    if (!e) return;
-    printk("  data\n");
-    if (e->drv && e->drv->ctl)    printk("  ctl\n");
-    if (e->drv && e->drv->status) printk("  status\n");
-}
-
-static vfs_ops_t dev_dir_ops = {
-    .walk    = _dev_dir_walk,
-    .readdir = _dev_dir_readdir,
-    .listdir = _dev_dir_listdir,
 };
 
 // Directory-entry ops (DEVFS_F_DIR): the registered driver owns the children,
@@ -153,7 +80,10 @@ static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     if (streq(name, "modinfo")) return &modinfo_node;
     for (devfs_entry_t *e = dev_list; e; e = e->next)
         if (streq(e->name, name))
-            return &e->dir_node;
+            return &e->node;
+    for (int i = 0; i < extra_count; i++)
+        if (streq(extra_nodes[i].name, name))
+            return extra_nodes[i].node;
     return 0;
 }
 
@@ -174,6 +104,13 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
             return &_root_de;
         }
     }
+    for (int k = 0; k < extra_count; k++) {
+        if (i++ == index) {
+            strlcpy(_root_de.name, extra_nodes[k].name, 128);
+            _root_de.inode = i;
+            return &_root_de;
+        }
+    }
     return 0;
 }
 
@@ -183,7 +120,13 @@ static void _root_listdir(vfs_node_t *dir) {
     for (devfs_entry_t *e = dev_list; e; e = e->next) {
         printk("  ");
         printk(e->name);
-        if (!(e->flags & DEVFS_F_SIMPLE)) printk("/");
+        if (e->flags & DEVFS_F_DIR) printk("/");
+        printk("\n");
+    }
+    for (int k = 0; k < extra_count; k++) {
+        printk("  ");
+        printk(extra_nodes[k].name);
+        if (extra_nodes[k].node->type == VFS_DIRECTORY) printk("/");
         printk("\n");
     }
 }
@@ -201,47 +144,20 @@ static int _modinfo_read(vfs_node_t *node, uint32_t off, uint32_t size, char *bu
 
 static vfs_ops_t modinfo_ops = { .read = _modinfo_read };
 
-// populate a devfs_entry_t with its VFS nodes (simple or directory-based)
+// populate a devfs_entry_t with its single VFS node
 static void _fill_entry(devfs_entry_t *e) {
-    memset(&e->dir_node, 0, sizeof(vfs_node_t));
-    strlcpy(e->dir_node.name, e->name, 128);
-    e->dir_node.priv = e;
+    memset(&e->node, 0, sizeof(vfs_node_t));
+    strlcpy(e->node.name, e->name, 128);
+    e->node.priv = e;
 
     if (e->flags & DEVFS_F_DIR) {
-        e->dir_node.type = VFS_DIRECTORY;
-        e->dir_node.ops  = &dev_subdir_ops;
+        e->node.type = VFS_DIRECTORY;
+        e->node.ops  = &dev_subdir_ops;
         return;
     }
 
-    if (e->flags & DEVFS_F_SIMPLE) {
-        e->dir_node.type = (e->flags & DEVFS_F_BLOCK)
-                           ? VFS_BLOCKDEVICE : VFS_CHARDEVICE;
-        e->dir_node.ops  = &data_ops;
-        return;  // simple devices expose only the data node
-    }
-
-    // complex devices have a directory with data/ctl/status children
-    e->dir_node.type = VFS_DIRECTORY;
-    e->dir_node.ops  = &dev_dir_ops;
-
-    memset(&e->data_node, 0, sizeof(vfs_node_t));
-    strlcpy(e->data_node.name, "data", 128);
-    e->data_node.type = (e->flags & DEVFS_F_BLOCK)
-                        ? VFS_BLOCKDEVICE : VFS_CHARDEVICE;
-    e->data_node.ops  = &data_ops;
-    e->data_node.priv = e;
-
-    memset(&e->ctl_node, 0, sizeof(vfs_node_t));
-    strlcpy(e->ctl_node.name, "ctl", 128);
-    e->ctl_node.type = VFS_FILE;
-    e->ctl_node.ops  = &ctl_ops;
-    e->ctl_node.priv = e;
-
-    memset(&e->status_node, 0, sizeof(vfs_node_t));
-    strlcpy(e->status_node.name, "status", 128);
-    e->status_node.type = VFS_FILE;
-    e->status_node.ops  = &status_ops;
-    e->status_node.priv = e;
+    e->node.type = (e->flags & DEVFS_F_BLOCK) ? VFS_BLOCKDEVICE : VFS_CHARDEVICE;
+    e->node.ops  = &data_ops;
 }
 
 // return the devfs root node (registered in VFS mount table)
@@ -251,6 +167,19 @@ vfs_node_t *devfs_get_root(void) { return &devfs_root; }
 devfs_entry_t *devfs_find(const char *name) {
     for (devfs_entry_t *e = dev_list; e; e = e->next)
         if (streq(e->name, name)) return e;
+    return 0;
+}
+
+int devfs_add_node(const char *name, vfs_node_t *node) {
+    if (!name || !node) return -1;
+    if (extra_count >= DEVFS_MAX_EXTRA) return -1;
+    if (devfs_find(name)) return -1;
+    for (int i = 0; i < extra_count; i++)
+        if (streq(extra_nodes[i].name, name)) return -1;
+
+    extra_nodes[extra_count].name = name;
+    extra_nodes[extra_count].node = node;
+    extra_count++;
     return 0;
 }
 
@@ -297,6 +226,8 @@ int unregister_chrdev(const char *name) {
 void devfs_init(void) {
     if (devfs_ready) return;
 
+    tty_init();
+
     memset(&devfs_root, 0, sizeof(vfs_node_t));
     strlcpy(devfs_root.name, "dev", 128);
     devfs_root.type = VFS_DIRECTORY;
@@ -307,39 +238,50 @@ void devfs_init(void) {
     modinfo_node.type = VFS_FILE;
     modinfo_node.ops  = &modinfo_ops;
 
-    register_chrdev("null",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_null,   0);
-    register_chrdev("zero",    DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_zero,   0);
-    register_chrdev("random",  DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
-    register_chrdev("urandom", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_random, 0);
+    register_chrdev("null",    DEVFS_F_CHAR,  &drv_null,   0);
+    register_chrdev("zero",    DEVFS_F_CHAR,  &drv_zero,   0);
+    register_chrdev("random",  DEVFS_F_CHAR,  &drv_random, 0);
+    register_chrdev("urandom", DEVFS_F_CHAR,  &drv_random, 0);
 
     // Block device nodes (/dev/<disk>, /dev/<part>) are registered by vfsdev,
     // not by devfs: devfs only owns character and kernel-service devices.
 
-    register_chrdev("tty", DEVFS_F_SIMPLE|DEVFS_F_CHAR,  &drv_tty, 0);
+    // Terminal family, Linux-style: /dev/tty0 aliases the active VT, tty1..N
+    // are the virtual terminals themselves.
+    register_chrdev("tty0", DEVFS_F_CHAR, &drv_tty, (void *)0);
+    for (int i = 1; i <= tty_count(); i++) {
+        char nm[16];
+        snprintf(nm, sizeof(nm), "tty%d", i);
+        register_chrdev(nm, DEVFS_F_CHAR, &drv_tty, (void *)(uintptr_t)i);
+    }
 
-    register_chrdev("keyboard", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_keyboard, 0);
-    register_chrdev("mouse",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_mouse,    0);
+    register_chrdev("keyboard", DEVFS_F_CHAR, &drv_keyboard, 0);
+    register_chrdev("mouse",    DEVFS_F_CHAR, &drv_mouse,    0);
 
-    register_chrdev("fb0", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_fb, 0);
+    register_chrdev("fb0", DEVFS_F_CHAR, &drv_fb, 0);
 
     // Kernel-service devices (new VFS-node model)
-    register_chrdev("console", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_console, 0);
-    register_chrdev("sys",     DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_sys,     0);
-    register_chrdev("net",     DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_net,     0);
-    register_chrdev("pipe",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_pipe,    0);
-    register_chrdev("memfd",   DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_memfd,   0);
-    register_chrdev("eventfd", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_eventfd, 0);
-    register_chrdev("timerfd", DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_timerfd, 0);
-    register_chrdev("signalfd",DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_signalfd,0);
-    register_chrdev("epoll",   DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_epoll,   0);
-    register_chrdev("kmsg",    DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_kmsg,    0);
-    register_chrdev("crypto",  DEVFS_F_SIMPLE|DEVFS_F_CHAR, &drv_crypto,  0);
+    register_chrdev("console", DEVFS_F_CHAR, &drv_console, 0);
+    register_chrdev("sys",     DEVFS_F_CHAR, &drv_sys,     0);
+    register_chrdev("net",     DEVFS_F_CHAR, &drv_net,     0);
+    register_chrdev("pipe",    DEVFS_F_CHAR, &drv_pipe,    0);
+    register_chrdev("memfd",   DEVFS_F_CHAR, &drv_memfd,   0);
+    register_chrdev("eventfd", DEVFS_F_CHAR, &drv_eventfd, 0);
+    register_chrdev("timerfd", DEVFS_F_CHAR, &drv_timerfd, 0);
+    register_chrdev("signalfd",DEVFS_F_CHAR, &drv_signalfd,0);
+    register_chrdev("epoll",   DEVFS_F_CHAR, &drv_epoll,   0);
+    register_chrdev("kmsg",    DEVFS_F_CHAR, &drv_kmsg,    0);
+    register_chrdev("crypto",  DEVFS_F_CHAR, &drv_crypto,  0);
+
+    // Per-process nodes (/dev/tty, /dev/stdin|stdout|stderr, /dev/fd, /dev/core)
+    // and the pty namespace (/dev/ptmx, /dev/pts).
+    devfs_proc_init();
 
     uint32_t ndev = 0;
     for (devfs_entry_t *e = dev_list; e; e = e->next) ndev++;
 
-    pr_info("  %-11s : root ready (%u device node(s) + /dev/modinfo)\n",
-            "devfs", ndev);
+    pr_info("  %-11s : root ready (%u device node(s) + %d proc node(s) + /dev/modinfo)\n",
+            "devfs", ndev, extra_count);
 
     devfs_ready = 1;
 }
