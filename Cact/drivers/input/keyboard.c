@@ -1,4 +1,5 @@
 #include "keyboard.h"
+#include "tty.h"
 
 // Volatile globals — written by IRQ handler, read by userspace
 volatile char          last_char          = 0;
@@ -21,6 +22,9 @@ void keyboard_post_key(char c) {
     }
     last_char          = c;
     key_event_happened = 1;
+
+    // Every key also lands on the active VT, which is what /dev/ttyN read from.
+    tty_input(0, c);
 }
 
 // Pop a character from the buffer (called from userspace).

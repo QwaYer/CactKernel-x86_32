@@ -97,7 +97,10 @@ const _: () = assert!(core::mem::offset_of!(VfsDirent, inode) == 128);
 
 /* ── devfs_driver_t ─────────────────────────────────────────────────────── */
 
-/// The five non-directory hooks stay NULL; `walk`/`readdir` are ours.
+/// Mirrors `devfs_driver_t` in Cact/fs/vfs/devfs/devfs.h.  The first five
+/// slots (read/write/ctl/status/ioctl) stay NULL for a DRM directory entry;
+/// `walk`/`readdir` are ours.  The legacy `ctl`/`status` slots are kept
+/// because the C struct keeps them for out-of-tree module compatibility.
 #[repr(C)]
 pub struct DevfsDriver {
     pub before: [*mut c_void; 5],

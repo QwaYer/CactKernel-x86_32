@@ -153,6 +153,11 @@ void printk_color(char* message, uint32_t color);
  * exception dump, which must be logged at a panic level. */
 void printk_color_level(int level, char* message, uint32_t color);
 void console_puts(char* message, uint32_t color);
+/* Framebuffer-only render of an explicit-length buffer (VT repaint). */
+void console_replay(const char* message, uint32_t len, uint32_t color);
+/* Called by console_puts() for every rendered byte stream; the tty core uses it
+ * to record console output in the active VT's scrollback. */
+void console_on_write(const char *buf, uint32_t len);
 void printk_at   (char* message, int x, int y);
 void clear_screen(void);
 void scroll      (void);

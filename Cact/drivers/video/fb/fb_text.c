@@ -122,7 +122,8 @@ static const uint32_t ansi_colors[16] = {
 
 /* Raw console renderer: framebuffer (or, with no display, serial) only.
  * The kernel message log is fed by printk()/printk_color(), not from here. */
-void console_puts(char* message, uint32_t color) {
+static void _console_emit(const char* message, uint32_t len, uint32_t color,
+                          int to_serial) {
     uint32_t w = fb_get_width();
     uint32_t h = fb_get_height();
     int have_fb = (w != 0 && h != 0);
@@ -130,8 +131,10 @@ void console_puts(char* message, uint32_t color) {
     current_fb_color = color;
 
     if (unlikely(!have_fb)) {
-        for (int i = 0; message[i] != '\0'; i++) {
+        if (!to_serial) return;
+        for (uint32_t i = 0; i < len; i++) {
             char c = message[i];
+            if (!c) break;
             serial_putc(c);
         }
         return;
@@ -145,19 +148,21 @@ void console_puts(char* message, uint32_t color) {
     uint32_t max_x = w - cellw;
     uint32_t max_y = h - cellh;
 
-    for (int i = 0; message[i] != '\0'; i++) {
+    for (uint32_t i = 0; i < len; i++) {
         char c = message[i];
+        if (!c) break;
 
         if (c == '\033') {
-            serial_putc(c);
+            if (to_serial) serial_putc(c);
             i++;
+            if (i >= len) break;
             if (!message[i]) break;
-            serial_putc(message[i]);
+            if (to_serial) serial_putc(message[i]);
             if (message[i] != '[') continue;
             i++;
 
             int params[4], np = 0, val = 0, has_val = 0;
-            while (message[i]) {
+            while (i < len && message[i]) {
                 if (message[i] >= '0' && message[i] <= '9') {
                     val = val * 10 + (message[i] - '0');
                     has_val = 1;
@@ -166,11 +171,11 @@ void console_puts(char* message, uint32_t color) {
                     if (has_val) params[np++] = val;
                     else params[np++] = 0;
                     val = 0; has_val = 0;
-                    serial_putc(';');
+                    if (to_serial) serial_putc(';');
                     i++;
                 } else {
                     if (has_val) params[np++] = val;
-                    serial_putc(message[i]);
+                    if (to_serial) serial_putc(message[i]);
 
                     if (message[i] == 'm') {
                         for (int p = 0; p < np; p++) {
@@ -218,7 +223,7 @@ void console_puts(char* message, uint32_t color) {
             continue;
         }
 
-        serial_putc(c);
+        if (to_serial) serial_putc(c);
 
         if (c == '\n') {
             cursor_x = 0;
@@ -244,6 +249,24 @@ void console_puts(char* message, uint32_t color) {
     }
 
     fb_flush();
+}
+
+/* Public console sinks.  console_puts() is the normal one (framebuffer plus
+ * serial mirror); console_replay() draws to the framebuffer only, so a VT
+ * repaint does not push a screenful of old text down the serial line.
+ *
+ * console_puts() also feeds console_on_write(), which the tty core uses to keep
+ * the active VT's scrollback in sync with what was actually drawn — that is how
+ * kernel messages survive a VT switch.  console_replay() deliberately skips it
+ * so repainting a terminal does not duplicate its own history. */
+void console_puts(char* message, uint32_t color) {
+    uint32_t len = strlen(message);
+    console_on_write(message, len);
+    _console_emit(message, len, color, 1);
+}
+
+void console_replay(const char* message, uint32_t len, uint32_t color) {
+    _console_emit(message, len, color, 0);
 }
 
 /* Console line with no explicit level: render it and log it at the default

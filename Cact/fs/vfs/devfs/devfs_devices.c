@@ -9,6 +9,7 @@
 #include "mouse.h"
 #include "fb.h"
 #include "validate.h"
+#include "tty.h"
 
 // ── Built-in driver tables ────────────────────────────────────────────────
 
@@ -35,40 +36,19 @@ devfs_driver_t drv_random = { .read=_rand_read, .write=_null_write };
 
 extern int keyboard_read_char(void);
 
+// ── /dev/tty0 + /dev/tty1..N ──────────────────────────────────────────────
+// The VT core owns the terminals; drv_priv is the VT index (0 = active).
 static int _tty_read(void *p, uint32_t off, uint32_t size, char *buf) {
-    (void)p;(void)off;
-    uint32_t i=0;
-    while(i<size){
-        int c;
-        while((c=keyboard_read_char())<0) schedule();
-        buf[i++]=(char)c;
-        /* One syscall = one key for size==1 (readline); larger reads stay line-oriented. */
-        if (size <= 1) break;
-        if((char)c=='\n') break;
-    }
-    return (int)i;
+    return tty_read((int)(uintptr_t)p, off, size, buf);
 }
 static int _tty_write(void *p, uint32_t off, uint32_t size, char *buf) {
-    (void)p;(void)off;
-    if (!buf || !validate_user_ptr(buf, size)) return -1;
-    char tmp[256]; uint32_t i=0;
-    while(i<size){
-        uint32_t c=size-i; if(c>=sizeof(tmp))c=sizeof(tmp)-1;
-        memcpy(tmp,buf+i,c); tmp[c]='\0';
-        /* Direct console render — see _console_write(): a tty write must not
-         * re-enter the kernel message log. */
-        console_puts(tmp, COLOR_WHITE); i+=c;
-    }
-    return (int)size;
+    return tty_write((int)(uintptr_t)p, off, size, buf);
 }
-static int _tty_status(void *p, char *buf, uint32_t size) {
-    (void)p;
-    const char *s = "device: tty\ntype: char\n";
-    uint32_t n=0; while(s[n]&&n<size-1){buf[n]=s[n];n++;} buf[n]='\0';
-    return (int)n;
+static int _tty_ioctl(void *p, uint32_t cmd, void *arg) {
+    return tty_ioctl((int)(uintptr_t)p, cmd, arg);
 }
 devfs_driver_t drv_tty = {
-    .read=_tty_read, .write=_tty_write, .status=_tty_status
+    .read=_tty_read, .write=_tty_write, .ioctl=_tty_ioctl
 };
 
 // /dev/keyboard — raw character stream from keyboard circular buffer

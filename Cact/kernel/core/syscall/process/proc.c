@@ -2,6 +2,7 @@
 #include "proc_mm.h"
 #include "vfs.h"
 #include "validate.h"
+#include "tty.h"
 
 // Maximum number of argv/envp entries to validate (prevents runaway loops)
 #define EXEC_VALIDATE_MAX 256
@@ -91,6 +92,9 @@ int sys_exit(struct syscall_frame* regs) {
     // Clear foreground process group if this was the terminal's leader
     if (terminal_fg_pid == current_task->pid)
         terminal_fg_pid = 0;
+
+    // Drop the process's controlling-terminal assignment
+    tty_clear_ctty(current_task->pid);
 
     sched_task_exit((int)regs->ebx);   // sets zombie state, reschedules
 

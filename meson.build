@@ -120,6 +120,8 @@ cact_includes = include_directories(
   'Cact/fs/timerfd',
   'Cact/fs/signalfd',
   'Cact/fs/epoll',
+  'Cact/fs/pty',
+  'Cact/drivers/tty',
   'Cact/fs/vfs/devfs',
   'Cact/drivers/block/pagecache',
   'Cact/fs/vfs/procfs',
@@ -232,6 +234,7 @@ subdir('Cact/fs/eventfd')
 subdir('Cact/fs/timerfd')
 subdir('Cact/fs/signalfd')
 subdir('Cact/fs/epoll')
+subdir('Cact/fs/pty')
 
 # ------------------------------------------------------------------------------
 # Drivers
@@ -251,6 +254,7 @@ subdir('Cact/drivers/pci/pcie')
 subdir('Cact/drivers/quirks/acpi')
 subdir('Cact/drivers/quirks/xhci')
 subdir('Cact/drivers/timer')
+subdir('Cact/drivers/tty')
 subdir('Cact/drivers/usb')
 subdir('Cact/drivers/usb/hid')
 subdir('Cact/drivers/usb/hub')

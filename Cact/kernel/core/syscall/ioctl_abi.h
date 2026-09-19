@@ -526,4 +526,27 @@ typedef struct cact_epoll_wait_arg {
     int32_t  timeout_ms;  // -1 = block, 0 = non-blocking, >0 = deadline
 } cact_epoll_wait_arg_t;
 
+// ===========================================================================
+// tty control (ioctls on /dev/ttyN and /dev/tty). RANGE 0x3D00.
+//
+// These mirror the shape of Linux's VT_* ioctls, but take pointers because
+// the generic sys_ioctl path only forwards pointer arguments to a node.
+// ===========================================================================
+#define CACT_TTYCTL_GET_INDEX   0x3D00  // arg=int* -> VT index of this node (0 = active)
+#define CACT_TTYCTL_VT_ACTIVATE 0x3D01  // arg=int* -> switch the console to VT n
+#define CACT_TTYCTL_VT_GETSTATE 0x3D02  // arg=cact_vt_state_t*
+#define CACT_TTYCTL_SET_CTTY    0x3D03  // arg=int* -> make VT n the controlling terminal
+#define CACT_TTYCTL_GET_CTTY    0x3D04  // arg=int* -> controlling VT index (0 = none)
+
+typedef struct cact_vt_state {
+    uint16_t v_active;   // active VT
+    uint16_t v_count;    // number of VTs
+} cact_vt_state_t;
+
+// ===========================================================================
+// /dev/ptmx + /dev/pts/<n> control. RANGE 0x3E00.
+// ===========================================================================
+#define CACT_PTYCTL_GET_NUMBER  0x3E00  // master: arg=int* -> pts number
+#define CACT_PTYCTL_LOCK        0x3E01  // master: arg=int* -> 1 lock, 0 unlock the slave
+
 #endif
