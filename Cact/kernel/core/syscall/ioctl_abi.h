@@ -281,10 +281,23 @@ typedef struct cact_recvfrom_arg {
 #define CACT_NETCTL_NETCFG       0x3404  // arg=cact_netcfg_arg_t* (root): set link config
 #define CACT_NETCTL_SOCKETPAIR   0x3405  // arg=cact_socketpair_arg_t*; fds[2] out
 #define CACT_NETCTL_NETCFG_GET   0x3406  // arg=cact_netcfg_get_t* (out): read link config
+#define CACT_NETCTL_PING_WAIT    0x3407  // arg=cact_ping_wait_arg_t*; returns RTT us or <0
 
 typedef struct cact_socket_arg { uint32_t domain; uint32_t type; uint32_t proto; } cact_socket_arg_t;
 typedef struct cact_socketpair_arg { uint32_t type; uint32_t fds[2]; } cact_socketpair_arg_t;
 typedef struct cact_ping_arg { uint32_t dst_ip; uint32_t id; uint32_t seq; } cact_ping_arg_t;
+// Blocking probe: send one echo request and wait for its reply.  Returns the
+// round-trip time in microseconds, or <0 on timeout.  The out fields describe
+// the reply (source address in host order, ICMP message length in bytes).
+typedef struct cact_ping_wait_arg {
+    uint32_t dst_ip;      // host order
+    uint32_t id;
+    uint32_t seq;
+    uint32_t timeout_ms;
+    uint32_t rtt_us_out;
+    uint32_t src_ip_out;  // host order
+    uint32_t bytes_out;
+} cact_ping_wait_arg_t;
 typedef struct cact_dns_arg { char *name; uint32_t *out_ip; } cact_dns_arg_t;
 
 // Link configuration set by the network manager.  ip_host/mask 0 removes the

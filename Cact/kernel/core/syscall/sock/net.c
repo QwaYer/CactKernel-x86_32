@@ -61,7 +61,7 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
         if (!arg) return -EINVAL;
         if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
         if (ks->kind != KS_TCP) return -1;
-        return tcp_connect(ks->proto_idx, a.addr.addr, ntohs(a.addr.port));
+        return tcp_connect(ks->proto_idx, ntohl(a.addr.addr), ntohs(a.addr.port));
     }
 
     case CACT_SOCKCTL_LISTEN: {
@@ -168,7 +168,7 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
         if (ks->kind == KS_TCP)
             return tcp_send(ks->proto_idx, (uint8_t *)a.buf, (uint16_t)a.len);
         if (ks->kind == KS_UDP)
-            return udp_sock_send(ks->proto_idx, a.dst.addr, ntohs(a.dst.port),
+            return udp_sock_send(ks->proto_idx, ntohl(a.dst.addr), ntohs(a.dst.port),
                                  (const uint8_t *)a.buf, (uint16_t)a.len);
         return -1;
     }

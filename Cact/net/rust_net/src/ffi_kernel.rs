@@ -25,6 +25,12 @@ unsafe extern "C" {
     pub fn create_task(entry: extern "C" fn()) -> *mut c_void;
     pub fn timer_ticks_get() -> u32;
     pub fn sched_sleep_ticks(ticks: u32);
+    pub fn ktime_get_usec() -> u64;
+    pub fn ktime_busy_wait_us(us: u64);
+
+    /// IRQ-saving spinlock (kernel `irq_spinlock_t`: a spin word + saved flags).
+    pub fn irq_spinlock_acquire(lock: *mut c_void);
+    pub fn irq_spinlock_release(lock: *mut c_void);
 
     pub fn read_vfs(node: *mut VfsNode, off: u32, size: u32, buf: *mut c_char) -> c_int;
     pub fn write_vfs(node: *mut VfsNode, off: u32, size: u32, buf: *mut c_char) -> c_int;

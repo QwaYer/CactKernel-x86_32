@@ -147,12 +147,22 @@ pub struct Spinlock {
     pub locked: u32,
 }
 
+/// Counting semaphore driven by the kernel's `sema_init`/`down`/`up`.
+///
+/// MUST stay layout-identical to `cact_sync::semaphore_t`
+/// (`Cact/kernel/sync/src/semaphore.rs`): the same object is handed across the
+/// FFI boundary, and hand-kept copies had already drifted (`count` was missing
+/// here, which pushed `waiter_count` 4 bytes past the end of the object and made
+/// it alias the next static).
 #[repr(C)]
 pub struct Semaphore {
     pub guard: Spinlock,
+    pub count: core::sync::atomic::AtomicI32,
     pub waiters: [*mut c_void; 64],
     pub waiter_count: u32,
 }
+
+const _: () = assert!(core::mem::size_of::<Semaphore>() == 268);
 
 #[repr(C)]
 #[derive(Clone, Copy)]

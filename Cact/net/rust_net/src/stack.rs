@@ -36,6 +36,34 @@ static mut ICMP_TX_PAYLOAD: [u8; 512] = [0; 512];
 pub(crate) static mut ICMP_HANDLE: Option<smoltcp::iface::SocketHandle> = None;
 static mut ICMP_IDENT_BOUND: u16 = 0xFFFF;
 
+/// Serializes IFACE / SOCKET_SET / PHY between the background poll task and
+/// syscall contexts.  With more than one CPU the poll task and a syscall can
+/// otherwise run `iface.poll()` at the same time: that corrupts smoltcp's rings
+/// and, because `PHY` stages a received frame in a *single* slot, one of the two
+/// frames is silently overwritten and lost.
+static mut STACK_LOCK: [u32; 2] = [0; 2]; // kernel irq_spinlock_t: spin + saved flags
+
+pub(crate) struct StackGuard;
+
+impl StackGuard {
+    #[inline]
+    pub(crate) fn new() -> Self {
+        unsafe {
+            ffi_kernel::irq_spinlock_acquire(core::ptr::addr_of_mut!(STACK_LOCK).cast());
+        }
+        StackGuard
+    }
+}
+
+impl Drop for StackGuard {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            ffi_kernel::irq_spinlock_release(core::ptr::addr_of_mut!(STACK_LOCK).cast());
+        }
+    }
+}
+
 /// Set after `stack_init` from `register_netdev`.
 pub static mut STACK_READY: bool = false;
 
@@ -199,6 +227,7 @@ pub fn stack_enqueue_rx(skb: *mut Skb) {
 }
 
 pub unsafe fn stack_teardown() {
+    let _stack_guard = StackGuard::new();
     if let Some(ref mut socks) = SOCKET_SET {
         crate::dns_resolve::remove_socket(socks);
     }
@@ -216,6 +245,7 @@ pub unsafe fn stack_teardown() {
 }
 
 pub fn stack_init() {
+    let _stack_guard = StackGuard::new();
     unsafe {
         if STACK_READY {
             return;
@@ -248,6 +278,7 @@ pub fn stack_init() {
 }
 
 pub fn stack_poll() {
+    let _stack_guard = StackGuard::new();
     unsafe {
         let nic = active_nic_ptr();
         if let Some(poll) = (!nic.is_null())
@@ -270,6 +301,7 @@ pub fn stack_poll() {
 
 /// Fire-and-forget ICMPv4 echo request (kernel ping helper).
 pub fn icmp_echo_request_host(dst_ip_host: u32, id: u16, seq: u16) -> bool {
+    let _stack_guard = StackGuard::new();
     unsafe {
         if !STACK_READY {
             return false;
@@ -307,7 +339,10 @@ pub fn icmp_echo_request_host(dst_ip_host: u32, id: u16, seq: u16) -> bool {
         let dst = IpAddress::Ipv4(ipv4_from_host(dst_ip_host));
         use smoltcp::phy::ChecksumCapabilities;
         use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr};
-        const PAYLOAD: &[u8] = b"CactOS ping!";
+        /* 56 bytes of data make the ICMP message 64 bytes, matching the default
+         * Linux `ping` payload so the reply sizes read the same. */
+        const PAYLOAD: &[u8] =
+            b"CactOS ping! 0123456789012345678901234567890123456789012";
         let repr = Icmpv4Repr::EchoRequest {
             ident: id,
             seq_no: seq,
@@ -330,9 +365,45 @@ pub(crate) fn with_iface_sockets<R, F>(f: F) -> Option<R>
 where
     F: FnOnce(&mut Interface, &mut SocketSet<'static>) -> R,
 {
+    let _stack_guard = StackGuard::new();
     unsafe {
         let iface = IFACE.as_mut()?;
         let socks = SOCKET_SET.as_mut()?;
         Some(f(iface, socks))
+    }
+}
+
+/// Dequeue the echo reply matching `(id, seq)` from the kernel ICMP socket.
+///
+/// The socket is bound to `Ident(id)`, so smoltcp already filters by identifier;
+/// the sequence check is what tells one probe from the next.  Returns
+/// `(source address in host order, ICMP message length)`.
+pub fn icmp_try_recv_reply(id: u16, seq: u16) -> Option<(u32, usize)> {
+    let _stack_guard = StackGuard::new();
+    unsafe {
+        let socks = SOCKET_SET.as_mut()?;
+        let handle = ICMP_HANDLE?;
+        let sock = socks.get_mut::<icmp::Socket>(handle);
+        loop {
+            let Ok((payload, addr)) = sock.recv() else {
+                return None;
+            };
+            let Ok(pkt) = smoltcp::wire::Icmpv4Packet::new_checked(payload) else {
+                continue;
+            };
+            let caps = smoltcp::phy::ChecksumCapabilities::ignored();
+            let Ok(repr) = smoltcp::wire::Icmpv4Repr::parse(&pkt, &caps) else {
+                continue;
+            };
+            if let smoltcp::wire::Icmpv4Repr::EchoReply { ident, seq_no, .. } = repr {
+                if ident == id && seq_no == seq {
+                    let src = match addr {
+                        IpAddress::Ipv4(v4) => v4.to_bits(),
+                        _ => 0,
+                    };
+                    return Some((src, payload.len()));
+                }
+            }
+        }
     }
 }

@@ -336,6 +336,18 @@ static int _net_ioctl(void *p, uint32_t cmd, void *arg) {
         return rust_net_ping_echo_host(a.dst_ip, (uint16_t)a.id, (uint16_t)a.seq);
     }
 
+    case CACT_NETCTL_PING_WAIT: {
+        cact_ping_wait_arg_t a;
+        int rtt;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        rtt = rust_net_ping_wait(a.dst_ip, (uint16_t)a.id, (uint16_t)a.seq,
+                                 a.timeout_ms, &a.src_ip_out, &a.bytes_out);
+        a.rtt_us_out = (rtt < 0) ? 0u : (uint32_t)rtt;
+        if (copy_to_user(arg, &a, sizeof(a)) != 0) return -EFAULT;
+        return rtt;
+    }
+
     case CACT_NETCTL_DNS_RESOLVE: {
         cact_dns_arg_t a;
         if (!arg) return -EINVAL;
