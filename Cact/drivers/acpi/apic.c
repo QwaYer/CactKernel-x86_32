@@ -188,6 +188,38 @@ void apic_clear_in_service(void)
                 "apic", retired);
 }
 
+/* Handler for the spurious vector (SVR[7:0], 0xFF).
+ *
+ * The specification says a spurious delivery does not set an in-service bit,
+ * so a bare return is the correct handler — and that is what this used to be.
+ * This hardware sets the bit anyway.  Left in service it pins PPR at 0xF0, the
+ * highest priority class, which blocks every interrupt of class <= F: the
+ * LAPIC timer (0xFE) and every MSI-X vector (0x30-0xEF) with it.  The machine
+ * stays alive on polling alone — boot completes, PCI enumeration and xHCI
+ * device bring-up print success, MSI-X "enables" — while the timer never
+ * ticks and a USB keyboard never delivers a report.
+ *
+ * So retire the bit here, where it was set.  A spurious interrupt that keeps
+ * arriving is a finding in itself: report the first few with the state that
+ * explains them, and stay quiet afterwards instead of flooding the log from
+ * interrupt context. */
+void spurious_apic_handler(void)
+{
+    static uint32_t spurious_count;
+
+    spurious_count++;
+    if (spurious_count <= 8) {
+        pr_warn("  %-11s : spurious interrupt #%u (isr=%d irr=%d ppr=0x%x) — "
+                "retiring in-service bit\n",
+                "apic", (unsigned)spurious_count,
+                lapic_pending_vector(LAPIC_ISR),
+                lapic_pending_vector(LAPIC_IRR),
+                (unsigned)apic_lapic_read(LAPIC_PPR));
+    }
+
+    apic_clear_in_service();
+}
+
 /* Program the mandatory LAPIC state: TPR 0, all LVT entries masked with a
  * spurious vector, and the APIC enabled through the SVR. */
 static void lapic_common_setup(void)
@@ -453,9 +485,17 @@ const char *apic_x2apic_note(void) { return x2apic_note; }
  * apic_is_enabled(), which only flips after the whole APIC/IOAPIC bring-up. */
 bool apic_lapic_ready(void) { return apic_x2apic != 0 || lapic != NULL; }
 
+/* Retire the in-service entry of whichever interrupt is being handled.
+ *
+ * Gated on readiness, not on apic_enabled: the flag only flips at the very end
+ * of apic_init(), after the IOAPIC redirections and the timer LVT are unmasked,
+ * so an interrupt delivered in that window runs its handler and then drops its
+ * EOI — and the vector stays in service, pinning PPR for good.  Writing an EOI
+ * is valid for as long as the LAPIC can be addressed, and is harmless when
+ * nothing is in service. */
 void apic_eoi(void)
 {
-    if (apic_enabled && apic_lapic_ready())
+    if (apic_lapic_ready())
         apic_lapic_write(LAPIC_EOI, 0);
 }
 

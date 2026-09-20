@@ -240,15 +240,15 @@ int _apic_read(uint32_t off, uint32_t size, char *buf) {
         }
     }
 
-    _A("MSI-X vectors   : 0x");
-    { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)MSIX_VECTOR_BASE); _A(h); }
+    _A("irq vectors     : 0x");
+    { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)MSIDEV_VECTOR_BASE); _A(h); }
     _A("-0x");
-    { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)(MSIX_VECTOR_END - 1)); _A(h); }
-    _A(" ("); _N(MSIX_VECTOR_COUNT); _A(" total)\n");
+    { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)(MSIDEV_VECTOR_END - 1)); _A(h); }
+    _A(" ("); _N(MSIDEV_VECTOR_COUNT); _A(" total)\n");
 
-    int used = msix_used_vectors();
-    _A("MSI-X used      : "); _N(used); _A("\n");
-    _A("MSI-X free      : "); _N(MSIX_VECTOR_COUNT - used); _A("\n");
+    int used = msidev_used_vectors();
+    _A("irq vectors used: "); _N(used); _A("\n");
+    _A("irq vectors free: "); _N(MSIDEV_VECTOR_COUNT - used); _A("\n");
 
     #undef _A
     #undef _N

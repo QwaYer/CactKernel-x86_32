@@ -304,7 +304,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         pr_info("  %-11s : %u worker(s) online\n", "smp", (unsigned)s_online);
     }
 
-    msix_init();
+    msidev_init();
 
     // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
     // kmods can register_blkdev(); otherwise mntfs sees no boot disk.
@@ -381,7 +381,7 @@ void kernel_resume_hardware(void) {
 
     /* Device-side state that lives in MMIO: the MSI-X tables were cleared
      * with the rest of the controller registers. */
-    msix_restore();
+    msidev_restore();
 
     /* Controller-level re-initialisation for the devices whose drivers keep
      * runtime state: a reset host controller has to be brought up and

@@ -13,9 +13,9 @@ kernel_objects += custom_target('asm-device-isrs',
   output: 'device_isrs.o',
   command: [nasm, '-f', 'elf32', '@INPUT@', '-o', '@OUTPUT@'])
 
-kernel_objects += custom_target('asm-msix-stubs',
-  input: 'msix_stubs.asm',
-  output: 'msix_stubs.o',
+kernel_objects += custom_target('asm-msidev-stubs',
+  input: 'msidev_stubs.asm',
+  output: 'msidev_stubs.o',
   command: [nasm, '-f', 'elf32', '@INPUT@', '-o', '@OUTPUT@'])
 
 kernel_objects += custom_target('asm-syscall-entries',

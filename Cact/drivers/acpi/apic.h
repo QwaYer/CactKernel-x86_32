@@ -14,6 +14,10 @@ void apic_probe(const char *tag, unsigned ms, unsigned ticks);
 /* Retire all in-service LAPIC entries (loops: one EOI clears only the highest
  * bit).  A stale entry holds PPR up and blocks the timer's priority class. */
 void apic_clear_in_service(void);
+/* Handler for the spurious vector (0xFF), installed at that IDT gate.  It
+ * retires the in-service bit the hardware sets there and would otherwise
+ * leave pinning PPR.  Must cope with a LAPIC that is still mid-bring-up. */
+void spurious_apic_handler(void);
 void apic_eoi(void);
 int  apic_pci_vector(uint8_t irq_pin);
 
