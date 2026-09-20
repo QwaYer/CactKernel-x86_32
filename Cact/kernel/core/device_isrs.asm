@@ -13,6 +13,7 @@ extern on_timer_tick
 extern timer_tick
 extern irq_apic_eoi
 extern xhci_irq_handler
+extern spurious_apic_handler
 extern energy_ipi_halt_handle
 extern energy_ipi_wake_handle
 
@@ -82,10 +83,23 @@ pci_isr:
     iretd
 
 ; ---------------------------------------------------------------------------
-; APIC spurious interrupt handler — must be valid but does nothing (APIC
-; doesn't expect EOI for spurious vectors).
+; APIC spurious interrupt handler.  The spec says a spurious delivery sets no
+; in-service bit and therefore needs no EOI, but this hardware does set the
+; bit: left in service it pins PPR at 0xF0 and blocks the LAPIC timer (0xFE)
+; along with every MSI-X vector (0x30-0xEF).  The handler therefore retires
+; the bit itself — see spurious_apic_handler().
 ; ---------------------------------------------------------------------------
 spurious_apic_isr:
+    pusha
+    push ds
+    push es
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    call spurious_apic_handler
+    pop es
+    pop ds
+    popa
     iretd
 
 ; ---------------------------------------------------------------------------

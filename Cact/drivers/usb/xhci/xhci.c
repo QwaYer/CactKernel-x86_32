@@ -43,8 +43,9 @@ static int xhci_pci_probe(pci_device_t *pdev) {
     }
     if (!mmio) { pr_warn("  %-11s : MMIO BAR missing\n", "xhci"); return -1; }
 
-    /* Memory space + bus mastering on.  Legacy INTx is disabled for good:
-     * this driver delivers interrupts through MSI-X and nothing else. */
+    /* Memory space + bus mastering on.  Legacy INTx stays off: this driver
+     * delivers interrupts through MSI-X, or through MSI where the controller
+     * has no MSI-X, and nothing else. */
     pcidev_enable_mmio(pdev);
     pcidev_enable_bus_master(pdev);
     pcidev_disable_intx(pdev);
@@ -53,28 +54,16 @@ static int xhci_pci_probe(pci_device_t *pdev) {
     if (quirks & XHCI_QUIRK_SPURIOUS_REBOOT)
         pr_info("  %-11s : spurious-reboot quirk active\n", "xhci");
 
-    volatile struct msix_table_entry *table = NULL;
-    uint32_t table_size = 0;
-    int cap_off = pci_msix_support(pdev);
-    if (!cap_off || pci_msix_table_map(pdev, &table, &table_size) != 0 || !table_size) {
-        pr_err("  %-11s : MSI-X unavailable (cap_off=%d) — controller not supported\n",
-               "xhci", (int)cap_off);
-        return -1;
-    }
-
-    int vec = msix_alloc_vector();
+    /* msidev picks the best mechanism the controller offers and does the
+     * vector/table/enable dance, so the driver only supplies the handler. */
+    int vec = msidev_register(pdev, xhci_irq_handler);
     if (vec <= 0) {
-        pr_err("  %-11s : no free MSI-X vector\n", "xhci");
+        pr_err("  %-11s : no MSI-X and no MSI — controller not supported\n", "xhci");
         return -1;
     }
-
-    msix_register_handler(vec, xhci_irq_handler);
-    pci_msix_enable(pdev, vec, table, 0);
-    /* MSI-X enable/vector line is reported once by pci_msix_enable(). */
 
     if (xhci_init_one(mmio, quirks) < 0) {
-        msix_unregister_handler(vec);
-        msix_free_vector(vec);
+        msidev_unregister(vec);
         return -1;
     }
     return 0;

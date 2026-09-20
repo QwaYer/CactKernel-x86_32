@@ -2,57 +2,30 @@
 #define CACT_MSI_H
 
 #include <stdint.h>
-#include <stdbool.h>
 #include "pci_enum.h"
 
-#define MSIX_VECTOR_BASE    0x30
-#define MSIX_VECTOR_COUNT   192
-#define MSIX_VECTOR_END     (MSIX_VECTOR_BASE + MSIX_VECTOR_COUNT)
-
-#define MSIX_TABLE_ENTRY_SIZE   16
-
-#define MSIX_VECTOR_CTRL_MASK   (1u << 0)
-
-struct msix_table_entry {
-    uint32_t msg_addr_lo;
-    uint32_t msg_addr_hi;
-    uint32_t msg_data;
-    uint32_t vector_ctrl;
-} __attribute__((packed));
-
-struct msix_cap {
-    uint16_t    cap_id;
-    uint16_t    msg_ctrl;
-    uint32_t    table_offset;
-    uint32_t    pba_offset;
-};
-
-void msix_init(void);
-int  msix_alloc_vector(void);
-void msix_free_vector(int vector);
-int  msix_register_handler(int vector, void (*handler)(void));
-void msix_unregister_handler(int vector);
-void msix_dispatch(unsigned int vector);
-
-int  pci_msix_support(pci_device_t *dev);
-int  pci_msix_enable(pci_device_t *dev, int vector,
-                     volatile struct msix_table_entry *table,
-                     unsigned int entry_idx);
-int  pci_msix_table_map(pci_device_t *dev,
-                        volatile struct msix_table_entry **table_out,
-                        uint32_t *table_size_out);
-int  pci_msix_pba_map(pci_device_t *dev,
-                      volatile uint32_t **pba_out);
-
-/* Re-program the device-side MSI-X tables after a resume.
+/*
+ * Umbrella header for the interrupt subsystem.  The pieces are split by
+ * mechanism so the layers stay separable:
  *
- * The MSI-X enable bit travels with the configuration snapshot, but the table
- * itself lives in device MMIO and is cleared by the platform reset, so every
- * enabled entry has to be written again with the LAPIC address and vector. */
-void msix_restore(void);
+ *   msidev.h — vector pool, IDT stubs, dispatch, msidev_register()
+ *   msix.h   — MSI-X capability (ID 0x11)
+ *   msi.h    — MSI capability (ID 0x05), declared below
+ */
+#include "msidev.h"
+#include "msix.h"
 
-int msix_used_vectors(void);
-
-extern uint32_t msix_stub_table[];
+/*
+ * MSI (capability ID 0x05) — the single-message predecessor of MSI-X, for
+ * controllers that expose MSI but no MSI-X (e.g. Intel PCH xHCI).  An MSI
+ * interrupt is just a LAPIC message carrying the vector, so delivery reuses
+ * the shared pool from msidev.h.
+ *
+ * Unlike the MSI-X table, the MSI message registers live in configuration
+ * space below 0x100, so the suspend/resume configuration snapshot already
+ * restores them — there is no MSI counterpart to msix_restore().
+ */
+int pci_msi_support(pci_device_t *dev);
+int pci_msi_enable(pci_device_t *dev, int vector);
 
 #endif
