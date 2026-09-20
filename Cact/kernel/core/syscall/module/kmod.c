@@ -37,6 +37,9 @@
 #ifndef EOPNOTSUPP
 #define EOPNOTSUPP 95
 #endif
+#ifndef ENOSPC
+#define ENOSPC 28
+#endif
 
 // Module load/unload core.  These are reached through the /dev/sys node
 // ioctls (CACT_SYSCTL_MODULE_LOAD/UNLOAD); the old sys_module_* trap
@@ -64,9 +67,77 @@ static int parse_pci_modinfo_index(const char *name, int *out_idx) {
     return 0;
 }
 
-static pci_driver_t usermod_pci_drv;
-static char         usermod_path_store[256];
-static int          usermod_slot_active;
+// Resident PCI module slots.  A .cctk PCI module occupies one slot for as long
+// as it stays loaded; the slot owns the pci_driver_t handed to
+// pci_register_driver() plus the module path it has to keep alive (module_path
+// is read back on lazy load and printed by /dev/modinfo).  Several modules can
+// be resident at once — this replaces the single "usermod" slot, which made the
+// second modload fail with EBUSY.
+#define KMOD_MAX_SLOTS 8
+#define KMOD_PATH_MAX  256
+
+typedef struct {
+    int          used;
+    char         name[PCI_DRIVER_NAME_MAX];
+    char         path[KMOD_PATH_MAX];
+    pci_driver_t drv;
+} kmod_slot_t;
+
+static kmod_slot_t kmod_slots[KMOD_MAX_SLOTS];
+
+// Instance name: module basename with the trailing ".cctk" stripped, spaces
+// folded to underscores ("/lib/virtio_net.cctk" -> "virtio_net").  This is the
+// name the module is registered and unloaded under.
+static void kmod_instance_name(const char *path, char *out, int out_sz) {
+    const char *base = path;
+    for (const char *p = path; p && *p; p++)
+        if (*p == '/') base = p + 1;
+
+    int i = 0;
+    while (base[i] && i < out_sz - 1) {
+        char c = (base[i] == ' ') ? '_' : base[i];
+        if (c == '.' && base[i + 1] == 'c' && base[i + 2] == 'c' &&
+            base[i + 3] == 't' && base[i + 4] == 'k')
+            break;
+        out[i++] = c;
+    }
+    out[i] = '\0';
+}
+
+static kmod_slot_t *kmod_slot_free(void) {
+    for (int i = 0; i < KMOD_MAX_SLOTS; i++)
+        if (!kmod_slots[i].used)
+            return &kmod_slots[i];
+    return 0;
+}
+
+static kmod_slot_t *kmod_slot_by_name(const char *name) {
+    if (!name || !name[0]) return 0;
+    for (int i = 0; i < KMOD_MAX_SLOTS; i++)
+        if (kmod_slots[i].used && streq(kmod_slots[i].name, name))
+            return &kmod_slots[i];
+    return 0;
+}
+
+static kmod_slot_t *kmod_slot_by_drv(const pci_driver_t *drv) {
+    for (int i = 0; i < KMOD_MAX_SLOTS; i++)
+        if (kmod_slots[i].used && &kmod_slots[i].drv == drv)
+            return &kmod_slots[i];
+    return 0;
+}
+
+// Tear a resident module down: run its remove(), free the image, drop the driver
+// from the table and free the slot it came from.  Drivers that no slot owns
+// (none exist today, but pci_driver_t.module_path allows lazy loading) are torn
+// down the same way and simply leave the slot table alone.
+static void kmod_release_driver(pci_driver_t *drv) {
+    if (!drv) return;
+    kmod_slot_t *slot = kmod_slot_by_drv(drv);
+    pci_unload_module(drv);
+    pci_unregister_driver(drv);
+    if (slot)
+        memset(slot, 0, sizeof(*slot));
+}
 
 static int require_root(void) {
     if (!current_task)
@@ -88,6 +159,8 @@ static int peek_errno(int pr) {
 }
 
 // Kernel-string core: load a module whose image path is a kernel buffer.
+// The module takes a free slot under its instance name; loading the same
+// instance twice is EEXIST and running out of slots is ENOSPC.
 int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
     if (require_root() != 0)
         return -EPERM;
@@ -101,12 +174,15 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
     if (fs_mod_detect(path) == 1)
         return fs_mod_load(path);
 
-    if (usermod_slot_active) {
-        pr_warn("kmod slot busy");
-        return -EBUSY;
-    }
+    char name[PCI_DRIVER_NAME_MAX];
+    kmod_instance_name(path, name, (int)sizeof(name));
+    if (!name[0])
+        return -EINVAL;
 
-    _kstrcpy(usermod_path_store, path, (int)sizeof(usermod_path_store));
+    if (kmod_slot_by_name(name)) {
+        pr_warn("kmod module already loaded: %s", name);
+        return -EEXIST;
+    }
 
     uint16_t v, d;
     uint8_t  cc = (uint8_t)PCI_ANY_ID;
@@ -116,7 +192,7 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
         (vendor_id == CACT_MODLOAD_ID_AUTO && device_id == CACT_MODLOAD_ID_AUTO);
 
     if (auto_ids) {
-        int pr = pci_peek_module_manifest(usermod_path_store, &v, &d, &cc, &ss);
+        int pr = pci_peek_module_manifest(path, &v, &d, &cc, &ss);
         if (pr != 0)
             return peek_errno(pr);
     } else {
@@ -128,49 +204,55 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
         d = (uint16_t)device_id;
     }
 
-    memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
-    strncpy(usermod_pci_drv.name, "usermod", PCI_DRIVER_NAME_MAX - 1);
-    usermod_pci_drv.name[PCI_DRIVER_NAME_MAX - 1] = '\0';
-    usermod_pci_drv.vendor_id  = v;
-    usermod_pci_drv.device_id  = d;
-    usermod_pci_drv.class_code = cc;
-    usermod_pci_drv.subclass   = ss;
-    usermod_pci_drv.module_path = usermod_path_store;
-    usermod_pci_drv.probe       = NULL;
+    kmod_slot_t *slot = kmod_slot_free();
+    if (!slot) {
+        pr_warn("kmod no free module slot");
+        return -ENOSPC;
+    }
 
-    if (pci_register_driver(&usermod_pci_drv) != 0)
-        return -EEXIST;   // "usermod" already registered / driver table full
+    strlcpy(slot->path, path, (int)sizeof(slot->path));
+    strlcpy(slot->name, name, (int)sizeof(slot->name));
+    memset(&slot->drv, 0, sizeof(slot->drv));
+    strlcpy(slot->drv.name, name, (int)sizeof(slot->drv.name));
+    slot->drv.vendor_id  = v;
+    slot->drv.device_id  = d;
+    slot->drv.class_code = cc;
+    slot->drv.subclass   = ss;
+    slot->drv.module_path = slot->path;
+    slot->drv.probe       = NULL;
+    slot->used = 1;
 
-    for (pci_device_t* d = pci_device_list; d; d = d->next)
-        pci_driver_match(d);
+    if (pci_register_driver(&slot->drv) != 0) {
+        memset(slot, 0, sizeof(*slot));
+        return -EEXIST;   // duplicate driver name / driver table full
+    }
 
-    if (!usermod_pci_drv.probe) {
+    for (pci_device_t *dev = pci_device_list; dev; dev = dev->next)
+        pci_driver_match(dev);
+
+    if (!slot->drv.probe) {
         // Manifest parsed fine, but no enumerated PCI function matched its
         // VID/DID (or the image failed to relocate and the probe was never
         // linked).  Look for the "[LDR]" lines in the kernel log.
-        pr_warn("kmod probe not linked");
-        pci_unregister_driver(&usermod_pci_drv);
+        pr_warn("kmod probe not linked: %s", name);
+        kmod_release_driver(&slot->drv);
         return -ENODEV;
     }
 
-    usermod_slot_active = 1;
+    pr_info("kmod module loaded: %s (slot %d)", name, (int)(slot - kmod_slots));
     return 0;
 }
 
-// Kernel-string core: unload by driver name / pci index / usermod slot.
-// |name| is a kernel buffer or NULL (NULL clears the usermod slot).
+// Kernel-string core: unload by instance name / pci index, or every resident
+// PCI module at once.  |name| is a kernel buffer or NULL (NULL unloads all).
 int kmod_unload_kname(const char *name) {
     if (require_root() != 0)
         return -EPERM;
 
     if (!name) {
-        if (!usermod_slot_active)
-            return 0;
-        pci_unload_module(&usermod_pci_drv);
-        pci_unregister_driver(&usermod_pci_drv);
-        memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
-        usermod_path_store[0] = '\0';
-        usermod_slot_active   = 0;
+        for (int i = 0; i < KMOD_MAX_SLOTS; i++)
+            if (kmod_slots[i].used)
+                kmod_release_driver(&kmod_slots[i].drv);
         return 0;
     }
 
@@ -194,13 +276,7 @@ int kmod_unload_kname(const char *name) {
             pr_warn("kmod no relocatable module for pci function");
             return -ENODEV;
         }
-        pci_unload_module(rdrv);
-        pci_unregister_driver(rdrv);
-        if (rdrv == &usermod_pci_drv) {
-            memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
-            usermod_path_store[0] = '\0';
-            usermod_slot_active   = 0;
-        }
+        kmod_release_driver(rdrv);
         return 0;
     }
 
@@ -214,14 +290,6 @@ int kmod_unload_kname(const char *name) {
         return -EOPNOTSUPP;
     }
 
-    pci_unload_module(drv);
-    pci_unregister_driver(drv);
-
-    if (drv == &usermod_pci_drv) {
-        memset(&usermod_pci_drv, 0, sizeof(usermod_pci_drv));
-        usermod_path_store[0] = '\0';
-        usermod_slot_active   = 0;
-    }
-
+    kmod_release_driver(drv);
     return 0;
 }
