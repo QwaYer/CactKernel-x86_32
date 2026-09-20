@@ -219,10 +219,15 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     if (ktime_init() != 0)
         pr_warn("  %-11s : no wall clock — timekeeping degraded\n", "ktime");
 
-    if (apic_init() == 0)
+    if (apic_init() == 0) {
         pr_info("  %-11s : LAPIC + IOAPIC operational\n", "apic");
-    else
+        /* Read the LVT back and check the counter is moving: this is what
+         * turns an "armed but silent" tick into a visible warning instead of
+         * a hang waiting for a scheduler tick that never arrives. */
+        (void)lapic_timer_selftest();
+    } else {
         pr_warn("  %-11s : init failed — interrupts will not work\n", "apic");
+    }
 
     // ACPI power path: S5 soft-off, reset register and S1/S3 suspend.  Runs
     // after the namespace is loaded (acpi_init) so \_Sx can be evaluated.
@@ -449,12 +454,23 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
         int wd_attempts = 0;
 
         for (;;) {
+            /* Live telemetry: while the tick is missing, sample the LAPIC
+             * every 250 ms so the log reads as a timeline — counter moving?
+             * tick pending (irr)? delivered (isr/ticks)? — instead of two
+             * snapshots.  A healthy boot leaves the loop on the first tick,
+             * before any sample prints. */
             uint64_t wd_usec = ktime_get_usec();
+            uint32_t wd_probe_ms = 0;
+
             while (timer_ticks_get() == wd_ticks) {
+                uint32_t waited = (uint32_t)((ktime_get_usec() - wd_usec) / 1000ull);
+                if (waited >= 2000u)
+                    break;   /* 2 s with no scheduler tick */
+                if (waited >= wd_probe_ms + 250u) {
+                    apic_probe("no-tick", waited, timer_ticks_get());
+                    wd_probe_ms = waited;
+                }
                 __asm__ __volatile__("pause");
-                if (ktime_get_usec() - wd_usec < 2000000ull)
-                    continue;
-                break;   /* 2 s with no scheduler tick */
             }
             if (timer_ticks_get() != wd_ticks)
                 break;   /* timer alive — normal boot */
@@ -463,6 +479,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
                 printk_color_level(KLOG_LEVEL_WARN,
                              "  timer       : WARNING — no tick for 2 s, re-arming LAPIC timer\n",
                              COLOR_LIGHT_RED);
+                apic_dump_state("no-tick");
                 uint32_t per_ms = lapic_timer_calibrate();
                 if (per_ms)
                     lapic_timer_start_periodic(per_ms);
@@ -473,6 +490,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
                          "  timer       : FATAL — no tick for 2 s (LAPIC timer dead), "
                          "scheduler cannot start\n",
                          COLOR_LIGHT_RED);
+            apic_dump_state("fatal");
             while (1) __asm__ __volatile__("hlt");
         }
     }
