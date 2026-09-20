@@ -103,6 +103,11 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
     if (!apic_lapic_ready() || ticks_per_ms == 0)
         return;
 
+    /* Retire any in-service entry left behind (firmware, or a delivery whose
+     * EOI never landed) before arming: while one is set, PPR sits at its
+     * priority class and the tick's own class waits in IRR forever. */
+    apic_clear_in_service();
+
     /* 100 Hz tick (10 ms) — the scheduler quantum base. */
     uint32_t count = ticks_per_ms * 10u;
 
@@ -112,6 +117,15 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
     apic_lapic_write(LAPIC_TIMER_DIV, 0x0B);
     apic_lapic_write(LAPIC_TIMER_INITCNT, count);
     apic_lapic_write(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC);
+
+    /* Confirm the unmasked word actually latched: a masked-to-unmasked
+     * transition is one place real firmware/BIOS has been seen to swallow the
+     * write, and a still-masked gate makes the timer tick silently. */
+    uint32_t lvt = apic_lapic_read(LAPIC_LVT_TIMER);
+    if ((lvt & LAPIC_LVT_MASK) || ((lvt & 0xFFu) != LAPIC_TIMER_VECTOR))
+        pr_warn("  %-11s : LVT Timer reads 0x%x after arming — vector 0x%x "
+                "unmasked expected, tick may not fire\n",
+                "timer", (unsigned)lvt, (unsigned)LAPIC_TIMER_VECTOR);
 
     lapic_ticks_per_ms = ticks_per_ms;
     lapic_timer_armed = 1;

@@ -240,7 +240,7 @@ int pci_msix_enable(pci_device_t *dev, int vector,
      *   4. fence, and only then unmask the vector
      * Unmasking before the global MSI-X enable lets the controller deliver an
      * interrupt against a half-configured function — fatal on some chipsets. */
-    table[entry_idx].msg_addr_lo = 0xFEE00000u | (apic_lapic_id() << 12);
+    table[entry_idx].msg_addr_lo = apic_msi_address();
     table[entry_idx].msg_addr_hi = 0;
     table[entry_idx].msg_data    = vector;
     table[entry_idx].vector_ctrl = MSIX_VECTOR_CTRL_MASK;
@@ -282,7 +282,7 @@ static void msix_program_entry(volatile struct msix_table_entry *e, int vector)
 {
     e->vector_ctrl = MSIX_VECTOR_CTRL_MASK;
     __asm__ volatile("sfence" ::: "memory");
-    e->msg_addr_lo = 0xFEE00000u | (apic_lapic_id() << 12);
+    e->msg_addr_lo = apic_msi_address();
     e->msg_addr_hi = 0;
     e->msg_data    = (uint32_t)vector;
     __asm__ volatile("sfence" ::: "memory");

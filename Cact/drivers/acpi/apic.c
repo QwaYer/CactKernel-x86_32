@@ -21,8 +21,11 @@
 
 #define LAPIC_ID            0x20
 #define LAPIC_TPR           0x80
+#define LAPIC_PPR           0xA0
 #define LAPIC_SVR           0xF0
 #define LAPIC_EOI           0xB0
+#define LAPIC_ISR           0x100   /* 8 x 32-bit words: vectors 0..255 */
+#define LAPIC_IRR           0x200
 #define LAPIC_ICR           0x300
 #define LAPIC_ICR_HIGH      0x310
 #define LAPIC_SVR_ENABLE    0x100
@@ -39,6 +42,11 @@
 #define LAPIC_LVT_LINT1     0x360
 #define LAPIC_LVT_ERROR     0x370
 #define LAPIC_LVT_MASKED    0x000100FFu  /* masked, vector 0xFF (spurious gate) */
+
+/* Timer registers, repeated here so the state dump can read them back. */
+#define LAPIC_TIMER_DIV     0x3E0
+#define LAPIC_TIMER_INITCNT 0x380
+#define LAPIC_TIMER_CURCNT  0x390
 
 #define IOAPIC_IOREGSEL     0x00
 #define IOAPIC_IOWIN        0x10
@@ -58,6 +66,9 @@ static volatile uint32_t *ioapic_regsel = NULL;
 static volatile uint32_t *ioapic_win = NULL;
 static int apic_enabled = 0;
 static int apic_x2apic = 0;
+/* Why the LAPIC is in the mode it is — surfaced in dmesg and /proc/apic so a
+ * silent fall back to xAPIC is never a mystery. */
+static const char *x2apic_note = "not probed";
 static unsigned int ioapic_max_redir = 0;
 static unsigned int ioapic_global_irq_base = 0;
 static unsigned int ioapic_id = 0;
@@ -136,6 +147,47 @@ void apic_lapic_write(uint32_t reg, uint32_t val)
     lapic[reg / 4] = val;
 }
 
+/* Highest set vector across the eight ISR (or IRR) words, or -1 if none. */
+static int lapic_pending_vector(uint32_t base)
+{
+    for (int w = 7; w >= 0; w--) {
+        uint32_t v = apic_lapic_read(base + (uint32_t)w * 0x10);
+        if (!v)
+            continue;
+        for (int b = 31; b >= 0; b--)
+            if (v & (1u << b))
+                return w * 32 + b;
+    }
+    return -1;
+}
+
+/* Retire every in-service entry.  Firmware — or any delivery whose EOI never
+ * landed — leaves an ISR bit set, and while it is set PPR sits at that
+ * vector's priority, so every interrupt of the same or lower class (the
+ * LAPIC timer included) waits in IRR forever.  One EOI clears only the
+ * highest in-service bit, so a single write is not enough when several are
+ * stuck; hence the bounded loop with a report of what was retired. */
+void apic_clear_in_service(void)
+{
+    if (!apic_lapic_ready())
+        return;
+
+    int retired = 0;
+    for (int i = 0; i < 256; i++) {
+        int vec = lapic_pending_vector(LAPIC_ISR);
+        if (vec < 0)
+            break;
+        if (retired < 8)
+            pr_warn("  %-11s : stale in-service vector 0x%x — retiring it\n",
+                    "apic", (unsigned)vec);
+        apic_lapic_write(LAPIC_EOI, 0);
+        retired++;
+    }
+    if (retired > 8)
+        pr_warn("  %-11s : %d stale in-service entries retired\n",
+                "apic", retired);
+}
+
 /* Program the mandatory LAPIC state: TPR 0, all LVT entries masked with a
  * spurious vector, and the APIC enabled through the SVR. */
 static void lapic_common_setup(void)
@@ -157,6 +209,26 @@ static void lapic_common_setup(void)
     apic_lapic_write(LAPIC_LVT_ERROR,   LAPIC_LVT_MASKED);
 
     apic_lapic_write(LAPIC_SVR, LAPIC_SVR_ENABLE | LAPIC_SPURIOUS_VEC);
+
+    /* A stale in-service entry — firmware's, or any delivery whose EOI never
+     * landed — holds PPR up and blocks the timer's priority class forever. */
+    apic_clear_in_service();
+
+    /* TPR and SVR gate every local delivery, and firmware is free to leave
+     * them dirty: a non-zero TPR masks the timer's priority class outright,
+     * and without SVR[8] the LAPIC ignores local interrupts entirely.  Read
+     * back what actually landed, so a "tick armed but silent" report points
+     * at the real culprit instead of the timer code. */
+    uint32_t tpr = apic_lapic_read(LAPIC_TPR);
+    if ((tpr & 0xFFu) != 0)
+        pr_warn("  %-11s : TPR reads 0x%x after clearing — priority class %u "
+                "masks lower-priority interrupts\n",
+                "apic", (unsigned)tpr, (unsigned)(tpr >> 4));
+
+    uint32_t svr = apic_lapic_read(LAPIC_SVR);
+    if (!(svr & LAPIC_SVR_ENABLE))
+        pr_warn("  %-11s : SVR reads 0x%x — software-enable bit clear, "
+                "LAPIC will not deliver\n", "apic", (unsigned)svr);
 }
 
 /* Bring up the BSP local APIC, preferring x2APIC when the CPU offers it.
@@ -174,14 +246,20 @@ static void lapic_init(uint32_t lapic_base)
     if (msr_val & APIC_X2APIC_ENABLE) {
         /* Firmware already switched: MMIO access would not reach the LAPIC. */
         apic_x2apic = 1;
+        x2apic_note = "already enabled by firmware";
     } else if (cpu_has_x2apic()) {
         apic_x2apic = 1;
         wrmsr(IA32_APIC_BASE, msr_val | APIC_ENABLE | APIC_X2APIC_ENABLE);
         if (!(rdmsr(IA32_APIC_BASE) & APIC_X2APIC_ENABLE)) {
-            pr_warn("  %-11s : x2APIC enable did not take — staying on xAPIC\n",
-                    "apic");
+            pr_warn("  %-11s : x2APIC enable did not take — staying on xAPIC "
+                    "(IA32_APIC_BASE[10] would not set)\n", "apic");
             apic_x2apic = 0;
+            x2apic_note = "IA32_APIC_BASE[10] would not set";
+        } else {
+            x2apic_note = "enabled by kernel";
         }
+    } else {
+        x2apic_note = "CPUID.01H:ECX[21] not set";
     }
 
     if (apic_x2apic) {
@@ -205,9 +283,12 @@ static void lapic_init(uint32_t lapic_base)
 
     lapic_common_setup();
 
-    pr_info("  %-11s : %s, LAPIC ID %u\n", "apic",
+    pr_info("  %-11s : %s, %s, LAPIC ID %u\n", "apic",
             apic_x2apic ? "x2APIC (MSR access)" : "xAPIC (MMIO)",
-            (unsigned)apic_lapic_id());
+            apic_x2apic_note(), (unsigned)apic_lapic_id());
+    /* Unmistakable build marker: when a fix "does not work" on hardware, the
+     * first question is whether the image actually contains it. */
+    pr_info("  %-11s : diag v4 (ISR drain + vector numbers)\n", "apic");
 }
 
 int apic_init(void)
@@ -366,6 +447,8 @@ bool apic_is_enabled(void) { return apic_enabled; }
 
 bool apic_x2apic_mode(void) { return apic_x2apic != 0; }
 
+const char *apic_x2apic_note(void) { return x2apic_note; }
+
 /* True once the LAPIC can be talked to — either mode qualifies.  Distinct from
  * apic_is_enabled(), which only flips after the whole APIC/IOAPIC bring-up. */
 bool apic_lapic_ready(void) { return apic_x2apic != 0 || lapic != NULL; }
@@ -403,6 +486,145 @@ uint32_t apic_lapic_id(void)
     (void)eax; (void)ecx; (void)edx;
     return (ebx >> 24) & 0xFF;
 }
+
+/* MSI/MSI-X message address for this logical processor.  The destination APIC
+ * ID lives in address bits 19:12 — eight bits — and that field does not widen
+ * in x2APIC mode: the message format is unchanged, so without interrupt
+ * remapping (VT-d/AMD-Vi, which this kernel does not program) a message can
+ * only reach an ID below 256.  Mask explicitly: an unmasked id would spill
+ * into the reserved bits above 19 and turn the store into an unclaimed-MMIO
+ * write instead of a delivery to some CPU. */
+uint32_t apic_msi_address(void)
+{
+    uint32_t id = apic_lapic_id();
+
+    if (id > 0xFFu) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            pr_warn("  %-11s : LAPIC ID %u exceeds MSI's 8-bit destination — "
+                    "messages go to ID %u (no interrupt remapping)\n",
+                    "apic", (unsigned)id, (unsigned)(id & 0xFFu));
+        }
+    }
+
+    return 0xFEE00000u | ((id & 0xFFu) << 12);
+}
+
+/* Dump every LAPIC register that can gate local delivery, plus a one-line
+ * verdict for the usual culprits.  Called from the boot watchdog when the
+ * scheduler tick never arrives: "LAPIC timer dead" names the symptom, not the
+ * cause, and the cause lives in exactly these bits. */
+void apic_dump_state(const char *tag)
+{
+    if (!apic_lapic_ready()) {
+        pr_warn("  %-11s : %s: LAPIC not reachable\n", "apic", tag);
+        return;
+    }
+
+    uint32_t flags;
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(flags));
+
+    uint64_t base = rdmsr(IA32_APIC_BASE);
+    uint32_t tpr  = apic_lapic_read(LAPIC_TPR);
+    uint32_t ppr  = apic_lapic_read(LAPIC_PPR);
+    uint32_t svr  = apic_lapic_read(LAPIC_SVR);
+    uint32_t lvt  = apic_lapic_read(LAPIC_LVT_TIMER);
+    uint32_t init = apic_lapic_read(LAPIC_TIMER_INITCNT);
+    uint32_t cur  = apic_lapic_read(LAPIC_TIMER_CURCNT);
+    uint32_t tdcr = apic_lapic_read(LAPIC_TIMER_DIV);
+    uint32_t gate = idt_gate_handler(LAPIC_TIMER_VECTOR);
+
+    /* Sample the counter twice: a single reading (or two dumps 2 s apart)
+     * cannot tell "counting" from "frozen", because the counter wraps once per
+     * period.  ~2 ms of pause is enough to see any live counter move. */
+    for (volatile uint32_t spin = 0; spin < 200000u; spin++)
+        __asm__ __volatile__("pause");
+    uint32_t cur2 = apic_lapic_read(LAPIC_TIMER_CURCNT);
+
+    /* Highest in-service and pending vectors, so a stuck entry names itself
+     * instead of only showing up as a raised PPR.  -1 means "none". */
+    int in_service = lapic_pending_vector(LAPIC_ISR);
+    int pending    = lapic_pending_vector(LAPIC_IRR);
+
+    pr_info("  %-11s : %s: %s, APIC_BASE=0x%llx EN=%u X2=%u IF=%u\n", "apic", tag,
+            apic_x2apic_mode() ? "x2APIC" : "xAPIC",
+            (unsigned long long)base,
+            (unsigned)((base >> 11) & 1u), (unsigned)((base >> 10) & 1u),
+            (unsigned)((flags >> 9) & 1u));
+    pr_info("  %-11s :   TPR=0x%x PPR=0x%x SVR=0x%x LVT=0x%x mask=%u periodic=%u\n",
+            "apic", (unsigned)tpr, (unsigned)ppr, (unsigned)svr, (unsigned)lvt,
+            (unsigned)((lvt >> 16) & 1u), (unsigned)((lvt >> 17) & 1u));
+    pr_info("  %-11s :   INIT=0x%x CUR=0x%x->0x%x TDCR=0x%x isr=%d irr=%d gate=0x%x\n",
+            "apic", (unsigned)init, (unsigned)cur, (unsigned)cur2, (unsigned)tdcr,
+            in_service, pending, (unsigned)gate);
+
+    if (!(base & APIC_ENABLE))
+        pr_warn("  %-11s :   -> APIC_BASE[11] clear: LAPIC globally disabled\n", "apic");
+    if (!((flags >> 9) & 1u))
+        pr_warn("  %-11s :   -> EFLAGS.IF clear: interrupts globally disabled\n", "apic");
+    if (!(svr & LAPIC_SVR_ENABLE))
+        pr_warn("  %-11s :   -> SVR[8] clear: LAPIC ignores local interrupts\n", "apic");
+    if (lvt & 0x10000u)
+        pr_warn("  %-11s :   -> LVT mask set: tick gated at the source\n", "apic");
+    if ((lvt & 0xFFu) != LAPIC_TIMER_VECTOR)
+        pr_warn("  %-11s :   -> LVT vector 0x%x, expected 0x%x\n", "apic",
+                (unsigned)(lvt & 0xFFu), (unsigned)LAPIC_TIMER_VECTOR);
+    if (init == 0)
+        pr_warn("  %-11s :   -> INIT count 0: timer never started\n", "apic");
+    else if (cur == cur2)
+        pr_warn("  %-11s :   -> counter frozen at 0x%x (INIT=0x%x): LAPIC timer "
+                "is not counting\n", "apic", (unsigned)cur, (unsigned)init);
+    if (in_service >= 0)
+        pr_warn("  %-11s :   -> in-service vector 0x%x was never EOI'd (PPR=0x%x): "
+                "the tick waits in IRR\n", "apic",
+                (unsigned)in_service, (unsigned)ppr);
+    else if (ppr > tpr)
+        pr_warn("  %-11s :   -> PPR 0x%x > TPR 0x%x with no ISR bit set\n",
+                "apic", (unsigned)ppr, (unsigned)tpr);
+    else if (pending == LAPIC_TIMER_VECTOR)
+        pr_info("  %-11s :   -> tick sits in IRR: the timer fires, delivery is "
+                "what is blocked\n", "apic");
+    if (gate != (uint32_t)timer_isr)
+        pr_warn("  %-11s :   -> IDT gate 0x%x is not timer_isr 0x%x\n", "apic",
+                (unsigned)gate, (unsigned)(uint32_t)timer_isr);
+}
+
+/* One-line live snapshot for the boot watchdog: is the counter moving, is the
+ * tick pending (IRR) and delivered (ISR), and is anything gating it
+ * (TPR/PPR/SVR/LVT/IF).  Printed every 250 ms while the tick is missing, so a
+ * silent timer death reads as a timeline instead of two snapshots. */
+void apic_probe(const char *tag, unsigned ms, unsigned ticks)
+{
+    if (!apic_lapic_ready()) {
+        pr_warn("  %-11s : %s t=%ums ticks=%u: LAPIC not reachable\n",
+                "apic", tag, ms, ticks);
+        return;
+    }
+
+    uint32_t flags;
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(flags));
+
+    uint32_t tpr = apic_lapic_read(LAPIC_TPR);
+    uint32_t ppr = apic_lapic_read(LAPIC_PPR);
+    uint32_t svr = apic_lapic_read(LAPIC_SVR);
+    uint32_t lvt = apic_lapic_read(LAPIC_LVT_TIMER);
+    uint32_t cur0 = apic_lapic_read(LAPIC_TIMER_CURCNT);
+    int in_service = lapic_pending_vector(LAPIC_ISR);   /* highest, -1 = none */
+    int pending    = lapic_pending_vector(LAPIC_IRR);
+
+    /* ~2 ms of pause: enough for any live counter to move. */
+    for (volatile uint32_t spin = 0; spin < 200000u; spin++)
+        __asm__ __volatile__("pause");
+    uint32_t cur1 = apic_lapic_read(LAPIC_TIMER_CURCNT);
+
+    pr_info("  %-11s : %s t=%ums ticks=%u cur=%s isr=%d irr=%d tpr=0x%x ppr=0x%x "
+            "svr=0x%x lvt=0x%x if=%u\n", "apic", tag, ms, ticks,
+            (cur1 != cur0) ? "run" : "FROZEN", in_service, pending,
+            (unsigned)tpr, (unsigned)ppr, (unsigned)svr, (unsigned)lvt,
+            (unsigned)((flags >> 9) & 1u));
+}
+
 bool     apic_ioapic_info(uint32_t *base, uint32_t *id, uint32_t *max_redir, uint32_t *gsi_base)
 {
     if (!apic_enabled) return false;

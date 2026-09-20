@@ -214,6 +214,7 @@ int _apic_read(uint32_t off, uint32_t size, char *buf) {
         _A("LAPIC mode      : ");
         _A(apic_x2apic_mode() ? "x2APIC (MSR)" : "xAPIC (MMIO)");
         _A("\n");
+        _A("LAPIC reason    : "); _A(apic_x2apic_note()); _A("\n");
         _A("LAPIC base      : 0x");
         { char h[12]; snprintf(h, sizeof(h), "0x%x", (unsigned)apic_lapic_base()); _A(h); }
         _A("\n");
