@@ -2,7 +2,6 @@
 
 use core::ffi::c_void;
 
-use crate::checksum;
 use crate::ffi_kernel;
 use crate::types::{Skb, SKB_MAX_SIZE};
 
@@ -81,9 +80,4 @@ pub extern "C" fn skb_len(skb: *mut Skb) -> u16 {
     }
     // SAFETY: valid skb pointer.
     unsafe { (*skb).total_len }
-}
-
-#[no_mangle]
-pub extern "C" fn inet_checksum(data: *mut c_void, len: u16) -> u16 {
-    checksum::inet_checksum(data.cast::<u8>(), len)
 }

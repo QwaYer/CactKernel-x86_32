@@ -5,7 +5,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use smoltcp::iface::{Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp;
-use smoltcp::wire::{IpAddress, IpListenEndpoint};
+use smoltcp::wire::IpAddress;
 
 use crate::stack::{self};
 use crate::types::*;
@@ -95,6 +95,47 @@ pub(crate) fn tcp_can_send(idx: usize) -> bool {
     with_tcp_socket(idx as i32, |s| s.can_send()).unwrap_or(false)
 }
 
+/// Fresh readiness for `poll()`: `(byte buffered, inbound connection pending,
+/// peer closed)`.
+///
+/// Queried from smoltcp rather than read out of the cached mirror so a
+/// select()/poll() loop never acts on a state that is up to one poll period
+/// old.  `None` means the slot has no smoltcp socket at all (closed or torn
+/// down), which the caller reports as `POLLERR`.
+///
+/// `can_recv()` — not `may_recv()` — is the data predicate: `may_recv()` is
+/// true for the whole life of an open connection, which made every established
+/// socket look readable and turned select() loops into a spin.
+pub(crate) fn tcp_poll_status(idx: usize) -> Option<(bool, bool, bool)> {
+    if idx >= TCP_MAX_SOCKETS {
+        return None;
+    }
+    let (used, listen_parent) = unsafe {
+        tcp_lock();
+        let r = (tcp_sockets[idx].used, tcp_sockets[idx].listen_parent);
+        tcp_unlock();
+        r
+    };
+    if used == 0 {
+        return None;
+    }
+    with_tcp_socket(idx as i32, |s| {
+        let st = s.state();
+        let eof = matches!(
+            st,
+            tcp::State::CloseWait | tcp::State::Closed | tcp::State::TimeWait
+        );
+        // A pending inbound connection.  `listen_endpoint().port != 0` alone is
+        // not enough: an accepted child keeps the endpoint it was listening on,
+        // so it would keep claiming to be accept-ready.  Children are the slots
+        // with a listen_parent, which is exactly what excludes them here.
+        let accept = st == tcp::State::Established
+            && s.listen_endpoint().port != 0
+            && listen_parent < 0;
+        (s.can_recv(), accept, eof)
+    })
+}
+
 pub(crate) unsafe fn reset_tcp_smoltcp_state() {
     TCP_HANDLE = [None; TCP_MAX_SOCKETS];
     NEXT_EPHEMERAL = 49152;
@@ -147,11 +188,23 @@ pub fn sync_tcp_pcbs_from_smoltcp(iface: &mut Interface, socks: &mut SocketSet<'
                 let IpAddress::Ipv4(a) = ep.addr;
                 tcp_sockets[i].remote_ip = ipv4_u32(a);
             }
+            // `accept_ready` marks a *listening* slot holding an unaccepted
+            // connection.  The `listen_parent < 0` test keeps an accepted child
+            // (which never clears the endpoint it was listening on) from
+            // advertising itself as accept-ready again.
             tcp_sockets[i].accept_ready = 0;
-            if st == tcp::State::Established && sock.listen_endpoint().port != 0 {
+            if st == tcp::State::Established
+                && sock.listen_endpoint().port != 0
+                && tcp_sockets[i].listen_parent < 0
+            {
                 tcp_sockets[i].accept_ready = 1;
             }
-            if sock.may_recv() {
+            // `rx_head`/`rx_tail` are the C-visible copy of "a byte is
+            // buffered".  It must track `can_recv()` (is there data), not
+            // `may_recv()` (may this socket ever receive): the latter is true
+            // for the whole life of an open connection, so it reported every
+            // socket as readable forever.
+            if sock.can_recv() {
                 if tcp_sockets[i].rx_head == tcp_sockets[i].rx_tail {
                     tcp_sockets[i].rx_tail = tcp_sockets[i].rx_head.wrapping_add(1);
                 }
@@ -183,6 +236,58 @@ pub(crate) fn alloc_tcp_smoltcp(
         let tx = tcp::SocketBuffer::new(&mut TCP_TX_BUFS[i][..]);
         let s = tcp::Socket::new(rx, tx);
         Some(socks.add(s))
+    }
+}
+
+/// Give up slot `i` without a close handshake: unlink the smoltcp socket and
+/// free the C slot.
+///
+/// Used to hand back a connection that was already moved into a child slot but
+/// can no longer be reached through any fd (accept() ran out of Ksock rows) —
+/// `tcp_close` would spend up to two seconds on the FIN first, and the point
+/// here is that nobody can ever send or receive on this socket again.
+pub(crate) fn tcp_free_slot(i: usize) {
+    if i >= TCP_MAX_SOCKETS {
+        return;
+    }
+    let h = unsafe {
+        tcp_lock();
+        let h = TCP_HANDLE[i];
+        TCP_HANDLE[i] = None;
+        tcp_unlock();
+        h
+    };
+    if let Some(h) = h {
+        let _ = stack::with_iface_sockets(|_iface, socks| {
+            let s = socks.remove(h);
+            core::mem::drop(s);
+        });
+    }
+    unsafe {
+        tcp_lock();
+        tcp_sockets[i] = TcpSocket {
+            used: 0,
+            state: TCP_CLOSED,
+            local_ip: 0,
+            local_port: 0,
+            remote_ip: 0,
+            remote_port: 0,
+            snd_una: 0,
+            snd_nxt: 0,
+            snd_wnd: 0,
+            rcv_nxt: 0,
+            rcv_wnd: TCP_RX_BUF_SIZE as u32,
+            rx_buf: [0; TCP_RX_BUF_SIZE],
+            rx_head: 0,
+            rx_tail: 0,
+            on_data: core::ptr::null_mut(),
+            on_event: core::ptr::null_mut(),
+            listen_parent: -1,
+            accept_ready: 0,
+            nodelay: 0,
+            keepalive: 0,
+        };
+        tcp_unlock();
     }
 }
 

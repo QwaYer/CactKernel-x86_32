@@ -93,6 +93,10 @@ typedef struct ksock {
     uint8_t so_keepalive;
     uint8_t tcp_nodelay;
     int     so_error;      /* pending socket error (cleared on read) */
+
+    /* O_NONBLOCK as set by fcntl(F_SETFL) on the socket fd.  Must stay last:
+       the Rust mirror (cact_net Ksock) asserts the offset/size of this field. */
+    uint8_t nonblock;
 } ksock_t;
 
 /* ── Public API ───────────────────────────────────────────────────────────── */
@@ -113,5 +117,10 @@ vfs_node_t *ksock_tcp_accept(vfs_node_t *listen_node,
 
 /* Shut down part of a full-duplex connection (how = SHUT_RD/WR/RDWR) */
 int ksock_shutdown(vfs_node_t *node, int how);
+
+/* Set/clear O_NONBLOCK on an AF_INET socket (called from sys_fcntl).  On a
+   non-blocking socket read()/write() return -EAGAIN instead of waiting.
+   Returns 0, or -1 when the node is not a socket. */
+int ksock_set_nonblock(vfs_node_t *node, int on);
 
 #endif /* KSOCKET_H */

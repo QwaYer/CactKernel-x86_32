@@ -109,13 +109,11 @@ int  tcp_close(int sock);
 /* Half-close: send FIN to peer without freeing the socket (for shutdown(SHUT_WR)) */
 int  tcp_shutdown_wr(int sock);
 
-/* Register callbacks */
-void tcp_set_callbacks(int sock, tcp_data_fn on_data, tcp_event_fn on_event);
+/* Register callbacks — the callback model is gone (smoltcp owns ingress), the
+   on_data/on_event fields stay in tcp_socket_t only to keep the C mirror
+   byte-identical with cact_net's TcpSocket. */
 
 /* Read buffered RX data; returns bytes copied, 0 if nothing available */
 int tcp_recv(int sock, uint8_t* buf, uint16_t max_len);
-
-/* Called by ip_input() */
-void tcp_input(skb_t* skb);
 
 #endif /* TCP_H */

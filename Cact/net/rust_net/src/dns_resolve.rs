@@ -9,6 +9,7 @@ use smoltcp::wire::IpAddress;
 
 use crate::ffi_kernel;
 use crate::stack;
+use crate::types::Semaphore;
 
 const DNS_PORT: u16 = 53;
 const QTYPE_A: u16 = 1;
@@ -22,10 +23,24 @@ static mut DNS_TX_META: [udp::PacketMetadata; 4] = [udp::PacketMetadata::EMPTY; 
 static mut DNS_TX_BUF: [u8; 2048] = [0; 2048];
 static mut DNS_HANDLE: Option<SocketHandle> = None;
 
+/// Serializes resolvers, because there is exactly one DNS socket: two tasks
+/// resolving at once would consume each other's replies.  `resolve_once` starts
+/// by flushing whatever is buffered (a stale answer from a query that timed
+/// out), which without this lock would throw away the other task's answer and
+/// make both fail.  Initialised to 1 in [`init_socket`]; a second resolver
+/// sleeps instead of corrupting the first one's exchange.
+static mut DNS_SEMA: Semaphore = Semaphore {
+    guard: crate::types::Spinlock { locked: 0 },
+    count: core::sync::atomic::AtomicI32::new(0),
+    waiters: [core::ptr::null_mut(); 64],
+    waiter_count: 0,
+};
+
 pub unsafe fn init_socket(socks: &mut SocketSet<'static>) {
     if DNS_HANDLE.is_some() {
         return;
     }
+    ffi_kernel::sema_init(core::ptr::addr_of_mut!(DNS_SEMA), 1);
     let rx = udp::PacketBuffer::new(&mut DNS_RX_META[..], &mut DNS_RX_BUF[..]);
     let tx = udp::PacketBuffer::new(&mut DNS_TX_META[..], &mut DNS_TX_BUF[..]);
     let u = udp::Socket::new(rx, tx);
@@ -285,7 +300,12 @@ pub extern "C" fn rust_net_dns_resolve_a(name: *const c_char, out_ip_host: *mut 
         }
     }
     let host = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len) };
-    match resolve_a(host) {
+    // The resolver owns one shared socket, so only one query may be in flight:
+    // a second task waits here instead of stealing the first one's reply.
+    unsafe { ffi_kernel::down(core::ptr::addr_of_mut!(DNS_SEMA)) };
+    let resolved = resolve_a(host);
+    unsafe { ffi_kernel::up(core::ptr::addr_of_mut!(DNS_SEMA)) };
+    match resolved {
         Some(ip) => {
             unsafe { *out_ip_host = ip };
             0

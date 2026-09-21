@@ -3,12 +3,14 @@
 //! non-blocking smoltcp-backed `tcp_*` layer.
 //!
 //! Two configs are available:
-//!   * verified   — webpki roots, standard chain verification.  NOTE: the
-//!     in-kernel `cact_crypto` provider does not implement certificate
-//!     signature verification yet, so this path only succeeds against servers
-//!     with certificates that skip signature checks.
+//!   * verified (the default) — webpki roots and standard chain verification,
+//!     backed by `cact_crypto`'s `SignatureVerificationAlgorithm`s (RSA
+//!     PKCS#1/PSS, ECDSA P-256/P-384).  The HTTP client uses this unless the
+//!     caller asks otherwise.
 //!   * skip-verify — `dangerous()` custom verifier that accepts any chain.
-//!     Used by the HTTP client by default until real verification lands.
+//!     Selected explicitly (`CACT_HTTP_FLAG_INSECURE_TLS` / `skip_verify != 0`)
+//!     for environments with no trustworthy clock, where a valid chain would
+//!     fail on its validity dates anyway.
 //!
 //! The C ABI (`cact_tls_connect/send/recv/close`) is preserved for external
 //! callers; the in-crate API (`TlsStream`) is what the HTTP client uses.
@@ -69,8 +71,9 @@ impl TimeProvider for CactTimeProvider {
     }
 }
 
-/// Accepts every certificate chain.  Only for environments where the in-kernel
-/// crypto provider cannot verify certificate signatures yet.
+/// Accepts every certificate chain.  Only reachable when a caller explicitly
+/// asks for an unverified connection; the default path verifies against the
+/// webpki roots with `cact_crypto`'s signature algorithms.
 #[derive(Debug)]
 struct NoVerifyVerifier;
 

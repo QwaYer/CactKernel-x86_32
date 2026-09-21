@@ -3,7 +3,6 @@
 use core::ffi::{c_char, c_int, c_void};
 
 pub const SKB_MAX_SIZE: usize = 2048;
-pub const ARP_CACHE_SIZE: usize = 16;
 pub const UDP_SOCK_MAX: usize = 8;
 pub const UDP_RX_BUF_SIZE: usize = 4096;
 pub const TCP_MAX_SOCKETS: usize = 8;
@@ -17,31 +16,9 @@ pub const VFS_POLLHUP: u32 = 0x010;
 pub const VFS_POLLNVAL: u32 = 0x020;
 pub const AF_INET: u16 = 2;
 
-pub const ETH_TYPE_IPV4: u16 = 0x0800;
-pub const ETH_TYPE_ARP: u16 = 0x0806;
-pub const IP_PROTO_ICMP: u8 = 1;
-pub const IP_PROTO_TCP: u8 = 6;
-pub const IP_PROTO_UDP: u8 = 17;
-
-pub const ICMP_ECHO_REQUEST: u8 = 8;
-pub const ICMP_ECHO_REPLY: u8 = 0;
-
-pub const TCP_FIN: u8 = 0x01;
-pub const TCP_SYN: u8 = 0x02;
-pub const TCP_RST: u8 = 0x04;
-pub const TCP_PSH: u8 = 0x08;
-pub const TCP_ACK: u8 = 0x10;
-
 pub const KS_NONE: u32 = 0;
 pub const KS_TCP: u32 = 1;
 pub const KS_UDP: u32 = 2;
-
-pub const SO_REUSEADDR: c_int = 2;
-pub const SO_KEEPALIVE: c_int = 9;
-pub const SO_ERROR: c_int = 4;
-pub const TCP_NODELAY: c_int = 1;
-pub const SOL_SOCKET: c_int = 1;
-pub const IPPROTO_TCP_C: c_int = 6;
 
 pub const SHUT_RD: c_int = 0;
 pub const SHUT_WR: c_int = 1;
@@ -53,7 +30,10 @@ pub struct MacAddr {
     pub b: [u8; 6],
 }
 
-pub const MAC_BROADCAST: MacAddr = MacAddr { b: [0xFF; 6] };
+/* Wire headers.  Only the types `Skb` points at are kept: they document the
+ * layout of each layer inside a received frame and mirror the C declarations in
+ * `Cact/net/net.h` and the per-protocol headers.  Parsing itself is smoltcp's
+ * job, so nothing here is dereferenced. */
 
 #[repr(C, packed)]
 pub struct EthHeader {
@@ -214,6 +194,10 @@ pub struct Ksock {
     pub so_keepalive: u8,
     pub tcp_nodelay: u8,
     pub so_error: c_int,
+    /// O_NONBLOCK as set through fcntl(F_SETFL) on the socket fd.  Appended
+    /// last so the C struct (`ksock_t` in `Cact/net/socket/socket.h`) and this
+    /// mirror stay in step; `ksock_set_nonblock` is the only writer.
+    pub nonblock: u8,
 }
 
 #[repr(C)]
@@ -280,32 +264,48 @@ const _: () = assert!(core::mem::offset_of!(VfsNode, ops) == 156);
 const _: () = assert!(core::mem::offset_of!(VfsNode, fops) == 160);
 const _: () = assert!(core::mem::offset_of!(VfsNode, priv_) == 164);
 
+// ── Layout guards for the remaining C mirrors ─────────────────────────────
+// Every struct below is declared twice — once in C (`ksock_t`, `tcp_socket_t`,
+// `udp_sock_t`, `net_driver_t`, `skb_t`) and once here for the Rust code that
+// writes it.  The EIP=3 crash of 2026-09-20 was exactly this class of drift, so
+// each mirror gets the same guard as vfs_node_t: if someone inserts a field on
+// one side, the build stops instead of the kernel jumping through a struct.
+const _: () = assert!(core::mem::size_of::<Ksock>() == 28);
+const _: () = assert!(core::mem::offset_of!(Ksock, kind) == 4);
+const _: () = assert!(core::mem::offset_of!(Ksock, proto_idx) == 8);
+const _: () = assert!(core::mem::offset_of!(Ksock, so_error) == 20);
+const _: () = assert!(core::mem::offset_of!(Ksock, nonblock) == 24);
+
+const _: () = assert!(core::mem::size_of::<TcpSocket>() == 4156);
+const _: () = assert!(core::mem::offset_of!(TcpSocket, state) == 4);
+const _: () = assert!(core::mem::offset_of!(TcpSocket, local_ip) == 8);
+const _: () = assert!(core::mem::offset_of!(TcpSocket, remote_ip) == 16);
+const _: () = assert!(core::mem::offset_of!(TcpSocket, rx_buf) == 44);
+const _: () = assert!(core::mem::offset_of!(TcpSocket, rx_head) == 4140);
+const _: () = assert!(core::mem::offset_of!(TcpSocket, on_data) == 4144);
+const _: () = assert!(core::mem::offset_of!(TcpSocket, listen_parent) == 4152);
+
+const _: () = assert!(core::mem::size_of::<UdpSock>() == 4116);
+const _: () = assert!(core::mem::offset_of!(UdpSock, local_port) == 2);
+const _: () = assert!(core::mem::offset_of!(UdpSock, local_ip) == 4);
+const _: () = assert!(core::mem::offset_of!(UdpSock, rx_buf) == 8);
+const _: () = assert!(core::mem::offset_of!(UdpSock, last_src_ip) == 4108);
+
+const _: () = assert!(core::mem::size_of::<NetDriver>() == 24);
+const _: () = assert!(core::mem::offset_of!(NetDriver, send) == 8);
+const _: () = assert!(core::mem::offset_of!(NetDriver, name) == 20);
+
+const _: () = assert!(core::mem::size_of::<Skb>() == 2076);
+const _: () = assert!(core::mem::offset_of!(Skb, total_len) == 2048);
+const _: () = assert!(core::mem::offset_of!(Skb, eth) == 2052);
+const _: () = assert!(core::mem::offset_of!(Skb, tcp) == 2072);
+
 #[repr(C)]
 pub struct SockAddrIn {
     pub sin_family: u16,
     pub sin_port: u16,
     pub sin_addr: u32,
     pub sin_zero: [u8; 8],
-}
-
-#[repr(C)]
-pub struct SendToArgs {
-    pub fd: c_int,
-    pub buf: *const c_void,
-    pub len: u32,
-    pub flags: c_int,
-    pub dest: *const SockAddrIn,
-    pub addrlen: u32,
-}
-
-#[repr(C)]
-pub struct RecvFromArgs {
-    pub fd: c_int,
-    pub buf: *mut c_void,
-    pub len: u32,
-    pub flags: c_int,
-    pub src: *mut SockAddrIn,
-    pub addrlen: *mut u32,
 }
 
 pub const TCP_CLOSED: u32 = 0;
@@ -319,3 +319,9 @@ pub const TCP_CLOSE_WAIT: u32 = 7;
 pub const TCP_CLOSING: u32 = 8;
 pub const TCP_LAST_ACK: u32 = 9;
 pub const TCP_TIME_WAIT: u32 = 10;
+
+/// `TcpSocket::state` mirrors smoltcp's `tcp::State` discriminants and the C
+/// `tcp_state_t` enum, so the cached value can be compared against these.
+const _: () = assert!(TCP_CLOSE_WAIT == smoltcp::socket::tcp::State::CloseWait as u32);
+const _: () = assert!(TCP_TIME_WAIT == smoltcp::socket::tcp::State::TimeWait as u32);
+const _: () = assert!(TCP_ESTABLISHED == smoltcp::socket::tcp::State::Established as u32);

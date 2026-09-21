@@ -7,6 +7,9 @@
 
 // SOCKCTL_* node-ioctl dispatcher (defined in net/net.c)
 int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg);
+// Socket-mode plumbing (rust_net/src/socket.rs and unix_sock.c).
+int ksock_set_nonblock(vfs_node_t *node, int on);
+int unix_sock_is_node(vfs_node_t *node);
 
 #define SETFL_MASK  (0x0800 | 0x0400)
 #define OPEN_ACCMODE 0x0003
@@ -655,6 +658,13 @@ int sys_fcntl(int fd, int cmd, int arg) {
         uint32_t new_flags = (f->flags & ~(uint32_t)SETFL_MASK)
                            | ((uint32_t)arg & SETFL_MASK);
         f->flags = new_flags;
+        /* The socket read/write paths live in Rust and only see the node, so
+         * O_NONBLOCK has to be pushed into the socket itself: without this,
+         * fcntl(F_SETFL, O_NONBLOCK) on a socket fd was accepted and then
+         * ignored, and every read kept blocking.  AF_UNIX sockets keep their
+         * own state and are dispatched by their own ops. */
+        if (f->node && f->node->type == VFS_SOCKET && !unix_sock_is_node(f->node))
+            (void)ksock_set_nonblock(f->node, (int)(new_flags & O_NONBLOCK));
         return 0;
     }
     default:

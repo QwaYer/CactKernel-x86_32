@@ -352,7 +352,7 @@ Full socket syscall API: `socket`, `bind`, `connect`, `listen`, `accept`, `send`
 | Layer | Responsibility |
 |-------|----------------|
 | **Ethernet / ARP / IPv4 / ICMP / TCP / UDP** | smoltcp (`cact_net`) |
-| **Sockets / VFS** | Up to **16** kernel socket nodes integrated with `read`/`write`/`close`, `.poll` op |
+| **Sockets / VFS** | Up to **16** kernel socket nodes integrated with `read`/`write`/`close`; `.poll` reports real readiness (`POLLIN`/`POLLOUT`/`POLLHUP`), `fcntl(F_SETFL, O_NONBLOCK)` makes `read`/`write` return `-EAGAIN` instead of blocking |
 | **net_poll_task** | Dedicated kernel thread: sleeps on a semaphore, wakes on NIC RX, calls **`net_poll` → `stack_poll()`** |
 | **net_timer_task** | Periodic timer kick — wakes `net_poll_task` so smoltcp timers advance without RX traffic |
 | **TLS 1.3** | In-kernel via rustls — `cact_tls_connect_ex` / `cact_tls_send` / `cact_tls_recv` / `cact_tls_close` |
@@ -368,12 +368,12 @@ int rc = cact_http_get(&r, "https://example.com/", 0, 0, buf, sizeof(buf));
 if (rc == 0) { /* r.status == 200, body at buf + r.body_off, r.body_len bytes */ }
 ```
 
-HTTPS currently skips certificate chain verification (the `cact_crypto` provider has not
-implemented certificate signature verification yet — RSA/ECDSA signature algorithms are
-empty), so it works against arbitrary servers with a one-time warning. The verified
-root-store path exists in `tls.rs` and is used by `cact_tls_connect`.
+HTTPS verifies the certificate chain by default — the webpki root store plus `cact_crypto`'s
+RSA (PKCS#1/PSS) and ECDSA (P-256/P-384) signature verification. Skipping verification now
+has to be asked for explicitly with `CACT_HTTP_FLAG_INSECURE_TLS` (it logs a warning), for
+boards with no trustworthy clock. `cact_tls_connect` uses the same verified path.
 
-**Limits (non-exhaustive):** no **IPv6**; default NIC is **virtio-net** in QEMU; DNS resolver is **A-record only**; HTTP responses are buffered with a 1 MiB cap; no gzip decompression.
+**Limits (non-exhaustive):** no **IPv6**; default NIC is **virtio-net** in QEMU; DNS resolver is **A-record only** (no retry, no TCP fallback); HTTP responses are buffered with a 1 MiB cap; no gzip decompression; one pending inbound connection per listening socket (smoltcp has no SYN backlog); IPv4 fragments are not reassembled.
 
 ---
 

@@ -1,6 +1,5 @@
 //! accept() hand-off between a listening slot and an established child slot.
 
-use smoltcp::iface::SocketHandle;
 use smoltcp::socket::tcp;
 
 use crate::stack::{self};

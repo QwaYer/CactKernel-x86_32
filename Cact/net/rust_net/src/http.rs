@@ -8,10 +8,11 @@
 //! * [`cact_http_get`]      — GET convenience
 //! * [`cact_http_post`]     — POST convenience
 //!
-//! HTTPS uses the in-kernel rustls provider.  Certificate chain verification
-//! is currently disabled (`skip_verify`) because `cact_crypto` does not
-//! implement certificate signature verification yet; this is logged once at
-//! startup and should be flipped to a verified config when signatures land.
+//! HTTPS uses the in-kernel rustls provider with the webpki root store and
+//! `cact_crypto`'s signature verification, so the certificate chain is checked
+//! by default.  A caller that needs the old "accept anything" behaviour (a
+//! board with no RTC, a captive portal) must ask for it explicitly with
+//! `CACT_HTTP_FLAG_INSECURE_TLS`, and gets a warning in the kernel log.
 //!
 //! Response handling supports `Content-Length`, chunked `Transfer-Encoding`
 //! (including trailers), and "read until close" bodies.
@@ -37,8 +38,13 @@ pub const HTTP_DELETE: c_int = 4;
 pub const HTTP_HEAD: c_int = 5;
 
 /// `flags` for [`cact_http_request`] (match `cact_http_request_flags` in `rust_net_ffi.h`).
-/// Verify the TLS certificate chain instead of skipping verification.
+///
+/// Verification is on unless `CACT_HTTP_FLAG_INSECURE_TLS` is set; this flag is
+/// kept for ABI compatibility and is a no-op (it asks for the default).
 pub const CACT_HTTP_FLAG_VERIFY_TLS: u32 = 0x1;
+/// Skip certificate chain verification.  For testing and for environments with
+/// no trustworthy clock; logs a warning.
+pub const CACT_HTTP_FLAG_INSECURE_TLS: u32 = 0x2;
 
 /// Overall per-request deadline in 10 ms ticks (6 s).
 const HTTP_TIMEOUT_TICKS: u32 = 600;
@@ -767,14 +773,14 @@ unsafe fn cstr_bytes(ptr: *const c_char) -> Option<Vec<u8>> {
     Some(core::slice::from_raw_parts(p, len).to_vec())
 }
 
-/// One-time warning that HTTPS currently skips certificate verification.
-static TLS_NOVERIFY_WARNED: AtomicBool = AtomicBool::new(false);
+/// One-time warning that a caller asked for an unverified TLS connection.
+static TLS_INSECURE_WARNED: AtomicBool = AtomicBool::new(false);
 
-fn warn_tls_noverify() {
-    if !TLS_NOVERIFY_WARNED.swap(true, Ordering::Relaxed) {
+fn warn_tls_insecure() {
+    if !TLS_INSECURE_WARNED.swap(true, Ordering::Relaxed) {
         ffi_kernel::klog_static(
             ffi_kernel::LOG_WARN,
-            b"HTTPS: cert chain verification disabled for this request (cact_crypto has no cert signature support yet)\0",
+            b"HTTPS: certificate chain verification disabled by CACT_HTTP_FLAG_INSECURE_TLS\0",
         );
     }
 }
@@ -784,7 +790,7 @@ fn do_fetch(
     method: c_int,
     extra_headers: Option<&[u8]>,
     body_bytes: Option<&[u8]>,
-    verify_tls: bool,
+    insecure_tls: bool,
     out_buf: *mut c_void,
     out_len: u32,
 ) -> (c_int, HttpResp) {
@@ -828,14 +834,14 @@ fn do_fetch(
     };
 
     let ret = if parsed.tls {
-        if !verify_tls {
-            warn_tls_noverify();
+        if insecure_tls {
+            warn_tls_insecure();
         }
         let Ok(name) = core::str::from_utf8(&parsed.host) else {
             let _ = tcp::tcp_close(sock);
             return (-1, resp);
         };
-        match tls::tls_stream_open(sock, name, !verify_tls) {
+        match tls::tls_stream_open(sock, name, insecure_tls) {
             Some(mut stream) => {
                 if tls::tls_stream_write(&mut stream, &request).is_err() {
                     let _ = tcp::tcp_close(sock);
@@ -870,8 +876,8 @@ fn do_fetch(
 /// * `method` — one of `CACT_HTTP_GET/POST/PUT/DELETE/HEAD`.
 /// * `headers` — optional extra request headers, CRLF-separated (may be NULL).
 /// * `body`/`body_len` — optional request body (POST/PUT).
-/// * `flags` — `CACT_HTTP_FLAG_VERIFY_TLS` to require a verified TLS chain;
-///   without it, HTTPS skips certificate verification (see module docs).
+/// * `flags` — `CACT_HTTP_FLAG_INSECURE_TLS` to skip certificate verification
+///   (logged as a warning); the chain is verified by default.
 /// * `out_buf`/`out_len` — destination for the full response (headers + body).
 ///
 /// Returns 0 and fills `*out` on success, -1 on transport/DNS/TLS failure,
@@ -916,7 +922,7 @@ pub extern "C" fn cact_http_request(
         method,
         extra_headers.as_deref(),
         body_bytes,
-        flags & CACT_HTTP_FLAG_VERIFY_TLS != 0,
+        flags & CACT_HTTP_FLAG_INSECURE_TLS != 0,
         out_buf,
         out_len,
     );

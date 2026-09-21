@@ -34,8 +34,8 @@ int rust_net_dns_resolve_a(const char* name, uint32_t* out_ip_host);
  */
 /* Connect TLS over an open connected TCP socket. Legacy entry: verified path. */
 int cact_tls_connect(int sock, const char* server_name);
-/* skip_verify != 0 disables certificate chain verification (the in-kernel
-   cact_crypto provider does not implement cert signature verification yet). */
+/* skip_verify != 0 disables certificate chain verification; the default (0)
+   verifies the chain against the webpki roots via cact_crypto. */
 int cact_tls_connect_ex(int sock, const char* server_name, int skip_verify);
 int cact_tls_send(int conn, const void* data, uint16_t len);
 int cact_tls_recv(int conn, void* buf, uint16_t max_len);  /* 0 = no data yet, -1 = error/closed */
@@ -55,11 +55,13 @@ typedef enum {
     CACT_HTTP_HEAD   = 5,
 } cact_http_method_t;
 
-/* cact_http_request flags. By default HTTPS skips certificate chain
-   verification (the in-kernel cact_crypto provider has no certificate
-   signature verification yet). Set CACT_HTTP_FLAG_VERIFY_TLS to require a
-   verified chain (fails against servers whose certs cannot be verified). */
+/* cact_http_request flags.  HTTPS verifies the certificate chain by default
+   (webpki roots + cact_crypto's RSA/ECDSA signature verification).
+   CACT_HTTP_FLAG_VERIFY_TLS names that default explicitly and is kept for ABI
+   compatibility; CACT_HTTP_FLAG_INSECURE_TLS opts out of verification and
+   logs a warning (only for environments with no trustworthy clock). */
 #define CACT_HTTP_FLAG_VERIFY_TLS 0x1
+#define CACT_HTTP_FLAG_INSECURE_TLS 0x2
 
 typedef struct {
     uint16_t status;     /* HTTP status code (200, 404, ...); 0 = transport failure */

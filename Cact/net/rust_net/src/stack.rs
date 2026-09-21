@@ -20,7 +20,20 @@ use crate::runtime;
 use crate::skb;
 use crate::types::Skb;
 
+/// Size of one frame buffer: a 1500-MTU Ethernet frame is 1514 bytes (14-byte
+/// header + 1500 payload), so 1536 leaves room for VLAN tags.
 const PHY_MTU: usize = 1536;
+
+/// Frame MTU advertised to smoltcp.  smoltcp's `max_transmission_unit` is the
+/// *frame* size including the Ethernet header (its `ip_mtu()` subtracts 14), so
+/// the standard 1500-byte IP MTU is 1514 here.  Advertising the buffer size
+/// instead made smoltcp build 1522-byte IP packets — oversized on every
+/// 1500-MTU link, and a silent drop for a peer that is not QEMU/slirp.
+const PHY_FRAME_MTU: usize = 1514;
+
+/// Depth of the receive queue staged between the driver and `stack_poll`.
+const RX_QUEUE_LEN: usize = 8;
+
 pub(crate) const SOCKET_SET_SIZE: usize = 40;
 
 static mut PHY: CactPhy = CactPhy::new();
@@ -43,6 +56,19 @@ static mut ICMP_IDENT_BOUND: u16 = 0xFFFF;
 /// frames is silently overwritten and lost.
 static mut STACK_LOCK: [u32; 2] = [0; 2]; // kernel irq_spinlock_t: spin + saved flags
 
+/// Protects the RX ring (`PHY.rx*`) alone.
+///
+/// It exists so the frame hand-off from a NIC driver (`stack_enqueue_rx`, which
+/// a driver's `poll()` reaches through `netif_rx`) never waits on `STACK_LOCK`:
+/// `stack_poll` calls the driver's `poll()` *while holding `STACK_LOCK`*, so
+/// taking `STACK_LOCK` again there deadlocked the CPU on the first received
+/// frame — interrupts off, no timer, no Ctrl+C, dhcpd hanging after one request.
+///
+/// Lock order is `STACK_LOCK` -> `RX_LOCK` and never the reverse: `receive()`
+/// runs under `STACK_LOCK` (via `iface.poll`) and takes `RX_LOCK` inside it,
+/// while the RX path takes `RX_LOCK` alone.
+static mut RX_LOCK: [u32; 2] = [0; 2]; // kernel irq_spinlock_t: spin + saved flags
+
 pub(crate) struct StackGuard;
 
 impl StackGuard {
@@ -60,6 +86,29 @@ impl Drop for StackGuard {
     fn drop(&mut self) {
         unsafe {
             ffi_kernel::irq_spinlock_release(core::ptr::addr_of_mut!(STACK_LOCK).cast());
+        }
+    }
+}
+
+/// Guard for the RX ring; see [`RX_LOCK`] for why it is separate from
+/// [`StackGuard`].
+pub(crate) struct RxGuard;
+
+impl RxGuard {
+    #[inline]
+    fn new() -> Self {
+        unsafe {
+            ffi_kernel::irq_spinlock_acquire(core::ptr::addr_of_mut!(RX_LOCK).cast());
+        }
+        RxGuard
+    }
+}
+
+impl Drop for RxGuard {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            ffi_kernel::irq_spinlock_release(core::ptr::addr_of_mut!(RX_LOCK).cast());
         }
     }
 }
@@ -101,9 +150,16 @@ pub(crate) fn sync_iface_ipv4_from_config(iface: &mut Interface) {
 }
 
 struct CactPhy {
-    rx: [u8; PHY_MTU],
-    rx_len: usize,
-    rx_pending: bool,
+    /// Frames copied out of the driver's `Skb` by `stack_enqueue_rx` and
+    /// drained by `receive()`.  A single slot used to hold the frame, so a NIC
+    /// that delivered two frames before `net_poll_task` ran silently lost the
+    /// first one.
+    rx: [[u8; PHY_MTU]; RX_QUEUE_LEN],
+    rx_len: [usize; RX_QUEUE_LEN],
+    rx_head: usize,
+    rx_tail: usize,
+    /// Frames dropped because the queue was full; never reset while running.
+    rx_dropped: u32,
     tx: [u8; PHY_MTU],
 }
 
@@ -117,9 +173,11 @@ fn active_nic_ptr() -> *mut crate::types::NetDriver {
 impl CactPhy {
     const fn new() -> Self {
         Self {
-            rx: [0; PHY_MTU],
-            rx_len: 0,
-            rx_pending: false,
+            rx: [[0; PHY_MTU]; RX_QUEUE_LEN],
+            rx_len: [0; RX_QUEUE_LEN],
+            rx_head: 0,
+            rx_tail: 0,
+            rx_dropped: 0,
             tx: [0; PHY_MTU],
         }
     }
@@ -176,14 +234,21 @@ impl Device for CactPhy {
     type TxToken<'a> = CactTxToken<'a> where Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        if !self.rx_pending {
-            return None;
-        }
-        self.rx_pending = false;
-        let n = self.rx_len.min(self.rx.len());
+        let (slot, n) = {
+            // Only the ring indices need the lock.  The producer never writes
+            // the slot `rx_head` points at (it stops one short of it), so the
+            // bytes cannot change after `rx_head` advances.
+            let _rx_guard = RxGuard::new();
+            if self.rx_head == self.rx_tail {
+                return None;
+            }
+            let slot = self.rx_head;
+            self.rx_head = (self.rx_head + 1) % RX_QUEUE_LEN;
+            (slot, self.rx_len[slot].min(PHY_MTU))
+        };
         Some((
             CactRxToken {
-                slice: &self.rx[..n],
+                slice: &self.rx[slot][..n],
             },
             CactTxToken { buf: &mut self.tx },
         ))
@@ -195,14 +260,20 @@ impl Device for CactPhy {
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut c = DeviceCapabilities::default();
-        c.max_transmission_unit = PHY_MTU;
+        c.max_transmission_unit = PHY_FRAME_MTU;
         c.max_burst_size = Some(1);
         c.medium = Medium::Ethernet;
         c
     }
 }
 
-/// Copy one Ethernet frame from driver `Skb` into the PHY RX staging buffer and wake `net_poll_task`.
+/// Copy one Ethernet frame from the driver's `Skb` into the RX queue and wake
+/// `net_poll_task`.
+///
+/// Historically entered from a NIC driver's `poll()`, which `stack_poll` calls
+/// while holding `STACK_LOCK` (and possibly from the driver's own IRQ or worker
+/// path), so the hand-off takes only [`RX_LOCK`] — the inner lock — and never
+/// `STACK_LOCK`.
 pub fn stack_enqueue_rx(skb: *mut Skb) {
     if skb.is_null() {
         return;
@@ -214,16 +285,41 @@ pub fn stack_enqueue_rx(skb: *mut Skb) {
             return;
         }
         let src = skb::skb_data(skb);
-        if !STACK_READY {
-            skb::kfree_skb(skb);
-            return;
-        }
-        core::ptr::copy_nonoverlapping(src, PHY.rx.as_mut_ptr(), len);
-        PHY.rx_len = len;
-        PHY.rx_pending = true;
+        let queued = {
+            let _rx_guard = RxGuard::new();
+            // STACK_READY is read under the lock so a frame cannot slip into the
+            // ring between `stack_teardown` resetting it and clearing the flag.
+            if !STACK_READY {
+                skb::kfree_skb(skb);
+                return;
+            }
+            let next = (PHY.rx_tail + 1) % RX_QUEUE_LEN;
+            if next == PHY.rx_head {
+                // Full: the stack is not draining as fast as the NIC fills it.
+                // Drop the newest frame (the older ones are already in flight)
+                // and keep a counter, so the loss is at least visible.
+                PHY.rx_dropped = PHY.rx_dropped.wrapping_add(1);
+                false
+            } else {
+                core::ptr::copy_nonoverlapping(src, PHY.rx[PHY.rx_tail].as_mut_ptr(), len);
+                PHY.rx_len[PHY.rx_tail] = len;
+                PHY.rx_tail = next;
+                true
+            }
+        };
         skb::kfree_skb(skb);
-        ffi_kernel::up(core::ptr::addr_of_mut!(runtime::net_sema));
+        if queued {
+            // Woken outside the lock: `up` can reach the scheduler, and this
+            // path may hold interrupts off.
+            ffi_kernel::up(core::ptr::addr_of_mut!(runtime::net_sema));
+        }
     }
+}
+
+/// Frames dropped because the RX queue was full (diagnostics).
+pub fn stack_rx_dropped() -> u32 {
+    let _rx_guard = RxGuard::new();
+    unsafe { PHY.rx_dropped }
 }
 
 pub unsafe fn stack_teardown() {
@@ -238,8 +334,14 @@ pub unsafe fn stack_teardown() {
     for s in SOCKET_STORAGE.iter_mut() {
         *s = SocketStorage::EMPTY;
     }
-    PHY = CactPhy::new();
-    STACK_READY = false;
+    {
+        // Reset the ring and STACK_READY together under the ring lock: a frame
+        // arriving concurrently is either already queued (and goes away with the
+        // reset) or sees the cleared flag and is freed.
+        let _rx_guard = RxGuard::new();
+        PHY = CactPhy::new();
+        STACK_READY = false;
+    }
     crate::tcp::reset_tcp_smoltcp_state();
     crate::udp::reset_udp_smoltcp_state();
 }
@@ -309,7 +411,9 @@ pub fn icmp_echo_request_host(dst_ip_host: u32, id: u16, seq: u16) -> bool {
         let Some(icmp_h) = ICMP_HANDLE else {
             return false;
         };
-        let Some(ref mut iface) = IFACE.as_mut() else {
+        // Only the presence of a live interface matters here; the packet is
+        // emitted into the socket buffer and sent by the next poll.
+        let Some(_iface) = IFACE.as_mut() else {
             return false;
         };
         let Some(ref mut socks) = SOCKET_SET.as_mut() else {
@@ -356,7 +460,6 @@ pub fn icmp_echo_request_host(dst_ip_host: u32, id: u16, seq: u16) -> bool {
         let mut pkt = Icmpv4Packet::new_unchecked(buf);
         let cap = ChecksumCapabilities::default();
         repr.emit(&mut pkt, &cap);
-        let _ = iface.context();
         true
     }
 }
@@ -397,6 +500,10 @@ pub fn icmp_try_recv_reply(id: u16, seq: u16) -> Option<(u32, usize)> {
             };
             if let smoltcp::wire::Icmpv4Repr::EchoReply { ident, seq_no, .. } = repr {
                 if ident == id && seq_no == seq {
+                    // Only IPv4 is compiled in, so the `_` arm is unreachable
+                    // today; it stays so that enabling proto-ipv6 later does not
+                    // silently report a v6 source as 0.0.0.0.
+                    #[allow(unreachable_patterns)]
                     let src = match addr {
                         IpAddress::Ipv4(v4) => v4.to_bits(),
                         _ => 0,
