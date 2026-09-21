@@ -12,6 +12,7 @@
 #include "apic.h"
 #include "msi.h"
 #include "energy.h"
+#include "rtc.h"
 
 // Approximate CPU MHz via short TSC busy-wait.
 static uint32_t _tsc_mhz(void) {
@@ -320,6 +321,30 @@ int _time_read(uint32_t off, uint32_t size, char *buf) {
     uint32_t ticks = timer_ticks_get();
     t.sec  = ticks / 100;
     t.usec = (ticks % 100) * (1000000 / 100);
+    uint32_t len = sizeof(t);
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, (const char *)&t + off, size);
+    return (int)size;
+}
+
+// /proc/wallclock — binary cact_time_t: civil time, i.e. seconds since the
+// Unix epoch, from the CMOS RTC read at boot.  /proc/time stays the monotonic
+// boot clock; this is the one to use when the answer has to agree with the
+// outside world (X.509 validity, file timestamps).
+int _wallclock_read(uint32_t off, uint32_t size, char *buf) {
+    cact_time_t t;
+    uint64_t us = rtc_epoch_usec();
+    if (us == 0) {
+        /* No usable RTC date: report the boot clock rather than 1970, so a
+         * caller that only needs something monotonic still behaves. */
+        uint32_t ticks = timer_ticks_get();
+        t.sec  = ticks / 100;
+        t.usec = (ticks % 100) * (1000000 / 100);
+    } else {
+        t.sec  = (uint32_t)(us / 1000000ull);
+        t.usec = (uint32_t)(us % 1000000ull);
+    }
     uint32_t len = sizeof(t);
     if (off >= len) return 0;
     if (size > len - off) size = len - off;

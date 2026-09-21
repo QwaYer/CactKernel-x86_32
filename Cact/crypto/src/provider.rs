@@ -3,7 +3,6 @@ use alloc::vec;
 use rustls::crypto::CryptoProvider;
 use rustls::{CipherSuiteCommon, SupportedCipherSuite, Tls13CipherSuite};
 use rustls::CipherSuite;
-use rustls::crypto::WebPkiSupportedAlgorithms;
 
 use crate::aead::{CactAes128Gcm, CactAes256Gcm};
 use crate::hash::{CactSha256, CactSha384};
@@ -37,10 +36,7 @@ pub fn cact_crypto_provider() -> CryptoProvider {
             }),
         ],
         kx_groups: vec![&CactX25519, &CactSecp256r1],
-        signature_verification_algorithms: WebPkiSupportedAlgorithms {
-            all: &[],
-            mapping: &[],
-        },
+        signature_verification_algorithms: crate::x509::SUPPORTED_ALGORITHMS,
         secure_random: &CactRandom,
         key_provider: &CactKeyProvider,
     }

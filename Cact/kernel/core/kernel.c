@@ -25,6 +25,7 @@
 #include "mtrr.h"
 #include "cact_acpi.h"
 #include "ktime.h"
+#include "rtc.h"
 #include "tick.h"
 #include "apic.h"
 #include "energy.h"
@@ -218,6 +219,22 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
      * apic_init() below. */
     if (ktime_init() != 0)
         pr_warn("  %-11s : no wall clock — timekeeping degraded\n", "ktime");
+
+    /* Civil time, for the things that have to agree with the outside world —
+     * X.509 validity windows above all.  Everything above counts since boot. */
+    rtc_init();
+    if (rtc_have_time())
+        pr_info("  %-11s : %u s since the epoch\n", "rtc",
+                (unsigned)rtc_epoch_sec());
+    else
+        pr_warn("  %-11s : no usable CMOS date — only uptime is known\n", "rtc");
+
+    /* CSPRNG self-test.  Everything downstream trusts this generator (TLS keys,
+     * /dev/urandom), and a generator that hands out zeros fails silently, so
+     * check it once here where the failure is one line in the boot log. */
+    if (cact_csprng_selftest() != 0)
+        pr_err("  %-11s : SELF-TEST FAILED — the DRBG returns zeros/duplicates\n",
+               "csprng");
 
     if (apic_init() == 0) {
         pr_info("  %-11s : LAPIC + IOAPIC operational\n", "apic");

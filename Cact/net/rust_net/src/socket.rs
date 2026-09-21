@@ -33,7 +33,28 @@ extern "C" fn socket_read_op(node: *mut VfsNode, _off: u32, size: u32, buf: *mut
             return -1;
         }
         if (*ks).kind == KS_TCP {
-            return tcp::tcp_recv((*ks).proto_idx, buf.cast::<u8>(), size as u16);
+            let idx = (*ks).proto_idx;
+            // `tcp_recv` answers 0 both when nothing is buffered yet and when
+            // the peer is done, so one call cannot tell a short read from EOF.
+            // A blocking socket read waits for the first byte instead: retry
+            // while the connection is still open and report 0 only once the
+            // peer has closed its half.
+            loop {
+                let n = tcp::tcp_recv(idx, buf.cast::<u8>(), size as u16);
+                if n != 0 {
+                    return n;
+                }
+                match tcp::with_tcp_socket(idx, |s| s.state()) {
+                    Some(smoltcp::socket::tcp::State::CloseWait)
+                    | Some(smoltcp::socket::tcp::State::Closed)
+                    | Some(smoltcp::socket::tcp::State::TimeWait)
+                    | None => return 0,
+                    // Reading a listener is a caller bug; fail instead of
+                    // blocking on a socket that will never deliver bytes.
+                    Some(smoltcp::socket::tcp::State::Listen) => return -1,
+                    _ => ffi_kernel::sched_sleep_ticks(1),
+                }
+            }
         }
         if (*ks).kind == KS_UDP {
             return udp::udp_sock_recv((*ks).proto_idx, buf.cast::<u8>(), size as u16, core::ptr::null_mut(), core::ptr::null_mut());
@@ -53,6 +74,16 @@ extern "C" fn socket_write_op(node: *mut VfsNode, _off: u32, size: u32, buf: *mu
         }
         if (*ks).kind == KS_TCP {
             return tcp::tcp_send((*ks).proto_idx, buf.cast::<u8>(), size as u16);
+        }
+        if (*ks).kind == KS_UDP {
+            // One datagram per write(), so the socket needs a peer — POSIX
+            // would answer EDESTADDRREQ for an unconnected datagram socket.
+            let idx = (*ks).proto_idx;
+            let (ip, port) = udp::udp_sock_peer(idx);
+            if ip == 0 || port == 0 || size > u16::MAX as u32 {
+                return -1;
+            }
+            return udp::udp_sock_send(idx, ip, port, buf.cast::<u8>(), size as u16);
         }
     }
     -1
@@ -103,17 +134,22 @@ extern "C" fn socket_poll_op(node: *mut VfsNode, events: u32) -> c_int {
             if idx >= TCP_MAX_SOCKETS {
                 return VFS_POLLERR as c_int;
             }
-            let s = &tcp::tcp_sockets[idx];
-            if s.used == 0 {
+            let (used, rx_head, rx_tail) = {
+                let s = &tcp::tcp_sockets[idx];
+                (s.used, s.rx_head, s.rx_tail)
+            };
+            if used == 0 {
                 return VFS_POLLERR as c_int;
             }
-            if events & VFS_POLLIN != 0 {
-                if s.rx_head != s.rx_tail {
-                    revents |= VFS_POLLIN;
-                }
+            if events & VFS_POLLIN != 0 && rx_head != rx_tail {
+                revents |= VFS_POLLIN;
             }
             if events & VFS_POLLOUT != 0 {
-                if s.state == TCP_ESTABLISHED || s.state == TCP_CLOSE_WAIT {
+                // Ask smoltcp instead of trusting the cached state: an
+                // ESTABLISHED socket whose TX buffer (or the peer's window) is
+                // full is not writable, and claiming otherwise makes a
+                // write->0->poll retry loop spin.
+                if tcp::tcp_can_send(idx) {
                     revents |= VFS_POLLOUT;
                 }
             }
@@ -128,7 +164,12 @@ extern "C" fn socket_poll_op(node: *mut VfsNode, events: u32) -> c_int {
                 }
             }
             if events & VFS_POLLOUT != 0 {
-                revents |= VFS_POLLOUT;
+                // Same reasoning as TCP: an unbound or TX-buffer-full datagram
+                // socket is not writable, and a dishonest POLLOUT makes a
+                // write->0->poll retry loop spin.
+                if udp::udp_can_send((*ks).proto_idx as usize) {
+                    revents |= VFS_POLLOUT;
+                }
             }
         }
         revents as c_int
@@ -153,6 +194,7 @@ static mut SOCKET_OPS: VfsOps = VfsOps {
     unlink: core::ptr::null_mut(),
     readlink: core::ptr::null_mut(),
     ioctl: core::ptr::null_mut(),
+    mmap_backing: core::ptr::null_mut(),
     truncate: core::ptr::null_mut(),
     chmod: core::ptr::null_mut(),
     chown: core::ptr::null_mut(),
@@ -207,7 +249,13 @@ unsafe fn make_socket_node(ks: *mut Ksock) -> *mut VfsNode {
     }
     core::ptr::write_bytes(node.cast::<u8>(), 0, core::mem::size_of::<VfsNode>());
     (*node).type_ = VFS_SOCKET;
-    node_refcount(node).store(1, Ordering::Relaxed);
+    // Nothing references the node yet: `alloc_fd()` -> `file_alloc()` calls
+    // open_vfs(), which takes the first reference, and the matching
+    // close_vfs() frees the node.  Starting at 1 (as this did) left the
+    // decrement in socket_close_op at 1, so close() never released the node,
+    // its Ksock slot or its TCP/UDP slot — socket() failed after KSOCK_MAX
+    // closes.  memfd/pipe start their nodes at 0 for the same reason.
+    node_refcount(node).store(0, Ordering::Relaxed);
     (*node).ops = core::ptr::addr_of_mut!(SOCKET_OPS);
     (*node).priv_ = ks.cast::<c_void>();
     node

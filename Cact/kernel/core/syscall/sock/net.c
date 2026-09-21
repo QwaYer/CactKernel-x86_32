@@ -20,6 +20,9 @@
 #ifndef EFAULT
 #define EFAULT 14
 #endif
+#ifndef EAGAIN
+#define EAGAIN 11
+#endif
 
 int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
     if (!node || node->type != VFS_SOCKET) return -1;
@@ -60,8 +63,13 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
         cact_sockaddr_arg_t a;
         if (!arg) return -EINVAL;
         if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
-        if (ks->kind != KS_TCP) return -1;
-        return tcp_connect(ks->proto_idx, ntohl(a.addr.addr), ntohs(a.addr.port));
+        if (ks->kind == KS_TCP)
+            return tcp_connect(ks->proto_idx, ntohl(a.addr.addr), ntohs(a.addr.port));
+        /* Datagram sockets accept connect() too: it only records the peer, so
+         * write() can send one datagram to it. */
+        if (ks->kind == KS_UDP)
+            return udp_sock_connect(ks->proto_idx, ntohl(a.addr.addr), ntohs(a.addr.port));
+        return -1;
     }
 
     case CACT_SOCKCTL_LISTEN: {
@@ -167,9 +175,14 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
 
         if (ks->kind == KS_TCP)
             return tcp_send(ks->proto_idx, (uint8_t *)a.buf, (uint16_t)a.len);
-        if (ks->kind == KS_UDP)
-            return udp_sock_send(ks->proto_idx, ntohl(a.dst.addr), ntohs(a.dst.port),
-                                 (const uint8_t *)a.buf, (uint16_t)a.len);
+        if (ks->kind == KS_UDP) {
+            int r = udp_sock_send(ks->proto_idx, ntohl(a.dst.addr), ntohs(a.dst.port),
+                                  (const uint8_t *)a.buf, (uint16_t)a.len);
+            /* A datagram is atomic, so "0 bytes sent" would read as success in
+             * userspace; the socket layer uses 0 to mean "TX buffer full, retry
+             * after POLLOUT".  Hand userspace the retryable error instead. */
+            return r == 0 ? -EAGAIN : r;
+        }
         return -1;
     }
 

@@ -130,8 +130,14 @@ int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
         int prec = -1;
         if (*fmt == '.') {
             fmt++;
-            prec = 0;
-            while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); fmt++; }
+            if (*fmt == '*') {
+                prec = va_arg(ap, int);
+                fmt++;
+                if (prec < 0) prec = -1;
+            } else {
+                prec = 0;
+                while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); fmt++; }
+            }
         }
 
         int lng = 0;
@@ -146,6 +152,8 @@ int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
         int tmp_len = 0;
         char fill = zero ? '0' : ' ';
         char sign = 0;
+        const char* pfx = "";      /* "0x"/"0X" для %#x, иначе пусто */
+        int pfx_len = 0;
 
         switch (*fmt) {
         case 'd':
@@ -176,23 +184,23 @@ int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
         case 'X': {
             unsigned long long v = (lng >= 2) ? va_arg(ap, unsigned long long) :
                                    (lng >= 1) ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+            if (alt && v != 0) { pfx = (*fmt == 'x') ? "0x" : "0X"; pfx_len = 2; }
             do {
                 int d = (v & 0xF);
                 tmp[tmp_len++] = (d < 10) ? (d + '0') : (d - 10 + ((*fmt == 'x') ? 'a' : 'A'));
                 v >>= 4;
             } while (v);
-            if (alt && width <= 0 && tmp_len >= 1) { /* prefix handled by caller */ }
             break;
         }
         case 'p': {
             unsigned long v = (unsigned long)va_arg(ap, void*);
-            tmp[tmp_len++] = 'x';
-            tmp[tmp_len++] = '0';
             do {
                 int d = (v & 0xF);
                 tmp[tmp_len++] = (d < 10) ? (d + '0') : (d - 10 + 'a');
                 v >>= 4;
             } while (v);
+            tmp[tmp_len++] = 'x';          /* печатается первым (tmp идёт назад) */
+            tmp[tmp_len++] = '0';
             fill = ' ';
             break;
         }
@@ -212,24 +220,54 @@ int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
         }
         case 'c': {
             char c = (char)va_arg(ap, int);
+            if (!left) {
+                for (int i = 1; i < width && remaining > 1; i++) { *dst++ = ' '; remaining--; }
+            }
             if (remaining > 1) { *dst++ = c; remaining--; }
+            if (left) {
+                for (int i = 1; i < width && remaining > 1; i++) { *dst++ = ' '; remaining--; }
+            }
             continue;
         }
         default:
             continue;
         }
 
+        // Точность у целых: минимум цифр (%.5d) и %.0d от нуля — пусто.  tmp
+        // заполнен от младшей цифры к старшей, так что '0' в конец добавляет
+        // ведущие нули.  Как и в C, точность отменяет zero-флаг у этих
+        // преобразований; у %s точность уже учтена выше.
+        if (prec >= 0 && (*fmt == 'd' || *fmt == 'i' || *fmt == 'u' ||
+                          *fmt == 'o' || *fmt == 'x' || *fmt == 'X')) {
+            fill = ' ';
+            if (prec == 0 && tmp_len == 1 && tmp[0] == '0' &&
+                !(alt && *fmt == 'o')) {
+                tmp_len = 0;
+            }
+            while (tmp_len < prec && tmp_len < (int)sizeof(tmp) - 1) {
+                tmp[tmp_len++] = '0';
+            }
+        }
+
         // reverse tmp and emit with width/sign/zero handling
         int digits = tmp_len;
-        int pad = width - digits;
-        if (sign && fill == '0') pad--;
+        int pad = width - digits - (sign ? 1 : 0) - pfx_len;
+        if (pad < 0) pad = 0;
 
         if (!left) {
-            if (sign && fill == '0' && remaining > 1) { *dst++ = sign; remaining--; }
-            for (int i = 0; i < pad && remaining > 1; i++) { *dst++ = fill; remaining--; }
-            if (sign && fill == ' ' && remaining > 1) { *dst++ = sign; remaining--; }
+            if (fill == '0') {
+                /* знак, затем префикс, затем нули: %#010x -> "0x0000beef" */
+                if (sign && remaining > 1) { *dst++ = sign; remaining--; }
+                for (int i = 0; i < pfx_len && remaining > 1; i++) { *dst++ = pfx[i]; remaining--; }
+                for (int i = 0; i < pad && remaining > 1; i++) { *dst++ = '0'; remaining--; }
+            } else {
+                for (int i = 0; i < pad && remaining > 1; i++) { *dst++ = ' '; remaining--; }
+                if (sign && remaining > 1) { *dst++ = sign; remaining--; }
+                for (int i = 0; i < pfx_len && remaining > 1; i++) { *dst++ = pfx[i]; remaining--; }
+            }
         } else {
             if (sign && remaining > 1) { *dst++ = sign; remaining--; }
+            for (int i = 0; i < pfx_len && remaining > 1; i++) { *dst++ = pfx[i]; remaining--; }
         }
         for (int i = digits - 1; i >= 0 && remaining > 1; i--) { *dst++ = tmp[i]; remaining--; }
         if (left) {

@@ -27,8 +27,37 @@ static mut UDP_TX_META: [[udp::PacketMetadata; 4]; UDP_SOCK_MAX] =
 static mut UDP_TX_PAY: [[u8; 2048]; UDP_SOCK_MAX] = [[0; 2048]; UDP_SOCK_MAX];
 static mut UDP_HANDLE: [Option<SocketHandle>; UDP_SOCK_MAX] = [None; UDP_SOCK_MAX];
 
+/// Next local port to hand to a socket that was never bind()ed.
+static mut NEXT_EPHEMERAL: u16 = 49152;
+
+/// Peer recorded by `connect()` on a datagram socket; (0, 0) = unconnected.
+/// Kept out of `UdpSock`/`Ksock` on purpose: those are C-visible mirrors, and
+/// the peer is private to this crate.
+static mut UDP_PEER: [(u32, u16); UDP_SOCK_MAX] = [(0, 0); UDP_SOCK_MAX];
+
+/// Pick a local port not already held by another UDP socket.
+unsafe fn pick_ephemeral() -> u16 {
+    for _ in 0..(65535 - 49152 + 1) {
+        let p = NEXT_EPHEMERAL;
+        NEXT_EPHEMERAL = if p >= 65535 { 49152 } else { p + 1 };
+        let mut taken = false;
+        for s in udp_socks.iter_mut() {
+            if s.used != 0 && s.local_port == p {
+                taken = true;
+                break;
+            }
+        }
+        if !taken {
+            return p;
+        }
+    }
+    0
+}
+
 pub(crate) unsafe fn reset_udp_smoltcp_state() {
     UDP_HANDLE = [None; UDP_SOCK_MAX];
+    NEXT_EPHEMERAL = 49152;
+    UDP_PEER = [(0, 0); UDP_SOCK_MAX];
     for s in udp_socks.iter_mut() {
         *s = UdpSock {
             used: 0,
@@ -117,7 +146,48 @@ pub extern "C" fn udp_sock_free(idx: i32) {
             });
         }
         udp_socks[i].used = 0;
+        UDP_PEER[i] = (0, 0);
     }
+}
+
+/// `connect()` on a datagram socket.  UDP is connectionless, so this only
+/// records the peer (validated here); `write()` afterwards sends one datagram
+/// to it, and reads are still accepted from anyone.
+#[no_mangle]
+pub extern "C" fn udp_sock_connect(idx: i32, dst_ip: u32, dst_port: u16) -> i32 {
+    if idx < 0 || idx as usize >= UDP_SOCK_MAX || dst_ip == 0 || dst_port == 0 {
+        return -1;
+    }
+    unsafe {
+        if udp_socks[idx as usize].used == 0 {
+            return -1;
+        }
+        UDP_PEER[idx as usize] = (dst_ip, dst_port);
+    }
+    0
+}
+
+/// Peer recorded by [`udp_sock_connect`], or (0, 0) when unconnected.
+pub(crate) fn udp_sock_peer(idx: i32) -> (u32, u16) {
+    if idx < 0 || idx as usize >= UDP_SOCK_MAX {
+        return (0, 0);
+    }
+    unsafe { UDP_PEER[idx as usize] }
+}
+
+/// True when a datagram would find room in this socket's TX buffer right now —
+/// the honest POLLOUT predicate for `sendto`/`write`, matching `tcp_can_send`.
+pub(crate) fn udp_can_send(idx: usize) -> bool {
+    if idx >= UDP_SOCK_MAX {
+        return false;
+    }
+    let r = stack::with_iface_sockets(|_iface, socks| unsafe {
+        let Some(h) = UDP_HANDLE[idx] else {
+            return false;
+        };
+        socks.get_mut::<udp::Socket>(h).can_send()
+    });
+    r.unwrap_or(false)
 }
 
 #[no_mangle]
@@ -189,6 +259,17 @@ pub extern "C" fn udp_sock_send(
         if udp_socks[i].used == 0 {
             return -1;
         }
+        // smoltcp refuses to transmit from a socket whose local port is still 0
+        // (SendError::Unaddressable), so an unbound socket gets an ephemeral
+        // port here — at first send, not earlier: an explicit bind() must win,
+        // and sync_udp_pcbs_from_smoltcp runs long before the app can bind().
+        if udp_socks[i].local_port == 0 {
+            let p = pick_ephemeral();
+            if p == 0 {
+                return -1;
+            }
+            udp_socks[i].local_port = p;
+        }
         ensure_udp_bound(i, socks);
         let Some(h) = UDP_HANDLE[i] else {
             return -1;
@@ -196,10 +277,19 @@ pub extern "C" fn udp_sock_send(
         let s = socks.get_mut::<udp::Socket>(h);
         let slice = core::slice::from_raw_parts(data, len as usize);
         let dst_a = core::net::Ipv4Addr::from_bits(dst_ip);
-        if s.send_slice(slice, (dst_a, dst_port)).is_err() {
+        // A datagram bigger than the socket's payload capacity can never be
+        // queued, so that is a hard error rather than "retry later".
+        if len as usize > s.payload_send_capacity() {
             return -1;
         }
-        len as i32
+        match s.send_slice(slice, (dst_a, dst_port)) {
+            Ok(()) => len as i32,
+            // Transient: the TX buffer still holds other datagrams.  0 means
+            // "nothing queued, retry after POLLOUT" (same convention as
+            // tcp_send); CACT_SOCKCTL_SENDTO turns it into -EAGAIN.
+            Err(udp::SendError::BufferFull) => 0,
+            Err(_) => -1,
+        }
     });
     r.unwrap_or(-1)
 }

@@ -7,7 +7,7 @@ use crate::ffi::{self, ProcPageTracker};
 use crate::mlfq;
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 use crate::task::{
-    calc_highest_mapped_va, current_task, free_user_stack_pages, map_user_stack_in_pd,
+    kstack_alloc, kstack_free, calc_highest_mapped_va, current_task, free_user_stack_pages, map_user_stack_in_pd,
     next_pid, push_empty_args, task_list_add, task_setup_sigreturn, task_zero_init,
     ustack_write_u32, ProcMeta, TaskStruct, SCHEDULER_LOCK, KERNEL_BASE, KERNEL_STACK_SIZE,
     USER_CODE_SEL, USER_DATA_SEL, USER_STACK_BYTES, USER_STACK_PAGES,
@@ -21,11 +21,11 @@ pub unsafe extern "C" fn create_task(entry_point: *const c_void) -> *mut TaskStr
     let p = ffi::kmalloc(core::mem::size_of::<ProcMeta>()) as *mut ProcMeta;
     if p.is_null() { ffi::kfree(t as *mut c_void); return ptr::null_mut(); }
 
-    let stack = ffi::kalloc() as *mut u32;
+    let stack = kstack_alloc();
     if stack.is_null() { ffi::kfree(p as *mut c_void); ffi::kfree(t as *mut c_void); return ptr::null_mut(); }
 
     if !task_zero_init(t, p) {
-        ffi::free_page(stack as *mut c_void);
+        kstack_free(stack as *mut c_void);
         ffi::kfree(p as *mut c_void);
         ffi::kfree(t as *mut c_void);
         return ptr::null_mut();
@@ -64,7 +64,7 @@ fn create_user_task_internal(entry_point: *const c_void, add_to_list: bool) -> *
     let p = ffi::kmalloc(core::mem::size_of::<ProcMeta>()) as *mut ProcMeta;
     if p.is_null() { ffi::kfree(t as *mut c_void); return ptr::null_mut(); }
 
-    let kstack = ffi::kalloc() as *mut u32;
+    let kstack = kstack_alloc();
     if kstack.is_null() { ffi::kfree(p as *mut c_void); ffi::kfree(t as *mut c_void); return ptr::null_mut(); }
 
     let mut ustack_pages: [*mut c_void; USER_STACK_PAGES as usize] =
@@ -75,7 +75,7 @@ fn create_user_task_internal(entry_point: *const c_void, add_to_list: bool) -> *
             for j in 0..i {
                 ffi::free_page(ustack_pages[j]);
             }
-            ffi::free_page(kstack as *mut c_void);
+            kstack_free(kstack as *mut c_void);
             ffi::kfree(p as *mut c_void);
             ffi::kfree(t as *mut c_void);
             return ptr::null_mut();
@@ -87,7 +87,7 @@ fn create_user_task_internal(entry_point: *const c_void, add_to_list: bool) -> *
         for page in ustack_pages {
             ffi::free_page(page);
         }
-        ffi::free_page(kstack as *mut c_void);
+        kstack_free(kstack as *mut c_void);
         ffi::kfree(p as *mut c_void);
         ffi::kfree(t as *mut c_void);
         return ptr::null_mut();
@@ -208,7 +208,7 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
         ffi::load_elf(path, pd, &raw mut (*p).mm)
     };
     if entry.is_null() {
-        ffi::free_page((*p).stack_base);
+        kstack_free((*p).stack_base);
         free_user_stack_pages(&mut *p);
         ffi::kfree(p as *mut c_void);
         ffi::kfree(t as *mut c_void);

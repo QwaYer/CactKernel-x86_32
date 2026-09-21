@@ -73,6 +73,7 @@ typedef enum {
 #define PT_INDEX(vaddr) ((vaddr >> 12) & 0x3FF)
 
 // I/O port operations (inline assembly)
+extern int      cact_csprng_selftest(void);   /* kernels crypto DRBG */
 extern void     outb(uint16_t port, uint8_t data);
 extern uint8_t  inb (uint16_t port);
 extern void     outw(uint16_t port, uint16_t data);

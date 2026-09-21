@@ -15,6 +15,17 @@ unsafe fn local_irq_restore(flags: u32) {
     core::arch::asm!("push {0}; popf", in(reg) flags, options(nostack));
 }
 
+// Non-x86 fallbacks exist so this crate (and cact_crypto with it) can be built
+// on a host for testing.  The kernel itself is x86-only and always takes the
+// asm path above; there, the locks really do disable interrupts.
+#[cfg(not(target_arch = "x86"))]
+unsafe fn local_irq_save() -> u32 {
+    0
+}
+
+#[cfg(not(target_arch = "x86"))]
+unsafe fn local_irq_restore(_flags: u32) {}
+
 pub struct Once {
     done: AtomicBool,
 }
