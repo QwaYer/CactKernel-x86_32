@@ -2,10 +2,10 @@
 
 use smoltcp::iface::{SocketHandle, SocketSet};
 use smoltcp::socket::udp;
-use smoltcp::wire::IpAddress;
+use smoltcp::wire::{IpAddress, IpListenEndpoint};
 
 use crate::stack::{self};
-use crate::types::{Skb, UdpSock, UDP_SOCK_MAX};
+use crate::types::{UdpSock, UDP_SOCK_MAX};
 
 #[no_mangle]
 pub static mut udp_socks: [UdpSock; UDP_SOCK_MAX] = [UdpSock {
@@ -86,7 +86,20 @@ fn ensure_udp_bound(idx: usize, socks: &mut SocketSet<'static>) {
         if s.is_open() {
             return;
         }
-        let _ = s.bind(port);
+        // A bind() may name a local address as well as a port (host order, 0 =
+        // INADDR_ANY).  Honour it: without the address the socket answers on
+        // whatever address the packet arrived on, which is not what bind(2)
+        // promises.
+        let local = udp_socks[idx].local_ip;
+        let ep = IpListenEndpoint {
+            addr: if local != 0 {
+                Some(IpAddress::Ipv4(crate::stack::ipv4_from_host(local)))
+            } else {
+                None
+            },
+            port,
+        };
+        let _ = s.bind(ep);
     }
 }
 
@@ -294,36 +307,21 @@ pub extern "C" fn udp_sock_send(
     r.unwrap_or(-1)
 }
 
-/// Legacy RX path — ingress is handled by smoltcp; free stray buffers.
-#[no_mangle]
-pub extern "C" fn udp_input(skb_ptr: *mut Skb) {
-    if !skb_ptr.is_null() {
-        crate::skb::kfree_skb(skb_ptr);
+/// Fresh readiness for `poll()`: `(datagram waiting, slot unusable)`.
+///
+/// `can_recv()` is whether a datagram is queued — the honest POLLIN predicate.
+pub(crate) fn udp_poll_status(idx: usize) -> (bool, bool) {
+    if idx >= UDP_SOCK_MAX {
+        return (false, true);
     }
-}
-
-/// Legacy TX helper — unused; kept if any C references the symbol.
-#[no_mangle]
-pub extern "C" fn udp_output(_skb_ptr: *mut Skb, _dst_ip: u32, _src_port: u16, _dst_port: u16) -> i32 {
-    -1
-}
-
-#[no_mangle]
-pub extern "C" fn udp_sock_read_ready(idx: i32) -> core::ffi::c_int {
-    if idx < 0 || idx as usize >= UDP_SOCK_MAX {
-        return 0;
-    }
-    unsafe {
-        if udp_socks[idx as usize].used == 0 {
-            return 0;
+    let r = stack::with_iface_sockets(|_iface, socks| unsafe {
+        if udp_socks[idx].used == 0 {
+            return (false, true);
         }
-        let Some(h) = UDP_HANDLE[idx as usize] else {
-            return 0;
+        let Some(h) = UDP_HANDLE[idx] else {
+            return (false, true);
         };
-        let r = stack::with_iface_sockets(|_iface, socks| {
-            let s = socks.get_mut::<udp::Socket>(h);
-            s.can_recv() as i32
-        });
-        r.unwrap_or(0)
-    }
+        (socks.get_mut::<udp::Socket>(h).can_recv(), false)
+    });
+    r.unwrap_or((false, true))
 }

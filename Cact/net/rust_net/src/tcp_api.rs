@@ -1,7 +1,6 @@
 //! TCP C ABI entry points. Split out of `tcp.rs`; shared state lives there.
 
 use core::net::Ipv4Addr;
-use core::sync::atomic::Ordering;
 
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::tcp;
@@ -69,19 +68,6 @@ pub extern "C" fn tcp_socket() -> i32 {
     })
 }
 
-#[no_mangle]
-pub extern "C" fn tcp_set_callbacks(sock: i32, on_data: *mut core::ffi::c_void, on_event: *mut core::ffi::c_void) {
-    if sock < 0 || sock as usize >= TCP_MAX_SOCKETS {
-        return;
-    }
-    unsafe {
-        tcp_lock();
-        tcp_sockets[sock as usize].on_data = on_data;
-        tcp_sockets[sock as usize].on_event = on_event;
-        tcp_unlock();
-    }
-}
-
 /// How long `connect()` waits for the handshake (ticks at 100 Hz, same budget
 /// as the kernel HTTP client).  smoltcp keeps retransmitting the SYN for an
 /// unreachable peer, so only this deadline turns "no answer" into a failure.
@@ -131,13 +117,22 @@ pub extern "C" fn tcp_connect(sock: i32, dst_ip: u32, dst_port: u16) -> i32 {
         if s.is_open() {
             return -1;
         }
+        // A local port set by CACT_SOCKCTL_BIND wins over the ephemeral one:
+        // bind() has to actually bind for connect() too, otherwise a caller
+        // that asked for a specific source port silently got another one.
         let local_port = unsafe {
             tcp_lock();
-            let p = NEXT_EPHEMERAL;
-            NEXT_EPHEMERAL = NEXT_EPHEMERAL.wrapping_add(1);
-            if NEXT_EPHEMERAL < 49152 {
-                NEXT_EPHEMERAL = 49152;
-            }
+            let bound = tcp_sockets[sock as usize].local_port;
+            let p = if bound != 0 {
+                bound
+            } else {
+                let p = NEXT_EPHEMERAL;
+                NEXT_EPHEMERAL = NEXT_EPHEMERAL.wrapping_add(1);
+                if NEXT_EPHEMERAL < 49152 {
+                    NEXT_EPHEMERAL = 49152;
+                }
+                p
+            };
             tcp_unlock();
             p
         };
@@ -375,48 +370,4 @@ pub extern "C" fn tcp_recv(sock: i32, buf: *mut u8, max_len: u16) -> i32 {
         }
     });
     r.unwrap_or(-1)
-}
-
-/// C ABI stub: ingress is handled by smoltcp via [`stack::stack_enqueue_rx`].
-#[no_mangle]
-pub extern "C" fn tcp_input(_skb_ptr: *mut Skb) {}
-
-/// Returns true if a TCP pcb index would read without blocking (for `select` / `poll`).
-#[no_mangle]
-pub extern "C" fn tcp_sock_read_ready(idx: i32) -> core::ffi::c_int {
-    if idx < 0 || idx as usize >= TCP_MAX_SOCKETS {
-        return 0;
-    }
-    let used_and_accept_ready = unsafe {
-        tcp_lock();
-        let r = (tcp_sockets[idx as usize].used, tcp_sockets[idx as usize].accept_ready);
-        tcp_unlock();
-        r
-    };
-    if used_and_accept_ready.0 == 0 {
-        return 0;
-    }
-    if used_and_accept_ready.1 != 0 {
-        return 1;
-    }
-    let h = unsafe {
-        tcp_lock();
-        let h = TCP_HANDLE[idx as usize];
-        tcp_unlock();
-        h
-    };
-    let Some(h) = h else {
-        return 0;
-    };
-    let r = stack::with_iface_sockets(|_iface, socks| {
-        let s = socks.get_mut::<tcp::Socket>(h);
-        if s.may_recv() {
-            return 1;
-        }
-        matches!(
-            s.state(),
-            tcp::State::CloseWait | tcp::State::Closed | tcp::State::TimeWait
-        ) as i32
-    });
-    r.unwrap_or(0)
 }

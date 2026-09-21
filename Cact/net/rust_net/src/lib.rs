@@ -25,7 +25,6 @@ unsafe impl GlobalAlloc for CactAllocator {
 #[global_allocator]
 static ALLOCATOR: CactAllocator = CactAllocator;
 
-pub mod checksum;
 pub mod config;
 pub mod dns_resolve;
 pub mod ffi;

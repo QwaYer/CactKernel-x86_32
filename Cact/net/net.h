@@ -63,8 +63,8 @@ static inline uint32_t htonl(uint32_t x) {
 }
 static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
 
-/* Generic internet checksum (IP / ICMP / TCP / UDP) */
-uint16_t inet_checksum(void* data, uint16_t len);
+/* Generic internet checksum — removed: smoltcp computes every checksum itself
+   (there was no caller left for the Rust `inet_checksum` helper). */
 
 typedef struct net_driver {
     mac_addr_t mac;

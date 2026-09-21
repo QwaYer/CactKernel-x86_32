@@ -52,8 +52,4 @@ int udp_sock_send(int idx, uint32_t dst_ip, uint16_t dst_port,
    non-zero) so write() can send single datagrams to it.  Returns 0 or -1. */
 int udp_sock_connect(int idx, uint32_t dst_ip, uint16_t dst_port);
 
-/* ── Raw protocol API ─────────────────────────────────────────────────────── */
-void udp_input(skb_t* skb);
-int  udp_output(skb_t* skb, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port);
-
 #endif
