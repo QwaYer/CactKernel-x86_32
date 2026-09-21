@@ -19,28 +19,6 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 const CRYPT_EINVAL: i32 = -22;
 const CRYPT_FAIL: i32 = -1;
 
-fn crypt_rdrand32(out: &mut [u8]) -> bool {
-    let mut off = 0usize;
-    while off < out.len() {
-        #[cfg(target_arch = "x86")]
-        {
-            let mut r: u32 = 0;
-            let ret = unsafe { core::arch::x86::_rdrand32_step(&mut r) };
-            if ret != 1 {
-                return false;
-            }
-            let n = if out.len() - off < 4 { out.len() - off } else { 4 };
-            out[off..off + n].copy_from_slice(&r.to_le_bytes()[..n]);
-            off += n;
-        }
-        #[cfg(not(target_arch = "x86"))]
-        {
-            return false;
-        }
-    }
-    true
-}
-
 unsafe fn crypt_slice<'a>(p: *const u8, len: u32) -> Option<&'a [u8]> {
     if p.is_null() {
         if len == 0 {
@@ -49,20 +27,6 @@ unsafe fn crypt_slice<'a>(p: *const u8, len: u32) -> Option<&'a [u8]> {
         return None;
     }
     Some(core::slice::from_raw_parts(p, len as usize))
-}
-
-/// Fill a buffer with hardware random bytes (RDRAND).
-#[no_mangle]
-pub extern "C" fn cact_crypt_random(buf: *mut u8, len: u32) -> i32 {
-    if buf.is_null() {
-        return CRYPT_EINVAL;
-    }
-    let out = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
-    if crypt_rdrand32(out) {
-        0
-    } else {
-        CRYPT_FAIL
-    }
 }
 
 /// One-shot SHA-256 (alg=0, digest 32) / SHA-384 (alg=1, digest 48).
@@ -354,16 +318,48 @@ pub extern "C" fn cact_crypt_aead(
     }
 }
 
-/// Generate an X25519 key pair: priv is raw (clamped on use), pub 32 bytes.
+/// Expand a caller-supplied seed (the kernel CSPRNG's output) into a P-256
+/// scalar: SHA-256(domain || seed || counter), rejected and retried when it
+/// falls outside the curve order.  Rejection is cheaper than reduction and
+/// keeps the mapping uniform.
+fn p256_scalar_from_seed(seed: &[u8]) -> Option<p256::SecretKey> {
+    for counter in 0u32..16 {
+        let mut h = Sha256::new();
+        h.update(b"cact-p256-keygen");
+        h.update(seed);
+        h.update(counter.to_le_bytes());
+        let digest = h.finalize();
+        let mut fb = p256::FieldBytes::default();
+        fb.copy_from_slice(&digest);
+        if let Ok(sk) = p256::SecretKey::from_bytes(&fb) {
+            return Some(sk);
+        }
+    }
+    None
+}
+
+/// Generate an X25519 key pair from `seed` (at least 32 bytes of CSPRNG
+/// output).  `priv` is the raw scalar; X25519 clamps it on use, so any 32 bytes
+/// are a valid key.
 #[no_mangle]
-pub extern "C" fn cact_crypt_x25519_keygen(pub_out: *mut u8, priv_out: *mut u8) -> i32 {
+pub extern "C" fn cact_crypt_x25519_keygen(
+    seed: *const u8,
+    seed_len: u32,
+    pub_out: *mut u8,
+    priv_out: *mut u8,
+) -> i32 {
     if pub_out.is_null() || priv_out.is_null() {
         return CRYPT_EINVAL;
     }
-    let mut priv_bytes = [0u8; 32];
-    if !crypt_rdrand32(&mut priv_bytes) {
-        return CRYPT_FAIL;
+    let seed_slice = match unsafe { crypt_slice(seed, seed_len) } {
+        Some(s) => s,
+        None => return CRYPT_EINVAL,
+    };
+    if seed_slice.len() < 32 {
+        return CRYPT_EINVAL;
     }
+    let mut priv_bytes = [0u8; 32];
+    priv_bytes.copy_from_slice(&seed_slice[..32]);
     let sk = StaticSecret::from(priv_bytes);
     let pk = XPublicKey::from(&sk);
     unsafe {
@@ -398,36 +394,39 @@ pub extern "C" fn cact_crypt_x25519_derive(
     0
 }
 
-/// Generate a P-256 (secp256r1) key pair: pub is 65-byte uncompressed SEC1.
+/// Generate a P-256 (secp256r1) key pair from `seed` (at least 32 bytes of
+/// CSPRNG output); pub is 65-byte uncompressed SEC1.
 #[no_mangle]
-pub extern "C" fn cact_crypt_p256_keygen(pub_out: *mut u8, priv_out: *mut u8) -> i32 {
+pub extern "C" fn cact_crypt_p256_keygen(
+    seed: *const u8,
+    seed_len: u32,
+    pub_out: *mut u8,
+    priv_out: *mut u8,
+) -> i32 {
     if pub_out.is_null() || priv_out.is_null() {
         return CRYPT_EINVAL;
     }
-    let mut attempts = 0u32;
-    let (priv_bytes, sk) = loop {
-        let mut priv_bytes = [0u8; 32];
-        if !crypt_rdrand32(&mut priv_bytes) {
-            return CRYPT_FAIL;
-        }
-        let mut fb = p256::FieldBytes::default();
-        fb.copy_from_slice(&priv_bytes);
-        if let Ok(sk) = p256::SecretKey::from_bytes(&fb) {
-            break (priv_bytes, sk);
-        }
-        attempts += 1;
-        if attempts > 16 {
-            return CRYPT_FAIL;
-        }
+    let seed_slice = match unsafe { crypt_slice(seed, seed_len) } {
+        Some(s) => s,
+        None => return CRYPT_EINVAL,
+    };
+    if seed_slice.len() < 32 {
+        return CRYPT_EINVAL;
+    }
+    let sk = match p256_scalar_from_seed(seed_slice) {
+        Some(sk) => sk,
+        None => return CRYPT_FAIL,
     };
     let pk = sk.public_key();
     let ep = pk.to_encoded_point(false);
     if ep.as_bytes().len() != 65 {
         return CRYPT_FAIL;
     }
+    // Hand back the scalar actually used, not the raw seed.
+    let scalar = sk.to_bytes();
     unsafe {
         core::ptr::copy_nonoverlapping(ep.as_bytes().as_ptr(), pub_out, 65);
-        core::ptr::copy_nonoverlapping(priv_bytes.as_ptr(), priv_out, 32);
+        core::ptr::copy_nonoverlapping(scalar.as_slice().as_ptr(), priv_out, 32);
     }
     0
 }

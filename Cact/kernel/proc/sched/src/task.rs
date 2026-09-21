@@ -35,8 +35,60 @@ pub const SIG_UNCATCHABLE: u32 = SIGKILL | SIGSTOP;
 pub const SIG_DFL: u32 = 0;
 pub const SIG_IGN: u32 = 1;
 
-pub const KERNEL_STACK_SIZE: usize = 4096;
+// Kernel stacks are one contiguous allocation that grows down.  They must be
+// bigger than a single page: syscall handoffs, the VFS, and now in-kernel
+// crypto (the DRBG, and webpki's X.509 chain validation) all run on the
+// caller's kernel stack, and 4 KiB was not enough room for that chain.
+pub const KERNEL_STACK_SIZE: usize = 16384;
 pub const KERNEL_BASE: u32 = 0xC000_0000;
+
+/// Canary words at the base of every kernel stack.  A stack that runs past its
+/// base silently overwrites whatever the allocator placed after it, so this is
+/// the one place that can notice the overflow instead of the damage it does.
+pub const KERNEL_STACK_CANARY: u32 = 0x5A5A_5A5A;
+
+/// Allocate a kernel stack with the canary painted at its base.
+pub unsafe fn kstack_alloc() -> *mut u32 {
+    let p = ffi::kmalloc(KERNEL_STACK_SIZE) as *mut u32;
+    if !p.is_null() {
+        *p = KERNEL_STACK_CANARY;
+        *p.add(1) = KERNEL_STACK_CANARY;
+    }
+    p
+}
+
+pub unsafe fn kstack_free(base: *mut c_void) {
+    if !base.is_null() {
+        ffi::kfree(base);
+    }
+}
+
+/// 1 while the stack's canary is intact.
+pub unsafe fn kstack_ok(base: *mut c_void) -> bool {
+    if base.is_null() {
+        return true;
+    }
+    let p = base as *const u32;
+    *p == KERNEL_STACK_CANARY && *p.add(1) == KERNEL_STACK_CANARY
+}
+
+/// Report a kernel stack that has run past its base.  The damage is already
+/// done by then — this is about naming it instead of letting it surface later
+/// as a mystery somewhere else.  Reported once.
+pub fn task_check_kernel_stack() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static REPORTED: AtomicBool = AtomicBool::new(false);
+    unsafe {
+        let t = current_task;
+        if t.is_null() || REPORTED.load(Ordering::Relaxed) { return; }
+        let p = (*t).proc;
+        if p.is_null() { return; }
+        if !kstack_ok((*p).stack_base) {
+            REPORTED.store(true, Ordering::Relaxed);
+            ffi::printk(b"  sched       : KERNEL STACK OVERFLOW (canary destroyed)\n\0".as_ptr());
+        }
+    }
+}
 
 pub const EXEC_MAX_ARGS:   usize = 256;
 pub const EXEC_MAX_ENVS:   usize = 256;

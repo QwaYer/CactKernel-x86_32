@@ -35,6 +35,7 @@ int _meminfo_read(uint32_t off, uint32_t size, char *buf);
 int _uptime_read(uint32_t off, uint32_t size, char *buf);
 int _version_read(uint32_t off, uint32_t size, char *buf);
 int _time_read(uint32_t off, uint32_t size, char *buf);
+int _wallclock_read(uint32_t off, uint32_t size, char *buf);
 int _uname_read(uint32_t off, uint32_t size, char *buf);
 
 #endif

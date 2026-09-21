@@ -43,9 +43,14 @@ udp_sock_t *udp_sock_find_by_port(uint16_t port);
 int udp_sock_recv(int idx, uint8_t *buf, uint16_t max_len,
                   uint32_t *src_ip_out, uint16_t *src_port_out);
 
-/* Send a datagram from a bound socket */
+/* Send a datagram from a bound socket.  Returns the byte count, 0 when the TX
+   buffer is momentarily full (retry after POLLOUT), or -1. */
 int udp_sock_send(int idx, uint32_t dst_ip, uint16_t dst_port,
                   const uint8_t *data, uint16_t len);
+
+/* connect() on a datagram socket: records the peer (host byte order, both
+   non-zero) so write() can send single datagrams to it.  Returns 0 or -1. */
+int udp_sock_connect(int idx, uint32_t dst_ip, uint16_t dst_port);
 
 /* ── Raw protocol API ─────────────────────────────────────────────────────── */
 void udp_input(skb_t* skb);

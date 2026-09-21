@@ -145,6 +145,10 @@ typedef struct cact_proc_info {
 // /proc/time — binary read-only (8 bytes), monotonic since boot.
 typedef struct cact_time { uint32_t sec; uint32_t usec; } cact_time_t;
 
+// /proc/wallclock — binary read-only, same cact_time_t layout: civil time,
+// seconds since the Unix epoch, taken from the CMOS RTC read at boot.  This is
+// what CLOCK_REALTIME/gettimeofday()/time() report; /proc/time stays monotonic.
+
 // /proc/uname — binary read-only, layout matches struct utsname (Linux i386).
 typedef struct cact_uname {
     char sysname[65];
@@ -206,6 +210,7 @@ typedef struct cact_shmctl_arg { uint32_t shmid; uint32_t cmd; void *buf; } cact
 // plain read()/write(), as for AF_INET sockets.  sendmsg/recvmsg ioctls add
 // SCM_RIGHTS fd passing on AF_UNIX stream sockets (payload stays a byte
 // stream; passed fds arrive as an ordered FIFO alongside it).
+//
 
 typedef struct cact_sockaddr_in {
     uint32_t addr;   // IPv4 big-endian
@@ -271,6 +276,7 @@ typedef struct cact_recvfrom_arg {
     void *buf;
     uint32_t len;
 } cact_recvfrom_arg_t;
+
 
 // ===========================================================================
 // /dev/net control. RANGE 0x3400.
@@ -359,6 +365,21 @@ typedef struct cact_module_arg { char *path; uint32_t vendor_id; uint32_t device
 #define CACT_CRYPTCTL_AEAD        0x3706  // arg=cact_crypt_aead_arg_t*
 #define CACT_CRYPTCTL_KX_KEYGEN   0x3707  // arg=cact_crypt_kx_keygen_arg_t*
 #define CACT_CRYPTCTL_KX_DERIVE   0x3708  // arg=cact_crypt_kx_derive_arg_t*
+#define CACT_CRYPTCTL_SIG_VERIFY  0x3709  // arg=cact_crypt_sig_verify_arg_t*
+                                          // returns 0 valid, -1 invalid, -EINVAL bad args
+#define CACT_CRYPTCTL_X509_VERIFY  0x370A  // arg=cact_crypt_x509_verify_arg_t*
+                                          // returns 0 valid, -1 invalid, -EINVAL bad args
+
+// signature schemes for CACT_CRYPTCTL_SIG_VERIFY (order matches Cact_SIG_* in
+// cact_crypto/src/sig.rs)
+#define CACT_SIG_ECDSA_P256_SHA256 0
+#define CACT_SIG_ECDSA_P384_SHA384 1
+#define CACT_SIG_RSA_PKCS1_SHA256  2
+#define CACT_SIG_RSA_PKCS1_SHA384  3
+#define CACT_SIG_RSA_PKCS1_SHA512  4
+#define CACT_SIG_RSA_PSS_SHA256    5
+#define CACT_SIG_RSA_PSS_SHA384    6
+#define CACT_SIG_RSA_PSS_SHA512    7
 
 // algorithm selectors
 #define CACT_CRYPT_SHA256     0   // hash / hmac / hkdf: SHA-256 family
@@ -439,6 +460,42 @@ typedef struct cact_crypt_kx_derive_arg {
     uint8_t peer_pub[65]; // in: X25519 32 bytes / P-256 65 bytes (uncompressed)
     uint8_t shared[32];   // out
 } cact_crypt_kx_derive_arg_t;
+
+// Signature verification.  `pubkey` is the key exactly as a certificate carries
+// it — the SubjectPublicKeyInfo subjectPublicKey contents: a SEC1 point for
+// ECDSA, a DER RSAPublicKey for RSA.  `msg` is hashed internally with the
+// scheme's digest, so callers pass the message, not a prehash.
+typedef struct cact_crypt_sig_verify_arg {
+    uint32_t scheme;              // CACT_SIG_*
+    const uint8_t *pubkey;        // in
+    uint32_t pubkey_len;
+    const uint8_t *msg;           // in
+    uint32_t msg_len;
+    const uint8_t *sig;           // in (DER for ECDSA, raw for RSA)
+    uint32_t sig_len;
+} cact_crypt_sig_verify_arg_t;
+
+// Certificate chain verification (rustls-webpki in the kernel).  `chain` and
+// `roots` are buffers of concatenated DER certificates (each self-delimiting);
+// the leaf comes first in `chain`, and `roots` are the trust anchors the caller
+// wants to accept — the kernel keeps no trust policy of its own.
+//
+// `tls_scheme` != 0 additionally requires `hs_sig` to be a valid signature over
+// `hs_msg` made with the leaf's key, which is how a TLS 1.3 client checks the
+// server's CertificateVerify message.
+typedef struct cact_crypt_x509_verify_arg {
+    const uint8_t *chain;      // in: concatenated DER, leaf first
+    uint32_t chain_len;
+    const uint8_t *roots;      // in: concatenated DER trust anchors
+    uint32_t roots_len;
+    const char    *hostname;   // in: NUL-terminated name the leaf must match
+    uint64_t unix_time;        // in: verification time, seconds since epoch
+    uint32_t tls_scheme;       // in: TLS SignatureScheme code, 0 = skip
+    const uint8_t *hs_msg;     // in: signed handshake message
+    uint32_t hs_msg_len;
+    const uint8_t *hs_sig;     // in
+    uint32_t hs_sig_len;
+} cact_crypt_x509_verify_arg_t;
 
 // ===========================================================================
 // /dev/memfd control. RANGE 0x3800.

@@ -23,13 +23,14 @@ static int _zero_read(void *p, uint32_t o, uint32_t s, char *b)
     { (void)p;(void)o; memset(b,0,s); return (int)s; }
 devfs_driver_t drv_zero = { .read=_zero_read, .write=_null_write };
 
-static uint32_t _rng = 0xDEADC0DE;
-static uint32_t _lcg(void) { _rng=_rng*1664525u+1013904223u; return _rng; }
+// /dev/random + /dev/urandom — the kernel CSPRNG (ChaCha20 DRBG, cact_crypto).
+// This is where getrandom(2), the crypto service and TLS key generation all get
+// their bytes, so there is exactly one generator to trust.
+extern int cact_csprng_fill(uint8_t *buf, uint32_t len);
+
 static int _rand_read(void *p, uint32_t o, uint32_t s, char *b) {
     (void)p;(void)o;
-    uint32_t i=0;
-    while(i<s){ uint32_t r=_lcg(); uint32_t c=s-i; if(c>4)c=4;
-                memcpy(b+i,&r,c); i+=c; }
+    if (cact_csprng_fill((uint8_t *)b, s) != 0) return -1;
     return (int)s;
 }
 devfs_driver_t drv_random = { .read=_rand_read, .write=_null_write };

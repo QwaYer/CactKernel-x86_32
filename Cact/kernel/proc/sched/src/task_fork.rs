@@ -6,7 +6,7 @@ use crate::ffi::{self, ContextFrame, MmapTable, VfsNode, PAGE_PRESENT, PAGE_RW, 
 use crate::mlfq;
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 use crate::task::{
-    current_task, find_task_by_pid, next_pid, task_list_add, task_list_head,
+    kstack_alloc, kstack_free, current_task, find_task_by_pid, next_pid, task_list_add, task_list_head,
     task_list_remove, task_setup_sigreturn, ustack_phys_by_idx, ProcMeta, TaskStruct,
     TaskState, TRACE_PROC_LOGS, KERNEL_STACK_SIZE, MAX_FD, SCHEDULER_LOCK,
     TASK_SHM_MAX, USER_STACK_PAGES,
@@ -43,7 +43,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         return ptr::null_mut();
     }
 
-    let kstack = ffi::kalloc() as *mut u32;
+    let kstack = kstack_alloc();
     if kstack.is_null() {
         ffi::kfree(child_p as *mut c_void);
         ffi::kfree(child as *mut c_void);
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
             for j in 0..i {
                 ffi::free_page(ustack_pages[j]);
             }
-            ffi::free_page(kstack as *mut c_void);
+            kstack_free(kstack as *mut c_void);
             ffi::kfree(child_p as *mut c_void);
             ffi::kfree(child as *mut c_void);
             ffi::vmm_free_address_space(child_pd);
@@ -103,7 +103,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         for page in ustack_pages {
             ffi::free_page(page);
         }
-        ffi::free_page(kstack as *mut c_void);
+        kstack_free(kstack as *mut c_void);
         ffi::kfree(child_p as *mut c_void);
         ffi::kfree(child as *mut c_void);
         ffi::vmm_free_address_space(child_pd);
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         for page in ustack_pages {
             ffi::free_page(page);
         }
-        ffi::free_page(kstack as *mut c_void);
+        kstack_free(kstack as *mut c_void);
         ffi::kfree(child_p as *mut c_void);
         ffi::kfree(child as *mut c_void);
         ffi::vmm_free_address_space(child_pd);
@@ -409,7 +409,7 @@ fn reap_task_free(t: *mut TaskStruct) {
         (*p).ustack_phys_extra = [ptr::null_mut(); 3];
 
         if !(*p).stack_base.is_null() {
-            ffi::free_page((*p).stack_base);
+            kstack_free((*p).stack_base);
         }
 
         ffi::kfree(p as *mut c_void);

@@ -88,6 +88,13 @@ pub(crate) fn with_tcp_socket<R>(idx: i32, f: impl FnOnce(&mut smoltcp::socket::
     .flatten()
 }
 
+/// True when a `write()` on this socket would accept at least one byte right
+/// now — the honest POLLOUT predicate (an ESTABLISHED socket whose TX buffer
+/// or peer window is full is not writable).
+pub(crate) fn tcp_can_send(idx: usize) -> bool {
+    with_tcp_socket(idx as i32, |s| s.can_send()).unwrap_or(false)
+}
+
 pub(crate) unsafe fn reset_tcp_smoltcp_state() {
     TCP_HANDLE = [None; TCP_MAX_SOCKETS];
     NEXT_EPHEMERAL = 49152;

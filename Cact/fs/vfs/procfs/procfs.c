@@ -140,6 +140,7 @@ void procfs_init(void) {
     procfs_register_file("uptime",  _uptime_read);
     procfs_register_file("version", _version_read);
     procfs_register_file("time",    _time_read);
+    procfs_register_file("wallclock", _wallclock_read);
     procfs_register_file("uname",   _uname_read);
 
     uint32_t nfiles = 0;

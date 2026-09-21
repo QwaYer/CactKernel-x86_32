@@ -422,6 +422,7 @@ pub unsafe extern "C" fn on_timer_tick() {
     irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 
     crate::task::task_check_timers();
+    crate::task::task_check_kernel_stack();
 
     let live = crate::task::current_task;
     if !live.is_null() {

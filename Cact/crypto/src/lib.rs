@@ -10,5 +10,8 @@ pub mod hkdf;
 pub mod aead;
 pub mod kx;
 pub mod random;
+pub mod rng;
+pub mod sig;
+pub mod x509;
 pub mod provider;
 pub mod signer;

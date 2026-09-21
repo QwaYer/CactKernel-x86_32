@@ -3,7 +3,19 @@ target = "i686-cact.json"
 
 [target.i686-cact]
 # heapless (via smoltcp) uses AtomicU64; enable 64-bit CAS on x86.
-rustflags = ["-C", "target-cpu=pentium4"]
+#
+# The force-soft cfgs pin the symmetric primitives (chacha20, poly1305, aes) to
+# their software backends.  Their cpufeatures dispatch can pick AVX2, which the
+# kernel cannot run: fpu_hd.c enables only CR4.OSFXSR/OSXMMEXCPT, never
+# CR4.OSXSAVE, and kernel code is otherwise built with -mno-sse on purpose (see
+# kernel_c_args).  sha2 is pinned through its `force-soft` feature in
+# Cact/crypto/Cargo.toml, the way hmac_ffi already does it.
+rustflags = [
+  "-C", "target-cpu=pentium4",
+  "--cfg", "chacha20_force_soft",
+  "--cfg", "poly1305_force_soft",
+  "--cfg", "aes_force_soft",
+]
 
 [unstable]
 build-std = ["core"]

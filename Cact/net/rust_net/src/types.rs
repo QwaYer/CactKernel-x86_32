@@ -236,6 +236,10 @@ pub struct VfsOps {
     pub unlink: *mut c_void,
     pub readlink: *mut c_void,
     pub ioctl: *mut c_void,
+    // C's vfs_ops_t carries mmap_backing between ioctl and truncate.  Omitting
+    // it shifted every later slot by one, so C's poll() read our `stat` entry
+    // (NULL) and reported sockets as unpollable.
+    pub mmap_backing: *mut c_void,
     pub truncate: *mut c_void,
     pub chmod: *mut c_void,
     pub chown: *mut c_void,
@@ -244,6 +248,12 @@ pub struct VfsOps {
     pub poll: Option<extern "C" fn(*mut VfsNode, u32) -> c_int>,
     pub lseek: *mut c_void,
 }
+
+// Slot positions are fixed by C's vfs_ops_t; rust_drm/src/vfs.rs asserts the
+// same numbers for its own mirror.
+const _: () = assert!(core::mem::size_of::<VfsOps>() == 100);
+const _: () = assert!(core::mem::offset_of!(VfsOps, mmap_backing) == 68);
+const _: () = assert!(core::mem::offset_of!(VfsOps, poll) == 92);
 
 #[repr(C)]
 pub struct VfsNode {
@@ -256,8 +266,19 @@ pub struct VfsNode {
     pub uid: u32,
     pub gid: u32,
     pub ops: *mut VfsOps,
+    // C's vfs_node_t has fops between ops and priv.  Without it priv_ landed on
+    // C's fops slot: write_file_vfs()/read_file_vfs() then saw the Ksock* as a
+    // vfs_file_ops_t and called its `write`/`read` — Ksock.kind == KS_TCP == 1,
+    // i.e. a jump to linear address 1 and an immediate #UD.
+    pub fops: *mut c_void,
     pub priv_: *mut c_void,
 }
+
+const _: () = assert!(core::mem::size_of::<VfsNode>() == 168);
+const _: () = assert!(core::mem::offset_of!(VfsNode, type_) == 128);
+const _: () = assert!(core::mem::offset_of!(VfsNode, ops) == 156);
+const _: () = assert!(core::mem::offset_of!(VfsNode, fops) == 160);
+const _: () = assert!(core::mem::offset_of!(VfsNode, priv_) == 164);
 
 #[repr(C)]
 pub struct SockAddrIn {
