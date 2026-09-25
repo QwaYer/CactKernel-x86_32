@@ -248,9 +248,7 @@ pub(crate) fn alloc_tcp_smoltcp(
 pub(crate) fn tcp_socket_peer(idx: usize) -> Option<(u32, u16)> {
     with_tcp_socket(idx as i32, |s| match s.remote_endpoint() {
         Some(ep) => {
-            let IpAddress::Ipv4(a) = ep.addr else {
-                return (0, 0);
-            };
+            let IpAddress::Ipv4(a) = ep.addr;
             (ipv4_u32(a), ep.port)
         }
         None => (0, 0),
@@ -264,9 +262,7 @@ pub(crate) fn tcp_socket_peer(idx: usize) -> Option<(u32, u16)> {
 pub(crate) fn tcp_socket_local(idx: usize) -> Option<(u32, u16)> {
     with_tcp_socket(idx as i32, |s| {
         if let Some(ep) = s.local_endpoint() {
-            let IpAddress::Ipv4(a) = ep.addr else {
-                return (0, 0);
-            };
+            let IpAddress::Ipv4(a) = ep.addr;
             return (ipv4_u32(a), ep.port);
         }
         (0, s.listen_endpoint().port)

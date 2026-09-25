@@ -1,6 +1,6 @@
 //! Weak link boundary into the scheduler and console.
 //!
-//! Declares `extern "C"` items (`schedule`, `sched_mlfq_enqueue_locked`, `printk`,
+//! Declares `extern "C"` items (`schedule`, `printk`,
 //! `current_task`, `scheduler_lock`) that `cact_sync` references; the final kernel or
 //! `sched` staticlib supplies the definitions. `improper_ctypes` is allowed because
 //! `irq_spinlock_t` is a Rust type passed through the C ABI edge.
@@ -13,7 +13,6 @@ use crate::task_abi::{TaskState, TaskStruct};
 
 unsafe extern "C" {
     fn schedule();
-    fn sched_mlfq_enqueue_locked(task: *mut TaskStruct, priority: u32);
     fn sched_mlfq_wake_task_locked(task: *mut TaskStruct);
     fn printk(s: *const u8);
     static mut current_task: *mut TaskStruct;
@@ -24,11 +23,6 @@ unsafe extern "C" {
 #[inline]
 pub(crate) fn schedule_yield() {
     unsafe { schedule() }
-}
-
-#[inline]
-pub(crate) fn mlfq_enqueue(task: *mut TaskStruct, priority: u32) {
-    unsafe { sched_mlfq_enqueue_locked(task, priority) }
 }
 
 /// State-aware wake (unlinks a Sleeping task from the sleep queue first).
@@ -66,14 +60,4 @@ pub(crate) fn task_state_set(t: *mut TaskStruct, st: TaskState) {
             (*t).state = st;
         }
     }
-}
-
-#[inline]
-pub(crate) fn task_state_get(t: *mut TaskStruct) -> TaskState {
-    unsafe { (*t).state }
-}
-
-#[inline]
-pub(crate) fn task_priority_get(t: *mut TaskStruct) -> u32 {
-    unsafe { (*t).priority }
 }

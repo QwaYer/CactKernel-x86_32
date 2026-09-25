@@ -65,8 +65,6 @@
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
-extern crate cact_shim as std;
-
 #[cfg(feature = "alloc")]
 extern crate alloc;
 

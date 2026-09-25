@@ -1,6 +1,5 @@
 use alloc::boxed::Box;
 use alloc::string::String;
-use alloc::vec::Vec;
 use core::fmt;
 
 pub trait Error: fmt::Display + fmt::Debug {

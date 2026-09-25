@@ -1,26 +1,18 @@
 pub mod tcp {
     use crate::io::{Read, Result, Write};
-    use alloc::vec::Vec;
 
     pub struct TcpStream {
         sock: i32,
-        rx_buf: Vec<u8>,
     }
 
     impl TcpStream {
         pub fn connect(_addr: &str) -> Result<TcpStream> {
             // Placeholder — in real use, cact_net TCP socket is wired through FFI
-            Ok(TcpStream {
-                sock: -1,
-                rx_buf: Vec::new(),
-            })
+            Ok(TcpStream { sock: -1 })
         }
 
         pub fn try_clone(&self) -> Result<TcpStream> {
-            Ok(TcpStream {
-                sock: self.sock,
-                rx_buf: Vec::new(),
-            })
+            Ok(TcpStream { sock: self.sock })
         }
     }
 

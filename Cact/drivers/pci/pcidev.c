@@ -15,12 +15,6 @@ static pci_device_t *deferred_devs[PCI_DEFER_MAX];
 static uint32_t      deferred_count = 0;
 
 
-static inline uint32_t bdf_addr(pci_device_t *d)
-{
-    return ((uint32_t)d->bus << 16) | ((uint32_t)d->dev << 11)
-         | ((uint32_t)d->fn << 8);
-}
-
 uint32_t pcidev_cfg_read32(pci_device_t *dev, uint16_t reg)
 {
     if (!dev) return 0xFFFFFFFF;

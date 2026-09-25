@@ -81,13 +81,6 @@ static const uint32_t crc32_tab[256] = {
     0xB40BBE37u, 0xC30C8EA1u, 0x5A05DF1Bu, 0x2D02EF8Du,
 };
 
-static uint32_t crc32(const uint8_t *buf, uint32_t len) {
-    uint32_t crc = 0xFFFFFFFFu;
-    for (uint32_t i = 0; i < len; i++)
-        crc = crc32_tab[(crc ^ buf[i]) & 0xFFu] ^ (crc >> 8);
-    return crc ^ 0xFFFFFFFFu;
-}
-
 /* The on-disk checksum covers the entire image *except* that the
  * 4-byte checksum field itself is treated as 0 during computation. */
 static uint32_t compute_image_crc32(const uint8_t *img, uint32_t total) {

@@ -98,7 +98,7 @@ pub(crate) fn pte_get(pd: *mut u32, vaddr: u32) -> *mut u32 {
     unsafe { pt.add(pt_index(vaddr) as usize) }
 }
 
-fn kill_current(fault_addr: u32, err: u32, eip: u32, regs: *mut ContextFrame, cr3: &mut Cr3Guard) {
+fn kill_current(fault_addr: u32, _err: u32, _eip: u32, regs: *mut ContextFrame, cr3: &mut Cr3Guard) {
     cr3.dismiss();
 
     // SAFETY: regs is provided by the interrupt frame.

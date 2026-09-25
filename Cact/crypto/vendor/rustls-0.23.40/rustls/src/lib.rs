@@ -383,7 +383,6 @@
 #![cfg_attr(bench, feature(test))]
 #![no_std]
 
-extern crate cact_shim as std;
 extern crate alloc;
 // This `extern crate` plus the `#![no_std]` attribute changes the default prelude from
 // `std::prelude` to `core::prelude`. That forces one to _explicitly_ import (`use`) everything that
@@ -432,6 +431,7 @@ mod sync {
 mod msgs;
 mod common_state;
 pub mod compress;
+/// Connection APIs: the shared connection state and the client/server halves.
 pub mod conn;
 /// Crypto provider interface.
 pub mod crypto;
