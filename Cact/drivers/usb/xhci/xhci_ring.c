@@ -74,6 +74,13 @@ static void xhci_drain_events(xhci_priv_t *priv) {
     }
 }
 
+/* Process whatever the controller has already posted (task context). */
+void xhci_poll_events(xhci_priv_t *priv) {
+    irq_spinlock_acquire(&xhci_evt_lock);
+    xhci_drain_events(priv);
+    irq_spinlock_release(&xhci_evt_lock);
+}
+
 /* Wait for one specific completion flag.
  *
  * Commands and transfers must not release each other's wait.  The interrupt
@@ -100,6 +107,15 @@ static int xhci_wait_flag(xhci_priv_t *priv, volatile uint8_t *flag,
         if (*flag) {
             *flag = 0;
             return priv->cmd_error ? -1 : 0;
+        }
+        /* A Host System Error halts the controller and no completion will ever
+         * arrive: report it instead of burning the whole timeout. */
+        if ((loops % 100u) == 0u) {
+            uint32_t sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
+            if (sts & XHCI_STS_HSE) {
+                pr_err("xHCI: Host System Error during command (USBSTS=0x%x)\n", sts);
+                break;
+            }
         }
         xhci_udelay(10);
     }

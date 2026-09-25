@@ -162,7 +162,8 @@ int xhci_port_reset(usb_hc_t *hc, uint8_t port) {
     uint32_t sc = xhci_portsc_read(priv, port);
     if (!(sc & XHCI_PORTSC_CCS)) return -1;
 
-    xhci_portsc_set(priv, port, XHCI_PORTSC_PR);
+    xhci_portsc_clear_change(priv, port, XHCI_PORTSC_RW1C_BITS);
+    xhci_portsc_set(priv, port, XHCI_PORTSC_PP | XHCI_PORTSC_PR);
 
     for (int i = 0; i < 500; i++) {
         xhci_udelay(1000);

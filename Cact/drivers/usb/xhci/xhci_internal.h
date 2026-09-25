@@ -63,15 +63,23 @@ static inline void xhci_portsc_write(xhci_priv_t *p, uint8_t port, uint32_t val)
 }
 
 static inline void xhci_portsc_set(xhci_priv_t *p, uint8_t port, uint32_t bits) {
+    /* Write only what the caller asked for: the read-only fields and, above
+     * all, the Port Link State field are written as zero.  Only a limited set
+     * of PLS values may legally be written, and a port reset sent together
+     * with an illegal PLS is silently dropped by the controller.  Port power
+     * is preserved so the port is never switched off by accident. */
     uint32_t sc = xhci_portsc_read(p, port);
-    sc = (sc & ~XHCI_PORTSC_RW1C_BITS) | bits;
-    xhci_portsc_write(p, port, sc);
+    xhci_portsc_write(p, port, (sc & XHCI_PORTSC_PP) | bits);
 }
 
 static inline void xhci_portsc_clear_change(xhci_priv_t *p, uint8_t port, uint32_t bits) {
+    /* Write 1 only into the change bits the caller asked to clear; every other
+     * RW1C bit must go out as 0 so it is not cleared by accident.  Read-only
+     * fields are not echoed back; PLS and PP are preserved, since zeroing PLS
+     * is not a no-op but a link-state change request. */
     uint32_t sc = xhci_portsc_read(p, port);
-    sc = (sc & ~XHCI_PORTSC_RW1C_BITS) | bits;
-    xhci_portsc_write(p, port, sc);
+    xhci_portsc_write(p, port,
+                      (sc & (XHCI_PORTSC_PP | XHCI_PORTSC_PLS_MASK)) | bits);
 }
 
 /* Ring / command / event core (xhci_ring.c). */
@@ -106,6 +114,9 @@ int  xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
 
 /* Host bring-up (xhci_hw.c). */
 int  xhci_init_one(uint32_t phys_base, uint32_t quirks);
+
+/* Process whatever the controller has already posted (xhci_ring.c). */
+void xhci_poll_events(xhci_priv_t *priv);
 
 /* Post-resume bring-up of a controller that is already registered. */
 int  xhci_resume(usb_hc_t *hc);

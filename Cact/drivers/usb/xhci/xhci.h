@@ -46,6 +46,7 @@
 #define XHCI_PORTSC_PRC  (1u << 21)
 #define XHCI_PORTSC_SPEED_MASK (0xFu << 10)
 #define XHCI_PORTSC_SPEED_SHIFT 10
+#define XHCI_PORTSC_PLS_MASK   (0xFu << 5)
 #define XHCI_PORT_SPEED_FS  1
 #define XHCI_PORT_SPEED_LS  2
 #define XHCI_PORT_SPEED_HS  3
@@ -166,6 +167,8 @@ typedef struct {
     uint64_t             *dcbaa;
     uint8_t              *dev_ctx_pool;
     uint8_t              *input_ctx_pool;
+    uint64_t             *scratchpad_array;
+    uint8_t              *scratchpad_pool;
 
     xhci_ring_t           cmd_ring;
     xhci_trb_t           *evt_ring;
