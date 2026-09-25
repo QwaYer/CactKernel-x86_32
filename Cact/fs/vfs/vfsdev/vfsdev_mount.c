@@ -6,7 +6,7 @@
 #include "klib.h"
 #include "kernel.h"
 
-// vfsdev_mount.c — mount manager ("монтёр").
+// vfsdev_mount.c — mount manager ("mounter").
 //
 // A mount binds a filesystem living on a block device onto an existing
 // directory in the VFS tree (Linux-style `mount /dev/<dev> <dir>`).  Mounts

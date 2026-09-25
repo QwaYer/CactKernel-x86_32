@@ -6,7 +6,7 @@
 #include "pci_driver.h"
 
 /*
- * xHCI host controller quirks — one bit per workaround ("костыль").
+ * xHCI host controller quirks — one bit per workaround ("hack").
  * No workaround behaviour is hardcoded in the driver outside these flags:
  * adding a broken controller means adding a row to the table in
  * xhci_quirks.c.

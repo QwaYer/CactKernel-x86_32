@@ -152,7 +152,7 @@ int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
         int tmp_len = 0;
         char fill = zero ? '0' : ' ';
         char sign = 0;
-        const char* pfx = "";      /* "0x"/"0X" для %#x, иначе пусто */
+        const char* pfx = "";      /* "0x"/"0X" for %#x, otherwise empty */
         int pfx_len = 0;
 
         switch (*fmt) {
@@ -199,7 +199,7 @@ int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
                 tmp[tmp_len++] = (d < 10) ? (d + '0') : (d - 10 + 'a');
                 v >>= 4;
             } while (v);
-            tmp[tmp_len++] = 'x';          /* печатается первым (tmp идёт назад) */
+            tmp[tmp_len++] = 'x';          /* printed first (tmp is traversed backwards) */
             tmp[tmp_len++] = '0';
             fill = ' ';
             break;
@@ -233,10 +233,11 @@ int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
             continue;
         }
 
-        // Точность у целых: минимум цифр (%.5d) и %.0d от нуля — пусто.  tmp
-        // заполнен от младшей цифры к старшей, так что '0' в конец добавляет
-        // ведущие нули.  Как и в C, точность отменяет zero-флаг у этих
-        // преобразований; у %s точность уже учтена выше.
+        // Precision for integers: minimum number of digits (%.5d), and %.0d on
+        // zero — empty.  tmp is filled from the least significant digit to the
+        // most, so appending a '0' at the end adds leading zeros.  As in C,
+        // precision cancels the zero flag for these conversions; for %s
+        // precision has already been accounted for above.
         if (prec >= 0 && (*fmt == 'd' || *fmt == 'i' || *fmt == 'u' ||
                           *fmt == 'o' || *fmt == 'x' || *fmt == 'X')) {
             fill = ' ';
@@ -256,7 +257,7 @@ int vsnprintf(char* buf, unsigned int size, const char* fmt, va_list args) {
 
         if (!left) {
             if (fill == '0') {
-                /* знак, затем префикс, затем нули: %#010x -> "0x0000beef" */
+                /* sign, then prefix, then zeros: %#010x -> "0x0000beef" */
                 if (sign && remaining > 1) { *dst++ = sign; remaining--; }
                 for (int i = 0; i < pfx_len && remaining > 1; i++) { *dst++ = pfx[i]; remaining--; }
                 for (int i = 0; i < pad && remaining > 1; i++) { *dst++ = '0'; remaining--; }
