@@ -59,14 +59,14 @@ exec qemu-system-i386 \
     -serial stdio \
     -rtc base=localtime \
     -M q35 \
-    -vga std \
-    -display gtk \
+    -display gtk,gl=on \
     -monitor vc \
     -drive file=build/nvme.img,if=none,id=sata0,format=raw \
     "${LOG_ARGS[@]}" \
     -device ide-hd,drive=sata0,bus=ide.0 \
     -netdev user,id=u1 \
     -device virtio-net-pci,disable-modern=on,netdev=u1 \
+    -device virtio-vga-gl \
     -object filter-dump,id=dump0,netdev=u1,file=/tmp/net.pcap \
     -device qemu-xhci,id=xhci -device usb-kbd \
     -no-reboot \
