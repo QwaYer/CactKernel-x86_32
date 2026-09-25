@@ -678,7 +678,6 @@ dependencies = [
 name = "rustls"
 version = "0.23.40"
 dependencies = [
- "cact_shim",
  "hashbrown",
  "once_cell",
  "rustls-pki-types 1.12.0",
@@ -691,7 +690,6 @@ dependencies = [
 name = "rustls-pki-types"
 version = "1.12.0"
 dependencies = [
- "cact_shim",
  "zeroize",
 ]
 
@@ -705,7 +703,6 @@ checksum = "30a7197ae7eb376e574fe940d068c30fe0462554a3ddbe4eca7838e049c937a9"
 name = "rustls-webpki"
 version = "0.103.11"
 dependencies = [
- "cact_shim",
  "ring",
  "rustls-pki-types 1.12.0",
  "untrusted",

@@ -83,7 +83,6 @@ aws-lc-rs = { version = "1.14", optional = true, default-features = false }
 pki-types = { path = "../rustls-pki-types", package = "rustls-pki-types", default-features = false }
 ring = { version = "0.17", default-features = false, optional = true }
 untrusted = "0.9"
-cact_shim = { path = "../../cact_shim" }
 
 [dev-dependencies]
 base64 = "0.22"

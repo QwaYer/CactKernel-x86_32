@@ -160,7 +160,6 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
 static void scan_bus(uint8_t bus) {
     // Never rescan a bus and never recurse deeper than MAX_SCAN_DEPTH —
     // a corrupt secondary-bus number must not hang the boot.
-    if (bus >= 256) return;
     uint8_t bit = 1u << (bus & 7);
     if (scanned_bus_map[bus >> 3] & bit) return;
     scanned_bus_map[bus >> 3] |= bit;

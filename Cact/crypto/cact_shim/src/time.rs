@@ -1,7 +1,5 @@
-use core::cmp::Ordering;
 use core::fmt;
-use core::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
-use core::time::Duration as CoreDuration;
+use core::ops::{Add, AddAssign, Sub, SubAssign};
 
 pub use core::time::Duration;
 
@@ -97,8 +95,6 @@ impl SubAssign<Duration> for Instant {
 }
 
 /// SystemTime: ticks since boot as a SystemTime-compatible representation.
-const TICKS_AT_UNIX_EPOCH: u64 = 0;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SystemTime {
     ticks: u64,

@@ -28,7 +28,6 @@ tls12 = []
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"], optional = true }
 log = { version = "0.4", optional = true }
 once_cell = { version = "1", default-features = false, features = ["alloc"] }
-cact_shim = { path = "../../../cact_shim" }
 subtle = { version = "2", default-features = false }
 webpki = { path = "../../rustls-webpki", package = "rustls-webpki", default-features = false, features = ["alloc"] }
 pki-types = { path = "../../rustls-pki-types", package = "rustls-pki-types", default-features = false, features = ["alloc"] }
@@ -56,4 +55,8 @@ unexpected_cfgs = { level = "warn", check-cfg = [
   "cfg(coverage_nightly)",
   "cfg(read_buf)",
   "cfg(rustls_docsrs)",
+  # Provider/compression features the CactOS fork strips from `[features]`; the
+  # source still names them in `#[cfg(feature = ...)]`, so teach check-cfg they
+  # are deliberate and inert here rather than undeclared.
+  'cfg(feature, values("zlib", "brotli", "ring", "aws_lc_rs", "fips"))',
 ] }

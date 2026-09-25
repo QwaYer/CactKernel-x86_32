@@ -46,8 +46,6 @@
 // Enable documentation for all features on docs.rs
 #![cfg_attr(webpki_docsrs, feature(doc_cfg))]
 
-extern crate cact_shim as std;
-
 #[cfg(any(test, feature = "alloc"))]
 #[cfg_attr(test, macro_use)]
 extern crate alloc;

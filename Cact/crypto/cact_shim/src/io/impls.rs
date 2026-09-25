@@ -1,8 +1,6 @@
-use super::{Error, ErrorKind, Read, Result, Write};
+use super::{Read, Result, Write};
 use alloc::vec::Vec;
 use core::cmp;
-use core::fmt;
-use core::slice;
 
 pub struct Cursor<T> {
     inner: T,
@@ -118,21 +116,5 @@ impl Read for Repeat {
             *b = self.byte;
         }
         Ok(buf.len())
-    }
-}
-
-pub fn copy<R: ?Sized + Read, W: ?Sized + Write>(reader: &mut R, writer: &mut W) -> Result<u64> {
-    let mut buf = [0u8; 512];
-    let mut total = 0;
-    loop {
-        match reader.read(&mut buf) {
-            Ok(0) => return Ok(total),
-            Ok(n) => {
-                writer.write_all(&buf[..n])?;
-                total += n as u64;
-            }
-            Err(ref e) if e.is_interrupted() => {}
-            Err(e) => return Err(e),
-        }
     }
 }

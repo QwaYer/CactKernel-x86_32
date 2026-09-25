@@ -355,4 +355,5 @@ int cpu_syscall_commit(void) {
         wrmsr(AMD_FMASK, 0x200);
     }
 
+    return 0;
 }

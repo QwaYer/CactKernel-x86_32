@@ -1,5 +1,4 @@
 use core::fmt;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 pub use self::error::{Error, ErrorKind, Result};
