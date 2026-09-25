@@ -80,6 +80,9 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
         if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) break;
         xhci_udelay(1000);
     }
+    if (!(xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH))
+        pr_warn("  %-11s : controller did not halt (USBSTS=0x%x)\n", "xhci",
+                xhci_op_read32(priv, XHCI_OP_USBSTS));
 
     xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
     for (int i = 0; i < 100; i++) {
@@ -90,7 +93,28 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
         if (!(xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_CNR)) break;
         xhci_udelay(1000);
     }
+    if (xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)
+        pr_warn("  %-11s : HCRST never self-cleared\n", "xhci");
     xhci_op_write32(priv, XHCI_OP_USBSTS, xhci_op_read32(priv, XHCI_OP_USBSTS));
+
+    /* The ring registers (CRCR, DCBAAP) are only accepted while the controller
+     * is halted; while it runs the writes are dropped with no error.  If the
+     * reset left it running, force a stop before giving up. */
+    uint32_t sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
+    if (!(sts & XHCI_STS_HCH) || (sts & XHCI_STS_CNR)) {
+        xhci_op_write32(priv, XHCI_OP_USBCMD, 0);
+        for (int i = 0; i < 100; i++) {
+            if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) break;
+            xhci_udelay(1000);
+        }
+        sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
+        if (!(sts & XHCI_STS_HCH) || (sts & XHCI_STS_CNR)) {
+            pr_err("  %-11s : controller not halted/ready after reset (USBSTS=0x%x)\n",
+                   "xhci", sts);
+            kfree(priv);
+            return -1;
+        }
+    }
 
     if (priv->quirks & XHCI_QUIRK_INTEL_HOST)
         xhci_udelay(5000);   /* Intel hosts need extra settle after reset */
@@ -103,6 +127,33 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
     memset(priv->dcbaa, 0, (priv->max_slots + 1) * sizeof(uint64_t));
     xhci_op_write32(priv, XHCI_OP_DCBAAP, xhci_va_to_pa(priv->dcbaa));
     xhci_op_write32(priv, XHCI_OP_DCBAAP + 4, 0);
+
+    /* Scratchpad buffers.  The controller says in HCSPARAMS2 how many it
+     * needs; DCBAA[0] must then point at an array holding their addresses.
+     * Without them the first operation that needs scratchpad memory faults
+     * with a Host System Error and the controller halts.  QEMU asks for
+     * none, so this only ever bites on real hardware. */
+    uint32_t hcs2 = xhci_cap_read32(priv, XHCI_CAP_HCSPARAMS2);
+    uint32_t sp_count = (((hcs2 >> 21) & 0x1Fu) << 4) | (hcs2 & 0xFu);
+    if (sp_count) {
+        priv->scratchpad_array = (uint64_t *)kmalloc_aligned(sp_count * sizeof(uint64_t), 64);
+        priv->scratchpad_pool  = (uint8_t *)kmalloc_aligned(sp_count * 4096u, 4096);
+        if (!priv->scratchpad_array || !priv->scratchpad_pool) {
+            pr_err("  %-11s : scratchpad allocation failed (%u buffers)\n",
+                   "xhci", (unsigned)sp_count);
+            kfree(priv->scratchpad_array); kfree(priv->scratchpad_pool);
+            kfree(priv->dcbaa); kfree(priv);
+            return -1;
+        }
+        memset(priv->scratchpad_array, 0, sp_count * sizeof(uint64_t));
+        memset(priv->scratchpad_pool, 0, sp_count * 4096u);
+        for (uint32_t i = 0; i < sp_count; i++)
+            priv->scratchpad_array[i] = xhci_va_to_pa(priv->scratchpad_pool + i * 4096u);
+        priv->dcbaa[0] = xhci_va_to_pa(priv->scratchpad_array);
+        pr_info("  %-11s : %u scratchpad buffers, pool=0x%x array=0x%x\n", "xhci",
+                (unsigned)sp_count, xhci_va_to_pa(priv->scratchpad_pool),
+                xhci_va_to_pa(priv->scratchpad_array));
+    }
 
     priv->dev_ctx_pool = (uint8_t *)kmalloc_aligned((priv->max_slots + 1) * 2048, 64);
     if (!priv->dev_ctx_pool) { kfree(priv->dcbaa); kfree(priv); return -1; }
@@ -192,6 +243,26 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
  * Shared by the initial bring-up and the post-resume re-enumeration. */
 static void xhci_scan_ports(xhci_priv_t *priv, usb_hc_t *hc)
 {
+    /* The controller has been posting port-status-change events since boot and
+     * nothing has drained them, so every connected port still carries its
+     * change latches.  Process them first. */
+    xhci_poll_events(priv);
+
+    /* Right after the controller is started a USB2 port sits in Polling while
+     * the xHC finishes its own connect detection; a software write to PR in
+     * that window does nothing (the reset engine is already busy).  Wait for
+     * the connected ports to come out of Polling before touching them. */
+    for (int i = 0; i < 400; i++) {
+        int busy = 0;
+        for (uint8_t p = 0; p < priv->max_ports; p++) {
+            uint32_t sc = xhci_portsc_read(priv, p);
+            if ((sc & XHCI_PORTSC_CCS) && (((sc >> 5) & 0xF) == 7))
+                busy = 1;
+        }
+        if (!busy) break;
+        xhci_udelay(1000);
+    }
+
     for (uint8_t p = 0; p < priv->max_ports; p++) {
         uint32_t sc = xhci_portsc_read(priv, p);
         if (sc & XHCI_PORTSC_CCS)
@@ -199,8 +270,25 @@ static void xhci_scan_ports(xhci_priv_t *priv, usb_hc_t *hc)
                     (unsigned)p, (unsigned)((sc >> 1) & 1),
                     (unsigned)((sc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT));
         if (sc & XHCI_PORTSC_CCS) {
+            if (!(sc & XHCI_PORTSC_PED) && (((sc >> 5) & 0xF) == 7)) {
+                /* Polling: a reset is already in progress, driven by the xHC
+                 * itself.  Wait for it instead of writing PR into it. */
+                for (int i = 0; i < 500; i++) {
+                    xhci_udelay(1000);
+                    sc = xhci_portsc_read(priv, p);
+                    if (sc & XHCI_PORTSC_PED) break;
+                    if (((sc >> 5) & 0xF) != 7) break;
+                }
+                if (sc & XHCI_PORTSC_PRC)
+                    xhci_portsc_clear_change(priv, p, XHCI_PORTSC_PRC);
+                if (sc & XHCI_PORTSC_CSC)
+                    xhci_portsc_clear_change(priv, p, XHCI_PORTSC_CSC);
+            }
             if (!(sc & XHCI_PORTSC_PED)) {
-                xhci_portsc_set(priv, p, XHCI_PORTSC_PR);
+                /* Clear the change latches before the reset: a stuck change
+                 * latch can keep the port from accepting PR. */
+                xhci_portsc_clear_change(priv, p, XHCI_PORTSC_RW1C_BITS);
+                xhci_portsc_set(priv, p, XHCI_PORTSC_PP | XHCI_PORTSC_PR);
                 for (int i = 0; i < 500; i++) {
                     xhci_udelay(1000);
                     sc = xhci_portsc_read(priv, p);
@@ -217,6 +305,26 @@ static void xhci_scan_ports(xhci_priv_t *priv, usb_hc_t *hc)
                     xhci_portsc_clear_change(priv, p, XHCI_PORTSC_CSC);
                 xhci_udelay(10000);
                 sc = xhci_portsc_read(priv, p);
+
+                if (!(sc & XHCI_PORTSC_PED)) {
+                    /* A USB2 port stuck in Polling does not finish a reset;
+                     * push it back to RxDetect first, then re-assert PR. */
+                    xhci_portsc_set(priv, p, XHCI_PORTSC_PP | (5u << 5));
+                    xhci_udelay(20000);
+                    xhci_portsc_set(priv, p, XHCI_PORTSC_PP | XHCI_PORTSC_PR);
+                    for (int i = 0; i < 500; i++) {
+                        xhci_udelay(1000);
+                        sc = xhci_portsc_read(priv, p);
+                        if (sc & XHCI_PORTSC_PRC) break;
+                        if (!(sc & XHCI_PORTSC_PR) && (sc & XHCI_PORTSC_PED)) break;
+                    }
+                    if (sc & XHCI_PORTSC_PRC)
+                        xhci_portsc_clear_change(priv, p, XHCI_PORTSC_PRC);
+                    if (sc & XHCI_PORTSC_CSC)
+                        xhci_portsc_clear_change(priv, p, XHCI_PORTSC_CSC);
+                    xhci_udelay(10000);
+                    sc = xhci_portsc_read(priv, p);
+                }
             }
 
             if (sc & XHCI_PORTSC_PED) {

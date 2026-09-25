@@ -96,6 +96,7 @@ pub extern "C" fn vmm_map(pd: *mut u32,
     let pdi = pd_index(virtual_addr) as usize;
     let pti = pt_index(virtual_addr) as usize;
     let mut flags = flags as u32;
+    let caller_uncached = (flags & (PAGE_PCD | PAGE_PWT)) != 0;
     if physical_addr >= PCI_HOLE_START {
         flags |= PAGE_PCD | PAGE_PWT;
     }
@@ -113,7 +114,14 @@ pub extern "C" fn vmm_map(pd: *mut u32,
     // PD: drivers may call vmm_map(get_current_pd(), bar_va, ...) and a
     // private copy would diverge from the kernel template, break framebuffer
     // under process CR3, and leak (vmm_free_address_space skips i >= PD_KERNEL_ENTRIES).
-    let is_kernel_mmio = virtual_addr >= PCI_HOLE_START;
+    //
+    // An uncacheable mapping is device MMIO wherever it lives: firmware may
+    // place a BAR *below* PCI_HOLE_START, inside what this kernel treats as the
+    // RAM window (the xHCI on this HP sits at 0xa1200000).  Such a mapping must
+    // be global too, otherwise it ends up in a per-process page table, and an
+    // interrupt handler running under a user CR3 faults on the next register
+    // access.
+    let is_kernel_mmio = virtual_addr >= PCI_HOLE_START || caller_uncached;
 
     unsafe {
         let pde = &mut *pd.add(pdi);
