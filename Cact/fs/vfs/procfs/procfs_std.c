@@ -13,6 +13,23 @@
 #include "msi.h"
 #include "energy.h"
 #include "rtc.h"
+#include "vfsdev.h"
+#include "module/kmod.h"
+#include "fs_mod.h"
+#include "usb.h"
+
+// Mutable host name reported by /proc/uname (default "cact").  Bounded to the
+// kernel's 65-byte utsname field.
+static char procfs_nodename[65] = "cact";
+
+const char *procfs_get_nodename(void) { return procfs_nodename; }
+
+void procfs_set_nodename(const char *name) {
+    if (!name || !name[0]) return;
+    int i = 0;
+    for (; name[i] && i < 64; i++) procfs_nodename[i] = name[i];
+    procfs_nodename[i] = '\0';
+}
 
 // Approximate CPU MHz via short TSC busy-wait.
 static uint32_t _tsc_mhz(void) {
@@ -295,7 +312,7 @@ int _uname_read(uint32_t off, uint32_t size, char *buf) {
     cact_uname_t u;
     memset(&u, 0, sizeof(u));
     const char *sysname  = "CactOS";
-    const char *nodename = "cact";
+    const char *nodename = procfs_get_nodename();
     const char *release  = "0.1.0";
     const char *version  = "#1";
     const char *machine  = "i686";
@@ -381,6 +398,82 @@ int _version_read(uint32_t off, uint32_t size, char *buf) {
     _V("Build: ");      _V(kernel_build_time);  _V("\n");
 
     #undef _V
+
+    uint32_t len = (uint32_t)p;
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, tmp + off, size);
+    return (int)size;
+}
+
+// /proc/mounts generator — the block-device mounts tracked by vfsdev, in the
+// Linux mount-table form "/dev/<dev> <target> <fstype> rw 0 0".  Filesystems
+// mounted by the kernel layout itself (mntfs: proc, dev, etc) are not listed,
+// matching what the mount manager owns.
+int _mounts_read(uint32_t off, uint32_t size, char *buf) {
+    static char tmp[4096];
+    int total = vfsdev_mounts_text(tmp, (int)sizeof(tmp));
+    uint32_t len = (uint32_t)total;
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, tmp + off, size);
+    return (int)size;
+}
+
+// /proc/modules generator — resident loadable modules in the Linux form
+// "<name> <size> <refcount> - Live 0x00000000": filesystem modules (fs_mod)
+// plus resident PCI kernel modules (kmod).  Sizes are not tracked here, so
+// they read as 0.
+int _modules_read(uint32_t off, uint32_t size, char *buf) {
+    static char tmp[2048];
+    int p = 0;
+    int cap = (int)sizeof(tmp);
+
+    int nfs = fs_mod_count();
+    for (int i = 0; i < nfs && p < cap - 48; i++) {
+        const char *nm = fs_mod_instance(i);
+        if (!nm) continue;
+        p += snprintf(tmp + p, (size_t)(cap - p), "%s 0 0 - Live 0x00000000\n", nm);
+    }
+    int nk = kmod_count();
+    for (int i = 0; i < nk && p < cap - 48; i++) {
+        const char *nm = kmod_name_at(i);
+        if (!nm) continue;
+        p += snprintf(tmp + p, (size_t)(cap - p), "%s 0 0 - Live 0x00000000\n", nm);
+    }
+    if (p < 0) p = 0;
+
+    uint32_t len = (uint32_t)p;
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, tmp + off, size);
+    return (int)size;
+}
+
+// /proc/usb generator — one line per attached USB device:
+//   <address> <vendor> <product> <class> <subclass> <protocol> <speed> <port>
+// (vendor/product as 0x%04x, the rest decimal).  lsusb formats it.
+int _usb_read(uint32_t off, uint32_t size, char *buf) {
+    static char tmp[2048];
+    int p = 0;
+    int cap = (int)sizeof(tmp);
+
+    int n = usb_device_count();
+    for (int i = 0; i < n && p < cap - 96; i++) {
+        const usb_device_t *d = usb_device_at(i);
+        if (!d) continue;
+        p += snprintf(tmp + p, (size_t)(cap - p),
+                      "%u %04x %04x %02x %02x %02x %u %u\n",
+                      (unsigned)d->address,
+                      (unsigned)d->dev_desc.idVendor,
+                      (unsigned)d->dev_desc.idProduct,
+                      (unsigned)d->class_code,
+                      (unsigned)d->subclass,
+                      (unsigned)d->protocol,
+                      (unsigned)d->speed,
+                      (unsigned)d->port);
+    }
+    if (p < 0) p = 0;
 
     uint32_t len = (uint32_t)p;
     if (off >= len) return 0;

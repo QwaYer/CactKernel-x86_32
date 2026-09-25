@@ -119,6 +119,20 @@ static kmod_slot_t *kmod_slot_by_name(const char *name) {
     return 0;
 }
 
+int kmod_count(void) {
+    int n = 0;
+    for (int i = 0; i < KMOD_MAX_SLOTS; i++)
+        if (kmod_slots[i].used) n++;
+    return n;
+}
+
+const char *kmod_name_at(int idx) {
+    int n = 0;
+    for (int i = 0; i < KMOD_MAX_SLOTS; i++)
+        if (kmod_slots[i].used && n++ == idx) return kmod_slots[i].name;
+    return 0;
+}
+
 static kmod_slot_t *kmod_slot_by_drv(const pci_driver_t *drv) {
     for (int i = 0; i < KMOD_MAX_SLOTS; i++)
         if (kmod_slots[i].used && &kmod_slots[i].drv == drv)

@@ -53,6 +53,7 @@ static void kernel_bootstrap_main(void) {
     if (!init) {
         pr_err("  boot        : FAILED — /bin/init not found\n");
     } else {
+        task_comm_set(init->pid, "init");
         pr_info("  boot        : /bin/init spawned as pid %d\n",
                 (int)init->pid);
     }

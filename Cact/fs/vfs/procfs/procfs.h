@@ -13,6 +13,10 @@ void         procfs_init        (void);
 // Set total memory (called by mntfs during init)
 void         procfs_set_meminfo  (uint32_t mem_total_kb);
 
+// Host name reported by /proc/uname; settable at runtime (CACT_SYSCTL_SETHOSTNAME).
+void         procfs_set_nodename (const char *name);
+const char  *procfs_get_nodename (void);
+
 // Return the procfs root VFS node (to be mounted)
 vfs_node_t  *procfs_get_root(void);
 
