@@ -25,7 +25,7 @@
 | **CPU ISRs** | 32 (IDT) + IRQ stubs via I/O APIC |
 | **PMM range** | Physical frames **0 … `0xC000_0000`** (3 GiB; PCI hole lowered from 0xE0000000) |
 | **MAX_FD** | 256 file descriptors per task (`rust_mm` FFI) |
-| **Kernel sockets** | `KSOCK_MAX` 16 VFS socket nodes; `TCP_MAX_SOCKETS` 8; `UDP_SOCK_MAX` 8 (see `rust_net` / `tcp.h`) |
+| **Kernel sockets** | `KSOCK_MAX` 16 VFS socket nodes; `TCP_MAX_SOCKETS` 8; `UDP_SOCK_MAX` 8 (see `rust_net` / `tcp.h`); blocking TCP `connect`/`read`/`write`, `getsockname`/`getpeername`, `O_NONBLOCK`, `-EINTR` on a pending signal |
 | **xHCI** | ~32 KiB host stack (USB 3.x) |
 | **Scheduler** | 4-level MLFQ (Rust) |
 | **ext4 (in-tree)** | ~40 KiB — read/write, inode operations |
@@ -40,8 +40,8 @@ CactKernel is one piece of a larger workspace. Typical pieces:
 
 | Component | Role |
 |-----------|------|
-| **[CactLib-x86_32](https://github.com/QwaYer/CactLib-x86_32)** | Userspace **`libc.a`** / **`libc.so`**. Every `SYS_*` number must match the kernel’s [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) and `ioctl_abi.h`. After any syscall change: rebuild libc and **re-link all ELFs** (init, shell, demos). |
-| **[LocalRepoCactOS](../LocalRepoCactOS)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
+| **[CactLib-x86_32](https://github.com/QwaYer/CactLibc-x86_32)** | Userspace **`libc.a`** / **`libc.so`**. Every `SYS_*` number must match the kernel’s [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) and `ioctl_abi.h`. After any syscall change: rebuild libc and **re-link all ELFs** (init, shell, demos). |
+| **[LocalRepoCactOS](../LocalRepoCactOS-x86_32)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
 | **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`ninja -C build-meson`** in this tree → **`build-meson/cact.iso`**. |
 
 **Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs** overlay files from that archive on top of ext4 (e.g. **`/bin/init`**, **`libc.so`**, optional **`*.cctk`** drivers). PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with **HMAC-SHA256** against the kernel's embedded static key before loading.
@@ -50,7 +50,7 @@ From the workspace root (QEMU-oriented full rebuild):
 
 ```sh
 ./build-cact-qemu.sh
-# Kernel only (expects ../LocalRepoCactOS/cctkfs.img already packed):
+# Kernel only (expects ../LocalRepoCactOS-x86_32/cctkfs.img already packed):
 cd CactKernel-x86_32 && meson setup build-meson --cross-file cross/i686-cact-clang.ini && ninja -C build-meson
 ```
 
@@ -202,7 +202,7 @@ Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register).
 | 5 | **TSC timekeeping** (ACPI PM timer fallback) + **LAPIC timer @ 100 Hz** — scheduler tick |
 | 6 | **Linear framebuffer** console, **PAT** write-combining for VRAM, optional **shadow buffer** (WB RAM + batched blit) |
 | 7 | **USB** HID only (PS/2 removed in 2.0) |
-| 8 | **`blkdev_init`** → **PCI bus scan** + **enumeration** (PCIe support) → **MSI-X allocation** → **`usb_init`** (xHCI) |
+| 8 | **`msidev_init`** (MSI/MSI-X vector pool) → **`blkdev_init`** → **PCI bus scan** + **enumeration** (PCIe support) → **`usb_init`** (xHCI) |
 | 9 | **Page cache** + **swap** (optional swap partition; failure logs a warning) |
 | 10 | **`vfs_init`** + **`net_init`** (Rust `stack_init`, **`net_poll_task`** thread on semaphore + `net_poll` / `stack_poll`) |
 | 11 | **`task_init`** + **`init_scheduler`** (Rust MLFQ) |
@@ -307,7 +307,7 @@ The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
 | **ACPI** | ACPICA — RSDP, MADT, FADT, APIC table parsing | New in 2.0 |
 
-All out-of-tree PCI drivers now use **MSI-X** instead of PIC IRQ lines. Extra PCI drivers live in **`*-for-Cact-x86_32`** repositories; **`ninja -C CactOS-x86_32/build-meson drivers`** (workspace integrator) installs them into **`LocalRepoCactOS-x86_32/lib/`** and packs **`cctkfs.img`**.
+All out-of-tree PCI drivers now register their interrupt through the kernel's **`msidev_register()`** — **MSI-X** when the device offers it, otherwise a single **MSI** message — instead of PIC IRQ lines. Extra PCI drivers live in **`*-for-Cact-x86_32`** repositories; **`ninja -C CactOS-x86_32/build-meson drivers`** (workspace integrator) installs them into **`LocalRepoCactOS-x86_32/lib/`** and packs **`cctkfs.img`**.
 
 ---
 
@@ -345,17 +345,17 @@ CLOSED → LISTEN → SYN_SENT → SYN_RECEIVED
        → CLOSE_WAIT → LAST_ACK → CLOSED
 ```
 
-`stack_poll()` drives the iface, **`rust_net_set_ipv4_config`** applies the address/gateway/DNS chosen by userspace, **`SYS_DNS_RESOLVE`** performs a blocking **A-record** query over UDP/53, and **`SYS_PING_ECHO`** sends ICMP echo requests. A periodic `net_timer_task` wakes the poll loop so smoltcp timers (TCP retransmit, timeouts) advance even without RX traffic.
+`stack_poll()` drives the iface, **`rust_net_set_ipv4_config`** applies the address/gateway/DNS chosen by userspace, **`CACT_NETCTL_DNS_RESOLVE`** performs a blocking **A-record** query over UDP/53 (with one retransmission before giving up), and **`CACT_NETCTL_PING` / `CACT_NETCTL_PING_WAIT`** send an ICMP echo request and optionally wait for its reply. A periodic `net_timer_task` wakes the poll loop so smoltcp timers (TCP retransmit, timeouts) advance even without RX traffic.
 
-Full socket syscall API: `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, `recvfrom`, `shutdown`, `setsockopt`, `getsockopt`.
+Full socket API (the libc wrappers over **`CACT_SOCKCTL_*`**): `socket`, `bind`, `connect`, `listen`, `accept`, `send`, `recv`, `sendto`, `recvfrom`, `shutdown`, `setsockopt`, `getsockopt`, `getsockname`, `getpeername`.
 
 | Layer | Responsibility |
 |-------|----------------|
 | **Ethernet / ARP / IPv4 / ICMP / TCP / UDP** | smoltcp (`cact_net`) |
-| **Sockets / VFS** | Up to **16** kernel socket nodes integrated with `read`/`write`/`close`; `.poll` reports real readiness (`POLLIN`/`POLLOUT`/`POLLHUP`), `fcntl(F_SETFL, O_NONBLOCK)` makes `read`/`write` return `-EAGAIN` instead of blocking |
+| **Sockets / VFS** | Up to **16** kernel socket nodes integrated with `read`/`write`/`close`; `.poll` reports real readiness (`POLLIN`/`POLLOUT`/`POLLHUP`), `fcntl(F_SETFL, O_NONBLOCK)` (and `SOCK_NONBLOCK`) makes `read`/`write` return `-EAGAIN` instead of blocking, `getsockname`/`getpeername` work, and a blocking `read`/`write`/`accept` yields `-EINTR` to a pending signal — so Ctrl+C reaches a task parked in a socket call |
 | **net_poll_task** | Dedicated kernel thread: sleeps on a semaphore, wakes on NIC RX, calls **`net_poll` → `stack_poll()`** |
 | **net_timer_task** | Periodic timer kick — wakes `net_poll_task` so smoltcp timers advance without RX traffic |
-| **TLS 1.3** | In-kernel via rustls — `cact_tls_connect_ex` / `cact_tls_send` / `cact_tls_recv` / `cact_tls_close` |
+| **TLS 1.3** | In-kernel via rustls, used by the kernel HTTP client — `cact_tls_connect_ex` / `cact_tls_send` / `cact_tls_recv` / `cact_tls_close`; userspace HTTPS uses the **libc** TLS 1.3 client instead, so session keys never enter the kernel |
 | **HTTP/HTTPS** | `cact_http_request` / `cact_http_get` / `cact_http_post` — DNS → TCP → (TLS) → HTTP/1.1 fetch; `Content-Length`, chunked and read-to-close bodies |
 
 **HTTP(S) FFI** (`Cact/net/rust_net_ffi.h`): the kernel can fetch pages without a userspace
@@ -373,7 +373,7 @@ RSA (PKCS#1/PSS) and ECDSA (P-256/P-384) signature verification. Skipping verifi
 has to be asked for explicitly with `CACT_HTTP_FLAG_INSECURE_TLS` (it logs a warning), for
 boards with no trustworthy clock. `cact_tls_connect` uses the same verified path.
 
-**Limits (non-exhaustive):** no **IPv6**; default NIC is **virtio-net** in QEMU; DNS resolver is **A-record only** (no retry, no TCP fallback); HTTP responses are buffered with a 1 MiB cap; no gzip decompression; one pending inbound connection per listening socket (smoltcp has no SYN backlog); IPv4 fragments are not reassembled.
+**Limits (non-exhaustive):** no **IPv6**; default NIC is **virtio-net** in QEMU; DNS resolver is **A-record only** (one retransmission, no server failover, no TCP fallback for truncated answers); HTTP responses are buffered with a 1 MiB cap; no gzip decompression; one pending inbound connection per listening socket (smoltcp has no SYN backlog); IPv4 fragments are not reassembled.
 
 ---
 
@@ -414,7 +414,7 @@ The call trace walks the EBP chain and resolves addresses via the per-task ELF s
 
 The kernel only traps for 15 syscalls; everything else is a **VFS-node service**. A process `open()`s a node and issues `ioctl`/`read`/`write` on it.
 
-Authoritative ABI headers: [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) (15 trap numbers) and [`ioctl_abi.h`](Cact/kernel/core/syscall/ioctl_abi.h) (every relay command/protocol struct) — both must stay byte-for-byte in sync with **[CactLib `syscall.h`](https://github.com/QwaYer/CactLib-x86_32/blob/main/include/syscall.h)**.
+Authoritative ABI headers: [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) (15 trap numbers) and [`ioctl_abi.h`](Cact/kernel/core/syscall/ioctl_abi.h) (every relay command/protocol struct) — both must stay byte-for-byte in sync with **[CactLib `syscall.h`](https://github.com/QwaYer/CactLibc-x86_32/blob/main/include/syscall.h)**.
 
 Syscall dispatch uses the **`sysenter`** CPU instruction (legacy `int 0x80` gate preserved as ring-3 fallback for `sigreturn` and CPUs without SEP — see [`idt.c`](Cact/kernel/idt/idt.c):102-104, [`cpudev.c`](Cact/kernel/cpudev/cpudev.c):208-210). Many syscalls take a **`struct syscall_frame*`** (full register snapshot) in the dispatcher — see [`mod.c`](Cact/kernel/core/syscall/mod.c) `_needs_frame()`.
 
@@ -441,6 +441,6 @@ Identity/process info: `/proc/self/info`; cwd: `/proc/self/cwd`; time: `/proc/ti
 
 <p align="center">
   <strong>Developer:</strong> <a href="https://github.com/QwaYer">QwaYer</a>
-  &nbsp;·&nbsp; <strong>libc:</strong> <a href="https://github.com/QwaYer/CactLib-x86_32">CactLib-x86_32</a>
+  &nbsp;·&nbsp; <strong>libc:</strong> <a href="https://github.com/QwaYer/CactLibc-x86_32">CactLib-x86_32</a>
   &nbsp;·&nbsp; <strong>OS:</strong> <a href="https://github.com/QwaYer/CactOS-x86_32">CactOS-x86_32</a>
 </p>
