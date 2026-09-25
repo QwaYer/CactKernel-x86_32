@@ -23,6 +23,24 @@ pub unsafe extern "C" fn task_signal(pid: u32, signal: u32) {
     irq_spinlock_release(&raw mut SCHEDULER_LOCK);
 }
 
+/// Non-zero when the *current* task has a signal that is pending and not blocked
+/// by its mask — i.e. one that will be delivered as soon as this task returns to
+/// userspace.
+///
+/// Blocking syscalls (socket read/write) poll this and return `-EINTR` instead
+/// of sleeping on.  Signals are only acted on when a task reaches userspace or
+/// the scheduler, so without this a task stuck in a blocking `read()` could not
+/// be killed with Ctrl+C at all.
+#[no_mangle]
+pub unsafe extern "C" fn task_signal_pending_current() -> u32 {
+    let t = crate::task::current_task;
+    if t.is_null() || (*t).proc.is_null() {
+        return 0;
+    }
+    let p = (*t).proc;
+    (*p).pending_signals & !(*p).signal_mask
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn task_signal_locked(pid: u32, signal: u32) {
     if task_list_head.is_null() || pid == 0 { return; }

@@ -25,6 +25,10 @@ int unix_sock_is_node(vfs_node_t *node);
 // SOCKCTL_* dispatcher for AF_UNIX socket fds (called by sock_ioctl_dispatch)
 int unix_sock_ioctl(vfs_node_t *node, uint32_t cmd, void *arg);
 
+// Set/clear O_NONBLOCK on an AF_UNIX socket (called from sys_fcntl).  On a
+// non-blocking socket read()/write() return -EAGAIN instead of waiting.
+int unix_sock_set_nonblock(vfs_node_t *node, int on);
+
 // socketpair(AF_UNIX, type, 0): install two connected fds in current task.
 // Returns 0 on success with fds[0]/fds[1] filled, or a negative errno.
 int unix_socketpair(int type, int fds[2]);

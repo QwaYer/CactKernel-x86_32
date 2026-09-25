@@ -21,6 +21,7 @@ use crate::udp;
 /// negative as "nothing yet", so both styles of caller cope.
 const EAGAIN: i32 = 11;
 const ETIMEDOUT: i32 = 110;
+const EINTR: i32 = 4;
 
 /// A blocking TCP read gives up after this long without a byte while the
 /// connection is still open.  Keep-alive is off by default, so smoltcp cannot
@@ -43,6 +44,16 @@ const UDP_WRITE_STALL_TICKS: u32 = 300;
 
 fn now_ticks() -> u32 {
     unsafe { ffi_kernel::timer_ticks_get() }
+}
+
+/// True when a signal is waiting for the current task.
+///
+/// A blocking wait must return `-EINTR` rather than keep sleeping: a signal is
+/// only acted on once the task returns to userspace (or the scheduler), so a
+/// task parked in a socket read could not be killed with Ctrl+C at all.  The
+/// signal is then delivered on the syscall-return path, as POSIX requires.
+fn signal_pending() -> bool {
+    unsafe { ffi_kernel::task_signal_pending_current() != 0 }
 }
 
 #[no_mangle]
@@ -98,6 +109,9 @@ extern "C" fn socket_read_op(node: *mut VfsNode, _off: u32, size: u32, buf: *mut
                 if nonblock {
                     return -EAGAIN;
                 }
+                if signal_pending() {
+                    return -EINTR;
+                }
                 if (*ks).shutdown_rd != 0 {
                     return -1;
                 }
@@ -116,6 +130,9 @@ extern "C" fn socket_read_op(node: *mut VfsNode, _off: u32, size: u32, buf: *mut
                 }
                 if nonblock {
                     return -EAGAIN;
+                }
+                if signal_pending() {
+                    return -EINTR;
                 }
                 if now_ticks() >= deadline {
                     // 0 keeps the long-standing "nothing yet" contract for
@@ -157,6 +174,9 @@ extern "C" fn socket_write_op(node: *mut VfsNode, _off: u32, size: u32, buf: *mu
                 if nonblock {
                     return -EAGAIN;
                 }
+                if signal_pending() {
+                    return -EINTR;
+                }
                 if (*ks).shutdown_wr != 0 {
                     return -1;
                 }
@@ -181,6 +201,9 @@ extern "C" fn socket_write_op(node: *mut VfsNode, _off: u32, size: u32, buf: *mu
                 }
                 if nonblock {
                     return -EAGAIN;
+                }
+                if signal_pending() {
+                    return -EINTR;
                 }
                 if now_ticks() >= deadline {
                     return -ETIMEDOUT;
@@ -353,6 +376,86 @@ pub extern "C" fn ksock_set_nonblock(node: *mut VfsNode, on: c_int) -> c_int {
     0
 }
 
+/// Local address of a socket (`getsockname`).  Returns 0, or -1 when it has
+/// none yet.
+#[no_mangle]
+pub extern "C" fn ksock_getsockname(node: *mut VfsNode, out: *mut SockAddrIn) -> c_int {
+    sock_name(node, out, false)
+}
+
+/// Peer address of a socket (`getpeername`).  Returns 0, or -1 when the socket
+/// is not connected.
+#[no_mangle]
+pub extern "C" fn ksock_getpeername(node: *mut VfsNode, out: *mut SockAddrIn) -> c_int {
+    sock_name(node, out, true)
+}
+
+/// Shared body of the two calls above, filling a `struct sockaddr_in`
+/// (`SockAddrIn`, byte-for-byte the C layout).
+fn sock_name(node: *mut VfsNode, out: *mut SockAddrIn, peer: bool) -> c_int {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe {
+        let ks = ksock_from_node(node);
+        if ks.is_null() {
+            return -1;
+        }
+        let idx = (*ks).proto_idx;
+        let (mut ip, port) = if (*ks).kind == KS_TCP {
+            if idx < 0 || idx as usize >= TCP_MAX_SOCKETS {
+                return -1;
+            }
+            // Straight from smoltcp: the cached mirror is only refreshed by the
+            // poll task, so it lags behind a just-connected or just-accepted
+            // socket (and reported a peer of 0 for a fresh accept()).
+            let ep = if peer {
+                tcp::tcp_socket_peer(idx as usize)
+            } else {
+                tcp::tcp_socket_local(idx as usize)
+            };
+            match ep {
+                Some(v) => v,
+                None => return -1,
+            }
+        } else if (*ks).kind == KS_UDP {
+            if idx < 0 || idx as usize >= UDP_SOCK_MAX {
+                return -1;
+            }
+            if peer {
+                // Datagram sockets keep their peer in a Rust-private table, so
+                // there is no C-visible copy to read.
+                udp::udp_sock_peer(idx)
+            } else {
+                let s = &udp::udp_socks[idx as usize];
+                (s.local_ip, s.local_port)
+            }
+        } else {
+            return -1;
+        };
+        if peer && (ip == 0 || port == 0) {
+            // Not connected — POSIX answers ENOTCONN here.
+            return -1;
+        }
+        if port == 0 {
+            // Bound to nothing yet: report the wildcard address, as POSIX does.
+            ip = 0;
+        } else if ip == 0 {
+            // Bound to a port only: report the address the interface currently
+            // holds, in host order — the `to_be()` below puts it on the wire the
+            // same way the C paths' htonl() does.
+            ip = crate::config::ip_host();
+        }
+        (*out).sin_family = AF_INET;
+        (*out).sin_port = port.to_be();
+        // The endpoint helpers hand back host-order numbers; a sockaddr_in wants
+        // network order (what htonl() produces in the C paths).
+        (*out).sin_addr = ip.to_be();
+        (*out).sin_zero = [0; 8];
+    }
+    0
+}
+
 fn ksock_alloc() -> *mut Ksock {
     unsafe {
         for s in ksock_table.iter_mut() {
@@ -468,11 +571,14 @@ pub extern "C" fn ksock_tcp_accept(listen_node: *mut VfsNode, peer_out: *mut Soc
         if tcp::tcp_accept_transfer(listen_idx as i32, ci as i32) != 0 {
             return core::ptr::null_mut();
         }
-        let peer = &tcp::tcp_sockets[ci];
+        // The child slot's C mirror is not filled until the poll task syncs it,
+        // so ask smoltcp — otherwise accept() reported a peer port of 0.
+        let (rip, rport) = tcp::tcp_socket_peer(ci).unwrap_or((0, 0));
         if !peer_out.is_null() {
             (*peer_out).sin_family = AF_INET;
-            (*peer_out).sin_port = peer.remote_port.to_be();
-            (*peer_out).sin_addr = peer.remote_ip;
+            (*peer_out).sin_port = rport.to_be();
+            // Host-order number from smoltcp -> network order for the sockaddr.
+            (*peer_out).sin_addr = rip.to_be();
             (*peer_out).sin_zero = [0; 8];
         }
         // The connection is already moved into the child slot, so every

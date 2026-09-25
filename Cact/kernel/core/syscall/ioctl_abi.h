@@ -206,6 +206,8 @@ typedef struct cact_shmctl_arg { uint32_t shmid; uint32_t cmd; void *buf; } cact
 #define CACT_SOCKCTL_UNIX_CONNECT 0x330B // AF_UNIX connect:arg=cact_unix_addr_t*
 #define CACT_SOCKCTL_SENDMSG    0x330C  // payload + SCM_RIGHTS: arg=cact_sendmsg_arg_t*
 #define CACT_SOCKCTL_RECVMSG    0x330D  // payload + SCM_RIGHTS: arg=cact_recvmsg_arg_t*
+#define CACT_SOCKCTL_GETSOCKNAME 0x330E // arg=cact_sockname_arg_t*; local addr out
+#define CACT_SOCKCTL_GETPEERNAME 0x330F // arg=cact_sockname_arg_t*; peer addr out
 // AF_UNIX reuses CACT_SOCKCTL_LISTEN / ACCEPT / SHUTDOWN; the data path is
 // plain read()/write(), as for AF_INET sockets.  sendmsg/recvmsg ioctls add
 // SCM_RIGHTS fd passing on AF_UNIX stream sockets (payload stays a byte
@@ -253,6 +255,13 @@ typedef struct cact_accept_arg {
     cact_sockaddr_in_t peer;     // out
     uint32_t addrlen;            // in/out
 } cact_accept_arg_t;
+
+// getsockname()/getpeername(): the kernel fills addr, and addrlen is in (bytes
+// the caller's buffer can hold) then out (bytes written), like accept's.
+typedef struct cact_sockname_arg {
+    cact_sockaddr_in_t addr;     // out
+    uint32_t addrlen;            // in/out
+} cact_sockname_arg_t;
 
 // socket option levels/names (kernel socket.h values; relay passes them through)
 //   level: SOL_SOCKET=1, IPPROTO_TCP=6

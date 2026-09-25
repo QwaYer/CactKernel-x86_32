@@ -15,6 +15,8 @@ const DNS_PORT: u16 = 53;
 const QTYPE_A: u16 = 1;
 const QCLASS_IN: u16 = 1;
 const DNS_TIMEOUT_TICKS: u32 = 300;
+/// Resend the query if no answer arrived within this long (one retry per lookup).
+const DNS_RETRY_TICKS: u32 = 100;
 const POLL_SLICE_TICKS: u32 = 2;
 
 static mut DNS_RX_META: [udp::PacketMetadata; 4] = [udp::PacketMetadata::EMPTY; 4];
@@ -227,6 +229,32 @@ fn try_recv_dns_reply(socks: &mut SocketSet<'static>, dns_host: u32, id: u16) ->
     parse_dns_a_response(data, id)
 }
 
+/// Send `query` from the shared DNS socket, binding an ephemeral port the first
+/// time.  With `flush`, also drop whatever is still buffered — a stale answer to
+/// a previous, timed-out lookup.  Only the first send of a lookup flushes, so a
+/// retransmission cannot throw away the reply that is already on its way back.
+/// Returns false when the socket is gone or the query could not be queued.
+fn send_query(query: &[u8], dns_ip: Ipv4Addr, flush: bool) -> bool {
+    stack::with_iface_sockets(|_iface, socks| {
+        let h = match unsafe { DNS_HANDLE } {
+            Some(h) => h,
+            None => return false,
+        };
+        if flush {
+            flush_dns_recv(socks);
+        }
+        let s = socks.get_mut::<udp::Socket>(h);
+        if !s.is_open() {
+            let p = pick_ephemeral_port();
+            if s.bind(p).is_err() {
+                return false;
+            }
+        }
+        s.send_slice(query, (dns_ip, DNS_PORT)).is_ok()
+    })
+    .unwrap_or(false)
+}
+
 fn resolve_once(name: &str, dns_host: u32, query_buf: &mut [u8]) -> Option<u32> {
     let dns_ip = Ipv4Addr::from_bits(dns_host);
     let id = (unsafe { ffi_kernel::timer_ticks_get() } as u16) ^ 0xa5a5;
@@ -251,20 +279,19 @@ fn resolve_once(name: &str, dns_host: u32, query_buf: &mut [u8]) -> Option<u32> 
     w += 2;
     let qlen = w;
 
-    stack::with_iface_sockets(|_iface, socks| {
-        let h = unsafe { DNS_HANDLE }?;
-        flush_dns_recv(socks);
-        let s = socks.get_mut::<udp::Socket>(h);
-        if !s.is_open() {
-            let p = pick_ephemeral_port();
-            s.bind(p).ok()?;
-        }
-        s.send_slice(&query_buf[..qlen], (dns_ip, DNS_PORT)).ok()?;
-        Some(())
-    })?;
+    // `flush` drops anything still buffered — a stale answer to a query that
+    // already timed out.  The retransmission below must not do it again, or it
+    // could throw away the answer that arrived between the two sends.
+    if !send_query(&query_buf[..qlen], dns_ip, true) {
+        return None;
+    }
 
-    let deadline = unsafe { ffi_kernel::timer_ticks_get() }.saturating_add(DNS_TIMEOUT_TICKS);
-    let mut next_wake = unsafe { ffi_kernel::timer_ticks_get() };
+    let start = unsafe { ffi_kernel::timer_ticks_get() };
+    let deadline = start.saturating_add(DNS_TIMEOUT_TICKS);
+    let mut next_wake = start;
+    // One retransmission: a single lost UDP packet (or a server that dropped
+    // the first query) used to fail the whole lookup after a silent 3 s wait.
+    let mut next_retry = start.saturating_add(DNS_RETRY_TICKS);
     while unsafe { ffi_kernel::timer_ticks_get() } < deadline {
         stack::stack_poll();
         let now = unsafe { ffi_kernel::timer_ticks_get() };
@@ -276,6 +303,11 @@ fn resolve_once(name: &str, dns_host: u32, query_buf: &mut [u8]) -> Option<u32> 
                 return Some(ip);
             }
             next_wake = now.saturating_add(POLL_SLICE_TICKS);
+        }
+        if now >= next_retry {
+            // Schedule no further retries; the deadline ends the wait.
+            next_retry = deadline;
+            let _ = send_query(&query_buf[..qlen], dns_ip, false);
         }
         unsafe { ffi_kernel::sched_sleep_ticks(1) };
     }

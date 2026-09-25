@@ -239,6 +239,40 @@ pub(crate) fn alloc_tcp_smoltcp(
     }
 }
 
+/// Remote endpoint of slot `idx` as `(network-order IPv4, port)`, straight from
+/// smoltcp.
+///
+/// The cached C mirror in `tcp_sockets` is only refreshed by `net_poll_task`, so
+/// a connection that was accepted a moment ago still reads 0 there — which made
+/// `accept()` report a peer port of 0.
+pub(crate) fn tcp_socket_peer(idx: usize) -> Option<(u32, u16)> {
+    with_tcp_socket(idx as i32, |s| match s.remote_endpoint() {
+        Some(ep) => {
+            let IpAddress::Ipv4(a) = ep.addr else {
+                return (0, 0);
+            };
+            (ipv4_u32(a), ep.port)
+        }
+        None => (0, 0),
+    })
+}
+
+/// Local endpoint of slot `idx` as `(network-order IPv4, port)`: the connected
+/// endpoint, or the listen endpoint while the socket is still a listener.  The
+/// address is 0 when it was never named (bound by port only), which the caller
+/// fills in from the interface config.
+pub(crate) fn tcp_socket_local(idx: usize) -> Option<(u32, u16)> {
+    with_tcp_socket(idx as i32, |s| {
+        if let Some(ep) = s.local_endpoint() {
+            let IpAddress::Ipv4(a) = ep.addr else {
+                return (0, 0);
+            };
+            return (ipv4_u32(a), ep.port);
+        }
+        (0, s.listen_endpoint().port)
+    })
+}
+
 /// Give up slot `i` without a close handshake: unlink the smoltcp socket and
 /// free the C slot.
 ///
