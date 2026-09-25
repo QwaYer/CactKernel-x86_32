@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Cact — пустой ext4-диск для QEMU
+# Cact — an empty ext4 disk for QEMU
 # ==============================================================================
-# Создаёт только отформатированный ext4 без файлов. Userland — через cctkfs на ISO.
+# Creates only a formatted ext4 with no files. Userland — via cctkfs on the ISO.
 #
-# Использование:
+# Usage:
 #   ./build_disk.sh
 #
-# Раньше скрипт собирал userspace и копировал ELF в образ — это убрано.
-# Флаг --no-build оставлен для совместимости со старыми командами (ничего не делает).
+# Previously the script built userspace and copied ELF into the image — that has been removed.
+# The --no-build flag is kept for compatibility with old commands (it does nothing).
 # ==============================================================================
 
 set -euo pipefail
@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 if [ "${1:-}" = "--no-build" ]; then
-    : # совместимость: раньше пропускали сборку ELF
+    : # compatibility: previously the ELF build was skipped
 fi
 
 IMG="build/nvme.img"

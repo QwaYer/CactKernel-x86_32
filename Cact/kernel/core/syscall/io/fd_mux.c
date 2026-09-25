@@ -128,7 +128,7 @@ int sys_poll(struct syscall_frame *regs) {
 
     if (!current_task) return -1;
 
-    // poll(NULL, 0, timeout) — чистый sleep (nfds == 0).
+    // poll(NULL, 0, timeout) — pure sleep (nfds == 0).
     if (nfds <= 0) {
         if (timeout_ms == 0) return 0;
         if (timeout_ms < 0) { for (;;) schedule(); }

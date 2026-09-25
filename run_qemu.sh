@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Запуск QEMU для CactKernel.
-# При первом запуске без диска: автоматически вызывается ./build_disk.sh (пустой ext4).
-# Полный цикл (драйверы + cctkfs + ISO + диск): ../build-cact-qemu.sh
-# Исправлено: монитор вынесен в виртуальную консоль (Ctrl+Alt+2 в окне QEMU), 
-# чтобы не конфликтовать со stdio серийного порта.
+# Launch QEMU for CactKernel.
+# On the first run without a disk: ./build_disk.sh is called automatically (empty ext4).
+# Full cycle (drivers + cctkfs + ISO + disk): ../build-cact-qemu.sh
+# Fixed: the monitor is moved to a virtual console (Ctrl+Alt+2 in the QEMU window),
+# so that it does not conflict with the serial port stdio.
 #
-# Отладка GDB:  QEMU_GDB=1 ./run_qemu.sh  или  ./run_qemu_gdb.sh
-#   QEMU слушает tcp::1234, гость стоит до "continue" в gdb.
-#   Сборка с символами:  meson configure build-meson -Dkern_debug=true && ninja -C build-meson
-#   Сессия:  gdb -x gdb/cact.gdb
+# GDB debugging:  QEMU_GDB=1 ./run_qemu.sh  or  ./run_qemu_gdb.sh
+#   QEMU listens on tcp::1234, the guest halts until "continue" in gdb.
+#   Build with symbols:  meson configure build-meson -Dkern_debug=true && ninja -C build-meson
+#   Session:  gdb -x gdb/cact.gdb
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 if [[ ! -f build/nvme.img ]]; then
-    echo "[run_qemu] build/nvme.img отсутствует — создаю через ./build_disk.sh" >&2
+    echo "[run_qemu] build/nvme.img is missing — creating it via ./build_disk.sh" >&2
     ./build_disk.sh
 fi
 
@@ -45,7 +45,7 @@ if [[ -z "$ISO" ]]; then
   done
 fi
 if [[ -z "$ISO" || ! -f "$ISO" ]]; then
-  echo "[run_qemu] Соберите ISO: ninja -C build-meson (iso-full для загрузочного) — или задайте CACT_ISO" >&2
+  echo "[run_qemu] Build the ISO: ninja -C build-meson (iso-full for a bootable one) — or set CACT_ISO" >&2
   exit 1
 fi
 

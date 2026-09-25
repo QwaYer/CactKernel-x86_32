@@ -4,14 +4,15 @@
 #include <stdint.h>
 #include "vfs.h"
 
-/* varfs — выделенный writable namespace для runtime-данных пользовательских
- * сервисов (логи, локальный state). Ring-3 init (cgoct и пр.) не должны
- * создавать сами /var и /var/log: ядро гарантирует их существование на
- * boot. Сервисы лишь пишут в уже подготовленную структуру.
+/* varfs — a dedicated writable namespace for the runtime data of user
+ * services (logs, local state). Ring-3 init (cgoct and the like) must not
+ * create /var and /var/log itself: the kernel guarantees they exist on
+ * boot. Services merely write into the already prepared structure.
  *
- * Слой реализации: forward на ext4 /var (если есть boot-disk). В nodisk-
- * режиме это noop — записать ничего нельзя, но точка монтирования всё ещё
- * присутствует в VFS root, чтобы пути из userspace не валились на walk. */
+ * Implementation layer: forward to ext4 /var (if there is a boot-disk). In
+ * nodisk mode this is a noop — nothing can be written, but the mount point is
+ * still present in the VFS root, so that paths from userspace do not fail on
+ * walk. */
 
 /* Initialise varfs and ensure /var (+ /var/log) on the backing ext4 root. */
 void        varfs_init    (vfs_node_t *ext4_root);

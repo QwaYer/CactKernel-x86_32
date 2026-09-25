@@ -3,7 +3,7 @@
 
 #include "blkdev.h"
 
-// vfsdev — block-device node + mount manager ("монтёр").
+// vfsdev — block-device node + mount manager ("mounter").
 //
 // Responsibilities:
 //   * register one /dev/<name> block node (VFS_BLOCKDEVICE) for every block

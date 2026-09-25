@@ -281,7 +281,7 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
         int p = _sig_permitted(a.pid);
         if (p) return p;
-        /* signum — индекс сигнала ядра (бит маски). 0 = SIGKILL (принудительно). */
+        /* signum — kernel signal index (mask bit). 0 = SIGKILL (forced). */
         if (a.signum == 0) { task_kill(a.pid); return 0; }
         if (a.signum >= NSIG) return -EINVAL;
         /* task_signal() takes the pending_signals *mask*, not the bit index:
