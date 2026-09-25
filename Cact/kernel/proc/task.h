@@ -38,6 +38,14 @@
 #define KERNEL_STACK_SIZE 16384
 #define USER_STACK_PAGES  4
 #define USER_STACK_BYTES  (USER_STACK_PAGES * 4096)
+
+/* Command-name registry (task_comm.c): the value behind /proc/<pid>/comm. */
+#define TASK_COMM_LEN   16
+#define TASK_COMM_SLOTS 128
+void task_comm_set     (uint32_t pid, const char *name);
+void task_comm_set_path(uint32_t pid, const char *path);
+void task_comm_inherit (uint32_t pid, uint32_t parent_pid);
+int  task_comm_get     (uint32_t pid, char *out, int cap);
 #ifndef KERNEL_BASE
 #define KERNEL_BASE       0xC0000000
 #endif

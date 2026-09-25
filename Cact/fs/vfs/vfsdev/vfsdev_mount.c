@@ -168,3 +168,17 @@ void vfsdev_list(void) {
         printk("]\n");
     }
 }
+
+int vfsdev_mounts_text(char *buf, int cap) {
+    int p = 0;
+    if (!buf || cap <= 0) return 0;
+    for (vfsdev_mount_t *m = mount_list; m; m = m->next) {
+        if (p >= cap - 1) break;
+        int n = snprintf(buf + p, (size_t)(cap - p), "/dev/%s %s %s rw 0 0\n",
+                         m->devname, m->target, m->fstype);
+        if (n < 0) break;
+        if (n >= cap - p) { p = cap - 1; break; }
+        p += n;
+    }
+    return p;
+}

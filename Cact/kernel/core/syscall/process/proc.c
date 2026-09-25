@@ -34,6 +34,7 @@ int sys_fork(struct syscall_frame* regs) {
     if (!child) {
         return -1;
     }
+    task_comm_inherit((uint32_t)child->pid, current_task->pid);
     return (int)child->pid;   // child sees 0, parent sees child PID
 }
 
@@ -81,6 +82,7 @@ int sys_exec(struct syscall_frame* regs) {
     cf.eflags  = regs->eflags;
     cf.useresp = regs->useresp;
     cf.ss      = regs->ss;
+    task_comm_set_path(current_task->pid, kpath);
     int ret = task_exec(kpath, argv, envp, &cf);   // never returns on success
     kfree(kpath);
     return ret;

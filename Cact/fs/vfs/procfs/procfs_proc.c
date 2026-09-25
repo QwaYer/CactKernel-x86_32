@@ -24,6 +24,7 @@
 static vfs_node_t self_info_node;
 static vfs_node_t self_cwd_node;
 static vfs_node_t self_ctl_node;
+static vfs_node_t self_comm_node;
 
 vfs_node_t proc_self_dir;   // exported for the procfs root walk
 
@@ -74,6 +75,19 @@ static int _cwd_read(vfs_node_t *node, uint32_t off, uint32_t size,
     while (current_task->proc->cwd[len] && len < sizeof(current_task->proc->cwd))
         len++;
     return _emit(current_task->proc->cwd, len, off, size, buf);
+}
+
+// /proc/self/comm — the calling process's command name, with a trailing
+// newline (Linux shape).
+static int _comm_read(vfs_node_t *node, uint32_t off, uint32_t size,
+                      char *buf) {
+    (void)node;
+    if (!current_task) return 0;
+    char out[TASK_COMM_LEN + 1];
+    int n = task_comm_get(current_task->pid, out, TASK_COMM_LEN);
+    if (n <= 0) return 0;
+    out[n++] = '\n';
+    return _emit(out, (uint32_t)n, off, size, buf);
 }
 
 // ---- /proc/self/ctl ioctl handler --------------------------------------
@@ -424,6 +438,7 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
 
 static vfs_ops_t self_info_ops = { .read = _info_read };
 static vfs_ops_t self_cwd_ops  = { .read = _cwd_read };
+static vfs_ops_t self_comm_ops = { .read = _comm_read };
 static vfs_ops_t self_ctl_ops  = { .ioctl = _self_ctl_ioctl };
 
 static vfs_dirent_t _self_de;
@@ -433,6 +448,7 @@ static vfs_node_t *_self_walk(vfs_node_t *dir, const char *name) {
     if (streq(name, "info")) return &self_info_node;
     if (streq(name, "cwd"))  return &self_cwd_node;
     if (streq(name, "ctl"))  return &self_ctl_node;
+    if (streq(name, "comm")) return &self_comm_node;
     return 0;
 }
 
@@ -443,6 +459,7 @@ static vfs_dirent_t *_self_readdir(vfs_node_t *dir, uint32_t index) {
     case 0:  name = "info"; break;
     case 1:  name = "cwd";  break;
     case 2:  name = "ctl";  break;
+    case 3:  name = "comm"; break;
     default: return 0;
     }
     strlcpy(_self_de.name, name, 128);
@@ -452,7 +469,7 @@ static vfs_dirent_t *_self_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _self_listdir(vfs_node_t *dir) {
     (void)dir;
-    printk("  info\n  cwd\n  ctl\n");
+    printk("  info\n  cwd\n  ctl\n  comm\n");
 }
 
 static vfs_ops_t self_dir_ops = {
@@ -485,6 +502,7 @@ typedef struct proc_pid_slot {
     vfs_node_t dir;
     vfs_node_t info;
     vfs_node_t cwd;
+    vfs_node_t comm;
 } proc_pid_slot_t;
 
 static proc_pid_slot_t _pid_slots[PROC_PID_SLOTS];
@@ -571,11 +589,37 @@ static int _pid_cwd_read(vfs_node_t *node, uint32_t off, uint32_t size,
     return _emit(path, len, off, size, buf);
 }
 
+static int _pid_comm_read(vfs_node_t *node, uint32_t off, uint32_t size,
+                          char *buf) {
+    proc_pid_slot_t *s = (proc_pid_slot_t *)node->priv;
+    if (!s || s->pid != node->inode) return -ENOENT;
+
+    char name[TASK_COMM_LEN + 1];
+    uint32_t len = 0;
+    int rc = 0;
+
+    irq_spinlock_acquire(&scheduler_lock);
+    struct task_struct *t = _find_task_locked(s->pid);
+    if (!t)                  rc = -ENOENT;
+    else if (!_may_read(t))  rc = -EPERM;
+    else {
+        int n = task_comm_get(s->pid, name, TASK_COMM_LEN);
+        if (n <= 0) { name[0] = '?'; n = 1; }
+        name[n++] = '\n';
+        len = (uint32_t)n;
+    }
+    irq_spinlock_release(&scheduler_lock);
+
+    if (rc) return rc;
+    return _emit(name, len, off, size, buf);
+}
+
 static vfs_node_t *_pid_walk(vfs_node_t *dir, const char *name) {
     proc_pid_slot_t *s = (proc_pid_slot_t *)dir->priv;
     if (!s || s->pid != dir->inode) return 0;   // dir node recycled under us
     if (streq(name, "info")) return &s->info;
     if (streq(name, "cwd"))  return &s->cwd;
+    if (streq(name, "comm")) return &s->comm;
     return 0;
 }
 
@@ -585,6 +629,7 @@ static vfs_dirent_t *_pid_readdir(vfs_node_t *dir, uint32_t index) {
     switch (index) {
     case 0:  name = "info"; break;
     case 1:  name = "cwd";  break;
+    case 2:  name = "comm"; break;
     default: return 0;
     }
     strlcpy(_pid_de.name, name, 128);
@@ -594,7 +639,7 @@ static vfs_dirent_t *_pid_readdir(vfs_node_t *dir, uint32_t index) {
 
 static void _pid_listdir(vfs_node_t *dir) {
     (void)dir;
-    printk("  info\n  cwd\n");
+    printk("  info\n  cwd\n  comm\n");
 }
 
 static vfs_ops_t _pid_dir_ops  = {
@@ -604,6 +649,7 @@ static vfs_ops_t _pid_dir_ops  = {
 };
 static vfs_ops_t _pid_info_ops = { .read = _pid_info_read };
 static vfs_ops_t _pid_cwd_ops  = { .read = _pid_cwd_read };
+static vfs_ops_t _pid_comm_ops = { .read = _pid_comm_read };
 
 // Caller must hold scheduler_lock.
 static void _slot_init(proc_pid_slot_t *s, uint32_t pid) {
@@ -627,6 +673,12 @@ static void _slot_init(proc_pid_slot_t *s, uint32_t pid) {
     s->cwd.priv  = s;
     s->cwd.inode = pid;
     strlcpy(s->cwd.name, "cwd", 128);
+
+    s->comm.type  = VFS_FILE;
+    s->comm.ops   = &_pid_comm_ops;
+    s->comm.priv  = s;
+    s->comm.inode = pid;
+    strlcpy(s->comm.name, "comm", 128);
 }
 
 // Caller must hold scheduler_lock.  The slot for |pid|, recycling one whose
@@ -699,11 +751,16 @@ void procfs_proc_init(void) {
     self_cwd_node.type = VFS_FILE;
     self_cwd_node.ops  = &self_cwd_ops;
 
+    memset(&self_comm_node, 0, sizeof(vfs_node_t));
+    strlcpy(self_comm_node.name, "comm", 128);
+    self_comm_node.type = VFS_FILE;
+    self_comm_node.ops  = &self_comm_ops;
+
     memset(&self_ctl_node, 0, sizeof(vfs_node_t));
     strlcpy(self_ctl_node.name, "ctl", 128);
     self_ctl_node.type = VFS_FILE;
     self_ctl_node.ops  = &self_ctl_ops;
 
-    pr_info("  %-11s : /proc/self ready (info, cwd, ctl)\n", "proc");
-    pr_info("  %-11s : /proc/<pid> ready (info, cwd)\n", "proc");
+    pr_info("  %-11s : /proc/self ready (info, cwd, comm, ctl)\n", "proc");
+    pr_info("  %-11s : /proc/<pid> ready (info, cwd, comm)\n", "proc");
 }

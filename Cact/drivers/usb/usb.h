@@ -241,6 +241,10 @@ int usb_set_interface     (usb_device_t *dev, uint8_t iface, uint8_t alt);
 
 void usb_dump_devices(void);
 
+/* Snapshot listing for /proc/usb: number of attached devices and the idx-th one. */
+int                 usb_device_count(void);
+const usb_device_t *usb_device_at(int idx);
+
 uint8_t usb_alloc_address(void);
 void    usb_free_address (uint8_t addr);
 

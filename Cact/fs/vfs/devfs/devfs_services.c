@@ -22,6 +22,7 @@
 #include "blkdev.h"
 #include "part.h"
 #include "vfsdev.h"
+#include "procfs.h"
 #include "cact_acpi.h"
 #include "tty.h"
 
@@ -288,6 +289,20 @@ static int _sys_ioctl(void *p, uint32_t cmd, void *arg) {
         int n = part_rescan(kname);
         kfree(kname);
         return n;   // >= 0: number of partitions exposed
+    }
+
+    case CACT_SYSCTL_SETHOSTNAME: {
+        int r = _root_only();
+        if (r) return r;
+        if (!arg) return -EINVAL;
+        if (!validate_user_str((const char *)arg)) return -EFAULT;
+        char *kname = copy_path_from_user((const char *)arg);
+        if (!kname) return -EFAULT;
+        size_t n = strlen(kname);
+        if (n == 0 || n > 64) { kfree(kname); return -EINVAL; }
+        procfs_set_nodename(kname);
+        kfree(kname);
+        return 0;
     }
 
     default:

@@ -7,4 +7,8 @@
 int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id);
 int kmod_unload_kname(const char *name);
 
+// Listing for /proc/modules.
+int         kmod_count(void);         // number of resident PCI modules
+const char *kmod_name_at(int idx);    // idx-th resident module name, or NULL
+
 #endif

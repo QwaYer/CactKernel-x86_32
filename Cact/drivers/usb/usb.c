@@ -293,3 +293,14 @@ int usb_register_device(usb_device_t *dev) {
 void usb_dump_devices(void) {
     (void)device_count;
 }
+
+int usb_device_count(void) {
+    return device_count;
+}
+
+const usb_device_t *usb_device_at(int idx) {
+    int n = 0;
+    for (usb_device_t *d = device_list; d; d = d->next)
+        if (n++ == idx) return d;
+    return 0;
+}
