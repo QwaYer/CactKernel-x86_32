@@ -23,6 +23,18 @@
 #ifndef EAGAIN
 #define EAGAIN 11
 #endif
+#ifndef EADDRINUSE
+#define EADDRINUSE 98
+#endif
+#ifndef EINTR
+#define EINTR 4
+#endif
+
+/* How long a blocking accept() waits for an inbound connection (ticks at
+   100 Hz) — the same order as the blocking-read stall timeout in Rust. */
+#define ACCEPT_WAIT_TICKS 3000u
+
+extern void sched_sleep_ticks(uint32_t ticks);
 
 int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
     if (!node || node->type != VFS_SOCKET) return -1;
@@ -45,6 +57,16 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
             if (ks->proto_idx >= 0 && ks->proto_idx < TCP_MAX_SOCKETS)
                 s = &tcp_sockets[ks->proto_idx];
             else return -1;
+            /* Two listeners on one port would fight over inbound SYNs, so refuse
+             * the second one unless SO_REUSEADDR was asked for (the same rule
+             * the UDP branch below already applies). */
+            if (port != 0 && !ks->so_reuseaddr) {
+                for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
+                    if (i == ks->proto_idx) continue;
+                    if (tcp_sockets[i].used && tcp_sockets[i].local_port == port)
+                        return -EADDRINUSE;
+                }
+            }
             s->local_port = port;
             s->local_ip   = htonl(rust_net_get_ip_host());
             return 0;
@@ -63,8 +85,15 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
         cact_sockaddr_arg_t a;
         if (!arg) return -EINVAL;
         if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
-        if (ks->kind == KS_TCP)
-            return tcp_connect(ks->proto_idx, ntohl(a.addr.addr), ntohs(a.addr.port));
+        if (ks->kind == KS_TCP) {
+            int r = tcp_connect(ks->proto_idx, ntohl(a.addr.addr), ntohs(a.addr.port));
+            /* connect() is synchronous here, so the caller gets the error
+             * directly; recording it in so_error lets getsockopt(SO_ERROR)
+             * report the same result afterwards (it is cleared when read, as
+             * POSIX says).  Before this, SO_ERROR always answered 0. */
+            if (r < 0) ks->so_error = -r;
+            return r;
+        }
         /* Datagram sockets accept connect() too: it only records the peer, so
          * write() can send one datagram to it. */
         if (ks->kind == KS_UDP)
@@ -88,6 +117,19 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
         struct sockaddr_in peer;
         memset(&peer, 0, sizeof(peer));
         vfs_node_t *conn = ksock_tcp_accept(node, &peer);
+        /* A blocking accept() waits for a connection instead of answering "none
+         * yet" the instant one has not arrived — that forced every server into a
+         * spin.  O_NONBLOCK keeps the immediate -1, and a pending signal ends
+         * the wait with -EINTR so Ctrl+C still works. */
+        if (!conn && !ks->nonblock) {
+            uint32_t deadline = timer_ticks_get() + ACCEPT_WAIT_TICKS;
+            while (!conn) {
+                if (task_signal_pending_current()) return -EINTR;
+                if ((int32_t)(timer_ticks_get() - deadline) >= 0) break;
+                sched_sleep_ticks(1);
+                conn = ksock_tcp_accept(node, &peer);
+            }
+        }
         if (!conn) return -1;
 
         a.peer.addr = peer.sin_addr;
@@ -98,6 +140,27 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
             return -EFAULT;
         }
         return alloc_fd(conn);
+    }
+
+    case CACT_SOCKCTL_GETSOCKNAME:
+    case CACT_SOCKCTL_GETPEERNAME: {
+        cact_sockname_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        if (a.addrlen < sizeof(struct sockaddr_in)) return -EINVAL;
+
+        struct sockaddr_in nm;
+        memset(&nm, 0, sizeof(nm));
+        int r = (cmd == CACT_SOCKCTL_GETSOCKNAME)
+                    ? ksock_getsockname(node, &nm)
+                    : ksock_getpeername(node, &nm);
+        if (r != 0) return r;
+
+        a.addr.addr = nm.sin_addr;
+        a.addr.port = nm.sin_port;
+        a.addrlen   = sizeof(struct sockaddr_in);
+        if (copy_to_user(arg, &a, sizeof(a)) != 0) return -EFAULT;
+        return 0;
     }
 
     case CACT_SOCKCTL_SHUTDOWN: {
@@ -198,7 +261,9 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
             ret = tcp_recv(ks->proto_idx, (uint8_t *)a.buf, (uint16_t)a.len);
             if (ret > 0) {
                 tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
-                a.src.addr = s->remote_ip;
+                /* remote_ip holds a host-order number, so htonl() like the UDP
+                 * branch below; without it the address came back byte-swapped. */
+                a.src.addr = htonl(s->remote_ip);
                 a.src.port = htons(s->remote_port);
             }
         } else if (ks->kind == KS_UDP) {

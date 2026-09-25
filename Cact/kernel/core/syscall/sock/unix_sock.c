@@ -44,6 +44,9 @@
 #ifndef EAGAIN
 #define EAGAIN 11
 #endif
+#ifndef EINTR
+#define EINTR 4
+#endif
 #ifndef EPIPE
 #define EPIPE 32
 #endif
@@ -85,6 +88,7 @@ typedef struct unix_ep {
     uint8_t  shut_wr;       /* local SHUT_WR applied: writes fail */
     uint8_t  eof;           /* peer closed / did SHUT_WR: reads drain then EOF */
     uint8_t  peer_no_read;  /* peer shut read side / is gone: writes fail */
+    uint8_t  nonblock;      /* O_NONBLOCK: reads/writes return -EAGAIN, not wait */
     struct unix_ep *peer;   /* other end of the connection (NULL when gone) */
     uint32_t refs;          /* node wrappers + queue holds + peer holds */
 
@@ -513,6 +517,10 @@ static int unix_node_read(vfs_node_t *node, uint32_t off, uint32_t size,
             return 0;
         }
         mutex_unlock(&ep->lock);
+        /* A blocking AF_UNIX read must honour O_NONBLOCK and must not sit on a
+           signal: returning lets the syscall-return path deliver it (Ctrl+C). */
+        if (ep->nonblock) return -EAGAIN;
+        if (task_signal_pending_current()) return -EINTR;
         if (!validate_user_ptr(buf, size)) return -1;
         schedule();
     }
@@ -544,6 +552,9 @@ static int unix_node_write(vfs_node_t *node, uint32_t off, uint32_t size,
         uint32_t space = UNIX_BUF_SIZE - peer->rx_len;
         if (space == 0) {
             mutex_unlock(&peer->lock);
+            if (ep->nonblock) return written ? (int)written : -EAGAIN;
+            if (task_signal_pending_current())
+                return written ? (int)written : -EINTR;
             if (!validate_user_ptr(buf + written, 1))
                 return written ? (int)written : -1;
             schedule();
@@ -555,6 +566,10 @@ static int unix_node_write(vfs_node_t *node, uint32_t off, uint32_t size,
         written += chunk;
         mutex_unlock(&peer->lock);
         if (written == size) break;
+        /* Partial write already accepted: report it, and let the caller decide
+           whether to retry (POSIX: a short count, not an error). */
+        if (ep->nonblock) return (int)written;
+        if (task_signal_pending_current()) return (int)written;
         if (!validate_user_ptr(buf + written, 1))
             return written ? (int)written : -1;
         schedule();
@@ -585,6 +600,17 @@ static int unix_node_poll(vfs_node_t *node, uint32_t events) {
     }
     mutex_unlock(&ep->lock);
     return (int)revents;
+}
+
+/* O_NONBLOCK for an AF_UNIX socket, called from sys_fcntl the same way
+   ksock_set_nonblock() serves AF_INET.  Returns 0, or -1 when the node is not a
+   Unix socket.  Without this, fcntl(F_SETFL, O_NONBLOCK) was accepted and then
+   ignored, and a read on a quiet peer blocked forever. */
+int unix_sock_set_nonblock(vfs_node_t *node, int on) {
+    unix_ep_t *ep = ep_from_node(node);
+    if (!ep) return -1;
+    ep->nonblock = on ? 1 : 0;
+    return 0;
 }
 
 static vfs_ops_t unix_sock_ops = {

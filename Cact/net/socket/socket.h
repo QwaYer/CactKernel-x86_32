@@ -123,4 +123,11 @@ int ksock_shutdown(vfs_node_t *node, int how);
    Returns 0, or -1 when the node is not a socket. */
 int ksock_set_nonblock(vfs_node_t *node, int on);
 
+/* getsockname()/getpeername(): fill `out` (kernel struct sockaddr_in, the same
+   layout as cact_sockaddr_in_t plus family/zero fields).  Returns 0, or -1 when
+   the socket has no such address yet (peer of an unconnected socket, a TCP
+   socket that never bound). */
+int ksock_getsockname(vfs_node_t *node, struct sockaddr_in *out);
+int ksock_getpeername(vfs_node_t *node, struct sockaddr_in *out);
+
 #endif /* KSOCKET_H */

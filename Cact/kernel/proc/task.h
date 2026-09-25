@@ -216,6 +216,9 @@ int task_exec(char* path, char** argv, char** envp, struct context_frame* regs);
 void task_kill(uint32_t pid);
 void task_signal(uint32_t pid, uint32_t signal);
 void task_signal_locked(uint32_t pid, uint32_t signal);
+/* Pending, unmasked signal on the *current* task (0 = none).  Blocking waits poll
+   this so they can return -EINTR instead of delaying the signal's delivery. */
+uint32_t task_signal_pending_current(void);
 void task_handle_signals(struct task_struct* t);
 int  task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler);
 void task_setup_sigreturn(struct task_struct* t);

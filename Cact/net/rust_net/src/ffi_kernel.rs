@@ -28,6 +28,10 @@ unsafe extern "C" {
     pub fn ktime_get_usec() -> u64;
     pub fn ktime_busy_wait_us(us: u64);
 
+    /// Pending, unmasked signal on the current task; blocking waits poll it so a
+    /// task stuck in a socket read can still be interrupted (Ctrl+C).
+    pub fn task_signal_pending_current() -> u32;
+
     /// IRQ-saving spinlock (kernel `irq_spinlock_t`: a spin word + saved flags).
     pub fn irq_spinlock_acquire(lock: *mut c_void);
     pub fn irq_spinlock_release(lock: *mut c_void);

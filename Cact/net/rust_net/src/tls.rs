@@ -479,6 +479,37 @@ pub(crate) fn tls_stream_read(tls: &mut TlsStream, dst: &mut [u8]) -> TlsRead {
 
 static mut TLS_CONNS: [Option<TlsStream>; TLS_MAX_CONNECTIONS] = [const { None }; TLS_MAX_CONNECTIONS];
 
+/// Guards slot allocation/release in [`TLS_CONNS`].
+///
+/// The C ABI can be reached from more than one task (the HTTP client runs in
+/// whichever task issued the request), and without this two callers could take
+/// the same slot.  Only the table is locked — never a live connection, since the
+/// handshake and the data path block by design and a lock held across a sleep
+/// would wedge the stack.  Using one handle from two tasks at once is still not
+/// supported.
+static mut TLS_LOCK: [u32; 2] = [0; 2];
+
+struct TlsGuard;
+
+impl TlsGuard {
+    #[inline]
+    fn new() -> Self {
+        unsafe {
+            ffi_kernel::irq_spinlock_acquire(core::ptr::addr_of_mut!(TLS_LOCK).cast());
+        }
+        TlsGuard
+    }
+}
+
+impl Drop for TlsGuard {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            ffi_kernel::irq_spinlock_release(core::ptr::addr_of_mut!(TLS_LOCK).cast());
+        }
+    }
+}
+
 /// Read a NUL-terminated C string (bounded).
 unsafe fn cstr(ptr: *const c_void) -> Option<alloc::string::String> {
     let p = ptr as *const u8;
@@ -522,8 +553,10 @@ pub extern "C" fn cact_tls_connect_ex(
     let Some(stream) = tls_stream_open(sock, &name, skip_verify != 0) else {
         return -1;
     };
-    // SAFETY: single-threaded boot paths; slots are only taken while running.
+    // SAFETY: the slot table is guarded so two tasks cannot take one slot; the
+    // stream itself is moved in and never touched under the lock.
     unsafe {
+        let _guard = TlsGuard::new();
         for i in 0..TLS_MAX_CONNECTIONS {
             if TLS_CONNS[i].is_none() {
                 TLS_CONNS[i] = Some(stream);
@@ -588,8 +621,15 @@ pub extern "C" fn cact_tls_recv(conn_idx: c_int, buf: *mut u8, max_len: u16) -> 
 /// Close and free a TLS connection (does not close the underlying TCP socket).
 #[no_mangle]
 pub extern "C" fn cact_tls_close(conn: c_int) {
-    if conn >= 0 && (conn as usize) < TLS_MAX_CONNECTIONS {
-        // SAFETY: validated index.
-        unsafe { TLS_CONNS[conn as usize] = None; }
+    if conn < 0 || conn as usize >= TLS_MAX_CONNECTIONS {
+        return;
     }
+    // Take the stream out under the lock, then drop it outside: freeing the
+    // rustls state can touch the allocator, which has no business running with
+    // interrupts disabled.
+    let victim = unsafe {
+        let _guard = TlsGuard::new();
+        TLS_CONNS[conn as usize].take()
+    };
+    drop(victim);
 }
