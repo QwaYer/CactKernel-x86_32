@@ -48,28 +48,56 @@ pub const KERNEL_BASE: u32 = 0xC000_0000;
 pub const KERNEL_STACK_CANARY: u32 = 0x5A5A_5A5A;
 
 /// Allocate a kernel stack with the canary painted at its base.
+///
+/// # Safety
+///
+/// `kstack_alloc` itself has no preconditions; the returned pointer must be passed to
+/// `kstack_free` exactly once and must not be used as a stack before it is initialised.
 pub unsafe fn kstack_alloc() -> *mut u32 {
-    let p = ffi::kmalloc(KERNEL_STACK_SIZE) as *mut u32;
+    let p = cact_mm::kmalloc(KERNEL_STACK_SIZE as u32) as *mut u32;
     if !p.is_null() {
-        *p = KERNEL_STACK_CANARY;
-        *p.add(1) = KERNEL_STACK_CANARY;
+        // SAFETY: `p` is a live `KERNEL_STACK_SIZE` block, so its first word is in bounds.
+        unsafe { *p = KERNEL_STACK_CANARY };
+        // SAFETY: `p` is valid for at least two `u32` words, so this address is in bounds.
+        let second = unsafe { p.add(1) };
+        // SAFETY: `second` is the second word of that live block.
+        unsafe { *second = KERNEL_STACK_CANARY };
     }
     p
 }
 
+/// # Safety
+///
+/// `base` must be null or a pointer previously returned by `kstack_alloc`/`kmalloc` that has
+/// not already been freed.
 pub unsafe fn kstack_free(base: *mut c_void) {
-    if !base.is_null() {
-        ffi::kfree(base);
+    // SAFETY: `base` is null-checked and, per the contract, is a live allocation from
+    // `kstack_alloc`, so `kfree` is called on a valid block.
+    unsafe {
+        if !base.is_null() {
+            cact_mm::kfree((base) as *mut u8);
+        }
     }
 }
 
 /// 1 while the stack's canary is intact.
+///
+/// # Safety
+///
+/// `base` must be null or point to a live kernel-stack allocation of at least two `u32` words.
 pub unsafe fn kstack_ok(base: *mut c_void) -> bool {
     if base.is_null() {
         return true;
     }
     let p = base as *const u32;
-    *p == KERNEL_STACK_CANARY && *p.add(1) == KERNEL_STACK_CANARY
+    // SAFETY: `base` is non-null and points to a live kernel-stack allocation (see # Safety), so
+    // the first canary word is in bounds.
+    let first = unsafe { *p };
+    // SAFETY: that allocation is at least two `u32` words, so this address is in bounds.
+    let second_ptr = unsafe { p.add(1) };
+    // SAFETY: `second_ptr` is the second word of the live allocation.
+    let second = unsafe { *second_ptr };
+    first == KERNEL_STACK_CANARY && second == KERNEL_STACK_CANARY
 }
 
 /// Report a kernel stack that has run past its base.  The damage is already
@@ -78,22 +106,33 @@ pub unsafe fn kstack_ok(base: *mut c_void) -> bool {
 pub fn task_check_kernel_stack() {
     use core::sync::atomic::{AtomicBool, Ordering};
     static REPORTED: AtomicBool = AtomicBool::new(false);
-    unsafe {
-        let t = current_task;
-        if t.is_null() || REPORTED.load(Ordering::Relaxed) { return; }
-        let p = (*t).proc;
-        if p.is_null() { return; }
-        if !kstack_ok((*p).stack_base) {
-            REPORTED.store(true, Ordering::Relaxed);
-            ffi::printk(b"  sched       : KERNEL STACK OVERFLOW (canary destroyed)\n\0".as_ptr());
-        }
+    // SAFETY: `current_task` is a scheduler-owned global; when non-null it is the live task
+    // running on this CPU.
+    let t = unsafe { current_task };
+    if t.is_null() || REPORTED.load(Ordering::Relaxed) {
+        return;
+    }
+    // SAFETY: `t` is the live current task (non-null checked above).
+    let p = unsafe { (*t).proc };
+    if p.is_null() {
+        return;
+    }
+    // SAFETY: `p` is the live `ProcMeta` of `t`.
+    let stack_base = unsafe { (*p).stack_base };
+    // SAFETY: `stack_base` is the live kernel-stack pointer of the current task.
+    let ok = unsafe { kstack_ok(stack_base) };
+    if !ok {
+        REPORTED.store(true, Ordering::Relaxed);
+        // SAFETY: `printk` takes a static NUL-terminated byte string.
+        unsafe {
+            ffi::printk(c"  sched       : KERNEL STACK OVERFLOW (canary destroyed)\n".as_ptr().cast())
+        };
     }
 }
 
 pub const EXEC_MAX_ARGS:   usize = 256;
 pub const EXEC_MAX_ENVS:   usize = 256;
 pub const EXEC_MAX_STRLEN: usize = 4096;
-pub(crate) const TRACE_PROC_LOGS: bool = false;
 
 pub const USER_STACK_PAGES: u32 = 4;
 pub const USER_STACK_BYTES: u32 = USER_STACK_PAGES * PAGE_SIZE;
@@ -116,64 +155,95 @@ pub static mut SCHEDULER_LOCK: irq_spinlock_t = irq_spinlock_t::new();
 
 static mut task_list_tail: *mut TaskStruct = ptr::null_mut();
 
-pub fn task_list_add(t: *mut TaskStruct) {
+/// Append `t` to the scheduler's global task list.
+///
+/// # Safety
+///
+/// `t` must be null or a live, exclusively owned `TaskStruct`; the caller must hold
+/// `SCHEDULER_LOCK` (or be single-threaded), because the list is shared scheduler state.
+pub unsafe fn task_list_add(t: *mut TaskStruct) {
     if t.is_null() {
         return;
     }
-    unsafe {
-        (*t).next = ptr::null_mut();
-        if task_list_tail.is_null() {
-            task_list_head = t;
-            task_list_tail = t;
-        } else {
-            (*task_list_tail).next = t;
-            task_list_tail = t;
-        }
+    // SAFETY: `t` is non-null and live (see # Safety), so clearing its link is in bounds.
+    unsafe { (*t).next = ptr::null_mut() };
+    // SAFETY: `task_list_tail` is a scheduler-owned global, read under the caller's
+    // `SCHEDULER_LOCK` (see # Safety).
+    let tail = unsafe { task_list_tail };
+    if tail.is_null() {
+        // SAFETY: `task_list_head` is a scheduler-owned global, mutated under the caller's lock.
+        unsafe { task_list_head = t };
+        // SAFETY: `task_list_tail` is a scheduler-owned global, mutated under the caller's lock.
+        unsafe { task_list_tail = t };
+    } else {
+        // SAFETY: `tail` is the last live element of the list, so writing its link is in bounds.
+        unsafe { (*tail).next = t };
+        // SAFETY: `task_list_tail` is a scheduler-owned global, mutated under the caller's lock.
+        unsafe { task_list_tail = t };
     }
 }
 
-pub fn task_list_remove(t: *mut TaskStruct) {
+/// Unlink `t` from the scheduler's global task list.
+///
+/// # Safety
+///
+/// `t` must be null or a live `TaskStruct` currently on the scheduler task list; the caller must
+/// hold `SCHEDULER_LOCK` (or be single-threaded), because the list is shared scheduler state.
+pub unsafe fn task_list_remove(t: *mut TaskStruct) {
     if t.is_null() {
         return;
     }
-    unsafe {
-        if task_list_head.is_null() {
+    // SAFETY: `task_list_head` is a scheduler-owned global, read under the caller's lock.
+    if unsafe { task_list_head }.is_null() {
+        return;
+    }
+
+    let mut prev: *mut TaskStruct = ptr::null_mut();
+    // SAFETY: `task_list_head` is a scheduler-owned global, read under the caller's lock.
+    let mut cur = unsafe { task_list_head };
+
+    while !cur.is_null() {
+        if cur == t {
+            // SAFETY: `t` is non-null and live (see # Safety).
+            let t_next = unsafe { (*t).next };
+            if prev.is_null() {
+                // SAFETY: `task_list_head` is a scheduler-owned global, mutated under the
+                // caller's lock.
+                unsafe { task_list_head = t_next };
+            } else {
+                // SAFETY: `prev` was reached by walking the list, so it is a live task.
+                unsafe { (*prev).next = t_next };
+            }
+            // SAFETY: `task_list_tail` is a scheduler-owned global, read here.
+            let tail = unsafe { task_list_tail };
+            if tail == t {
+                // SAFETY: mutated under the caller's lock.
+                unsafe { task_list_tail = prev };
+            }
+            // SAFETY: `t` is live, so clearing its link is in bounds.
+            unsafe { (*t).next = ptr::null_mut() };
             return;
         }
-
-        let mut prev: *mut TaskStruct = ptr::null_mut();
-        let mut cur = task_list_head;
-
-        while !cur.is_null() {
-            if cur == t {
-                if prev.is_null() {
-                    task_list_head = (*t).next;
-                } else {
-                    (*prev).next = (*t).next;
-                }
-                if task_list_tail == t {
-                    task_list_tail = prev;
-                }
-                (*t).next = ptr::null_mut();
-                return;
-            }
-            prev = cur;
-            cur  = (*cur).next;
-        }
+        prev = cur;
+        // SAFETY: `cur` was reached by walking the list, so it is a live task.
+        cur = unsafe { (*cur).next };
     }
 }
 
 pub fn find_task_by_pid(pid: u32) -> *mut TaskStruct {
-    unsafe {
-        let mut cur = task_list_head;
-        while !cur.is_null() {
-            if (*cur).pid == pid {
-                return cur;
-            }
-            cur = (*cur).next;
+    // SAFETY: `task_list_head` is a scheduler-owned global; all callers hold `SCHEDULER_LOCK`, so
+    // the list is stable while it is walked here.
+    let mut cur = unsafe { task_list_head };
+    while !cur.is_null() {
+        // SAFETY: `cur` is a live task on the list.
+        let cur_pid = unsafe { (*cur).pid };
+        if cur_pid == pid {
+            return cur;
         }
-        ptr::null_mut()
+        // SAFETY: `cur` is live, so its link is in bounds.
+        cur = unsafe { (*cur).next };
     }
+    ptr::null_mut()
 }
 
 pub(crate) fn ustack_phys_by_idx(p: &ProcMeta, idx: usize) -> *mut c_void {
@@ -190,10 +260,16 @@ pub(crate) fn ustack_kernel_byte_mut(p: &ProcMeta, uva: u32) -> *mut u8 {
     debug_assert!(off < USER_STACK_BYTES as usize);
     let pi = off / PAGE_SIZE as usize;
     let po = off % PAGE_SIZE as usize;
+    // SAFETY: `p` is a live `ProcMeta`; `pi`/`po` are the page/offset split of `uva`, and callers
+    // pass a `uva` inside this process's mapped user-stack window, so the returned pointer lies
+    // inside one of the stack's backing pages.
     unsafe { ustack_phys_by_idx(p, pi).cast::<u8>().add(po) }
 }
 
 pub(crate) fn ustack_write_u32(p: &ProcMeta, uva: u32, val: u32) {
+    // SAFETY: `ustack_kernel_byte_mut` yields a pointer inside a user-stack backing page for the
+    // caller-supplied in-window `uva`, and callers only pass word-aligned addresses (the stack
+    // slots they decrement by 4), so the 4-byte store is aligned and in bounds.
     unsafe {
         *(ustack_kernel_byte_mut(p, uva) as *mut u32) = val;
     }
@@ -203,22 +279,24 @@ pub(crate) fn map_user_stack_in_pd(pd: *mut u32, p: &ProcMeta) {
     if pd.is_null() {
         return;
     }
+    // SAFETY: `pd` is null-checked and, per the contract, a live page directory owned by the
+    // task; `p` is a live `ProcMeta` whose `ustack_phys`/`ustack_phys_extra` hold this process's
+    // stack pages, so each `vmm_map` is handed a real physical page.
     unsafe {
         for i in 0..USER_STACK_PAGES {
             let vaddr = p.ustack_virt.wrapping_add(i.wrapping_mul(PAGE_SIZE));
             let phys = ustack_phys_by_idx(p, i as usize) as u32;
-            ffi::vmm_map(pd, vaddr, phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
+            cact_mm::vmm_map(pd, vaddr, phys, (PAGE_USER | PAGE_RW | PAGE_PRESENT) as i32);
         }
     }
 }
 
 pub(crate) fn free_user_stack_pages(p: &mut ProcMeta) {
-    unsafe {
-        for i in 0..USER_STACK_PAGES as usize {
-            let pn = ustack_phys_by_idx(p, i);
-            if !pn.is_null() {
-                ffi::free_page(pn);
-            }
+    for i in 0..USER_STACK_PAGES as usize {
+        let pn = ustack_phys_by_idx(p, i);
+        if !pn.is_null() {
+            // SAFETY: the frame is live and PMM-managed; this call releases exactly one reference to it.
+            unsafe { cact_mm::free_page(pn as *mut u8) };
         }
     }
     p.ustack_phys = ptr::null_mut();
@@ -229,74 +307,107 @@ pub(crate) fn task_zero_init(t: *mut TaskStruct, p: *mut ProcMeta) -> bool {
     if t.is_null() || p.is_null() {
         return false;
     }
-    unsafe {
-        ffi::memory_set(t as *mut c_void, 0, core::mem::size_of::<TaskStruct>());
-        ffi::memory_set(p as *mut c_void, 0, core::mem::size_of::<ProcMeta>());
+    // SAFETY: `t` is a freshly allocated `TaskStruct` block, so zeroing its whole extent is in
+    // bounds.
+    unsafe { ffi::memory_set(t as *mut c_void, 0, core::mem::size_of::<TaskStruct>()) };
+    // SAFETY: `p` is a freshly allocated `ProcMeta` block, so zeroing its whole extent is in
+    // bounds.
+    unsafe { ffi::memory_set(p as *mut c_void, 0, core::mem::size_of::<ProcMeta>()) };
 
-        let fds = ffi::kmalloc(core::mem::size_of::<ffi::TaskFdTable>()) as *mut ffi::TaskFdTable;
-        if fds.is_null() {
-            return false;
-        }
-        ffi::memory_set(fds as *mut c_void, 0, core::mem::size_of::<ffi::TaskFdTable>());
-        (*p).fds = fds;
+    // SAFETY: `t` is a fresh, exclusively owned `TaskStruct`, now zeroed.
+    let t = unsafe { &mut *t };
+    // SAFETY: `p` is a fresh, exclusively owned `ProcMeta`, now zeroed.
+    let p = unsafe { &mut *p };
 
-        let mmap_tbl = ffi::kmalloc(core::mem::size_of::<MmapTable>()) as *mut MmapTable;
-        if mmap_tbl.is_null() {
-            ffi::kfree(fds as *mut c_void);
-            (*p).fds = ptr::null_mut();
-            return false;
-        }
-        ffi::mmap_table_init(mmap_tbl);
-        (*p).mmap_table = mmap_tbl;
-
-        (*t).state      = TaskState::Ready;
-        (*t).priority   = mlfq::MLFQ_LEVEL_INTERACTIVE;
-        (*t).time_slice = mlfq::MLFQ_QUANTUM[mlfq::MLFQ_LEVEL_INTERACTIVE as usize];
-        (*t).proc       = p;
-        (*p).cwd[0]     = b'/';
-        for i in 0..NSIG {
-            (*p).signal_handlers[i] = SIG_DFL;
-        }
-        true
+    let fds = cact_mm::kmalloc(core::mem::size_of::<ffi::TaskFdTable>() as u32) as *mut ffi::TaskFdTable;
+    if fds.is_null() {
+        return false;
     }
+    // SAFETY: `fds` is a fresh block of exactly `TaskFdTable`'s size; zeroing it is in bounds.
+    unsafe { ffi::memory_set(fds as *mut c_void, 0, core::mem::size_of::<ffi::TaskFdTable>()) };
+    p.fds = fds;
+
+    let mmap_tbl = cact_mm::kmalloc(core::mem::size_of::<MmapTable>() as u32) as *mut MmapTable;
+    if mmap_tbl.is_null() {
+        // SAFETY: `fds` is a live allocation owned here, so releasing it is sound.
+        unsafe { cact_mm::kfree((fds as *mut c_void) as *mut u8) };
+        p.fds = ptr::null_mut();
+        return false;
+    }
+    // SAFETY: `mmap_tbl` is a fresh `MmapTable`-sized block.
+    unsafe { cact_mm::mmap_table_init(mmap_tbl) };
+    p.mmap_table = mmap_tbl;
+
+    t.state      = TaskState::Ready;
+    t.priority   = mlfq::MLFQ_LEVEL_INTERACTIVE;
+    t.time_slice = mlfq::MLFQ_QUANTUM[mlfq::MLFQ_LEVEL_INTERACTIVE as usize];
+    t.proc       = p as *mut ProcMeta;
+    p.cwd[0]     = b'/';
+    for slot in p.signal_handlers.iter_mut() {
+        *slot = SIG_DFL;
+    }
+    true
 }
 
+/// # Safety
+///
+/// Must be called exactly once during single-threaded boot, before any other code touches the
+/// scheduler globals or `SCHEDULER_LOCK`.
 #[no_mangle]
 pub unsafe extern "C" fn task_init() {
-    current_task    = ptr::null_mut();
-    task_list_head  = ptr::null_mut();
-    task_list_tail  = ptr::null_mut();
-    next_pid        = 1;
+    // SAFETY: single-threaded boot entry: these are the scheduler's own globals, written before
+    // any other CPU or interrupt can observe them (see # Safety).
+    unsafe { current_task = ptr::null_mut() };
+    // SAFETY: as above.
+    unsafe { task_list_head = ptr::null_mut() };
+    // SAFETY: as above.
+    unsafe { task_list_tail = ptr::null_mut() };
+    // SAFETY: as above.
+    unsafe { next_pid = 1 };
 
-    crate::sync::irq_spinlock_init(&raw mut SCHEDULER_LOCK);
+    // SAFETY: initialises the scheduler's own spinlock before it is ever used.
+    unsafe { crate::sync::irq_spinlock_init(&raw mut SCHEDULER_LOCK) };
     mlfq::mlfq_init();
     timer_wheel::timer_wheel_global_init();
-    ffi::printk(b"\x01\x36  sched       : MLFQ, timer wheel, scheduler lock\n\0".as_ptr());
+    // SAFETY: `printk` takes a static NUL-terminated byte string.
+    unsafe { ffi::printk(c"\x01\x36  sched       : MLFQ, timer wheel, scheduler lock\n".as_ptr().cast()) };
 }
 
+/// # Safety
+///
+/// Must be called once from single-threaded boot after `task_init`, with interrupts disabled.
 #[no_mangle]
 pub unsafe extern "C" fn init_scheduler() -> i32 {
-    let idle = ffi::kmalloc(core::mem::size_of::<TaskStruct>()) as *mut TaskStruct;
+    let idle = cact_mm::kmalloc(core::mem::size_of::<TaskStruct>() as u32) as *mut TaskStruct;
     if idle.is_null() {
-        ffi::printk(b"\x01\x33  sched       : cannot allocate idle task\n\0".as_ptr());
+        // SAFETY: `printk` takes a static NUL-terminated byte string.
+        unsafe { ffi::printk(c"\x01\x33  sched       : cannot allocate idle task\n".as_ptr().cast()) };
         return -1;
     }
-    ffi::memory_set(idle as *mut c_void, 0, core::mem::size_of::<TaskStruct>());
+    // SAFETY: `idle` is a fresh allocation of exactly `TaskStruct`'s size; zeroing it is in
+    // bounds.
+    unsafe { ffi::memory_set(idle as *mut c_void, 0, core::mem::size_of::<TaskStruct>()) };
 
-    (*idle).pid           = 0;
-    (*idle).state         = TaskState::Running;
-    (*idle).is_kernel     = 1;
-    (*idle).page_directory = ptr::null_mut();
-    (*idle).proc          = ptr::null_mut();
-    (*idle).next          = idle;
-    (*idle).priority      = mlfq::MLFQ_LEVEL_BACKGROUND;
-    (*idle).ticks_used    = 0;
+    // SAFETY: `idle` is a fresh, exclusively owned `TaskStruct`, now zeroed.
+    let idle_t = unsafe { &mut *idle };
+    idle_t.pid            = 0;
+    idle_t.state          = TaskState::Running;
+    idle_t.is_kernel      = 1;
+    idle_t.page_directory = ptr::null_mut();
+    idle_t.proc           = ptr::null_mut();
+    idle_t.next           = idle;
+    idle_t.priority       = mlfq::MLFQ_LEVEL_BACKGROUND;
+    idle_t.ticks_used     = 0;
 
-    current_task    = idle;
-    task_list_head  = idle;
-    task_list_tail  = idle;
+    // SAFETY: boot-time writes to the scheduler globals, before interrupts are enabled.
+    unsafe { current_task = idle };
+    // SAFETY: as above.
+    unsafe { task_list_head = idle };
+    // SAFETY: as above.
+    unsafe { task_list_tail = idle };
 
-    ffi::printk(b"\x01\x36  sched       : idle task pid 0, circular run queue\n\0".as_ptr());
+    // SAFETY: `printk` takes a static NUL-terminated byte string.
+    unsafe { ffi::printk(c"\x01\x36  sched       : idle task pid 0, circular run queue\n".as_ptr().cast()) };
     0
 }
 
@@ -304,24 +415,31 @@ pub(crate) fn calc_highest_mapped_va(pd: *mut u32) -> u32 {
     if pd.is_null() {
         return 0;
     }
-    unsafe {
-        for pdi in (0..1024).rev() {
-            let pde = *pd.add(pdi);
-            if pde & PAGE_PRESENT == 0 {
-                continue;
-            }
-            let pt = (pde & !0xFFF) as *mut u32;
-            for pti in (0..1024).rev() {
-                if *pt.add(pti) & PAGE_PRESENT != 0 {
-                    let va = ((pdi << 22) | (pti << 12)) as u32;
-                    if va < 0xBF00_0000 {
-                        return va + PAGE_SIZE;
-                    }
+    for pdi in (0..1024).rev() {
+        // SAFETY: `pd` is a live page directory and `pdi < 1024`, so this PDE offset is in
+        // bounds.
+        let pde_ptr = unsafe { pd.add(pdi) };
+        // SAFETY: `pde_ptr` is a live PDE slot.
+        let pde = unsafe { *pde_ptr };
+        if pde & PAGE_PRESENT == 0 {
+            continue;
+        }
+        let pt = (pde & !0xFFF) as *mut u32;
+        for pti in (0..1024).rev() {
+            // SAFETY: `pt` is a live page table and `pti < 1024`, so this PTE offset is in
+            // bounds.
+            let pte_ptr = unsafe { pt.add(pti) };
+            // SAFETY: `pte_ptr` is a live PTE slot.
+            let pte = unsafe { *pte_ptr };
+            if pte & PAGE_PRESENT != 0 {
+                let va = ((pdi << 22) | (pti << 12)) as u32;
+                if va < 0xBF00_0000 {
+                    return va + PAGE_SIZE;
                 }
             }
         }
-        0
     }
+    0
 }
 
 pub(crate) fn push_empty_args(p: &ProcMeta, sp: &mut u32) {
@@ -341,13 +459,19 @@ pub(crate) fn push_empty_args(p: &ProcMeta, sp: &mut u32) {
     ustack_write_u32(p, *sp, 0);
 }
 
+/// # Safety
+///
+/// `t` must be null or a live `TaskStruct`, and the caller must hold `SCHEDULER_LOCK` (or be
+/// single-threaded).
 #[no_mangle]
 pub unsafe extern "C" fn task_set_state(
     t:         *mut TaskStruct,
     _old_state: u32,
     new_state:  u32,
 ) {
-    if t.is_null() { return; }
+    if t.is_null() {
+        return;
+    }
     let ns = match new_state {
         0 => TaskState::Ready,
         1 => TaskState::Running,
@@ -356,10 +480,14 @@ pub unsafe extern "C" fn task_set_state(
         4 => TaskState::Waiting,
         _ => return,
     };
-    (*t).state = ns;
-    match ns {
-        TaskState::Ready => mlfq::mlfq_enqueue_locked(t, (*t).priority),
-        _ => {}
+    // SAFETY: `t` is non-null and, per the contract, a live task, so the field write is in
+    // bounds.
+    unsafe { (*t).state = ns };
+    if ns == TaskState::Ready {
+        // SAFETY: `t` is live.
+        let pri = unsafe { (*t).priority };
+        // SAFETY: `t` is live; the caller holds `SCHEDULER_LOCK` (see # Safety).
+        unsafe { mlfq::mlfq_enqueue_locked(t, pri) };
     }
 }
 

@@ -122,26 +122,14 @@ pub struct NetDriver {
     pub name: *const c_char,
 }
 
-#[repr(C)]
-pub struct Spinlock {
-    pub locked: u32,
-}
+// The kernel's semaphore and spinlock are `cact_sync`'s (`semaphore_t` /
+// `spinlock_t`, shared with the scheduler and with the lock implementation
+// itself).  Re-exported under the names this crate uses so there is exactly
+// one Rust definition of each — hand-kept copies had already drifted once
+// (a missing `count` field made `waiter_count` alias the next static).
+pub use cact_sync::{semaphore_t as Semaphore, spinlock_t as Spinlock};
 
-/// Counting semaphore driven by the kernel's `sema_init`/`down`/`up`.
-///
-/// MUST stay layout-identical to `cact_sync::semaphore_t`
-/// (`Cact/kernel/sync/src/semaphore.rs`): the same object is handed across the
-/// FFI boundary, and hand-kept copies had already drifted (`count` was missing
-/// here, which pushed `waiter_count` 4 bytes past the end of the object and made
-/// it alias the next static).
-#[repr(C)]
-pub struct Semaphore {
-    pub guard: Spinlock,
-    pub count: core::sync::atomic::AtomicI32,
-    pub waiters: [*mut c_void; 64],
-    pub waiter_count: u32,
-}
-
+// The shared layout must stay the size the C side expects.
 const _: () = assert!(core::mem::size_of::<Semaphore>() == 268);
 
 #[repr(C)]

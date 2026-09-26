@@ -22,6 +22,8 @@ use sha2::{Digest, Sha256};
 
 // SAFETY: all three are C kernel symbols, linked into the final image.
 unsafe extern "C" {
+    // Reached only from the x86-32 `rdrand32`; other targets use a stub.
+    #[cfg(target_arch = "x86")]
     fn cpu_has_rdrand() -> i32;
     fn ktime_get_usec() -> u64;
     fn timer_ticks_get() -> u32;
@@ -38,6 +40,8 @@ fn rdrand32() -> Option<u32> {
     }
     for _ in 0..10 {
         let mut v: u32 = 0;
+        // SAFETY: RDRAND was confirmed present by the CPUID check above, and
+        // `&mut v` is a valid place to write the instruction's result.
         let ok = unsafe { core::arch::x86::_rdrand32_step(&mut v) };
         if ok == 1 {
             return Some(v);
@@ -138,6 +142,7 @@ fn seed(g: &mut Drbg) {
     // SAFETY: C kernel timer/clock.
     src[n..n + 8].copy_from_slice(&unsafe { ktime_get_usec() }.to_le_bytes());
     n += 8;
+    // SAFETY: C kernel timer; no arguments, only reads the tick counter.
     src[n..n + 4].copy_from_slice(&unsafe { timer_ticks_get() }.to_le_bytes());
     n += 4;
     let stack_probe = 0u8;
@@ -149,7 +154,9 @@ fn seed(g: &mut Drbg) {
     // Independent nonce material; the same hash would tie the two together.
     let mut n2 = [0u8; 48];
     n2[..32].copy_from_slice(&g.key);
+    // SAFETY: C kernel timer/clock.
     n2[32..40].copy_from_slice(&unsafe { ktime_get_usec() }.to_le_bytes());
+    // SAFETY: C kernel timer; no arguments, only reads the tick counter.
     n2[40..44].copy_from_slice(&unsafe { timer_ticks_get() }.to_le_bytes());
     g.nonce.copy_from_slice(&hash_sources(b"cact-csprng-v1-nonce", &n2[..44], 64)[..12]);
     g.ready = true;
@@ -169,8 +176,10 @@ fn stir(g: &mut Drbg) {
             n += 4;
         }
     }
+    // SAFETY: C kernel timer/clock.
     src[n..n + 8].copy_from_slice(&unsafe { ktime_get_usec() }.to_le_bytes());
     n += 8;
+    // SAFETY: C kernel timer; no arguments, only reads the tick counter.
     src[n..n + 4].copy_from_slice(&unsafe { timer_ticks_get() }.to_le_bytes());
     n += 4;
 
@@ -227,8 +236,13 @@ pub fn fill(buf: &mut [u8]) {
 }
 
 /// C ABI: fill a kernel buffer.  Returns 0, or -1 on a null buffer.
+///
+/// # Safety
+///
+/// `buf` must point to at least `len` bytes of writable memory that stay valid
+/// and unaliased for the duration of the call.
 #[no_mangle]
-pub extern "C" fn cact_csprng_fill(buf: *mut u8, len: u32) -> i32 {
+pub unsafe extern "C" fn cact_csprng_fill(buf: *mut u8, len: u32) -> i32 {
     if len == 0 {
         return 0;
     }
@@ -261,9 +275,7 @@ pub extern "C" fn cact_csprng_selftest() -> i32 {
 #[no_mangle]
 pub extern "C" fn cact_csprng_hw_entropy() -> i32 {
     let g = DRBG.lock();
-    if g.ready && g.hw_entropy {
-        1
-    } else if rdrand32().is_some() {
+    if (g.ready && g.hw_entropy) || rdrand32().is_some() {
         1
     } else {
         0

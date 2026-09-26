@@ -81,12 +81,15 @@ pub extern "C" fn drm_mode_to_modeinfo(m: *const DisplayMode, mi: *mut ModeInfo)
     if m.is_null() || mi.is_null() {
         return;
     }
-    // SAFETY: the caller guarantees pointers to a valid source mode and a
-    // writable uapi struct, exactly as the C function assumed.
-    unsafe {
-        core::ptr::write_bytes(mi, 0, 1);
-        let m = &*m;
-        let mi = &mut *mi;
+    // SAFETY: the caller guarantees `mi` points to a writable uapi struct, so
+    // zeroing one `ModeInfo` is in bounds.
+    unsafe { core::ptr::write_bytes(mi, 0, 1) };
+    {
+        // SAFETY: as above, and `m` points to a valid source mode; the borrow is
+        // consumed by the field copies below.
+        let m = unsafe { &*m };
+        // SAFETY: as above — `mi` points to the writable uapi struct.
+        let mi = unsafe { &mut *mi };
         mi.clock = m.clock;
         mi.hdisplay = m.hdisplay;
         mi.hsync_start = m.hsync_start;
@@ -119,11 +122,15 @@ pub extern "C" fn drm_modeinfo_to_mode(mi: *const ModeInfo, m: *mut DisplayMode)
     if mi.is_null() || m.is_null() {
         return;
     }
-    // SAFETY: as above, with the direction reversed.
-    unsafe {
-        core::ptr::write_bytes(m, 0, 1);
-        let mi = &*mi;
-        let m = &mut *m;
+    // SAFETY: the caller guarantees `m` points to a writable kernel mode, so
+    // zeroing one `DisplayMode` is in bounds.
+    unsafe { core::ptr::write_bytes(m, 0, 1) };
+    {
+        // SAFETY: as above, and `mi` points to a valid uapi mode struct; the borrow
+        // is consumed by the field copies below.
+        let mi = unsafe { &*mi };
+        // SAFETY: as above — `m` points to the writable kernel mode.
+        let m = unsafe { &mut *m };
         m.clock = mi.clock;
         m.hdisplay = mi.hdisplay;
         m.hsync_start = mi.hsync_start;

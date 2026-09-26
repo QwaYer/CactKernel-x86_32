@@ -84,7 +84,7 @@ fn now_ticks() -> u32 {
 /// Sleep for `t` ticks (safe wrapper).
 fn sleep_ticks(t: u32) {
     // SAFETY: ffi_kernel re-exports the C scheduler sleep.
-    unsafe { ffi_kernel::sched_sleep_ticks(t) }
+    unsafe { sched::timer_wheel::sched_sleep_ticks(t) }
 }
 
 // ─────────────────────────────── URL parsing ───────────────────────────────
@@ -224,10 +224,7 @@ fn sock_write(idx: i32, data: &[u8]) -> bool {
             if !s.may_send() {
                 return 0;
             }
-            match s.send_slice(&data[off..off + chunk]) {
-                Ok(n) => n,
-                Err(_) => 0,
-            }
+            s.send_slice(&data[off..off + chunk]).unwrap_or_default()
         })
         .unwrap_or(0);
         if sent > 0 {
@@ -451,10 +448,10 @@ fn parse_headers(header: &[u8]) -> (Option<u64>, bool) {
             if let Some(v) = parse_decimal(value) {
                 content_len = Some(v);
             }
-        } else if eq_ignore_ascii_case(name, b"transfer-encoding") {
-            if contains_ignore_ascii_case(value, b"chunked") {
-                chunked = true;
-            }
+        } else if eq_ignore_ascii_case(name, b"transfer-encoding")
+            && contains_ignore_ascii_case(value, b"chunked")
+        {
+            chunked = true;
         }
     }
     // RFC 7230 §3.3.3: Transfer-Encoding overrides Content-Length.
@@ -564,10 +561,7 @@ fn chunked_scan(body: &[u8], scanner: &mut ChunkScanner) -> ChunkStatus {
 fn decode_chunked(body: &[u8], out: &mut [u8]) -> (usize, bool) {
     let mut i = 0usize;
     let mut w = 0usize;
-    loop {
-        let Some(line_end) = find_lf(body, i) else {
-            break;
-        };
+    while let Some(line_end) = find_lf(body, i) {
         let line = &body[i..line_end];
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         let size_str = match line.iter().position(|&b| b == b';') {
@@ -745,6 +739,9 @@ fn do_request(
     out_len: u32,
     resp: &mut HttpResp,
 ) -> c_int {
+    // SAFETY: `do_request` is only reached from `cact_http_request`/`do_fetch`
+    // after the request entry point validated `out_buf` non-null and `out_len != 0`;
+    // per that caller contract those are `out_len` writable bytes for the call.
     let out = unsafe { slice::from_raw_parts_mut(out_buf.cast::<u8>(), out_len as usize) };
     let rr = match read_raw_response(src, deadline, resp) {
         Ok(rr) => rr,
@@ -758,19 +755,35 @@ fn do_request(
 // ─────────────────────────────── C ABI entry ───────────────────────────────
 
 /// Copy a bounded NUL-terminated C string into a Vec.
+///
+/// # Safety
+///
+/// `ptr` must be null or point to a NUL-terminated string readable up to and
+/// including its terminator (the scan is capped at 4096 bytes).
 unsafe fn cstr_bytes(ptr: *const c_char) -> Option<Vec<u8>> {
     if ptr.is_null() {
         return None;
     }
     let p = ptr.cast::<u8>();
     let mut len = 0usize;
-    while *p.add(len) != 0 {
-        len += 1;
+    loop {
         if len > 4096 {
             return None;
         }
+        // SAFETY: the caller contract (see # Safety) makes `p` a NUL-terminated
+        // string; `len <= 4096` here, so `add` stays within that string's first
+        // 4097 bytes (or the cap fails the call).
+        let q = unsafe { p.add(len) };
+        // SAFETY: `q` is a byte of the NUL-terminated string above; the scan
+        // stops as soon as it is the terminator.
+        if unsafe { *q } == 0 {
+            break;
+        }
+        len += 1;
     }
-    Some(core::slice::from_raw_parts(p, len).to_vec())
+    // SAFETY: as above, `len` is the count of initialised bytes before the NUL,
+    // all of which are readable for the duration of the call.
+    Some(unsafe { core::slice::from_raw_parts(p, len) }.to_vec())
 }
 
 /// One-time warning that a caller asked for an unverified TLS connection.
@@ -882,8 +895,16 @@ fn do_fetch(
 ///
 /// Returns 0 and fills `*out` on success, -1 on transport/DNS/TLS failure,
 /// -2 when `out_len` is too small to even hold the response headers.
+///
+/// # Safety
+///
+/// `out` must point to a writable, properly aligned [`HttpResp`].  `url` must be
+/// a NUL-terminated C string and `out_buf` a pointer to `out_len` writable bytes
+/// (`out_len != 0`).  `headers`, when non-null, must also be a NUL-terminated C
+/// string, and `body`/`body_len`, when used, must describe `body_len` readable
+/// bytes.  All of these must stay live for the duration of the call.
 #[no_mangle]
-pub extern "C" fn cact_http_request(
+pub unsafe extern "C" fn cact_http_request(
     out: *mut HttpResp,
     url: *const c_char,
     method: c_int,
@@ -897,6 +918,9 @@ pub extern "C" fn cact_http_request(
     if out.is_null() || url.is_null() || out_buf.is_null() || out_len == 0 {
         return -1;
     }
+    // SAFETY: `STACK_READY` is a `static mut bool` set by `stack_init` and
+    // cleared by `stack_teardown`; a byte load cannot tear, and reading it as
+    // false fails the call closed.
     if !unsafe { stack::STACK_READY } {
         return -1;
     }
@@ -934,8 +958,14 @@ pub extern "C" fn cact_http_request(
 }
 
 /// Convenience: HTTP GET.
+///
+/// # Safety
+///
+/// Identical to [`cact_http_request`]: `out` must be writable, `url` and
+/// `headers` must be NUL-terminated C strings, and `out_buf` must point to
+/// `out_len` writable bytes — all live for the duration of the call.
 #[no_mangle]
-pub extern "C" fn cact_http_get(
+pub unsafe extern "C" fn cact_http_get(
     out: *mut HttpResp,
     url: *const c_char,
     headers: *const c_char,
@@ -943,22 +973,33 @@ pub extern "C" fn cact_http_get(
     out_buf: *mut c_void,
     out_len: u32,
 ) -> c_int {
-    cact_http_request(
-        out,
-        url,
-        HTTP_GET,
-        headers,
-        core::ptr::null(),
-        0,
-        flags,
-        out_buf,
-        out_len,
-    )
+    // SAFETY: this only forwards its arguments; the caller contract above
+    // (identical to `cact_http_request`'s) is what makes the call sound.
+    unsafe {
+        cact_http_request(
+            out,
+            url,
+            HTTP_GET,
+            headers,
+            core::ptr::null(),
+            0,
+            flags,
+            out_buf,
+            out_len,
+        )
+    }
 }
 
 /// Convenience: HTTP POST with a request body.
+///
+/// # Safety
+///
+/// Identical to [`cact_http_request`]: `out` must be writable, `url` and
+/// `headers` must be NUL-terminated C strings, `body` must point to `body_len`
+/// readable bytes when non-null, and `out_buf` must point to `out_len` writable
+/// bytes — all live for the duration of the call.
 #[no_mangle]
-pub extern "C" fn cact_http_post(
+pub unsafe extern "C" fn cact_http_post(
     out: *mut HttpResp,
     url: *const c_char,
     headers: *const c_char,
@@ -968,15 +1009,19 @@ pub extern "C" fn cact_http_post(
     out_buf: *mut c_void,
     out_len: u32,
 ) -> c_int {
-    cact_http_request(
-        out,
-        url,
-        HTTP_POST,
-        headers,
-        body,
-        body_len,
-        flags,
-        out_buf,
-        out_len,
-    )
+    // SAFETY: this only forwards its arguments; the caller contract above
+    // (identical to `cact_http_request`'s) is what makes the call sound.
+    unsafe {
+        cact_http_request(
+            out,
+            url,
+            HTTP_POST,
+            headers,
+            body,
+            body_len,
+            flags,
+            out_buf,
+            out_len,
+        )
+    }
 }

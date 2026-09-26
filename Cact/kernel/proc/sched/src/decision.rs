@@ -123,7 +123,7 @@ pub extern "C" fn energy_decision_should_sleep(load_permille: u32, idle_ms: u32)
 }
 
 fn idle_ms_of(cpu: u32) -> u32 {
-    let now = unsafe { ffi::timer_ticks_get() };
+    let now = ffi::timer_ticks_get();
     let since = energy::energy_core_idle_since_tick(cpu);
     let elapsed = now.wrapping_sub(since);
     // Only meaningful once the core is recorded idle; otherwise 0.

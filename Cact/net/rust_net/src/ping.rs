@@ -23,7 +23,13 @@ pub fn send_echo_request_host(dst_ip_host: u32, id: u16, seq: u16) -> c_int {
 /// ping works even if the background poll task is busy elsewhere.  It spins
 /// briefly to keep sub-millisecond RTT resolution, then falls back to a tick
 /// sleep so a lost probe does not burn a whole timeout in the CPU.
-pub fn ping_wait_host(
+///
+/// # Safety
+///
+/// `src_ip_out` and `bytes_out` may be null (the corresponding result is then
+/// discarded), but each non-null one must point to a writable, properly aligned
+/// `u32` that stays live until this call returns.
+pub unsafe fn ping_wait_host(
     dst_ip_host: u32,
     id: u16,
     seq: u16,
@@ -35,31 +41,40 @@ pub fn ping_wait_host(
         return -1;
     }
     let timeout_us = (timeout_ms as u64).saturating_mul(1000);
-    unsafe {
-        let t0 = crate::ffi_kernel::ktime_get_usec();
-        loop {
-            crate::stack::stack_poll();
-            if let Some((src, bytes)) = crate::stack::icmp_try_recv_reply(id, seq) {
-                let rtt = crate::ffi_kernel::ktime_get_usec().saturating_sub(t0);
-                if !src_ip_out.is_null() {
-                    *src_ip_out = src;
-                }
-                if !bytes_out.is_null() {
-                    *bytes_out = bytes as u32;
-                }
-                return rtt.min(i32::MAX as u64) as c_int;
+    // SAFETY: `ktime_get_usec` is a kernel C service, safe to call from task
+    // context; it only reads the monotonic clock.
+    let t0 = unsafe { crate::ffi_kernel::ktime_get_usec() };
+    loop {
+        crate::stack::stack_poll();
+        if let Some((src, bytes)) = crate::stack::icmp_try_recv_reply(id, seq) {
+            // SAFETY: as for `t0` — the same monotonic-clock read.
+            let rtt = unsafe { crate::ffi_kernel::ktime_get_usec() }.saturating_sub(t0);
+            if !src_ip_out.is_null() {
+                // SAFETY: the caller contract (see # Safety) makes `src_ip_out`
+                // a writable, aligned `u32`; the null check above excluded null.
+                unsafe { *src_ip_out = src };
             }
-            let elapsed = crate::ffi_kernel::ktime_get_usec().saturating_sub(t0);
-            if elapsed >= timeout_us {
-                return -1;
+            if !bytes_out.is_null() {
+                // SAFETY: as above, for `bytes_out`.
+                unsafe { *bytes_out = bytes as u32 };
             }
-            if elapsed < 250_000 {
-                // Poll every millisecond while the reply is still plausible:
-                // a 10 ms tick sleep would inflate every WAN RTT by that much.
-                crate::ffi_kernel::ktime_busy_wait_us(1000);
-            } else {
-                crate::ffi_kernel::sched_sleep_ticks(1);
-            }
+            return rtt.min(i32::MAX as u64) as c_int;
+        }
+        // SAFETY: as for `t0` — the same monotonic-clock read.
+        let elapsed = unsafe { crate::ffi_kernel::ktime_get_usec() }.saturating_sub(t0);
+        if elapsed >= timeout_us {
+            return -1;
+        }
+        if elapsed < 250_000 {
+            // Poll every millisecond while the reply is still plausible: a 10 ms
+            // tick sleep would inflate every WAN RTT by that much.
+            // SAFETY: `ktime_busy_wait_us` is a kernel C service that spins for
+            // the requested microseconds; it touches no memory of ours.
+            unsafe { crate::ffi_kernel::ktime_busy_wait_us(1000) };
+        } else {
+            // SAFETY: `sched_sleep_ticks` is a kernel service that suspends the
+            // calling task for the requested number of ticks.
+            unsafe { sched::timer_wheel::sched_sleep_ticks(1) };
         }
     }
 }

@@ -3,8 +3,11 @@ name = "cact_mm"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+cact_sync = { path = "../../sync" }
+
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["lib"]
 
 [profile.dev]
 panic = "abort"

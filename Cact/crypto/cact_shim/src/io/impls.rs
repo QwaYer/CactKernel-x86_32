@@ -57,7 +57,7 @@ impl Read for Cursor<Vec<u8>> {
 
 impl Read for Cursor<&mut [u8]> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let data = self.inner.as_ref();
+        let data = &*self.inner;
         let start = self.pos as usize;
         let n = cmp::min(buf.len(), data.len().saturating_sub(start));
         buf[..n].copy_from_slice(&data[start..start + n]);

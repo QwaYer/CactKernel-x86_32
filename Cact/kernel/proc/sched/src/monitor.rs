@@ -81,14 +81,21 @@ static MONITOR_STATE: SyncUnsafeCell<MonitorState> = SyncUnsafeCell::new(Monitor
 static mut MONITOR_LOCK: crate::sync::irq_spinlock_t = crate::sync::irq_spinlock_t::new();
 
 fn state() -> &'static mut MonitorState {
+    // SAFETY: `MONITOR_STATE` is the governor's private global; every caller of `state()` holds
+    // `MONITOR_LOCK` (see `query`, `sample_tick`, `energy_monitor_init`), so the reference is
+    // exclusive for the duration of that critical section.
     unsafe { &mut *MONITOR_STATE.get() }
 }
 
 fn lock() {
+    // SAFETY: `MONITOR_LOCK` is a statically initialised `irq_spinlock_t` with a unique address,
+    // so `&raw mut MONITOR_LOCK` is a valid, aligned pointer to live lock storage.
     unsafe { irq_spinlock_acquire(&raw mut MONITOR_LOCK) };
 }
 
 fn unlock() {
+    // SAFETY: pairs with the `lock()` above on the same statically initialised `MONITOR_LOCK`,
+    // which this call site holds.
     unsafe { irq_spinlock_release(&raw mut MONITOR_LOCK) };
 }
 
@@ -140,7 +147,12 @@ fn update_trend(core: &mut CoreLoad) {
 /// Sample the master core. Runs on every scheduler tick with the scheduler
 /// lock held and IRQs off.
 pub(crate) fn sample_tick() {
-    let pid = unsafe { (*current_task).pid };
+    // SAFETY: `sample_tick` is only reached from `on_timer_tick`, which has already returned
+    // early when `current_task` is null, so it points at the live task currently running on
+    // this CPU.
+    let cur = unsafe { current_task };
+    // SAFETY: `cur` is that live task pointer, so reading its `pid` field is in bounds.
+    let pid = unsafe { (*cur).pid };
     let busy = pid != 0;
     let queue_len = mlfq::mlfq_runnable_count();
     let instant = if busy { PERMILLE } else { 0 };
@@ -162,11 +174,9 @@ pub(crate) fn sample_tick() {
     }
     core.window_samples += 1;
     if core.window_samples >= SAMPLES_PER_SEC {
-        core.cpu_utilization = if core.window_samples != 0 {
-            (core.busy_samples * PERMILLE) / core.window_samples
-        } else {
-            0
-        };
+        core.cpu_utilization = (core.busy_samples * PERMILLE)
+            .checked_div(core.window_samples)
+            .unwrap_or(0);
         core.busy_samples = 0;
         core.window_samples = 0;
         core.energy_budget = DEFAULT_ENERGY_BUDGET;

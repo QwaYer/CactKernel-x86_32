@@ -21,19 +21,26 @@ static MMAP_TABLE: KStatic<Mb2MmapTable> = KStatic::new(Mb2MmapTable {
 
 #[inline(always)]
 fn bitmap_set(idx: u32) {
-    let bm = MEMORY_BITMAP.get_mut();
+    // SAFETY: `MEMORY_BITMAP` is the PMM free-frame bitmap. `bitmap_set` runs either
+    // during single-threaded boot (`init_memory_manager`) or with `PAGE_LOCK` held
+    // (`kalloc`/`free_page`), so this access is exclusive.
+    let bm = unsafe { KStatic::get_mut(MEMORY_BITMAP.as_ptr()) };
     bm[(idx / 8) as usize] |= 1 << (idx % 8);
 }
 
 #[inline(always)]
 fn bitmap_clear(idx: u32) {
-    let bm = MEMORY_BITMAP.get_mut();
+    // SAFETY: `MEMORY_BITMAP` write; callers are `init_memory_manager` (boot,
+    // single-threaded) or `free_page` (holds `PAGE_LOCK`).
+    let bm = unsafe { KStatic::get_mut(MEMORY_BITMAP.as_ptr()) };
     bm[(idx / 8) as usize] &= !(1 << (idx % 8));
 }
 
 #[inline(always)]
 fn bitmap_test(idx: u32) -> bool {
-    let bm = MEMORY_BITMAP.get_mut();
+    // SAFETY: `MEMORY_BITMAP` read; only `kalloc` calls this, and it holds
+    // `PAGE_LOCK` across the whole first-fit scan.
+    let bm = unsafe { KStatic::get_mut(MEMORY_BITMAP.as_ptr()) };
     bm[(idx / 8) as usize] & (1 << (idx % 8)) != 0
 }
 
@@ -50,16 +57,23 @@ fn page_to_addr(idx: u32) -> u32 {
 
 
 // Public API: C-exported PMM / page refcount helpers.
+/// # Safety
+///
+/// `mmap` must be null or point to a valid `Mb2MmapTable` (the bootloader's
+/// static MMAP table) that stays valid for the call, and this must be invoked
+/// once, single-threaded, during boot.
 #[unsafe(no_mangle)]
-pub extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
+pub unsafe extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
     if mmap.is_null() {
-        klog_msg(LOG_WARN, b"pmm mmap pointer is null; using fallback\0".as_ptr());
+        klog_msg(LOG_WARN, c"pmm mmap pointer is null; using fallback".as_ptr() as *const u8);
         return;
     }
     // SAFETY: pointer is valid C-side static storage.
     let src = unsafe { &*mmap };
     let count = (src.count as usize).min(MB2_MMAP_MAX_ENTRIES);
-    let dst = MMAP_TABLE.get_mut();
+    // SAFETY: `MMAP_TABLE` is written only here, from the C boot code before the
+    // scheduler starts; the kernel is still single-threaded.
+    let dst = unsafe { KStatic::get_mut(MMAP_TABLE.as_ptr()) };
     dst.count = count as u32;
     for i in 0..count {
         let mut e = src.entries[i];
@@ -77,21 +91,25 @@ pub extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn init_memory_manager() {
-    unsafe { irq_spinlock_init(PAGE_LOCK.as_ptr() as *mut IrqSpinlock) };
+    // SAFETY: boot-time initialisation of `PAGE_LOCK` before any lock user runs;
+    // the kernel is single-threaded here.
+    unsafe { irq_spinlock_init(PAGE_LOCK.as_ptr()) };
     {
-        let bm = MEMORY_BITMAP.get_mut();
+        // SAFETY: `MEMORY_BITMAP` is pre-filled during single-threaded boot, before
+        // `kalloc` can run.
+        let bm = unsafe { KStatic::get_mut(MEMORY_BITMAP.as_ptr()) };
         for b in bm.iter_mut() {
             *b = 0xFF;
         }
     }
 
-    let mmap = MMAP_TABLE.get_mut();
+    // SAFETY: `MMAP_TABLE` was filled by `pmm_init_from_mmap` during boot and is
+    // only read here, still single-threaded.
+    let mmap = unsafe { KStatic::get_mut(MMAP_TABLE.as_ptr()) };
     let have_mmap = mmap.count > 0;
 
     if have_mmap {
-        for i in 0..mmap.count as usize {
-            let e = mmap.entries[i];
-
+        for &e in &mmap.entries[..mmap.count as usize] {
             if e.ty != MB2_MMAP_TYPE_AVAILABLE { continue; }
             if e.len == 0 { continue; }
 
@@ -110,7 +128,7 @@ pub extern "C" fn init_memory_manager() {
             }
         }
     } else {
-        klog_msg(LOG_WARN, b"pmm has no mmap; assuming RAM above reserved area\0".as_ptr());
+        klog_msg(LOG_WARN, c"pmm has no mmap; assuming RAM above reserved area".as_ptr() as *const u8);
         let first_free = addr_to_page(RESERVED_END);
         for pg in first_free..TOTAL_PAGES {
             bitmap_clear(pg);
@@ -139,7 +157,9 @@ pub extern "C" fn init_memory_manager() {
     } else {
         heap_end_page
     };
-    *FIRST_AVAILABLE_PAGE.get_mut() = initial_hint;
+    // SAFETY: `FIRST_AVAILABLE_PAGE` is the first-fit hint; initialising it during
+    // single-threaded boot cannot race `kalloc`/`free_page`.
+    *unsafe { KStatic::get_mut(FIRST_AVAILABLE_PAGE.as_ptr()) } = initial_hint;
 
 }
 
@@ -149,20 +169,25 @@ pub extern "C" fn kalloc() -> *mut u8 {
 
     let mut round: u32 = 0;
     loop {
-        lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
-        let hint = *FIRST_AVAILABLE_PAGE.get_mut();
+        lock_acquire(PAGE_LOCK.as_ptr());
+        // SAFETY: `FIRST_AVAILABLE_PAGE` is read while holding `PAGE_LOCK`, which
+        // serialises it against `free_page` and the other `kalloc` CPU.
+        let hint = *unsafe { KStatic::get_mut(FIRST_AVAILABLE_PAGE.as_ptr()) };
         let mut i = hint;
         while i < TOTAL_PAGES {
             if !bitmap_test(i) {
                 bitmap_set(i);
-                PAGE_REFCOUNTS.get_mut()[i as usize] = 1;
-                *FIRST_AVAILABLE_PAGE.get_mut() = i + 1;
-                lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+                // SAFETY: `PAGE_REFCOUNTS[idx]` initialised under `PAGE_LOCK`, held here for
+                // the whole allocation.
+                (unsafe { KStatic::get_mut(PAGE_REFCOUNTS.as_ptr()) })[i as usize] = 1;
+                // SAFETY: `FIRST_AVAILABLE_PAGE` write while holding `PAGE_LOCK`.
+                *unsafe { KStatic::get_mut(FIRST_AVAILABLE_PAGE.as_ptr()) } = i + 1;
+                lock_release(PAGE_LOCK.as_ptr());
                 return page_to_addr(i) as *mut u8;
             }
             i += 1;
         }
-        lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(PAGE_LOCK.as_ptr());
 
         if round >= MAX_RECLAIM_ROUNDS {
             break;
@@ -171,7 +196,9 @@ pub extern "C" fn kalloc() -> *mut u8 {
 
         let reclaimed = if crate::fault::swap::swap_is_enabled() {
             let pd = crate::safe::current_page_dir();
-            if !pd.is_null() && crate::fault::swap::swap_evict_page(pd) == 0 {
+            // SAFETY: `pd` is the live page directory read from CR3 above, and
+            // eviction only walks/mutates that directory's own user PTEs.
+            if !pd.is_null() && unsafe { crate::fault::swap::swap_evict_page(pd) } == 0 {
                 true
             } else {
                 crate::fault::oom::oom_kill() == 0
@@ -185,17 +212,22 @@ pub extern "C" fn kalloc() -> *mut u8 {
         }
     }
 
-    kprint_str(b"[PMM] kalloc: OUT OF MEMORY\n\0".as_ptr());
+    kprint_str(c"[PMM] kalloc: OUT OF MEMORY\n".as_ptr() as *const u8);
     core::ptr::null_mut()
 }
 
+/// # Safety
+///
+/// `ptr` must be null or a page-aligned base address previously returned by the
+/// page allocator (a `kalloc` frame or another PMM-managed page, or a C caller
+/// honouring the same contract) that has not already been freed.
 #[unsafe(no_mangle)]
-pub extern "C" fn free_page(ptr: *mut u8) {
+pub unsafe extern "C" fn free_page(ptr: *mut u8) {
     if ptr.is_null() { return; }
 
     let addr = ptr as u32;
     // Must be page-aligned and within the managed range.
-    if addr % PAGE_SIZE != 0 { return; }
+    if !addr.is_multiple_of(PAGE_SIZE) { return; }
 
     let page_idx = addr_to_page(addr);
     if page_idx >= TOTAL_PAGES { return; }
@@ -210,24 +242,27 @@ pub extern "C" fn free_page(ptr: *mut u8) {
         return;
     }
 
-    lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(PAGE_LOCK.as_ptr());
 
-    let rc = &mut PAGE_REFCOUNTS.get_mut()[page_idx as usize];
+    // SAFETY: `PAGE_REFCOUNTS[page_idx]` read+write under `PAGE_LOCK`, held for
+    // the whole function.
+    let rc = &mut (unsafe { KStatic::get_mut(PAGE_REFCOUNTS.as_ptr()) })[page_idx as usize];
     if *rc > 1 {
         *rc -= 1;
-        lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(PAGE_LOCK.as_ptr());
         return;
     }
     *rc = 0;
     bitmap_clear(page_idx);
 
     // Update first-fit hint if this page is earlier than the current hint.
-    let first = FIRST_AVAILABLE_PAGE.get_mut();
+    // SAFETY: `FIRST_AVAILABLE_PAGE` lowered to `page_idx` under `PAGE_LOCK`.
+    let first = unsafe { KStatic::get_mut(FIRST_AVAILABLE_PAGE.as_ptr()) };
     if page_idx < *first {
         *first = page_idx;
     }
 
-    lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(PAGE_LOCK.as_ptr());
 }
 
 pub fn page_ref_inc(phys: *const u8) {
@@ -236,10 +271,13 @@ pub fn page_ref_inc(phys: *const u8) {
     let idx = addr_to_page(addr);
     if idx >= TOTAL_PAGES { return; }
 
-    lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
-    PAGE_REFCOUNTS.get_mut()[idx as usize] =
-        PAGE_REFCOUNTS.get_mut()[idx as usize].saturating_add(1);
-    lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(PAGE_LOCK.as_ptr());
+    // SAFETY: `PAGE_REFCOUNTS[idx]` incremented under `PAGE_LOCK` (line above).
+    (unsafe { KStatic::get_mut(PAGE_REFCOUNTS.as_ptr()) })[idx as usize] =
+        // SAFETY: second read of the same `PAGE_REFCOUNTS[idx]` slot under the same
+        // `PAGE_LOCK` critical section.
+        (unsafe { KStatic::get_mut(PAGE_REFCOUNTS.as_ptr()) })[idx as usize].saturating_add(1);
+    lock_release(PAGE_LOCK.as_ptr());
 }
 
 /// Read the reference count of a physical page under `PAGE_LOCK`.
@@ -252,9 +290,11 @@ pub fn page_ref_get(phys: *const u8) -> u16 {
     if addr < RESERVED_END { return 0; }
     let idx = addr_to_page(addr);
     if idx >= TOTAL_PAGES { return 0; }
-    lock_acquire(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
-    let rc = PAGE_REFCOUNTS.get_mut()[idx as usize];
-    lock_release(PAGE_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(PAGE_LOCK.as_ptr());
+    // SAFETY: `PAGE_REFCOUNTS[idx]` read under `PAGE_LOCK`, which is held until
+    // after the load, so the value cannot be changed in between.
+    let rc = (unsafe { KStatic::get_mut(PAGE_REFCOUNTS.as_ptr()) })[idx as usize];
+    lock_release(PAGE_LOCK.as_ptr());
     rc
 }
 
@@ -269,5 +309,7 @@ pub(crate) fn page_ref_get_locked(phys: *const u8) -> u16 {
     if addr < RESERVED_END { return 0; }
     let idx = addr_to_page(addr);
     if idx >= TOTAL_PAGES { return 0; }
-    PAGE_REFCOUNTS.get_mut()[idx as usize]
+    // SAFETY: `PAGE_REFCOUNTS[idx]` read without taking `PAGE_LOCK`; that is this
+    // function's documented contract — every caller already holds `PAGE_LOCK`.
+    (unsafe { KStatic::get_mut(PAGE_REFCOUNTS.as_ptr()) })[idx as usize]
 }

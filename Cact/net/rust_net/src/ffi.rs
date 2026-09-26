@@ -24,28 +24,41 @@ fn parse_ipv4_host(bytes: &[u8]) -> Option<u32> {
 
 fn cstr_len(ptr: *const c_char) -> usize {
     let mut len = 0usize;
-    // SAFETY: caller owns `ptr`; this scans until '\0'.
-    unsafe {
-        while *ptr.add(len) != 0 {
-            len += 1;
+    loop {
+        // SAFETY: the caller owns `ptr` and guarantees it is NUL-terminated, so
+        // every offset below the terminator is a readable byte of that string.
+        let p = unsafe { ptr.add(len) };
+        // SAFETY: `p` is a byte of the NUL-terminated string above; the scan
+        // stops as soon as it is the terminator.
+        if unsafe { *p } == 0 {
+            break;
         }
+        len += 1;
     }
     len
 }
 
+/// # Safety
+///
+/// `input` must be a NUL-terminated string readable for its whole length, and
+/// `out_host_ip` must point to a writable, properly aligned `u32`.  Both may be
+/// null, in which case the call returns -1 without touching memory.
 #[no_mangle]
-pub extern "C" fn rust_net_parse_ipv4(input: *const c_char, out_host_ip: *mut u32) -> c_int {
+pub unsafe extern "C" fn rust_net_parse_ipv4(input: *const c_char, out_host_ip: *mut u32) -> c_int {
     if input.is_null() || out_host_ip.is_null() {
         return -1;
     }
 
     let len = cstr_len(input);
-    // SAFETY: validated non-null; len computed from NUL-terminated string.
+    // SAFETY: the caller contract (see # Safety) makes `input` a NUL-terminated
+    // string, so `cstr_len` counted exactly the bytes before the terminator and
+    // all `len` of them are readable.
     let bytes = unsafe { core::slice::from_raw_parts(input.cast::<u8>(), len) };
 
     match parse_ipv4_host(bytes) {
         Some(ip) => {
-            // SAFETY: pointer was validated by caller contract above.
+            // SAFETY: the caller contract (see # Safety) makes `out_host_ip` a
+            // writable, aligned `u32`; the null check above excluded null.
             unsafe { *out_host_ip = ip; }
             0
         }
@@ -60,8 +73,14 @@ pub extern "C" fn rust_net_ping_echo_host(dst_ip_host: u32, id: u16, seq: u16) -
 
 /// Send one echo request and block until the matching reply arrives.
 /// Returns the round-trip time in microseconds, or -1 on timeout.
+///
+/// # Safety
+///
+/// `src_ip_out` and `bytes_out` may be null (that result is then dropped), but
+/// each non-null one must point to a writable, properly aligned `u32` that
+/// stays live for the call.
 #[no_mangle]
-pub extern "C" fn rust_net_ping_wait(
+pub unsafe extern "C" fn rust_net_ping_wait(
     dst_ip_host: u32,
     id: u16,
     seq: u16,
@@ -69,5 +88,8 @@ pub extern "C" fn rust_net_ping_wait(
     src_ip_out: *mut u32,
     bytes_out: *mut u32,
 ) -> c_int {
-    ping::ping_wait_host(dst_ip_host, id, seq, timeout_ms, src_ip_out, bytes_out)
+    // SAFETY: the caller contract above makes each non-null output pointer a
+    // writable `u32`; `ping_wait_host` only stores through them after its own
+    // `is_null` checks, and it blocks no longer than `timeout_ms`.
+    unsafe { ping::ping_wait_host(dst_ip_host, id, seq, timeout_ms, src_ip_out, bytes_out) }
 }

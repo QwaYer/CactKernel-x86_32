@@ -48,7 +48,6 @@ pub const MEM_START: u32 = 0x0010_0000;
 ///
 /// TOTAL_PAGES covers every 4K frame from address 0 up to PCI_HOLE_START.
 /// ---------------------------------------------------------------------------
-
 /// Upper boundary of the region managed by PMM (= start of PCI/MMIO hole).
 /// 0xC000_0000 = 3072 MB (Q35 with 4 GB).  Change this if your board has
 /// a different PCI hole location.
@@ -126,6 +125,8 @@ pub const MAP_FAILED: u32 = 0xFFFFFFFF;
 pub const MMAP_BASE: u32 = 0x40000000;
 pub const MMAP_LIMIT: u32 = 0xBF000000;
 pub const MMAP_MAX_REGIONS: usize = 256;
+// The shared array size must stay in step with this crate's constant.
+const _: () = assert!(MMAP_MAX_REGIONS == cact_sync::kernel_types::MMAP_MAX_REGIONS);
 
 pub const SHM_VA_BASE: u32 = 0xA0000000;
 pub const SHM_VA_LIMIT: u32 = 0xB0000000;
@@ -226,33 +227,10 @@ pub struct ShmInfo {
     pub shm_nattch: u32,
 }
 
-#[repr(C)]
-pub struct ProcPageTracker {
-    pub pages: *mut *mut u8,
-    pub count: u32,
-    pub capacity: u32,
-    pub page_dir: *mut u32,
-}
-
-#[repr(C)]
-pub struct MmapRegion {
-    pub base: u32,
-    pub length: u32,
-    pub flags: u32,
-    pub prot: u32,
-    pub fd: i32,
-    pub file_off: u32,
-    pub is_used: u8,
-    /// Handle of the shared backing object (memfd) for MAP_SHARED mappings,
-    /// or 0 for plain private/anon/file mappings.
-    pub shobj: i32,
-}
-
-#[repr(C)]
-pub struct MmapTable {
-    pub regions: [MmapRegion; MMAP_MAX_REGIONS],
-    pub next_base: u32,
-}
+// The kernel-wide definitions live in `cact_sync` (the shared-types crate);
+// re-exported here so an `MmapTable`/`ProcPageTracker` pointer has one Rust
+// type in `sched`, `cact_mm` and every other kernel Rust crate.
+pub use cact_sync::kernel_types::{MmapRegion, MmapTable, ProcPageTracker};
 
 #[repr(C)]
 pub struct TaskFdTable {

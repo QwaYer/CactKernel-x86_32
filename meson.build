@@ -271,6 +271,8 @@ subdir('Cact/kernel/proc/sched')
 subdir('Cact/kernel/memory/rust_mm')
 subdir('Cact/net/rust_net')
 subdir('Cact/drivers/gpu/drm/rust_drm')
+# The one Rust staticlib (all other kernel Rust crates are rlibs).
+subdir('Cact/kernel/kernel_rust')
 subdir('Cact/crypto/hmac_ffi')
 
 # ------------------------------------------------------------------------------

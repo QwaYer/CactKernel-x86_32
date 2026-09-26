@@ -110,13 +110,21 @@ unsafe fn cslice<'a>(p: *const u8, len: u32) -> Option<&'a [u8]> {
         }
         return None;
     }
-    Some(core::slice::from_raw_parts(p, len as usize))
+    // SAFETY: `p` is non-null and the caller guarantees `len` readable bytes at
+    // `p` that outlive the returned reference.
+    Some(unsafe { core::slice::from_raw_parts(p, len as usize) })
 }
 
 /// C ABI for `/dev/crypto`.  Returns 0 when the signature is valid, -1 when it
 /// is not, and -22 when the arguments are malformed or the scheme is unknown.
+///
+/// # Safety
+///
+/// `pubkey`, `msg` and `sig` must each be null or point to at least
+/// `pubkey_len`, `msg_len` and `sig_len` readable bytes respectively, valid for
+/// the duration of the call.
 #[no_mangle]
-pub extern "C" fn cact_sig_verify(
+pub unsafe extern "C" fn cact_sig_verify(
     scheme: u32,
     pubkey: *const u8,
     pubkey_len: u32,
@@ -128,15 +136,13 @@ pub extern "C" fn cact_sig_verify(
     if !scheme_supported(scheme) {
         return -22;
     }
-    // SAFETY: every pointer is validated by cslice before use.
-    let parts = unsafe {
-        (
-            cslice(pubkey, pubkey_len),
-            cslice(msg, msg_len),
-            cslice(sig, sig_len),
-        )
-    };
-    let (Some(pk), Some(m), Some(s)) = parts else {
+    // SAFETY: `pubkey` is null or points to `pubkey_len` readable bytes (caller contract).
+    let pk = unsafe { cslice(pubkey, pubkey_len) };
+    // SAFETY: `msg` is null or points to `msg_len` readable bytes (caller contract).
+    let m = unsafe { cslice(msg, msg_len) };
+    // SAFETY: `sig` is null or points to `sig_len` readable bytes (caller contract).
+    let s = unsafe { cslice(sig, sig_len) };
+    let (Some(pk), Some(m), Some(s)) = (pk, m, s) else {
         return -22;
     };
     if pk.is_empty() || s.is_empty() {

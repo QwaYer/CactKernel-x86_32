@@ -1,5 +1,2 @@
-pub mod marker {
-    pub use core::marker::{Send, Sync, Sized, Unpin, PhantomData};
 pub use core::clone::Clone;
-pub use core::marker::Copy;
-}
+pub use core::marker::{Copy, PhantomData, Send, Sized, Sync, Unpin};

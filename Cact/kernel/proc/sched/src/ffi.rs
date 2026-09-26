@@ -45,19 +45,11 @@ pub struct InterpInfo {
 // read/written under the scheduler spinlock or during boot — callers must
 // hold the appropriate lock (or be in a single-threaded context).
 unsafe extern "C" {
-    pub fn kmalloc(size: usize) -> *mut c_void;
-    pub fn kfree(ptr: *mut c_void);
-    pub fn kalloc() -> *mut c_void;       
-    pub fn free_page(ptr: *mut c_void);
 
     pub fn memory_copy(dst: *mut c_void, src: *const c_void, size: usize);
     pub fn memory_set(dst: *mut c_void, val: u8, size: usize);
 
-    pub fn vmm_create_address_space() -> *mut u32;
-    pub fn vmm_free_address_space(pd: *mut u32);
-    pub fn vmm_fork_address_space(src_pd: *mut u32, dst_pd: *mut u32);
-    pub fn vmm_map(pd: *mut u32, virt: u32, phys: u32, flags: u32);
-    pub fn vmm_sync_kernel_mmio_mappings(pd: *mut u32);
+
 
     pub fn load_elf(
         path:    *const u8,
@@ -83,19 +75,8 @@ unsafe extern "C" {
     pub fn file_ref(f: *mut c_void) -> *mut c_void;
     pub fn file_unref(f: *mut c_void) -> i32;
 
-    pub fn proc_tracker_add(tracker: *mut ProcPageTracker, phys: *mut c_void) -> i32;
-    pub fn proc_free_pages(tracker: *mut ProcPageTracker);
 
-    pub fn mmap_table_init(table: *mut MmapTable);
-    pub fn mmap_table_clone(
-        src: *mut MmapTable,
-        dst: *mut MmapTable,
-        src_pd: *mut u32,
-        dst_pd: *mut u32,
-    );
-    pub fn mmap_table_free(table: *mut MmapTable, pd: *mut u32);
 
-    pub fn shm_detach_all(pid: u32, pd: *mut u32);
 
     pub fn switch_to(old_esp: *mut u32, new_esp: u32);
     pub fn switch_paging(pd: *mut u32);
@@ -115,13 +96,10 @@ unsafe extern "C" {
     pub static terminal_fg_pid: SyncUnsafeCell<u32>;
     pub static sys_sigreturn_num: u32;
     
-    pub fn cpu_syscall_mech() -> u32;
     pub fn syscall_set_esp0(esp: u32);
     pub fn elf_load_exec_symtab(path: *const u8, proc: *mut c_void);
 
     pub fn apic_lapic_id() -> u32;
-    pub fn acpi_available() -> i32;
-    pub fn timer_ticks_get() -> u32;
 
     pub fn set_idt_gate(n: i32, handler: u32);
     pub fn apic_x2apic_mode() -> bool;
@@ -133,6 +111,16 @@ unsafe extern "C" {
     pub fn apic_send_init_ipi(dest_lapic: u32);
     pub fn apic_send_sipi(dest_lapic: u32, vector: u32);
 }
+
+// Value-only kernel helpers: no pointer arguments and no preconditions, so
+// calling them is safe Rust (the *returned* pointer may still need care).
+// The `safe` qualifier is what lets their call sites stay out of `unsafe`.
+unsafe extern "C" {
+    pub safe fn cpu_syscall_mech() -> u32;
+    pub safe fn acpi_available() -> i32;
+    pub safe fn timer_ticks_get() -> u32;
+}
+
 
 #[repr(C)]
 pub struct TssEntry {
@@ -164,32 +152,64 @@ macro_rules! printk {
     };
 }
 
+/// # Safety
+///
+/// `t` must point to a valid, writable `ProcPageTracker`.
 #[inline(always)]
 pub unsafe fn proc_tracker_init(t: *mut ProcPageTracker) {
-    (*t).pages    = core::ptr::null_mut();
-    (*t).count    = 0;
-    (*t).capacity = 0;
-    (*t).page_dir = core::ptr::null_mut();
+    // SAFETY: `t` is a caller-supplied live `ProcPageTracker` (see # Safety), so it can be
+    // reborrowed exclusively for the duration of this call.
+    let t = unsafe { &mut *t };
+    t.pages    = core::ptr::null_mut();
+    t.count    = 0;
+    t.capacity = 0;
+    t.page_dir = core::ptr::null_mut();
 }
 
+/// # Safety
+///
+/// The caller must be in kernel mode and must not disable interrupts in a way that violates an
+/// outer critical-section invariant.
 #[inline(always)]
 pub unsafe fn cli() {
-    core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
+    // SAFETY: `cli` only clears IF on the current CPU and writes no memory.
+    unsafe {
+        core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
+    }
 }
 
+/// # Safety
+///
+/// The caller must be in kernel mode and must only enable interrupts once the state it is
+/// protecting is consistent.
 #[inline(always)]
 pub unsafe fn sti() {
-    core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+    // SAFETY: `sti` only sets IF on the current CPU and writes no memory.
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+    }
 }
 
+/// # Safety
+///
+/// The caller must be in kernel mode with a valid kernel stack.
 #[inline(always)]
 pub unsafe fn read_eflags() -> u32 {
-    let flags: u32;
-    core::arch::asm!("pushfd; pop {}", out(reg) flags, options(nomem, nostack));
-    flags
+    // SAFETY: `pushfd; pop` is stack-balanced and only reports the current EFLAGS value.
+    unsafe {
+        let flags: u32;
+        core::arch::asm!("pushfd; pop {}", out(reg) flags, options(nomem, nostack));
+        flags
+    }
 }
 
+/// # Safety
+///
+/// The caller must be in kernel mode; the instruction has no side effects.
 #[inline(always)]
 pub unsafe fn pause() {
-    core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
+    // SAFETY: `pause` is a hint instruction that touches no memory and no flags.
+    unsafe {
+        core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
+    }
 }

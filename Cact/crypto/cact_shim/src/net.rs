@@ -28,6 +28,9 @@ pub mod tcp {
                 ));
             }
             let max = buf.len().min(u16::MAX as usize) as u16;
+            // SAFETY: `buf` is a live `&mut [u8]` that the caller lent us for the
+            // duration of the call, so `tcp_recv` may write at most `max` (<= its
+            // length) bytes through the pointer, and does not retain it.
             let n = unsafe { tcp_recv(self.sock, buf.as_mut_ptr(), max) };
             if n < 0 {
                 Err(crate::io::Error::new(
@@ -52,6 +55,9 @@ pub mod tcp {
                 ));
             }
             let max = buf.len().min(u16::MAX as usize) as u16;
+            // SAFETY: `buf` is a live `&[u8]` of at least `max` bytes; the kernel
+            // `tcp_send` only reads that many bytes (the `*mut` in its C signature
+            // is not used to mutate the buffer) and does not retain the pointer.
             let n = unsafe { tcp_send(self.sock, buf.as_ptr() as *mut u8, max) };
             if n < 0 {
                 Err(crate::io::Error::new(

@@ -36,61 +36,79 @@ pub(crate) static SHM_LOCK: KStatic<IrqSpinlock> = KStatic::new(IrqSpinlock { sp
 pub(crate) static SHM_INITIALIZED: KStatic<i32> = KStatic::new(0);
 
 pub(crate) fn shm_ensure_init() {
-    if *SHM_INITIALIZED.get_mut() != 0 {
+    // SAFETY: `SHM_INITIALIZED` boot/first-use latch; a racing read can at worst run
+    // the idempotent init twice.
+    if *unsafe { KStatic::get_mut(SHM_INITIALIZED.as_ptr()) } != 0 {
         return;
     }
     // SAFETY: boot-time init.
-    unsafe { irq_spinlock_init(SHM_LOCK.as_ptr() as *mut IrqSpinlock) };
-    let table = SHM_TABLE.get_mut();
-    for i in 0..SHM_MAX_SEGMENTS {
-        table[i].valid = 0;
-        table[i].nattch = 0;
-        table[i].destroy = 0;
+    unsafe { irq_spinlock_init(SHM_LOCK.as_ptr()) };
+    // SAFETY: `SHM_TABLE` reset during single-threaded first-use init.
+    let table = unsafe { KStatic::get_mut(SHM_TABLE.as_ptr()) };
+    for e in table.iter_mut() {
+        e.valid = 0;
+        e.nattch = 0;
+        e.destroy = 0;
     }
-    *SHM_INITIALIZED.get_mut() = 1;
+    // SAFETY: latch set last, after `SHM_LOCK` and the table are initialised.
+    *unsafe { KStatic::get_mut(SHM_INITIALIZED.as_ptr()) } = 1;
 }
 
 pub(crate) fn seg_valid(id: i32) -> bool {
     if id < 1 || id > SHM_MAX_SEGMENTS as i32 {
         return false;
     }
-    SHM_TABLE.get_mut()[(id - 1) as usize].valid != 0
+    // SAFETY: `SHM_TABLE[id-1].valid` read; all `seg_valid` callers hold `SHM_LOCK`.
+    (unsafe { KStatic::get_mut(SHM_TABLE.as_ptr()) })[(id - 1) as usize].valid != 0
 }
 
 pub(crate) fn seg_free(s: *mut ShmSeg) {
-    // SAFETY: s is a valid ShmSeg pointer.
-    unsafe {
-        for i in 0..(*s).num_pages as usize {
-            if !(*s).pages[i].is_null() {
-                free_page((*s).pages[i]);
-                (*s).pages[i] = core::ptr::null_mut();
-            }
+    // SAFETY: `s` is a valid `ShmSeg` pointer (per the caller contract); this
+    // borrow is exclusive for the whole teardown, and `free_page` only touches the
+    // frame it is handed.
+    let s = unsafe { &mut *s };
+    let n = s.num_pages as usize;
+    for slot in s.pages.iter_mut().take(n) {
+        if !slot.is_null() {
+            // SAFETY: the frame is live and PMM-managed; this call releases exactly one reference to it.
+            unsafe { free_page(*slot) };
+            *slot = core::ptr::null_mut();
         }
-        (*s).valid = 0;
-        (*s).nattch = 0;
     }
+    s.valid = 0;
+    s.nattch = 0;
 }
 
 pub(crate) fn find_shm_va(num_pages: u32) -> u32 {
     let size = num_pages * PAGE_SIZE;
     let mut candidate = SHM_VA_BASE;
 
-    // SAFETY: current_task is a valid kernel global.
+    // SAFETY: `current_task` is a valid kernel global.
     let t = unsafe { *current_task.get() };
-    if t.is_null() || unsafe { (*t).proc.is_null() } {
+    if t.is_null() {
+        return 0;
+    }
+    // SAFETY: `t` is the live current task (non-null, checked above), so this
+    // `proc` field read is in bounds.
+    let proc_meta = unsafe { (*t).proc };
+    if proc_meta.is_null() {
         return 0;
     }
 
     while candidate + size <= SHM_VA_LIMIT {
         let mut clash = false;
-        // SAFETY: t is valid.
         for i in 0..TASK_SHM_MAX {
-            let id = unsafe { (*(*t).proc).shm_attachments[i].shm_id };
+            // SAFETY: `proc_meta` is the live `ProcMeta` and `i < TASK_SHM_MAX`, so
+            // this attachment field read is in bounds.
+            let id = unsafe { (*proc_meta).shm_attachments[i].shm_id };
             if id == 0 || !seg_valid(id) {
                 continue;
             }
-            let seg = &SHM_TABLE.get_mut()[(id - 1) as usize];
-            let base = unsafe { (*(*t).proc).shm_attachments[i].shm_vaddr };
+            // SAFETY: `SHM_TABLE[id-1]` read; `seg_valid(id)` passed and the caller holds
+            // `SHM_LOCK`.
+            let seg = &(unsafe { KStatic::get_mut(SHM_TABLE.as_ptr()) })[(id - 1) as usize];
+            // SAFETY: as above, for the attachment's virtual address.
+            let base = unsafe { (*proc_meta).shm_attachments[i].shm_vaddr };
             let end = base + seg.num_pages * PAGE_SIZE;
             let cend = candidate + size;
             if candidate < end && cend > base {
@@ -110,15 +128,21 @@ pub(crate) fn shm_unmap_from(pd: *mut u32, va: u32, num_pages: u32) {
     for i in 0..num_pages {
         let addr = va + i * PAGE_SIZE;
         let pdi = (addr >> 22) & 0x3FF;
-        // SAFETY: pd is valid.
-        let pde = unsafe { *pd.add(pdi as usize) };
+        // SAFETY: `pd` is valid and `pdi` is masked to 10 bits, so this PD entry
+        // pointer is in bounds.
+        let pde_entry = unsafe { pd.add(pdi as usize) };
+        // SAFETY: `pde_entry` points at one initialised PD entry.
+        let pde = unsafe { *pde_entry };
         if pde & PAGE_PRESENT == 0 {
             continue;
         }
         let pt = (pde & !0xFFF) as *mut u32;
         let pti = (addr >> 12) & 0x3FF;
-        // SAFETY: pt is valid.
-        unsafe { *pt.add(pti as usize) = 0; }
+        // SAFETY: `pt` is the live page table named by the present PDE and `pti` is
+        // masked to 10 bits, so this entry pointer is in bounds.
+        let pte_entry = unsafe { pt.add(pti as usize) };
+        // SAFETY: `pte_entry` points at one PTE, which this unmap clears.
+        unsafe { *pte_entry = 0 };
         flush_tlb(addr);
     }
 }
@@ -126,49 +150,48 @@ pub(crate) fn shm_unmap_from(pd: *mut u32, va: u32, num_pages: u32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
     shm_ensure_init();
-    lock_acquire(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(SHM_LOCK.as_ptr());
 
-    let table = SHM_TABLE.get_mut();
+    // SAFETY: `SHM_TABLE` mutated during the whole of `shm_get`, under `SHM_LOCK`.
+    let table = unsafe { KStatic::get_mut(SHM_TABLE.as_ptr()) };
 
     if key != IPC_PRIVATE {
-        for i in 0..SHM_MAX_SEGMENTS {
-            if table[i].valid == 0 || table[i].key != key {
+        for (i, e) in table.iter().enumerate() {
+            if e.valid == 0 || e.key != key {
                 continue;
             }
             if (flags & IPC_CREAT != 0) && (flags & IPC_EXCL != 0) {
-                lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+                lock_release(SHM_LOCK.as_ptr());
                 return -1;
             }
             let id = i as i32 + 1;
-            lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+            lock_release(SHM_LOCK.as_ptr());
             return id;
         }
         if flags & IPC_CREAT == 0 {
-            lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+            lock_release(SHM_LOCK.as_ptr());
             return -1;
         }
     }
 
     if size == 0 {
-        lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(SHM_LOCK.as_ptr());
         return -1;
     }
 
-    let mut slot: i32 = -1;
-    for i in 0..SHM_MAX_SEGMENTS {
-        if table[i].valid == 0 {
-            slot = i as i32;
-            break;
-        }
-    }
+    let slot: i32 = table
+        .iter()
+        .position(|e| e.valid == 0)
+        .map(|i| i as i32)
+        .unwrap_or(-1);
     if slot < 0 {
-        lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(SHM_LOCK.as_ptr());
         return -1;
     }
 
-    let npages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    let npages = size.div_ceil(PAGE_SIZE);
     if npages > SHM_MAX_PAGES as u32 {
-        lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(SHM_LOCK.as_ptr());
         return -1;
     }
 
@@ -176,19 +199,25 @@ pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
     for i in 0..npages as usize {
         let p = kalloc();
         if p.is_null() {
-            for j in 0..i {
-                free_page(s.pages[j]);
-                s.pages[j] = core::ptr::null_mut();
+            for slot in s.pages.iter_mut().take(i) {
+                // SAFETY: the frame is live and PMM-managed; this call releases exactly one reference to it.
+                unsafe { free_page(*slot) };
+                *slot = core::ptr::null_mut();
             }
-            lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+            lock_release(SHM_LOCK.as_ptr());
             return -1;
         }
         zero_page(p);
         s.pages[i] = p;
     }
 
-    let cur_pid = if !unsafe { *current_task.get() }.is_null() {
-        unsafe { (*(*current_task.get())).pid }
+    // SAFETY: `current_task` is a valid kernel global; it may be null, which the
+    // test below handles.
+    let cur_task = unsafe { *current_task.get() };
+    let cur_pid = if !cur_task.is_null() {
+        // SAFETY: `cur_task` is the live current task (non-null, checked above), so
+        // this `pid` field read is in bounds.
+        unsafe { (*cur_task).pid }
     } else {
         0
     };
@@ -203,7 +232,7 @@ pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
     s.valid = 1;
     s.destroy = 0;
 
-    lock_release(SHM_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(SHM_LOCK.as_ptr());
     slot + 1
 }
 

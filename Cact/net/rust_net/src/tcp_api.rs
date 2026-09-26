@@ -13,24 +13,30 @@ use crate::types::*;
 
 #[no_mangle]
 pub extern "C" fn tcp_socket() -> i32 {
+    // SAFETY: `STACK_READY` is a `static mut bool` set by `stack_init` and
+    // cleared by `stack_teardown`; a byte load cannot tear, and reading it as
+    // false fails the call closed.
     if !unsafe { stack::STACK_READY } {
         return -1;
     }
+    // SAFETY: `tcp_sockets` is the kernel-wide TCP slot table; this takes
+    // `tcp_lock` and scans the fixed-size array end to end, so the accesses are
+    // in bounds and serialized against the poll thread.
     let idx = unsafe {
         tcp_lock();
         let mut found = -1i32;
-        for i in 0..TCP_MAX_SOCKETS {
-            if tcp_sockets[i].used == 0 {
-                tcp_sockets[i].used = 1;
-                tcp_sockets[i].state = TCP_CLOSED;
-                tcp_sockets[i].rx_head = 0;
-                tcp_sockets[i].rx_tail = 0;
-                tcp_sockets[i].listen_parent = -1;
-                tcp_sockets[i].accept_ready = 0;
-                tcp_sockets[i].on_data = core::ptr::null_mut();
-                tcp_sockets[i].on_event = core::ptr::null_mut();
-                tcp_sockets[i].nodelay = 0;
-                tcp_sockets[i].keepalive = 0;
+        for (i, slot) in (*core::ptr::addr_of_mut!(tcp_sockets)).iter_mut().enumerate() {
+            if slot.used == 0 {
+                slot.used = 1;
+                slot.state = TCP_CLOSED;
+                slot.rx_head = 0;
+                slot.rx_tail = 0;
+                slot.listen_parent = -1;
+                slot.accept_ready = 0;
+                slot.on_data = core::ptr::null_mut();
+                slot.on_event = core::ptr::null_mut();
+                slot.nodelay = 0;
+                slot.keepalive = 0;
                 found = i as i32;
                 break;
             }
@@ -42,23 +48,32 @@ pub extern "C" fn tcp_socket() -> i32 {
         return -1;
     }
     let r = stack::with_iface_sockets(|_iface, socks| {
-        unsafe {
+        // Runs inside `with_iface_sockets` (stack lock held); `tcp_lock`
+        // serializes the `TCP_HANDLE` update and `alloc_tcp_smoltcp` against the
+        // poll thread, and `idx` was bounds-checked above.
+        {
             let h = match alloc_tcp_smoltcp(idx as usize, socks) {
                 Some(h) => h,
                 None => {
                     tcp_lock();
-                    tcp_sockets[idx as usize].used = 0;
+                    // SAFETY: `idx` is bounds-checked above and `tcp_lock` is
+                    // held, so this row store is exclusive.
+                    unsafe { tcp_sockets[idx as usize].used = 0 };
                     tcp_unlock();
                     return -1;
                 }
             };
             tcp_lock();
-            TCP_HANDLE[idx as usize] = Some(h);
+            // SAFETY: `TCP_HANDLE` is written under `tcp_lock`, as every access
+            // is.
+            unsafe { TCP_HANDLE[idx as usize] = Some(h) };
             tcp_unlock();
             idx as i32
         }
     });
     r.unwrap_or_else(|| {
+        // SAFETY: same table, same `tcp_lock`; this only rolls back the `used` flag of
+        // the slot this call owns (`idx` bounds-checked above).
         unsafe {
             tcp_lock();
             tcp_sockets[idx as usize].used = 0;
@@ -81,6 +96,8 @@ const ETIMEDOUT: i32 = 110;
 /// answer.  Block until that happens — otherwise the caller's very next
 /// `write()` lands on a socket that cannot send yet and fails with a bare -1.
 fn wait_connected(sock: i32) -> i32 {
+    // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+    // counter; it takes no pointers and is callable from task context.
     let deadline = unsafe { ffi_kernel::timer_ticks_get() }.saturating_add(CONNECT_TIMEOUT_TICKS);
     loop {
         match crate::tcp::with_tcp_socket(sock, |s| s.state()) {
@@ -91,10 +108,14 @@ fn wait_connected(sock: i32) -> i32 {
             }
             _ => {}
         }
+        // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+        // counter; it takes no pointers and is callable from task context.
         if unsafe { ffi_kernel::timer_ticks_get() } >= deadline {
             return -ETIMEDOUT;
         }
-        unsafe { ffi_kernel::sched_sleep_ticks(1) };
+        // SAFETY: `sched_sleep_ticks` is a kernel C service taking a plain tick
+        // count; it takes no pointers and is callable from task context.
+        unsafe { sched::timer_wheel::sched_sleep_ticks(1) };
     }
 }
 
@@ -103,6 +124,8 @@ pub extern "C" fn tcp_connect(sock: i32, dst_ip: u32, dst_port: u16) -> i32 {
     if sock < 0 || sock as usize >= TCP_MAX_SOCKETS {
         return -1;
     }
+    // SAFETY: `TCP_HANDLE` is read under `tcp_lock` and `sock` was bounds-checked
+    // above, so the read is in bounds and cannot race the poll thread.
     let h = unsafe {
         tcp_lock();
         let h = TCP_HANDLE[sock as usize];
@@ -120,16 +143,26 @@ pub extern "C" fn tcp_connect(sock: i32, dst_ip: u32, dst_port: u16) -> i32 {
         // A local port set by CACT_SOCKCTL_BIND wins over the ephemeral one:
         // bind() has to actually bind for connect() too, otherwise a caller
         // that asked for a specific source port silently got another one.
-        let local_port = unsafe {
+        // `tcp_sockets[sock]` and the shared `NEXT_EPHEMERAL` counter are touched
+        // under `tcp_lock` (the counter's read/modify/write must not race another
+        // `connect`), and `sock` was bounds-checked above.
+        let local_port = {
             tcp_lock();
-            let bound = tcp_sockets[sock as usize].local_port;
+            // SAFETY: `sock` is bounds-checked above and `tcp_lock` is held, so
+            // this slot read cannot race another `connect`.
+            let bound = unsafe { tcp_sockets[sock as usize].local_port };
             let p = if bound != 0 {
                 bound
             } else {
-                let p = NEXT_EPHEMERAL;
-                NEXT_EPHEMERAL = NEXT_EPHEMERAL.wrapping_add(1);
-                if NEXT_EPHEMERAL < 49152 {
-                    NEXT_EPHEMERAL = 49152;
+                // SAFETY: `NEXT_EPHEMERAL` is read under `tcp_lock`, so the
+                // ephemeral counter cannot race another `connect`.
+                let p = unsafe { NEXT_EPHEMERAL };
+                let next = p.wrapping_add(1);
+                // SAFETY: the advanced counter is stored under the same lock.
+                unsafe { NEXT_EPHEMERAL = next };
+                if next < 49152 {
+                    // SAFETY: the wrap-around clamp is stored under the same lock.
+                    unsafe { NEXT_EPHEMERAL = 49152 };
                 }
                 p
             };
@@ -157,6 +190,8 @@ pub extern "C" fn tcp_listen(sock: i32, local_port: u16) -> i32 {
     if sock < 0 || sock as usize >= TCP_MAX_SOCKETS {
         return -1;
     }
+    // SAFETY: `TCP_HANDLE` is read under `tcp_lock`, and `sock` was bounds-checked
+    // above, so the read is in bounds and cannot race the poll thread.
     let h = unsafe {
         tcp_lock();
         let h = TCP_HANDLE[sock as usize];
@@ -176,11 +211,21 @@ pub extern "C" fn tcp_listen(sock: i32, local_port: u16) -> i32 {
     r.unwrap_or(-1)
 }
 
+/// Send `len` bytes from `data` on TCP socket `sock`.  Returns the number of
+/// bytes smoltcp accepted (may be a short count, 0 when nothing fit), or -1 on
+/// error.
+///
+/// # Safety
+///
+/// `data` must point to `len` readable bytes that stay live for the duration of
+/// the call (it may be null, in which case the call returns -1).
 #[no_mangle]
-pub extern "C" fn tcp_send(sock: i32, data: *mut u8, len: u16) -> i32 {
+pub unsafe extern "C" fn tcp_send(sock: i32, data: *mut u8, len: u16) -> i32 {
     if sock < 0 || sock as usize >= TCP_MAX_SOCKETS || data.is_null() {
         return -1;
     }
+    // SAFETY: `TCP_HANDLE` is read under `tcp_lock`, and `sock` was bounds-checked
+    // above, so the read is in bounds and cannot race the poll thread.
     let h = unsafe {
         tcp_lock();
         let h = TCP_HANDLE[sock as usize];
@@ -195,6 +240,9 @@ pub extern "C" fn tcp_send(sock: i32, data: *mut u8, len: u16) -> i32 {
         if !s.may_send() {
             return -1;
         }
+        // SAFETY: `data` is non-null (checked above) and, per this function's caller
+        // contract (see # Safety), points to `len` readable bytes that stay live for
+        // the call, so the slice is valid.
         unsafe {
             let sl = core::slice::from_raw_parts(data, len as usize);
             // Hand back exactly what smoltcp enqueued.  It can be a short count
@@ -239,6 +287,8 @@ fn wait_close_settled(h: SocketHandle) -> bool {
     {
         return false;
     }
+    // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+    // counter; it takes no pointers and is callable from task context.
     let deadline = unsafe { ffi_kernel::timer_ticks_get() }.saturating_add(CLOSE_TIMEOUT_TICKS);
     loop {
         // Poll here rather than waiting for `net_poll_task`: the timer task
@@ -250,10 +300,14 @@ fn wait_close_settled(h: SocketHandle) -> bool {
             Some(_) => {}
             None => return false,
         }
+        // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+        // counter; it takes no pointers and is callable from task context.
         if unsafe { ffi_kernel::timer_ticks_get() } >= deadline {
             return false;
         }
-        unsafe { ffi_kernel::sched_sleep_ticks(1) };
+        // SAFETY: `sched_sleep_ticks` is a kernel C service taking a plain tick
+        // count; it takes no pointers and is callable from task context.
+        unsafe { sched::timer_wheel::sched_sleep_ticks(1) };
     }
 }
 
@@ -263,6 +317,9 @@ pub extern "C" fn tcp_close(sock: i32) -> i32 {
         return -1;
     }
     let i = sock as usize;
+    // SAFETY: `TCP_HANDLE[i]` is read under `tcp_lock`, and `i` derives from the
+    // bounds check at the top of the function, so the read is in bounds and cannot
+    // race the poll thread.
     let handle = unsafe {
         tcp_lock();
         let h = TCP_HANDLE[i];
@@ -281,16 +338,19 @@ pub extern "C" fn tcp_close(sock: i32) -> i32 {
         }
         // Unlink the handle before removing the socket: `stack_poll`'s mirror
         // update resolves the handle, and smoltcp panics on a stale one.
+        // SAFETY: clears `TCP_HANDLE[i]` under `tcp_lock` so `stack_poll`'s mirror
+        // update cannot resolve the handle while the socket is being removed.
         unsafe {
             tcp_lock();
             TCP_HANDLE[i] = None;
             tcp_unlock();
         }
         let _ = stack::with_iface_sockets(|_iface, socks| {
-            let s = socks.remove(h);
-            core::mem::drop(s);
+            let _ = socks.remove(h);
         });
     }
+    // SAFETY: resets slot `i` of the fixed-size `tcp_sockets` table under
+    // `tcp_lock`; `i` comes from the bounds check at the top of the function.
     unsafe {
         tcp_lock();
         tcp_sockets[i] = TcpSocket {
@@ -325,6 +385,8 @@ pub extern "C" fn tcp_shutdown_wr(sock: i32) -> i32 {
     if sock < 0 || sock as usize >= TCP_MAX_SOCKETS {
         return -1;
     }
+    // SAFETY: `TCP_HANDLE` is read under `tcp_lock`, and `sock` was bounds-checked
+    // above, so the read is in bounds and cannot race the poll thread.
     let h = unsafe {
         tcp_lock();
         let h = TCP_HANDLE[sock as usize];
@@ -342,11 +404,20 @@ pub extern "C" fn tcp_shutdown_wr(sock: i32) -> i32 {
     r.unwrap_or(-1)
 }
 
+/// Receive up to `max_len` bytes into `buf` on TCP socket `sock`.  Returns the
+/// byte count, 0 when nothing is buffered yet, or -1 on error.
+///
+/// # Safety
+///
+/// `buf` must point to `max_len` writable bytes that stay live for the duration
+/// of the call (it may be null, in which case the call returns -1).
 #[no_mangle]
-pub extern "C" fn tcp_recv(sock: i32, buf: *mut u8, max_len: u16) -> i32 {
+pub unsafe extern "C" fn tcp_recv(sock: i32, buf: *mut u8, max_len: u16) -> i32 {
     if sock < 0 || sock as usize >= TCP_MAX_SOCKETS || buf.is_null() {
         return -1;
     }
+    // SAFETY: `TCP_HANDLE` is read under `tcp_lock`, and `sock` was bounds-checked
+    // above, so the read is in bounds and cannot race the poll thread.
     let h = unsafe {
         tcp_lock();
         let h = TCP_HANDLE[sock as usize];
@@ -361,6 +432,9 @@ pub extern "C" fn tcp_recv(sock: i32, buf: *mut u8, max_len: u16) -> i32 {
         if !s.may_recv() {
             return 0;
         }
+        // SAFETY: `buf` is non-null (checked above) and, per this function's caller
+        // contract (see # Safety), points to `max_len` writable bytes that stay live
+        // for the call, so the mutable slice is valid.
         unsafe {
             let sl = core::slice::from_raw_parts_mut(buf, max_len as usize);
             match s.recv_slice(sl) {

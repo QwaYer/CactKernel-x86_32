@@ -5,10 +5,11 @@ edition = "2021"
 
 [dependencies]
 cact_sync = { path = "../../sync" }
+cact_mm   = { path = "../../memory/rust_mm" }
 
 [lib]
 name       = "sched"
-crate-type = ["staticlib"]
+crate-type = ["lib"]
 
 [profile.release]
 panic           = "abort"

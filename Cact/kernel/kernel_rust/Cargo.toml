@@ -1,0 +1,31 @@
+[package]
+name    = "cact_kernel"
+version = "0.1.0"
+edition = "2021"
+
+# The kernel's Rust crates are all rlibs now (so they can `use` each other as
+# ordinary Rust).  This crate is the single staticlib: it depends on all of
+# them and is the one archive meson links into kernel.bin, which is also why
+# the C ABI surface and the graph's single lang items live on this side.
+[lib]
+name       = "cact_kernel"
+crate-type = ["staticlib"]
+
+[dependencies]
+cact_mm  = { path = "../memory/rust_mm" }
+sched    = { path = "../proc/sched" }
+cact_drm = { path = "../../drivers/gpu/drm/rust_drm" }
+cact_net = { path = "../../net/rust_net" }
+cact_hmac_ffi = { path = "../../crypto/hmac_ffi" }
+
+[profile.release]
+panic           = "abort"
+opt-level       = 2
+lto             = true
+codegen-units   = 1
+overflow-checks = true
+debug           = false
+
+[profile.dev]
+panic           = "abort"
+overflow-checks = true

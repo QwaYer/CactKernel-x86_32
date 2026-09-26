@@ -3,14 +3,11 @@
 //! All symbols are implemented in C and linked into the final kernel image.
 
 use core::cell::SyncUnsafeCell;
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_char, c_int};
 
-use crate::types::{MacAddr, Semaphore, Skb, VfsNode};
+use crate::types::{MacAddr, Skb, VfsNode};
 
 unsafe extern "C" {
-    pub fn kmalloc(size: usize) -> *mut c_void;
-    pub fn kmalloc_aligned(size: usize, align: u32) -> *mut c_void;
-    pub fn kfree(ptr: *mut c_void);
 
     pub fn printk(s: *mut c_char);
     pub fn printk_color(s: *mut c_char, color: u32);
@@ -18,23 +15,15 @@ unsafe extern "C" {
 
     pub fn itoa(v: c_int, out: *mut c_char);
 
-    pub fn sema_init(s: *mut Semaphore, val: c_int);
-    pub fn down(s: *mut Semaphore);
-    pub fn up(s: *mut Semaphore);
 
-    pub fn create_task(entry: extern "C" fn()) -> *mut c_void;
     pub fn timer_ticks_get() -> u32;
-    pub fn sched_sleep_ticks(ticks: u32);
     pub fn ktime_get_usec() -> u64;
     pub fn ktime_busy_wait_us(us: u64);
 
     /// Pending, unmasked signal on the current task; blocking waits poll it so a
     /// task stuck in a socket read can still be interrupted (Ctrl+C).
-    pub fn task_signal_pending_current() -> u32;
 
     /// IRQ-saving spinlock (kernel `irq_spinlock_t`: a spin word + saved flags).
-    pub fn irq_spinlock_acquire(lock: *mut c_void);
-    pub fn irq_spinlock_release(lock: *mut c_void);
 
     pub fn read_vfs(node: *mut VfsNode, off: u32, size: u32, buf: *mut c_char) -> c_int;
     pub fn write_vfs(node: *mut VfsNode, off: u32, size: u32, buf: *mut c_char) -> c_int;
@@ -46,6 +35,13 @@ unsafe extern "C" {
 
     pub static terminal_fg_pid: SyncUnsafeCell<u32>;
 }
+
+pub use cact_mm::kmalloc;
+// The scheduler's semaphore/lock entry points are `cact_sync`'s own
+// functions (Rust), called here by crate path instead of by C ABI.
+pub use cact_sync::{down, irq_spinlock_acquire, irq_spinlock_release, sema_init, up};
+pub use cact_mm::kmalloc_aligned;
+pub use cact_mm::kfree;
 
 pub const LOG_OK: c_int = 0;
 pub const LOG_WARN: c_int = 1;
@@ -72,6 +68,9 @@ pub fn klog_static(level: c_int, msg: &'static [u8]) {
     buf[2..2 + len].copy_from_slice(&msg[..len]);
     buf[2 + len] = b'\n';
     buf[3 + len] = 0;
+    // SAFETY: `buf` is a local array that is NUL-terminated at `buf[3 + len]`
+    // (len is capped at `buf.len() - 3`), so `printk`'s C-string contract is
+    // met, and the array outlives the call.
     unsafe {
         printk(buf.as_mut_ptr().cast());
     }
@@ -81,6 +80,18 @@ pub fn mac_equal(a: &MacAddr, b: &MacAddr) -> bool {
     a.b == b.b
 }
 
+/// # Safety
+///
+/// `skb` must be non-null and point to a live, initialised [`Skb`] — one
+/// returned by `skb_alloc` or received by a NIC driver — that the caller may
+/// access for the duration of the call, with `data_offset` maintained within
+/// `SKB_MAX_SIZE` (which every producer in this crate guarantees).
 pub unsafe fn skb_data_ptr(skb: *mut Skb) -> *mut u8 {
-    (*skb).data.as_mut_ptr().add((*skb).data_offset as usize)
+    // SAFETY: the caller contract (see # Safety) makes `skb` a valid pointer to
+    // a live `Skb` that this call borrows and does not let escape.
+    let s = unsafe { &mut *skb };
+    let offset = s.data_offset;
+    // SAFETY: `offset` is the validated `data_offset`, which producers keep
+    // below `SKB_MAX_SIZE`, so the resulting pointer stays inside `s.data`.
+    unsafe { s.data.as_mut_ptr().add(offset as usize) }
 }

@@ -17,8 +17,7 @@ use crate::ffi::{drm_copy_in, drm_copy_out, printk};
 use crate::structs::{DrmDevice, DrmFile, GemObject, IrqSpinlock};
 
 extern "C" {
-    fn kmalloc(size: u32) -> *mut c_void;
-    fn kfree(ptr: *mut c_void);
+
     fn irq_spinlock_acquire(lock: *mut IrqSpinlock);
     fn irq_spinlock_release(lock: *mut IrqSpinlock);
 
@@ -39,7 +38,9 @@ extern "C" {
 /// Address of the device's bookkeeping lock.
 #[inline]
 unsafe fn lock_ptr(dev: *mut DrmDevice) -> *mut IrqSpinlock {
-    core::ptr::addr_of_mut!((*dev).lock)
+    // SAFETY: `dev` is a live device owned by the caller; `addr_of_mut!` only
+    // forms the address of its `lock` field and never creates a reference.
+    unsafe { core::ptr::addr_of_mut!((*dev).lock) }
 }
 
 /* ── object lifecycle ───────────────────────────────────────────────────── */
@@ -65,50 +66,72 @@ pub extern "C" fn drm_gem_create(dev: *mut DrmDevice, size: u32) -> *mut GemObje
     if dev.is_null() || size == 0 {
         return core::ptr::null_mut();
     }
-    // SAFETY: `dev` is the caller's live device.
-    unsafe {
-        let obj = kmalloc(core::mem::size_of::<GemObject>() as u32) as *mut GemObject;
-        if obj.is_null() {
-            return core::ptr::null_mut();
-        }
-        core::ptr::write_bytes(obj, 0, 1);
+    let obj = cact_mm::kmalloc(core::mem::size_of::<GemObject>() as u32) as *mut GemObject;
+    if obj.is_null() {
+        return core::ptr::null_mut();
+    }
+    // SAFETY: `obj` is the fresh `kmalloc` object just checked non-null, so zeroing
+    // one `GemObject` covers exactly that allocation.
+    unsafe { core::ptr::write_bytes(obj, 0, 1) };
 
-        let rounded = (size + 4095) & !4095u32;
+    let rounded = (size + 4095) & !4095u32;
 
-        let h = memfd_create(b"drm-gem\0".as_ptr(), 7, 0);
-        if h <= 0 {
-            kfree(obj as *mut c_void);
-            return core::ptr::null_mut();
-        }
-        if memfd_truncate(h, rounded) != 0 {
-            memfd_close(h);
-            kfree(obj as *mut c_void);
-            return core::ptr::null_mut();
-        }
+    // SAFETY: `memfd_create` is a kernel C service; the name is a NUL-terminated
+    // literal and the flags are the values the C path used.
+    let h = unsafe { memfd_create(c"drm-gem".as_ptr() as *const u8, 7, 0) };
+    if h <= 0 {
+        // SAFETY: `obj` is the object allocated above and not yet published.
+        unsafe { cact_mm::kfree(obj as *mut u8) };
+        return core::ptr::null_mut();
+    }
+    // SAFETY: `h` is the live memfd just created and `rounded` its requested size.
+    if unsafe { memfd_truncate(h, rounded) } != 0 {
+        // SAFETY: `h` is the live memfd; `obj` is the un-published object.
+        unsafe { memfd_close(h) };
+        // SAFETY: as above.
+        unsafe { cact_mm::kfree(obj as *mut u8) };
+        return core::ptr::null_mut();
+    }
 
-        (*obj).dev = dev;
-        (*obj).memfd = h;
-        (*obj).size = rounded;
-        (*obj).refcount = 1;
+    {
+        // SAFETY: `obj` is the fresh, exclusively-owned object; this borrow is
+        // consumed by the field stores below and ends before the driver hook.
+        let obj_ref = unsafe { &mut *obj };
+        obj_ref.dev = dev;
+        obj_ref.memfd = h;
+        obj_ref.size = rounded;
+        obj_ref.refcount = 1;
+    }
 
-        /* Let the driver refuse or constrain the object (e.g. a device that
-         * needs physically contiguous scanout). */
-        let ops = (*dev).ops;
-        if !ops.is_null() {
-            if let Some(create) = (*ops).gem_create {
-                if create(dev, obj) != 0 {
-                    memfd_close(h);
-                    kfree(obj as *mut c_void);
-                    return core::ptr::null_mut();
-                }
+    /* Let the driver refuse or constrain the object (e.g. a device that needs
+     * physically contiguous scanout). */
+    // SAFETY: `dev` is the caller's live device; this copies its ops pointer.
+    let ops = unsafe { (*dev).ops };
+    if !ops.is_null() {
+        // SAFETY: `ops` is the driver's live ops table; this copies the `gem_create`
+        // fn pointer only.
+        let create = unsafe { (*ops).gem_create };
+        if let Some(create) = create {
+            // `create` is the plain `extern "C"` driver hook and `dev`/`obj` are
+            // the live device and object it expects.
+            if create(dev, obj) != 0 {
+                // SAFETY: on refusal the object and its memfd are still ours.
+                unsafe { memfd_close(h) };
+                // SAFETY: as above.
+                unsafe { cact_mm::kfree(obj as *mut u8) };
+                return core::ptr::null_mut();
             }
         }
-
-        irq_spinlock_acquire(lock_ptr(dev));
-        drm_gem_link(dev, obj);
-        irq_spinlock_release(lock_ptr(dev));
-        obj
     }
+
+    // SAFETY: `lock_ptr`'s contract: `dev` is the caller's live device.
+    let lock = unsafe { lock_ptr(dev) };
+    // SAFETY: `lock` is the device's lock word; the pair brackets the link update.
+    unsafe { irq_spinlock_acquire(lock) };
+    drm_gem_link(dev, obj);
+    // SAFETY: as above — releasing the same lock.
+    unsafe { irq_spinlock_release(lock) };
+    obj
 }
 
 /// Take a reference.
@@ -117,11 +140,11 @@ pub extern "C" fn drm_gem_ref(obj: *mut GemObject) -> c_int {
     if obj.is_null() {
         return -1;
     }
-    // SAFETY: caller's object.
-    unsafe {
-        (*obj).refcount += 1;
-        (*obj).refcount
-    }
+    // SAFETY: `obj` is the caller's live object (checked non-null above); this
+    // borrow is consumed by the counter update and the read that follows it.
+    let obj = unsafe { &mut *obj };
+    obj.refcount += 1;
+    obj.refcount
 }
 
 /// Drop a reference; the last one frees the object and its memfd.
@@ -130,38 +153,59 @@ pub extern "C" fn drm_gem_unref(obj: *mut GemObject) -> c_int {
     if obj.is_null() {
         return -1;
     }
-    // SAFETY: caller's object; the refcount decides whether it is still live.
-    unsafe {
-        if (*obj).refcount == 0 {
-            return -1;
-        }
-        (*obj).refcount -= 1;
-        if (*obj).refcount > 0 {
-            return (*obj).refcount;
-        }
-
-        let dev = (*obj).dev;
-        let ops = (*dev).ops;
-        if !ops.is_null() {
-            if let Some(free) = (*ops).gem_free {
-                free(obj);
-            }
-        }
-
-        irq_spinlock_acquire(lock_ptr(dev));
-        /* Drop the map offsets first: a client may still have the object
-         * mapped, but no new mmap may resolve to it.  Same for its global
-         * name. */
-        (*dev).map_offsets.retain(|_, &mut v| v != obj);
-        (*dev).flink.retain(|_, &mut v| v != obj);
-        (*dev).gem_list.retain(|&p| p != obj);
-        irq_spinlock_release(lock_ptr(dev));
-
-        if (*obj).memfd > 0 {
-            memfd_close((*obj).memfd);
-        }
-        kfree(obj as *mut c_void);
+    // SAFETY: `obj` is the caller's live object (checked non-null above), so this
+    // reference-count read is in bounds.
+    if unsafe { (*obj).refcount } == 0 {
+        return -1;
     }
+    // SAFETY: as above — dropping one reference.
+    unsafe { (*obj).refcount -= 1 };
+    // SAFETY: as above — re-reading the count.
+    if unsafe { (*obj).refcount } > 0 {
+        // SAFETY: as above.
+        return unsafe { (*obj).refcount };
+    }
+
+    // SAFETY: `obj` is the live object; this reads its device pointer.
+    let dev = unsafe { (*obj).dev };
+    // SAFETY: `dev` is the object's live device; this copies its ops pointer.
+    let ops = unsafe { (*dev).ops };
+    if !ops.is_null() {
+        // SAFETY: `ops` is the driver's live ops table; this copies the `gem_free`
+        // fn pointer only.
+        let free = unsafe { (*ops).gem_free };
+        if let Some(free) = free {
+            // `free` is the plain `extern "C"` driver hook and `obj` the live object
+            // it is releasing.
+            free(obj);
+        }
+    }
+
+    // SAFETY: `lock_ptr`'s contract: `dev` is the object's live device.
+    let lock = unsafe { lock_ptr(dev) };
+    // SAFETY: `lock` is the device's lock word; the pair brackets the unlink below.
+    unsafe { irq_spinlock_acquire(lock) };
+    /* Drop the map offsets first: a client may still have the object mapped, but
+     * no new mmap may resolve to it.  Same for its global name. */
+    // SAFETY: `dev` is the live device; this drops the object from its map-offset
+    // table while the lock is held.
+    unsafe { (*dev).map_offsets.retain(|_, &mut v| v != obj) };
+    // SAFETY: as above — the flink table.
+    unsafe { (*dev).flink.retain(|_, &mut v| v != obj) };
+    // SAFETY: as above — the object list.
+    unsafe { (*dev).gem_list.retain(|&p| p != obj) };
+    // SAFETY: as above — releasing the same lock.
+    unsafe { irq_spinlock_release(lock) };
+
+    // SAFETY: `obj` is the live object; this reads its memfd handle.
+    let memfd = unsafe { (*obj).memfd };
+    if memfd > 0 {
+        // SAFETY: that memfd was created by `drm_gem_create` and is closed once here.
+        unsafe { memfd_close(memfd) };
+    }
+    // SAFETY: the object's last reference was just dropped, so reclaiming its
+    // allocation is the matching free.
+    unsafe { cact_mm::kfree(obj as *mut u8) };
     0
 }
 
@@ -195,17 +239,20 @@ pub extern "C" fn drm_gem_vaddr(obj: *mut GemObject, off: u32) -> *mut c_void {
     if obj.is_null() {
         return core::ptr::null_mut();
     }
-    // SAFETY: caller's object; `off` is range-checked before use.
-    unsafe {
-        if off >= (*obj).size {
-            return core::ptr::null_mut();
-        }
-        let page = memfd_get_page((*obj).memfd, off / 4096) as *mut u8;
-        if page.is_null() {
-            return core::ptr::null_mut();
-        }
-        page.add((off & 4095) as usize) as *mut c_void
+    // SAFETY: `obj` is the caller's live object (checked non-null above), so this
+    // `size` read is in bounds.
+    if off >= unsafe { (*obj).size } {
+        return core::ptr::null_mut();
     }
+    // SAFETY: `obj` is the live object; this reads its memfd handle.
+    let memfd = unsafe { (*obj).memfd };
+    // SAFETY: `memfd` is that object's live memfd and `off / 4096` its page index.
+    let page = unsafe { memfd_get_page(memfd, off / 4096) } as *mut u8;
+    if page.is_null() {
+        return core::ptr::null_mut();
+    }
+    // SAFETY: `page` is a live 4 KiB frame and `off & 4095` indexes within it.
+    unsafe { page.add((off & 4095) as usize) as *mut c_void }
 }
 
 /* ── mmap offsets ───────────────────────────────────────────────────────── */
@@ -227,9 +274,13 @@ pub extern "C" fn drm_gem_find_map_offset(dev: *mut DrmDevice, offset: u32) -> *
 
 /// The caller holds the device lock.
 unsafe fn drm_gem_alloc_map_offset(dev: *mut DrmDevice, obj: *mut GemObject) -> u32 {
-    let off = (*dev).next_map_offset;
-    (*dev).next_map_offset = off.wrapping_add(0x1000_0000); // stay page aligned
-    (*dev).map_offsets.insert(off, obj);
+    // SAFETY: the caller holds the device lock (see the function's contract), so
+    // `map_offsets` has no concurrent writer; `dev` is live and this borrow is
+    // exclusive.
+    let dev = unsafe { &mut *dev };
+    let off = dev.next_map_offset;
+    dev.next_map_offset = off.wrapping_add(0x1000_0000); // stay page aligned
+    dev.map_offsets.insert(off, obj);
     off
 }
 
@@ -244,17 +295,23 @@ pub extern "C" fn drm_gem_map_offset(
     if dev.is_null() || obj.is_null() || offset_out.is_null() {
         return -22;
     }
-    // SAFETY: caller's device and object.
-    unsafe {
-        let mut off = (*obj).map_offset;
-        if off == 0 {
-            irq_spinlock_acquire(lock_ptr(dev));
-            off = drm_gem_alloc_map_offset(dev, obj);
-            irq_spinlock_release(lock_ptr(dev));
-            (*obj).map_offset = off;
-        }
-        *offset_out = off as u64;
+    // SAFETY: `obj` is the caller's live object (checked non-null above); this reads
+    // its cached map offset.
+    let mut off = unsafe { (*obj).map_offset };
+    if off == 0 {
+        // SAFETY: `lock_ptr`'s contract: `dev` is the caller's live device.
+        let lock = unsafe { lock_ptr(dev) };
+        // SAFETY: `lock` is the device's lock word; the pair brackets the allocation.
+        unsafe { irq_spinlock_acquire(lock) };
+        // SAFETY: `drm_gem_alloc_map_offset`'s contract: the device lock is held.
+        off = unsafe { drm_gem_alloc_map_offset(dev, obj) };
+        // SAFETY: as above — releasing the same lock.
+        unsafe { irq_spinlock_release(lock) };
+        // SAFETY: `obj` is the live object; caching the freshly-allocated offset.
+        unsafe { (*obj).map_offset = off };
     }
+    // SAFETY: `offset_out` is the caller's out-parameter for the offset.
+    unsafe { *offset_out = off as u64 };
     0
 }
 
@@ -270,16 +327,25 @@ pub extern "C" fn drm_gem_handle_create(
     if file.is_null() || obj.is_null() || handle_out.is_null() {
         return -1;
     }
-    // SAFETY: caller's file and object.
-    unsafe {
-        let dev = (*file).dev;
-        irq_spinlock_acquire(lock_ptr(dev));
-        (*file).next_handle += 1;
-        let handle = (*file).next_handle;
-        (*file).handles.insert(handle, obj);
+    // SAFETY: `file` is the caller's live client (checked non-null above); this
+    // reads its device pointer.
+    let dev = unsafe { (*file).dev };
+    // SAFETY: `lock_ptr`'s contract: `dev` is the client's live device.
+    let lock = unsafe { lock_ptr(dev) };
+    // SAFETY: `lock` is the device's lock word; the pair brackets the handle insert.
+    unsafe { irq_spinlock_acquire(lock) };
+    {
+        // SAFETY: `file` is the live client; this borrow is consumed by the handle
+        // insert below.
+        let file = unsafe { &mut *file };
+        file.next_handle += 1;
+        let handle = file.next_handle;
+        file.handles.insert(handle, obj);
         drm_gem_ref(obj);
-        irq_spinlock_release(lock_ptr(dev));
-        *handle_out = handle;
+        // SAFETY: as above — releasing the same lock.
+        unsafe { irq_spinlock_release(lock) };
+        // SAFETY: `handle_out` is the caller's out-parameter for the handle.
+        unsafe { *handle_out = handle };
     }
     0
 }
@@ -333,25 +399,34 @@ pub extern "C" fn drm_gem_prime_handle_to_fd(
     if dev.is_null() || file.is_null() || fd_out.is_null() {
         return -22;
     }
-    // SAFETY: caller's file; the object is looked up in its handle table.
-    unsafe {
-        let obj = drm_gem_handle_lookup(file, handle);
-        if obj.is_null() {
-            return -9; // -EBADF
-        }
-
-        let node = memfd_vnode_from_handle((*obj).memfd, b"drm-prime\0".as_ptr(), (*obj).size);
-        if node.is_null() {
-            return -12;
-        }
-
-        let fd = alloc_fd(node);
-        if fd < 0 {
-            return -24; // -EMFILE
-        }
-
-        *fd_out = fd;
+    // SAFETY: `drm_gem_handle_lookup`'s contract: this only walks the caller's file.
+    let obj = drm_gem_handle_lookup(file, handle);
+    if obj.is_null() {
+        return -9; // -EBADF
     }
+
+    // SAFETY: `obj` is the live object named by the handle; this reads its memfd.
+    let memfd = unsafe { (*obj).memfd };
+    // SAFETY: as above — its size.
+    let size = unsafe { (*obj).size };
+
+    // SAFETY: `memfd` is that live object's backing memfd and `size` its length.
+    let node = unsafe {
+        memfd_vnode_from_handle(memfd, c"drm-prime".as_ptr() as *const u8, size)
+    };
+    if node.is_null() {
+        return -12;
+    }
+
+    // SAFETY: `node` is the live vnode just created; `alloc_fd`'s contract wants a
+    // live node to install as the new fd's file.
+    let fd = unsafe { alloc_fd(node) };
+    if fd < 0 {
+        return -24; // -EMFILE
+    }
+
+    // SAFETY: `fd_out` is the caller's out-parameter for the fd.
+    unsafe { *fd_out = fd };
     0
 }
 
@@ -369,71 +444,101 @@ pub extern "C" fn drm_gem_prime_fd_to_handle(
     if dev.is_null() || file.is_null() || handle_out.is_null() {
         return -22;
     }
-    // SAFETY: caller's device and file; the object list is walked under the
-    // device lock.
-    unsafe {
-        let h = memfd_fd_handle(fd);
-        if h <= 0 {
-            return -22;
-        }
+    // SAFETY: `memfd_fd_handle` is a kernel C service mapping an fd to its memfd.
+    let h = unsafe { memfd_fd_handle(fd) };
+    if h <= 0 {
+        return -22;
+    }
 
-        let mut obj: *mut GemObject = core::ptr::null_mut();
-        irq_spinlock_acquire(lock_ptr(dev));
-        for &o in (*dev).gem_list.iter() {
-            if !o.is_null() && (*o).memfd == h {
+    let mut obj: *mut GemObject = core::ptr::null_mut();
+    // SAFETY: `lock_ptr`'s contract: `dev` is the caller's live device.
+    let lock = unsafe { lock_ptr(dev) };
+    // SAFETY: `lock` is the device's lock word; the pair brackets the object-list
+    // walk.
+    unsafe { irq_spinlock_acquire(lock) };
+    // SAFETY: `dev` is the live device; this borrow of its object list is consumed
+    // by the walk below.
+    let gem_list = unsafe { &(*dev).gem_list };
+    for &o in gem_list.iter() {
+        if !o.is_null() {
+            // SAFETY: `o` is a live object (non-null, checked above).
+            if unsafe { (*o).memfd } == h {
                 obj = o;
                 break;
             }
         }
-        irq_spinlock_release(lock_ptr(dev));
+    }
+    // SAFETY: as above — releasing the same lock.
+    unsafe { irq_spinlock_release(lock) };
 
-        if !obj.is_null() {
-            let mut handle = 0u32;
-            if drm_gem_handle_create(file, obj, &mut handle) != 0 {
-                return -12;
-            }
-            *handle_out = handle;
-            return 0;
-        }
-
-        let size = memfd_size(h);
-        if size <= 0 {
-            return -22;
-        }
-
-        obj = kmalloc(core::mem::size_of::<GemObject>() as u32) as *mut GemObject;
-        if obj.is_null() {
-            return -12;
-        }
-        core::ptr::write_bytes(obj, 0, 1);
-        (*obj).dev = dev;
-        (*obj).memfd = h;
-        (*obj).size = size as u32;
-        (*obj).refcount = 1;
-        memfd_ref(h); // the object now owns a reference of its own
-
-        let ops = (*dev).ops;
-        if !ops.is_null() {
-            if let Some(create) = (*ops).gem_create {
-                if create(dev, obj) != 0 {
-                    memfd_close(h);
-                    kfree(obj as *mut c_void);
-                    return -22;
-                }
-            }
-        }
-
-        irq_spinlock_acquire(lock_ptr(dev));
-        drm_gem_link(dev, obj);
-        irq_spinlock_release(lock_ptr(dev));
-
+    if !obj.is_null() {
         let mut handle = 0u32;
         if drm_gem_handle_create(file, obj, &mut handle) != 0 {
-            drm_gem_unref(obj);
             return -12;
         }
-        *handle_out = handle;
+        // SAFETY: `handle_out` is the caller's out-parameter for the handle.
+        unsafe { *handle_out = handle };
+        return 0;
     }
+
+    // SAFETY: `memfd_size` is a kernel C service reading the memfd's length.
+    let size = unsafe { memfd_size(h) };
+    if size <= 0 {
+        return -22;
+    }
+
+    let obj = cact_mm::kmalloc(core::mem::size_of::<GemObject>() as u32) as *mut GemObject;
+    if obj.is_null() {
+        return -12;
+    }
+    // SAFETY: `obj` is the fresh `kmalloc` object just checked non-null, so zeroing
+    // one `GemObject` covers exactly that allocation.
+    unsafe { core::ptr::write_bytes(obj, 0, 1) };
+    {
+        // SAFETY: `obj` is the fresh, exclusively-owned object; this borrow is
+        // consumed by the field stores below.
+        let obj_ref = unsafe { &mut *obj };
+        obj_ref.dev = dev;
+        obj_ref.memfd = h;
+        obj_ref.size = size as u32;
+        obj_ref.refcount = 1;
+    }
+    // SAFETY: `h` is the live memfd being adopted; the object now owns a reference
+    // of its own.
+    unsafe { memfd_ref(h) };
+
+    // SAFETY: `dev` is the live device; this copies its ops pointer.
+    let ops = unsafe { (*dev).ops };
+    if !ops.is_null() {
+        // SAFETY: `ops` is the driver's live ops table; this copies the `gem_create`
+        // fn pointer only.
+        let create = unsafe { (*ops).gem_create };
+        if let Some(create) = create {
+            // `create` is the plain `extern "C"` driver hook and `dev`/`obj` are
+            // the live device and object it expects.
+            if create(dev, obj) != 0 {
+                // SAFETY: on refusal the adopted memfd and the object are still ours.
+                unsafe { memfd_close(h) };
+                // SAFETY: as above.
+                unsafe { cact_mm::kfree(obj as *mut u8) };
+                return -22;
+            }
+        }
+    }
+
+    // SAFETY: `lock` is the device's lock word; the pair brackets the link update.
+    unsafe { irq_spinlock_acquire(lock) };
+    drm_gem_link(dev, obj);
+    // SAFETY: as above — releasing the same lock.
+    unsafe { irq_spinlock_release(lock) };
+
+    let mut handle = 0u32;
+    if drm_gem_handle_create(file, obj, &mut handle) != 0 {
+        drm_gem_unref(obj);
+        return -12;
+    }
+    // SAFETY: `handle_out` is the caller's out-parameter for the handle.
+    unsafe { *handle_out = handle };
     0
 }
 
@@ -529,42 +634,49 @@ pub extern "C" fn drm_gem_dumb_create(file: *mut DrmFile, user: *mut c_void) -> 
         return -22;
     }
 
-    // SAFETY: caller's file; the new object is owned here.
-    unsafe {
-        let obj = drm_gem_create((*file).dev, size);
-        if obj.is_null() {
-            return -12;
-        }
-
-        (*obj).is_dumb = 1;
-        (*obj).width = args.width;
-        (*obj).height = args.height;
-        (*obj).bpp = bpp;
-        (*obj).pitch = pitch;
-
-        let dev = (*file).dev;
-        let mut off = 0u64;
-        if drm_gem_map_offset(dev, obj, &mut off) != 0 {
-            drm_gem_unref(obj);
-            return -12;
-        }
-        printk(b"  drm         : DBG dumb map_offset ok\n\0".as_ptr());
-
-        let mut handle = 0u32;
-        if drm_gem_handle_create(file, obj, &mut handle) != 0 {
-            drm_gem_unref(obj);
-            return -12;
-        }
-
-        /* No zeroing here: memfd frames are zeroed as they are allocated, and
-         * a linear memset over the whole object would run off the first frame
-         * anyway — the frames are individually allocated. */
-
-        args.handle = handle;
-        args.pitch = pitch;
-        args.size = size as u64;
-        drm_copy_out(user, &args as *const _ as *const c_void, core::mem::size_of::<ModeCreateDumb>() as u32)
+    // SAFETY: `file` is the caller's live client (checked non-null above); this
+    // reads its device pointer.
+    let dev = unsafe { (*file).dev };
+    // SAFETY: `drm_gem_create`'s contract: `dev` is the live device; it returns a
+    // fresh object with one reference held.
+    let obj = drm_gem_create(dev, size);
+    if obj.is_null() {
+        return -12;
     }
+
+    {
+        // SAFETY: `obj` is the fresh object created above and exclusively owned here;
+        // this borrow is consumed by the field stores.
+        let obj_ref = unsafe { &mut *obj };
+        obj_ref.is_dumb = 1;
+        obj_ref.width = args.width;
+        obj_ref.height = args.height;
+        obj_ref.bpp = bpp;
+        obj_ref.pitch = pitch;
+    }
+
+    let mut off = 0u64;
+    if drm_gem_map_offset(dev, obj, &mut off) != 0 {
+        drm_gem_unref(obj);
+        return -12;
+    }
+    // SAFETY: static NUL-terminated string.
+    unsafe { printk(c"  drm         : DBG dumb map_offset ok\n".as_ptr() as *const u8) };
+
+    let mut handle = 0u32;
+    if drm_gem_handle_create(file, obj, &mut handle) != 0 {
+        drm_gem_unref(obj);
+        return -12;
+    }
+
+    /* No zeroing here: memfd frames are zeroed as they are allocated, and a linear
+     * memset over the whole object would run off the first frame anyway — the
+     * frames are individually allocated. */
+
+    args.handle = handle;
+    args.pitch = pitch;
+    args.size = size as u64;
+    drm_copy_out(user, &args as *const _ as *const c_void, core::mem::size_of::<ModeCreateDumb>() as u32)
 }
 
 #[no_mangle]
@@ -583,17 +695,17 @@ pub extern "C" fn drm_gem_dumb_map_offset(file: *mut DrmFile, user: *mut c_void)
         return -22;
     }
 
-    // SAFETY: caller's file.
-    unsafe {
-        let obj = drm_gem_handle_lookup(file, args.handle);
-        if obj.is_null() {
-            return -9;
-        }
-        if (*obj).is_dumb == 0 {
-            return -22;
-        }
-        args.offset = (*obj).map_offset as u64;
+    // SAFETY: `drm_gem_handle_lookup`'s contract: this only walks the caller's file.
+    let obj = drm_gem_handle_lookup(file, args.handle);
+    if obj.is_null() {
+        return -9;
     }
+    // SAFETY: `obj` is the live object named by the handle; this reads its dumb flag.
+    if unsafe { (*obj).is_dumb } == 0 {
+        return -22;
+    }
+    // SAFETY: as above — the object's cached map offset.
+    args.offset = unsafe { (*obj).map_offset } as u64;
     drm_copy_out(user, &args as *const _ as *const c_void, core::mem::size_of::<ModeMapDumb>() as u32)
 }
 

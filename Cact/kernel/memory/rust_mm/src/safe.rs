@@ -32,13 +32,24 @@ impl<T> KStatic<T> {
         KStatic(UnsafeCell::new(val))
     }
 
-    /// Obtain a mutable reference to the inner value.
+    /// Obtain a mutable reference to the inner value of a `KStatic` **static**.
     ///
-    /// The caller must ensure proper synchronization (typically by holding
-    /// the associated `IrqSpinlock`).
-    pub fn get_mut(&self) -> &mut T {
-        // SAFETY: guaranteed by the kernel's spinlock protocol.
-        unsafe { &mut *self.0.get() }
+    /// Takes the pointer by value (see [`KStatic::as_ptr`]) rather than handing
+    /// out a `&mut T` borrowed from a shared reference: `KStatic` is an
+    /// interior-mutability wrapper, so the shared reference itself proves
+    /// nothing about exclusive access — the caller's lock protocol does.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must come from [`KStatic::as_ptr`] on a `static KStatic`, and the
+    /// caller must be entitled to access that static's inner value exclusively
+    /// for the returned reference's lifetime: it holds the `IrqSpinlock` that
+    /// serialises the static (or the kernel is still single-threaded at boot).
+    /// No other reference to the same value may be live for that lifetime.
+    pub unsafe fn get_mut<'a>(ptr: *mut T) -> &'a mut T {
+        // SAFETY: the caller contract above makes `ptr` point to a live static
+        // value that this call is allowed to borrow exclusively.
+        unsafe { &mut *ptr }
     }
 
     /// Obtain a raw mutable pointer to the inner value.
@@ -105,13 +116,18 @@ pub fn kprint_str(s: *const u8) {
 /// Print a signed integer.
 pub fn kprint_int(n: i32) {
     let mut buf = [0u8; 16];
-    unsafe {
-        itoa(n, buf.as_mut_ptr());
-        printk(buf.as_ptr());
-    }
+    // SAFETY: `buf` is a live 16-byte stack array, so `itoa` writes its digits
+    // (and terminator) in bounds.
+    unsafe { itoa(n, buf.as_mut_ptr()) };
+    // SAFETY: `buf` was just made a NUL-terminated string by `itoa` and stays
+    // valid for the call.
+    unsafe { printk(buf.as_ptr()) };
 }
 
 /// Log a message at the given level (KERN_SOH + level prefix).
+///
+/// `msg` must be null or point to a null-terminated byte string that stays
+/// valid for the duration of the call.
 pub fn klog_msg(level: u32, msg: *const u8) {
     if !msg.is_null() {
         let mut buf = [0u8; 1024];
@@ -123,11 +139,21 @@ pub fn klog_msg(level: u32, msg: *const u8) {
         buf[0] = 0x01;          // KERN_SOH
         buf[1] = lvl;
         let mut n = 2;
-        unsafe {
-            while *msg.add(n - 2) != 0 && n < buf.len() - 2 {
-                buf[n] = *msg.add(n - 2);
-                n += 1;
+        loop {
+            // `n` is capped at `buf.len() - 2`, keeping every write inside `buf`.
+            if n >= buf.len() - 2 {
+                break;
             }
+            // SAFETY: the caller contract states `msg` is a null-terminated
+            // string, so `n - 2` indexes it in bounds.
+            let p = unsafe { msg.add(n - 2) };
+            // SAFETY: `p` points at one byte of that string.
+            let byte = unsafe { *p };
+            if byte == 0 {
+                break;
+            }
+            buf[n] = byte;
+            n += 1;
         }
         buf[n] = b'\n';
         buf[n + 1] = 0;

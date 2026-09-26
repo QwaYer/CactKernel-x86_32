@@ -17,26 +17,45 @@ pub struct semaphore_t {
     pub waiter_count: u32,
 }
 
+// SAFETY: `semaphore_t` is a plain data record whose fields are only mutated
+// while its internal `guard` spinlock is held (or during single-threaded
+// `init`), so moving one between CPUs (Send) cannot expose a partial update.
 unsafe impl Send for semaphore_t {}
+// SAFETY: shared references to `semaphore_t` are safe because every read and
+// write of `count`/`waiters`/`waiter_count` happens under `guard` (taken with
+// the scheduler lock when a wake-up must be ordered); the raw task pointers are
+// never dereferenced while not holding `guard`.
 unsafe impl Sync for semaphore_t {}
 
+/// # Safety
+///
+/// `s` must be non-null and properly aligned, and must point to storage the
+/// caller owns exclusively for this call; it becomes an initialised semaphore
+/// with `val` tokens.
 #[no_mangle]
 pub unsafe extern "C" fn sema_init(s: *mut semaphore_t, val: i32) {
-    sema_init_impl(&mut *s, val);
+    // SAFETY: the caller contract (see # Safety) makes `s` a valid, aligned,
+    // unaliased pointer, so creating the unique `&mut` is sound.
+    sema_init_impl(unsafe { &mut *s }, val);
 }
 
 fn sema_init_impl(s: &mut semaphore_t, val: i32) {
     s.guard.init();
     s.count.store(val, Ordering::Relaxed);
     s.waiter_count = 0;
-    for slot in &mut s.waiters {
-        *slot = ptr::null_mut();
-    }
+    s.waiters.fill(ptr::null_mut());
 }
 
+/// # Safety
+///
+/// `s` must be non-null and properly aligned, must point to an initialised
+/// `semaphore_t` that stays live for the duration of the call, and must not be
+/// accessed concurrently except through this semaphore's own operations.
 #[no_mangle]
 pub unsafe extern "C" fn down(s: *mut semaphore_t) {
-    sema_down_impl(&mut *s);
+    // SAFETY: the caller contract (see # Safety) makes `s` a valid, aligned,
+    // unaliased pointer for the duration of the call.
+    sema_down_impl(unsafe { &mut *s });
 }
 
 fn sema_down_impl(s: &mut semaphore_t) {
@@ -82,9 +101,16 @@ fn sema_down_impl(s: &mut semaphore_t) {
     }
 }
 
+/// # Safety
+///
+/// `s` must be non-null and properly aligned, must point to an initialised
+/// `semaphore_t` that stays live for the duration of the call, and must not be
+/// accessed concurrently except through this semaphore's own operations.
 #[no_mangle]
 pub unsafe extern "C" fn up(s: *mut semaphore_t) {
-    sema_up_impl(&mut *s);
+    // SAFETY: the caller contract (see # Safety) makes `s` a valid, aligned,
+    // unaliased pointer for the duration of the call.
+    sema_up_impl(unsafe { &mut *s });
 }
 
 fn sema_up_impl(s: &mut semaphore_t) {

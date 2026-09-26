@@ -29,9 +29,5 @@ foreach f : _found_kms.stdout().strip().split('\n')
   endif
 endforeach
 
-kernel_rust_libs += custom_target('rust-cact-drm',
-  input: _rust_inputs,
-  output: 'libcact_drm.a',
-  command: [bash, rust_build_script, meson.current_source_dir(),
-            'libcact_drm.a', 'stable', '@OUTPUT@'],
-  build_by_default: false)
+# `cact_drm` is an rlib now; the kernel's single Rust archive is built by
+# `Cact/kernel/kernel_rust` (see its src/lib.rs for why).

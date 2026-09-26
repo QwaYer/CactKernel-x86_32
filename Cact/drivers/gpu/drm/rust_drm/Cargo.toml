@@ -3,8 +3,11 @@ name = "cact_drm"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+cact_mm = { path = "../../../../kernel/memory/rust_mm" }
+
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["lib"]
 
 [profile.dev]
 panic = "abort"

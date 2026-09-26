@@ -164,7 +164,7 @@ fn now_ticks() -> u32 {
 /// Sleep for `t` ticks (safe wrapper).
 fn sleep_ticks(t: u32) {
     // SAFETY: ffi_kernel re-exports the C scheduler sleep.
-    unsafe { ffi_kernel::sched_sleep_ticks(t) }
+    unsafe { sched::timer_wheel::sched_sleep_ticks(t) }
 }
 
 /// True when the underlying TCP socket reached a closed state (FIN received or
@@ -192,10 +192,7 @@ fn tcp_write(sock: i32, buf: &[u8]) -> Result<(), ()> {
             if !s.may_send() {
                 return 0;
             }
-            match s.send_slice(&buf[off..off + chunk]) {
-                Ok(n) => n,
-                Err(_) => 0,
-            }
+            s.send_slice(&buf[off..off + chunk]).unwrap_or_default()
         })
         .unwrap_or(0);
         if sent > 0 {
@@ -214,6 +211,9 @@ fn tcp_write(sock: i32, buf: &[u8]) -> Result<(), ()> {
 /// available right now; the caller polls again later).
 fn tcp_read(sock: i32, buf: &mut [u8]) -> Result<usize, ()> {
     let max = core::cmp::min(buf.len(), u16::MAX as usize) as u16;
+    // SAFETY: `tcp_recv` is the crate's C-ABI TCP receive entry point; `sock` is a
+    // live socket index and `buf` is a `max`-byte writable buffer owned by this
+    // call for its duration.
     let n = unsafe { tcp_recv(sock, buf.as_mut_ptr(), max) };
     if n < 0 {
         Err(())
@@ -494,6 +494,9 @@ struct TlsGuard;
 impl TlsGuard {
     #[inline]
     fn new() -> Self {
+        // SAFETY: `TLS_LOCK` is a kernel-lifetime `irq_spinlock_t` static;
+        // `addr_of_mut!` yields its stable, properly aligned address for the kernel's
+        // C acquire/release pair.
         unsafe {
             ffi_kernel::irq_spinlock_acquire(core::ptr::addr_of_mut!(TLS_LOCK).cast());
         }
@@ -504,6 +507,8 @@ impl TlsGuard {
 impl Drop for TlsGuard {
     #[inline]
     fn drop(&mut self) {
+        // SAFETY: as in `TlsGuard::new` — `TLS_LOCK` is a live kernel-lifetime lock,
+        // and this is the matching release for the acquire in `TlsGuard::new`.
         unsafe {
             ffi_kernel::irq_spinlock_release(core::ptr::addr_of_mut!(TLS_LOCK).cast());
         }
@@ -511,17 +516,33 @@ impl Drop for TlsGuard {
 }
 
 /// Read a NUL-terminated C string (bounded).
+///
+/// # Safety
+///
+/// `ptr` must be a NUL-terminated string readable up to and including its
+/// terminator (the scan is capped at 1024 bytes).
 unsafe fn cstr(ptr: *const c_void) -> Option<alloc::string::String> {
     let p = ptr as *const u8;
     let mut len = 0usize;
-    while *p.add(len) != 0 {
-        len += 1;
+    loop {
         if len > 1024 {
             return None;
         }
+        // SAFETY: the caller contract (see # Safety) makes `p` a NUL-terminated
+        // string; `len <= 1024` here, so `add` stays within that string's first
+        // 1025 bytes (or the cap fails the call).
+        let q = unsafe { p.add(len) };
+        // SAFETY: `q` is a byte of the NUL-terminated string above; the scan
+        // stops as soon as it is the terminator.
+        if unsafe { *q } == 0 {
+            break;
+        }
+        len += 1;
     }
-    let slice = core::slice::from_raw_parts(p, len);
-    core::str::from_utf8(slice).ok().map(|s| String::from(s))
+    // SAFETY: as above, `len` is the number of initialised bytes before the NUL
+    // and they all stay readable for the call.
+    let slice = unsafe { core::slice::from_raw_parts(p, len) };
+    core::str::from_utf8(slice).ok().map(String::from)
 }
 
 #[no_mangle]
@@ -529,16 +550,28 @@ pub extern "C" fn cact_tls_init() {}
 
 /// Connect TLS over an open connected TCP socket. Legacy entry: uses the
 /// verified (root store) path.
+///
+/// # Safety
+///
+/// `server_name` must be a NUL-terminated C string that stays readable for the
+/// call (the name is copied out before use).
 #[no_mangle]
-pub extern "C" fn cact_tls_connect(sock: c_int, server_name: *const c_void) -> c_int {
-    cact_tls_connect_ex(sock, server_name, 0)
+pub unsafe extern "C" fn cact_tls_connect(sock: c_int, server_name: *const c_void) -> c_int {
+    // SAFETY: this only forwards its arguments; the caller contract above
+    // (identical to `cact_tls_connect_ex`'s) is what makes the call sound.
+    unsafe { cact_tls_connect_ex(sock, server_name, 0) }
 }
 
 /// Connect TLS over an open connected TCP socket. `skip_verify` != 0 disables
 /// certificate chain verification (see module docs). Returns a connection
 /// handle >= 0 to use with [`cact_tls_send`]/[`cact_tls_recv`], or -1.
+///
+/// # Safety
+///
+/// `server_name` must be a NUL-terminated C string that stays readable for the
+/// duration of the call.
 #[no_mangle]
-pub extern "C" fn cact_tls_connect_ex(
+pub unsafe extern "C" fn cact_tls_connect_ex(
     sock: c_int,
     server_name: *const c_void,
     skip_verify: c_int,
@@ -557,9 +590,9 @@ pub extern "C" fn cact_tls_connect_ex(
     // stream itself is moved in and never touched under the lock.
     unsafe {
         let _guard = TlsGuard::new();
-        for i in 0..TLS_MAX_CONNECTIONS {
-            if TLS_CONNS[i].is_none() {
-                TLS_CONNS[i] = Some(stream);
+        for (i, slot) in (*core::ptr::addr_of_mut!(TLS_CONNS)).iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(stream);
                 return i as c_int;
             }
         }
@@ -568,53 +601,67 @@ pub extern "C" fn cact_tls_connect_ex(
 }
 
 /// Send plaintext data over a TLS connection. Returns bytes accepted, or -1.
+///
+/// # Safety
+///
+/// `data` must point to `len` readable bytes that stay live for the duration of
+/// the call (it may be null, in which case the call returns -1).
 #[no_mangle]
-pub extern "C" fn cact_tls_send(conn_idx: c_int, data: *const u8, len: u16) -> c_int {
+pub unsafe extern "C" fn cact_tls_send(conn_idx: c_int, data: *const u8, len: u16) -> c_int {
     if conn_idx < 0 || conn_idx as usize >= TLS_MAX_CONNECTIONS || data.is_null() {
         return -1;
     }
-    // SAFETY: indices and pointer validated above.
-    unsafe {
-        let Some(ref mut stream) = TLS_CONNS[conn_idx as usize] else {
-            return -1;
-        };
-        let plaintext = core::slice::from_raw_parts(data, len as usize);
-        if tls_stream_write(stream, plaintext).is_ok() {
-            len as c_int
-        } else {
-            -1
-        }
+    // SAFETY: `conn_idx` is bounds-checked above, so this indexes the
+    // kernel-lifetime `TLS_CONNS` static in bounds; the borrow is the only
+    // access to that slot for the rest of the call.
+    let Some(stream) = (unsafe { TLS_CONNS[conn_idx as usize].as_mut() }) else {
+        return -1;
+    };
+    // SAFETY: the caller contract (see # Safety) makes `data` point to `len`
+    // readable bytes that stay live for the duration of the call.
+    let plaintext = unsafe { core::slice::from_raw_parts(data, len as usize) };
+    if tls_stream_write(stream, plaintext).is_ok() {
+        len as c_int
+    } else {
+        -1
     }
 }
 
 /// Receive plaintext data from a TLS connection. Returns bytes read, 0 when no
 /// data is available yet, or -1 on error/close.
+///
+/// # Safety
+///
+/// `buf` must point to `max_len` writable bytes that stay live for the duration
+/// of the call (it may be null, in which case the call returns -1).
 #[no_mangle]
-pub extern "C" fn cact_tls_recv(conn_idx: c_int, buf: *mut u8, max_len: u16) -> c_int {
+pub unsafe extern "C" fn cact_tls_recv(conn_idx: c_int, buf: *mut u8, max_len: u16) -> c_int {
     if conn_idx < 0 || conn_idx as usize >= TLS_MAX_CONNECTIONS || buf.is_null() {
         return -1;
     }
-    // SAFETY: indices and pointer validated above.
-    unsafe {
-        let Some(ref mut stream) = TLS_CONNS[conn_idx as usize] else {
-            return -1;
-        };
-        let dst = core::slice::from_raw_parts_mut(buf, max_len as usize);
-        if append_to_inbuf(stream).is_err() {
-            return -1;
-        }
-        match tls_stream_read(stream, dst) {
-            TlsRead::Data(n) => n as c_int,
-            TlsRead::WouldBlock => 0,
-            TlsRead::Closed => {
-                if stream.ready_plaintext.len() > stream.plaintext_off {
-                    drain_pt(stream, dst) as c_int
-                } else {
-                    -1
-                }
+    // SAFETY: `conn_idx` is bounds-checked above, so this indexes the
+    // kernel-lifetime `TLS_CONNS` static in bounds; the borrow is the only
+    // access to that slot for the rest of the call.
+    let Some(stream) = (unsafe { TLS_CONNS[conn_idx as usize].as_mut() }) else {
+        return -1;
+    };
+    // SAFETY: the caller contract (see # Safety) makes `buf` point to `max_len`
+    // writable bytes that stay live for the duration of the call.
+    let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
+    if append_to_inbuf(stream).is_err() {
+        return -1;
+    }
+    match tls_stream_read(stream, dst) {
+        TlsRead::Data(n) => n as c_int,
+        TlsRead::WouldBlock => 0,
+        TlsRead::Closed => {
+            if stream.ready_plaintext.len() > stream.plaintext_off {
+                drain_pt(stream, dst) as c_int
+            } else {
+                -1
             }
-            TlsRead::Err => -1,
         }
+        TlsRead::Err => -1,
     }
 }
 
@@ -627,6 +674,9 @@ pub extern "C" fn cact_tls_close(conn: c_int) {
     // Take the stream out under the lock, then drop it outside: freeing the
     // rustls state can touch the allocator, which has no business running with
     // interrupts disabled.
+    // SAFETY: `conn` was bounds-checked above and `TLS_CONNS` is a kernel-lifetime
+    // static; the take runs under `TlsGuard`, so no other task can take the same
+    // slot, and the stream is dropped outside the lock.
     let victim = unsafe {
         let _guard = TlsGuard::new();
         TLS_CONNS[conn as usize].take()

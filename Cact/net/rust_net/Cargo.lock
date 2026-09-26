@@ -102,19 +102,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "cact_mm"
+version = "0.1.0"
+dependencies = [
+ "cact_sync",
+]
+
+[[package]]
 name = "cact_net"
 version = "0.1.0"
 dependencies = [
  "cact_crypto",
+ "cact_mm",
  "cact_shim",
+ "cact_sync",
  "rustls",
  "rustls-pki-types 1.12.0",
+ "sched",
  "smoltcp",
  "webpki-roots",
 ]
 
 [[package]]
 name = "cact_shim"
+version = "0.1.0"
+
+[[package]]
+name = "cact_sync"
 version = "0.1.0"
 
 [[package]]
@@ -706,6 +720,14 @@ dependencies = [
  "ring",
  "rustls-pki-types 1.12.0",
  "untrusted",
+]
+
+[[package]]
+name = "sched"
+version = "0.1.0"
+dependencies = [
+ "cact_mm",
+ "cact_sync",
 ]
 
 [[package]]

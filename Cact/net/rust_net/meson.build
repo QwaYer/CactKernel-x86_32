@@ -16,12 +16,5 @@ foreach f : _found.stdout().strip().split('\n')
   endif
 endforeach
 
-kernel_rust_libs += custom_target('rust-cact-net',
-  input: _rust_inputs,
-  output: 'libcact_net.a',
-  command: [bash, rust_build_script, meson.current_source_dir(),
-            'libcact_net.a', 'nightly', '@OUTPUT@',
-            '-Z', 'json-target-spec',
-            '-Z', 'build-std=core,alloc,compiler_builtins',
-            '-Z', 'build-std-features=compiler-builtins-mem'],
-  build_by_default: false)
+# `cact_net` is an rlib now; the kernel's single Rust archive is built by
+# `Cact/kernel/kernel_rust` (see its src/lib.rs for why).

@@ -25,9 +25,6 @@ extern "C" {
     pub(crate) fn printk(fmt: *const u8, ...);
 }
 
-/// Message printed by the panic handler.
-pub(crate) static PANIC_MSG: &[u8] = b"[rust_drm] PANIC\n\0";
-
 /* ── the _IOC encoding (mirrors uapi/drm_ioctl.h) ───────────────────────── */
 
 const IOC_NRBITS: u32 = 8;
@@ -72,18 +69,18 @@ pub extern "C" fn drm_copy_in(
     let size = drm_ioctl_size(cmd);
     if size != expect {
         // SAFETY: static NUL-terminated string.
-        unsafe { printk(b"[drm] ioctl payload size mismatch\n\0".as_ptr()) };
+        unsafe { printk(c"[drm] ioctl payload size mismatch\n".as_ptr() as *const u8) };
         return -1;
     }
-    // SAFETY: `user` is a non-null userspace pointer the caller asked us to
-    // read; validate_user_ptr is the kernel's own range check for it.
-    unsafe {
-        if validate_user_ptr(user, size) == 0 {
-            return -1;
-        }
-        if copy_from_user(dst, user, size) != 0 {
-            return -1;
-        }
+    // SAFETY: `user` is a non-null userspace pointer the caller asked us to read;
+    // `validate_user_ptr` is the kernel's own range check for it.
+    if unsafe { validate_user_ptr(user, size) } == 0 {
+        return -1;
+    }
+    // SAFETY: the range check above passed, so `user` is a readable userspace range
+    // of `size` bytes and `dst` is a kernel buffer of the same size.
+    if unsafe { copy_from_user(dst, user, size) } != 0 {
+        return -1;
     }
     0
 }
@@ -94,14 +91,15 @@ pub extern "C" fn drm_copy_out(user: *mut c_void, src: *const c_void, size: u32)
     if user.is_null() || src.is_null() {
         return -1;
     }
-    // SAFETY: as above; `src` is a kernel buffer of at least `size` bytes.
-    unsafe {
-        if validate_user_ptr(user, size) == 0 {
-            return -1;
-        }
-        if copy_to_user(user, src, size) != 0 {
-            return -1;
-        }
+    // SAFETY: `user` is a non-null userspace pointer; `validate_user_ptr` is the
+    // kernel's own range check for it.
+    if unsafe { validate_user_ptr(user, size) } == 0 {
+        return -1;
+    }
+    // SAFETY: the range check above passed, so `user` is a writable userspace range
+    // of `size` bytes and `src` is a kernel buffer of the same size.
+    if unsafe { copy_to_user(user, src, size) } != 0 {
+        return -1;
     }
     0
 }

@@ -89,7 +89,19 @@ pub struct ProcMeta {
     pub exec_symtab_count:  i32,
 }
 
+// SAFETY: `TaskStruct` is a plain `#[repr(C)]` record of integers and raw
+// pointers. Ownership moves between CPUs only while the scheduler lock is held,
+// so transferring it does not race with another CPU's access.
 unsafe impl Send for TaskStruct {}
+// SAFETY: `TaskStruct` fields other than `state` are only written by the task
+// running on its own CPU; `state` and the run-queue links are mutated only under
+// the scheduler lock, so shared references from several CPUs cannot race.
 unsafe impl Sync for TaskStruct {}
+// SAFETY: `ProcMeta` is heap data reachable only through its owning task;
+// ownership follows the task and every transfer happens under the scheduler
+// lock, so moving it between CPUs is safe.
 unsafe impl Send for ProcMeta {}
+// SAFETY: `ProcMeta` is read/written by its owning task (which runs on a single
+// CPU at a time) or while the scheduler lock is held, so shared references from
+// several CPUs cannot race.
 unsafe impl Sync for ProcMeta {}

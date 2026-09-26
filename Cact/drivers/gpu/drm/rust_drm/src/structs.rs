@@ -324,6 +324,9 @@ impl DrmDevice {
             return core::ptr::null_mut();
         }
         for &p in &self.fbs {
+            // SAFETY: `fbs` only ever holds pointers produced by the framebuffer
+            // constructor (a kalloc'd `Framebuffer`), removed when it is freed,
+            // and the null check below guards the remaining entries.
             if !p.is_null() && unsafe { (*(p as *const crate::kms::framebuffer::Framebuffer)).id } == id {
                 return p;
             }
