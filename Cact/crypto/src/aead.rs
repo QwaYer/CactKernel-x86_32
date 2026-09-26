@@ -86,7 +86,7 @@ impl MessageEncrypter for Aes128GcmImpl {
             .map_err(|_| rustls::Error::EncryptError)?;
         let mut payload = match msg.payload {
             rustls::crypto::cipher::OutboundChunks::Single(s) => s.to_vec(),
-            rustls::crypto::cipher::OutboundChunks::Multiple { ref chunks, start, end } => {
+            rustls::crypto::cipher::OutboundChunks::Multiple { chunks, start, end } => {
                 let mut v = Vec::new();
                 for c in &chunks[start..end] { v.extend_from_slice(c); }
                 v
@@ -143,7 +143,7 @@ impl MessageEncrypter for Aes256GcmImpl {
             .map_err(|_| rustls::Error::EncryptError)?;
         let mut payload = match msg.payload {
             rustls::crypto::cipher::OutboundChunks::Single(s) => s.to_vec(),
-            rustls::crypto::cipher::OutboundChunks::Multiple { ref chunks, start, end } => {
+            rustls::crypto::cipher::OutboundChunks::Multiple { chunks, start, end } => {
                 let mut v = Vec::new();
                 for c in &chunks[start..end] { v.extend_from_slice(c); }
                 v

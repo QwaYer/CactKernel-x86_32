@@ -26,7 +26,9 @@ unsafe fn crypt_slice<'a>(p: *const u8, len: u32) -> Option<&'a [u8]> {
         }
         return None;
     }
-    Some(core::slice::from_raw_parts(p, len as usize))
+    // SAFETY: `p` is non-null, and the caller guarantees `len` readable bytes
+    // starting at `p` that stay valid for `'a`.
+    Some(unsafe { core::slice::from_raw_parts(p, len as usize) })
 }
 
 /// One-shot SHA-256 (alg=0, digest 32) / SHA-384 (alg=1, digest 48).
@@ -40,6 +42,8 @@ pub extern "C" fn cact_crypt_hash(
     if digest.is_null() {
         return CRYPT_EINVAL;
     }
+    // SAFETY: `data` is null with len 0 (-> empty slice) or points to `data_len`
+    // readable bytes, as required of this function's caller.
     let data_slice = match unsafe { crypt_slice(data, data_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
@@ -49,6 +53,9 @@ pub extern "C" fn cact_crypt_hash(
             let mut h = Sha256::new();
             h.update(data_slice);
             let out = h.finalize();
+            // SAFETY: `digest` is non-null (checked above) and the caller
+            // guarantees room for a 32-byte SHA-256 digest; `out` is a separate
+            // 32-byte local, so the two cannot overlap.
             unsafe { core::ptr::copy_nonoverlapping(out.as_ptr(), digest, 32) };
             0
         }
@@ -56,6 +63,9 @@ pub extern "C" fn cact_crypt_hash(
             let mut h = Sha384::new();
             h.update(data_slice);
             let out = h.finalize();
+            // SAFETY: `digest` is non-null (checked above) and the caller
+            // guarantees room for a 48-byte SHA-384 digest; `out` is a separate
+            // 48-byte local, so the two cannot overlap.
             unsafe { core::ptr::copy_nonoverlapping(out.as_ptr(), digest, 48) };
             0
         }
@@ -79,10 +89,14 @@ pub extern "C" fn cact_crypt_hmac_sign(
     if tag.is_null() {
         return CRYPT_EINVAL;
     }
+    // SAFETY: `key` is null with len 0 (-> empty slice) or points to `key_len`
+    // readable bytes, as required of this function's caller.
     let key_slice = match unsafe { crypt_slice(key, key_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
     };
+    // SAFETY: `data` is null with len 0 (-> empty slice) or points to `data_len`
+    // readable bytes, as required of this function's caller.
     let data_slice = match unsafe { crypt_slice(data, data_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
@@ -95,6 +109,8 @@ pub extern "C" fn cact_crypt_hmac_sign(
             };
             <HmacSha256 as hmac::Mac>::update(&mut mac, data_slice);
             let out = <HmacSha256 as hmac::Mac>::finalize(mac).into_bytes();
+            // SAFETY: `tag` is non-null (checked above) and the caller guarantees
+            // room for a 32-byte tag; `out` is a separate 32-byte local.
             unsafe { core::ptr::copy_nonoverlapping(out.as_ptr(), tag, 32) };
             0
         }
@@ -105,6 +121,8 @@ pub extern "C" fn cact_crypt_hmac_sign(
             };
             <HmacSha384 as hmac::Mac>::update(&mut mac, data_slice);
             let out = <HmacSha384 as hmac::Mac>::finalize(mac).into_bytes();
+            // SAFETY: `tag` is non-null (checked above) and the caller guarantees
+            // room for a 48-byte tag; `out` is a separate 48-byte local.
             unsafe { core::ptr::copy_nonoverlapping(out.as_ptr(), tag, 48) };
             0
         }
@@ -122,10 +140,14 @@ pub extern "C" fn cact_crypt_hmac_verify(
     data_len: u32,
     tag: *const u8,
 ) -> i32 {
+    // SAFETY: `key` is null with len 0 (-> empty slice) or points to `key_len`
+    // readable bytes, as required of this function's caller.
     let key_slice = match unsafe { crypt_slice(key, key_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
     };
+    // SAFETY: `data` is null with len 0 (-> empty slice) or points to `data_len`
+    // readable bytes, as required of this function's caller.
     let data_slice = match unsafe { crypt_slice(data, data_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
@@ -135,6 +157,8 @@ pub extern "C" fn cact_crypt_hmac_verify(
         1 => 48u32,
         _ => return CRYPT_EINVAL,
     };
+    // SAFETY: `tag` is non-null and points to `tag_len` (32 or 48) readable
+    // bytes, as required of this function's caller.
     let tag_slice = match unsafe { crypt_slice(tag, tag_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
@@ -182,18 +206,26 @@ pub extern "C" fn cact_crypt_hkdf(
     if out.is_null() {
         return CRYPT_EINVAL;
     }
+    // SAFETY: `salt` is null with len 0 (-> empty slice) or points to `salt_len`
+    // readable bytes, as required of this function's caller.
     let salt_slice = match unsafe { crypt_slice(salt, salt_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
     };
+    // SAFETY: `ikm` is null with len 0 (-> empty slice) or points to `ikm_len`
+    // readable bytes, as required of this function's caller.
     let ikm_slice = match unsafe { crypt_slice(ikm, ikm_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
     };
+    // SAFETY: `info` is null with len 0 (-> empty slice) or points to `info_len`
+    // readable bytes, as required of this function's caller.
     let info_slice = match unsafe { crypt_slice(info, info_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
     };
+    // SAFETY: `out` is non-null (checked above) and the caller guarantees
+    // `out_len` writable bytes at it, valid for the duration of the call.
     let out_slice = unsafe { core::slice::from_raw_parts_mut(out, out_len as usize) };
     let salt_opt = if salt_slice.is_empty() { None } else { Some(salt_slice) };
     match alg {
@@ -291,18 +323,26 @@ pub extern "C" fn cact_crypt_aead(
         return CRYPT_EINVAL; // only CACT_CRYPT_OP_SEAL / CACT_CRYPT_OP_OPEN
     }
     let seal = op == 0;
+    // SAFETY: `key` is null with len 0 (-> empty slice) or points to `key_len`
+    // readable bytes, as required of this function's caller.
     let key_slice = match unsafe { crypt_slice(key, key_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
     };
+    // SAFETY: `aad` is null with len 0 (-> empty slice) or points to `aad_len`
+    // readable bytes, as required of this function's caller.
     let aad_slice = match unsafe { crypt_slice(aad, aad_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
     };
+    // SAFETY: `nonce` is non-null (checked above) and points to the 12 readable
+    // bytes required of this function's caller.
     let nonce_slice = match unsafe { crypt_slice(nonce, 12) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
     };
+    // SAFETY: `buf` is non-null (checked above) and the caller guarantees `cap`
+    // writable bytes at it, valid for the duration of the call.
     let buf_slice = unsafe { core::slice::from_raw_parts_mut(buf, cap as usize) };
     let result = match alg {
         0 => crypt_gcm::<Aes128Gcm>(seal, key_slice, nonce_slice, aad_slice, buf_slice, in_len as usize),
@@ -311,6 +351,8 @@ pub extern "C" fn cact_crypt_aead(
     };
     match result {
         Ok(n) => {
+            // SAFETY: `out_len` is non-null (checked above) and the caller
+            // guarantees it points to a writable `u32`.
             unsafe { *out_len = n as u32 };
             0
         }
@@ -351,6 +393,8 @@ pub extern "C" fn cact_crypt_x25519_keygen(
     if pub_out.is_null() || priv_out.is_null() {
         return CRYPT_EINVAL;
     }
+    // SAFETY: `seed` is non-null and points to at least `seed_len` readable
+    // bytes, as required of this function's caller.
     let seed_slice = match unsafe { crypt_slice(seed, seed_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
@@ -362,8 +406,14 @@ pub extern "C" fn cact_crypt_x25519_keygen(
     priv_bytes.copy_from_slice(&seed_slice[..32]);
     let sk = StaticSecret::from(priv_bytes);
     let pk = XPublicKey::from(&sk);
+    // SAFETY: `pub_out` is non-null (checked above) and the caller guarantees 32
+    // writable bytes at it; `pk` is a distinct local.
     unsafe {
         core::ptr::copy_nonoverlapping(pk.as_bytes().as_ptr(), pub_out, 32);
+    }
+    // SAFETY: `priv_out` is non-null (checked above) and the caller guarantees 32
+    // writable bytes at it; `priv_bytes` is a distinct local.
+    unsafe {
         core::ptr::copy_nonoverlapping(priv_bytes.as_ptr(), priv_out, 32);
     }
     0
@@ -381,13 +431,21 @@ pub extern "C" fn cact_crypt_x25519_derive(
     }
     let mut priv_bytes = [0u8; 32];
     let mut peer_bytes = [0u8; 32];
+    // SAFETY: `priv_in` is non-null (checked above) and the caller guarantees 32
+    // readable bytes at it; `priv_bytes` is a distinct local.
     unsafe {
         core::ptr::copy_nonoverlapping(priv_in, priv_bytes.as_mut_ptr(), 32);
+    }
+    // SAFETY: `peer_pub` is non-null (checked above) and the caller guarantees 32
+    // readable bytes at it; `peer_bytes` is a distinct local.
+    unsafe {
         core::ptr::copy_nonoverlapping(peer_pub, peer_bytes.as_mut_ptr(), 32);
     }
     let sk = StaticSecret::from(priv_bytes);
     let pk = XPublicKey::from(peer_bytes);
     let shared = sk.diffie_hellman(&pk);
+    // SAFETY: `shared_out` is non-null (checked above) and the caller guarantees
+    // 32 writable bytes at it; `shared` is a distinct local.
     unsafe {
         core::ptr::copy_nonoverlapping(shared.as_bytes().as_ptr(), shared_out, 32);
     }
@@ -406,6 +464,8 @@ pub extern "C" fn cact_crypt_p256_keygen(
     if pub_out.is_null() || priv_out.is_null() {
         return CRYPT_EINVAL;
     }
+    // SAFETY: `seed` is non-null and points to at least `seed_len` readable
+    // bytes, as required of this function's caller.
     let seed_slice = match unsafe { crypt_slice(seed, seed_len) } {
         Some(s) => s,
         None => return CRYPT_EINVAL,
@@ -424,8 +484,14 @@ pub extern "C" fn cact_crypt_p256_keygen(
     }
     // Hand back the scalar actually used, not the raw seed.
     let scalar = sk.to_bytes();
+    // SAFETY: `pub_out` is non-null (checked above) and the caller guarantees 65
+    // writable bytes at it; `ep` is a distinct local.
     unsafe {
         core::ptr::copy_nonoverlapping(ep.as_bytes().as_ptr(), pub_out, 65);
+    }
+    // SAFETY: `priv_out` is non-null (checked above) and the caller guarantees 32
+    // writable bytes at it; `scalar` is a distinct local.
+    unsafe {
         core::ptr::copy_nonoverlapping(scalar.as_slice().as_ptr(), priv_out, 32);
     }
     0
@@ -443,8 +509,14 @@ pub extern "C" fn cact_crypt_p256_derive(
     }
     let mut priv_bytes = [0u8; 32];
     let mut peer_bytes = [0u8; 65];
+    // SAFETY: `priv_in` is non-null (checked above) and the caller guarantees 32
+    // readable bytes at it; `priv_bytes` is a distinct local.
     unsafe {
         core::ptr::copy_nonoverlapping(priv_in, priv_bytes.as_mut_ptr(), 32);
+    }
+    // SAFETY: `peer_pub` is non-null (checked above) and the caller guarantees 65
+    // readable bytes at it; `peer_bytes` is a distinct local.
+    unsafe {
         core::ptr::copy_nonoverlapping(peer_pub, peer_bytes.as_mut_ptr(), 65);
     }
     let mut fb = p256::FieldBytes::default();
@@ -458,6 +530,8 @@ pub extern "C" fn cact_crypt_p256_derive(
         Err(_) => return CRYPT_FAIL,
     };
     let shared = p256::ecdh::diffie_hellman(sk.to_nonzero_scalar(), pk.as_affine());
+    // SAFETY: `shared_out` is non-null (checked above) and the caller guarantees
+    // 32 writable bytes at it; `shared` is a distinct local.
     unsafe {
         core::ptr::copy_nonoverlapping(shared.raw_secret_bytes().as_slice().as_ptr(), shared_out, 32);
     }

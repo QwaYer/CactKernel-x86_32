@@ -215,6 +215,9 @@ fn der_certificates(buf: &[u8]) -> Option<Vec<&[u8]>> {
 /// Outcome of a chain check: `Ok(())` means the chain is valid for the
 /// hostname at the given time and (when supplied) the handshake signature was
 /// made by the leaf key.
+// A pass/fail verdict is the whole contract here; the single caller maps it to
+// the C ABI's 0/-1, so there is nothing for a richer error type to carry.
+#[allow(clippy::result_unit_err)]
 pub fn verify_chain(
     chain_der: &[u8],
     roots_der: &[u8],
@@ -270,7 +273,9 @@ unsafe fn cslice<'a>(p: *const u8, len: u32) -> Option<&'a [u8]> {
         }
         return None;
     }
-    Some(core::slice::from_raw_parts(p, len as usize))
+    // SAFETY: `p` is non-null and the caller guarantees `len` readable bytes at
+    // `p` that outlive the returned reference.
+    Some(unsafe { core::slice::from_raw_parts(p, len as usize) })
 }
 
 /// C ABI for `/dev/crypto`.  All pointers must be kernel addresses: the ioctl
@@ -281,8 +286,15 @@ unsafe fn cslice<'a>(p: *const u8, len: u32) -> Option<&'a [u8]> {
 ///
 /// Returns 0 when the chain is valid, -1 when it is not, -22 on malformed
 /// input.
+///
+/// # Safety
+///
+/// `chain`, `roots`, `hs_msg` and `hs_sig` must each be null or point to at
+/// least `chain_len`, `roots_len`, `hs_msg_len` and `hs_sig_len` readable bytes
+/// respectively for the duration of the call; `hostname` must be null or point
+/// to a NUL-terminated byte sequence.
 #[no_mangle]
-pub extern "C" fn cact_x509_verify(
+pub unsafe extern "C" fn cact_x509_verify(
     chain: *const u8,
     chain_len: u32,
     roots: *const u8,
@@ -295,15 +307,17 @@ pub extern "C" fn cact_x509_verify(
     hs_sig: *const u8,
     hs_sig_len: u32,
 ) -> i32 {
-    // SAFETY: every pointer is validated by cslice; hostname by cstr below.
-    let (Some(chain), Some(roots), Some(msg), Some(signature)) = (unsafe {
-        (
-            cslice(chain, chain_len),
-            cslice(roots, roots_len),
-            cslice(hs_msg, hs_msg_len),
-            cslice(hs_sig, hs_sig_len),
-        )
-    }) else {
+    // SAFETY: `chain` is null or points to `chain_len` readable bytes (caller contract).
+    let chain = unsafe { cslice(chain, chain_len) };
+    // SAFETY: `roots` is null or points to `roots_len` readable bytes (caller contract).
+    let roots = unsafe { cslice(roots, roots_len) };
+    // SAFETY: `hs_msg` is null or points to `hs_msg_len` readable bytes (caller contract).
+    let msg = unsafe { cslice(hs_msg, hs_msg_len) };
+    // SAFETY: `hs_sig` is null or points to `hs_sig_len` readable bytes (caller contract).
+    let signature = unsafe { cslice(hs_sig, hs_sig_len) };
+    let (Some(chain), Some(roots), Some(msg), Some(signature)) =
+        (chain, roots, msg, signature)
+    else {
         return -22;
     };
     if hostname.is_null() {
@@ -332,12 +346,22 @@ pub extern "C" fn cact_x509_verify(
 unsafe fn cstr(ptr: *const core::ffi::c_char) -> Option<alloc::string::String> {
     let p = ptr as *const u8;
     let mut len = 0usize;
-    while *p.add(len) != 0 {
+    loop {
+        // SAFETY: the caller guarantees `ptr` points into a readable allocation
+        // holding a NUL-terminated string, so `p.add(len)` stays in bounds.
+        let cur = unsafe { p.add(len) };
+        // SAFETY: `cur` is in bounds of that readable allocation, so reading the
+        // byte at it is valid.
+        if unsafe { *cur } == 0 {
+            break;
+        }
         len += 1;
         if len > 255 {
             return None;
         }
     }
-    let slice = core::slice::from_raw_parts(p, len);
+    // SAFETY: the loop stopped at the NUL terminator, so `p` is valid for `len`
+    // initialised bytes and the slice contains no interior NUL.
+    let slice = unsafe { core::slice::from_raw_parts(p, len) };
     core::str::from_utf8(slice).ok().map(alloc::string::String::from)
 }

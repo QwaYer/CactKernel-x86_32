@@ -166,6 +166,8 @@ pub extern "C" fn smp_cpu_online(cpu: u32) -> i32 {
         return 0;
     }
     let p = cpu_ptr(cpu as usize);
+    // SAFETY: `cpu` was bounds-checked against `MAX_CPUS` above, so `cpu_ptr` returns a pointer
+    // inside the `CPU_TABLE` array and the `online` field read is in bounds.
     unsafe { (*p).online as i32 }
 }
 
@@ -179,6 +181,8 @@ unsafe extern "C" {
 
 fn cpu_ptr(cpu: usize) -> *mut SmpCpu {
     let base = CPU_TABLE.get() as *mut SmpCpu;
+    // SAFETY: `base` addresses the statically allocated `CPU_TABLE`; every caller bounds-checks
+    // `cpu` against `MAX_CPUS`, so the offset stays inside that array.
     unsafe { base.add(cpu) }
 }
 
@@ -186,6 +190,7 @@ fn delay_ms(ms: u32) {
     let mut n = ms.saturating_mul(20000);
     while n > 0 {
         n -= 1;
+        // SAFETY: `pause` is a spin-wait hint; it touches no memory, no registers and no flags.
         unsafe {
             core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
         }
@@ -194,6 +199,8 @@ fn delay_ms(ms: u32) {
 
 fn read_cr3() -> u32 {
     let cr3: u32;
+    // SAFETY: `mov ..., cr3` only copies the current page-directory base into an output register;
+    // `nomem`/`nostack` declare that it reads and writes no memory.
     unsafe {
         core::arch::asm!("mov {0}, cr3", out(reg) cr3, options(nomem, nostack));
     }
@@ -202,12 +209,16 @@ fn read_cr3() -> u32 {
 
 fn stack_top(cpu: usize) -> u32 {
     let p = cpu_ptr(cpu);
+    // SAFETY: `p` points at a `CPU_TABLE` entry for a bounds-checked `cpu`, so `idle_stack` is a
+    // live in-bounds array and taking its address is valid.
     let base = unsafe { (&raw mut (*p).idle_stack) as usize };
     let aligned = (base + 15) & !15usize;
     (aligned + IDLE_STACK_SIZE) as u32
 }
 
 fn write_volatile<T: Copy>(addr: *mut T, val: T) {
+    // SAFETY: the caller guarantees `addr` points to a valid, aligned, live `T`; a volatile store
+    // performs exactly that write and nothing else.
     unsafe { addr.write_volatile(val) };
 }
 
@@ -228,49 +239,54 @@ fn build_cpu_env(cpu: usize, lapic_id: u32) {
     let p = cpu_ptr(cpu);
     let count = TSS_SLOT + MAX_CPUS;
 
-    unsafe {
-        // Reset descriptors (all-zero except the ones we set).
-        for i in 0..count {
-            let e = &raw mut (*p).gdt[i];
-            write_volatile(e, GdtEntry {
-                limit_low: 0,
-                base_low: 0,
-                base_middle: 0,
-                access: 0,
-                granularity: 0,
-                base_high: 0,
-            });
-        }
+    // SAFETY: `p` points at the `CPU_TABLE` entry for `cpu` (bounds-checked by the caller), so
+    // reborrowing it exclusively here, during single-threaded BSP bring-up before the AP starts,
+    // is sound.
+    let p = unsafe { &mut *p };
 
-        // Fixed slots 0..4 mirror the boot GDT (user selectors included).
-        set_gdt(&mut (*p).gdt[0], 0, 0, 0, 0);
-        set_gdt(&mut (*p).gdt[1], 0, 0xFFFF_FFFF, 0x9A, 0xCF);
-        set_gdt(&mut (*p).gdt[2], 0, 0xFFFF_FFFF, 0x92, 0xCF);
-        set_gdt(&mut (*p).gdt[3], 0, 0xFFFF_FFFF, 0xFA, 0xCF);
-        set_gdt(&mut (*p).gdt[4], 0, 0xFFFF_FFFF, 0xF2, 0xCF);
-
-        // Per-CPU TSS at slot TSS_SLOT + cpu (str() identifies the CPU).
-        let tss_base = (&raw mut (*p).tss) as u32;
-        set_gdt(
-            &mut (*p).gdt[TSS_SLOT + cpu],
-            tss_base,
-            core::mem::size_of::<Tss>() as u32 - 1,
-            0xE9,
-            0x00,
-        );
-
-        (*p).tss.ss0 = 0x10;
-        (*p).tss.esp0 = stack_top(cpu);
-        (*p).tss.iomap_base = core::mem::size_of::<Tss>() as u16;
-
-        (*p).gp.limit = (count * core::mem::size_of::<GdtEntry>()) as u16 - 1;
-        (*p).gp.base = (&raw mut (*p).gdt) as u32;
-        (*p).lapic_id = lapic_id;
-        write_volatile(&raw mut (*p).online, 0);
+    // Reset descriptors (all-zero except the ones we set).
+    for slot in p.gdt[..count].iter_mut() {
+        write_volatile(slot as *mut GdtEntry, GdtEntry {
+            limit_low: 0,
+            base_low: 0,
+            base_middle: 0,
+            access: 0,
+            granularity: 0,
+            base_high: 0,
+        });
     }
+
+    // Fixed slots 0..4 mirror the boot GDT (user selectors included).
+    set_gdt(&mut p.gdt[0], 0, 0, 0, 0);
+    set_gdt(&mut p.gdt[1], 0, 0xFFFF_FFFF, 0x9A, 0xCF);
+    set_gdt(&mut p.gdt[2], 0, 0xFFFF_FFFF, 0x92, 0xCF);
+    set_gdt(&mut p.gdt[3], 0, 0xFFFF_FFFF, 0xFA, 0xCF);
+    set_gdt(&mut p.gdt[4], 0, 0xFFFF_FFFF, 0xF2, 0xCF);
+
+    // Per-CPU TSS at slot TSS_SLOT + cpu (str() identifies the CPU).
+    let tss_base = (&raw mut p.tss) as u32;
+    set_gdt(
+        &mut p.gdt[TSS_SLOT + cpu],
+        tss_base,
+        core::mem::size_of::<Tss>() as u32 - 1,
+        0xE9,
+        0x00,
+    );
+
+    p.tss.ss0 = 0x10;
+    p.tss.esp0 = stack_top(cpu);
+    p.tss.iomap_base = core::mem::size_of::<Tss>() as u16;
+
+    p.gp.limit = (count * core::mem::size_of::<GdtEntry>()) as u16 - 1;
+    p.gp.base = (&raw mut p.gdt) as u32;
+    p.lapic_id = lapic_id;
+    write_volatile(&raw mut p.online, 0);
 }
 
 fn read_info(off: usize) -> u32 {
+    // SAFETY: the trampoline binary was copied to the identity-mapped `TRAMP_ADDR` page, and
+    // `off` is one of the fixed `INFO_*` offsets inside that page, so the volatile word read is
+    // in bounds.
     unsafe { ((TRAMP_ADDR as usize + off) as *const u32).read_volatile() }
 }
 
@@ -291,6 +307,8 @@ pub extern "C" fn smp_ap_entry() -> ! {
     write_volatile((TRAMP_ADDR as usize + INFO_ACK) as *mut u32, AP_STAGE_TRAMP_READ);
     if cpu >= MAX_CPUS {
         loop {
+            // SAFETY: an out-of-range CPU id means the trampoline was fed bad info; `cli; hlt`
+            // touches no memory and parks this AP forever, which is all that is left to do.
             unsafe {
                 core::arch::asm!("cli; hlt", options(nomem, nostack));
             }
@@ -299,21 +317,29 @@ pub extern "C" fn smp_ap_entry() -> ! {
 
     let p = cpu_ptr(cpu);
     let sel = ((TSS_SLOT + cpu) << 3) as u16;
-    unsafe {
-        // Per-CPU GDT + TSS, shared IDT, local APIC.
-        ffi::gdt_flush((&raw const (*p).gp) as u32);
-        core::arch::asm!("ltr {0:x}", in(reg) sel, options(nomem, nostack));
-        ffi::idt_reload();
-        ffi::apic_ap_online();
+    // SAFETY: the AP runs on its own `idle_stack` and `cpu < MAX_CPUS` (checked above), so `p`
+    // is this CPU's own live `CPU_TABLE` entry, exclusively reborrowed before it is brought up.
+    let p = unsafe { &mut *p };
 
-        // Online in the energy governor and idle from the start.
-        let lapic_id = ffi::apic_lapic_id();
-        let _ = energy::energy_core_online(cpu as u32, lapic_id);
-        energy::energy_core_mark_idle(cpu as u32);
-        write_volatile(&raw mut (*p).online, 1);
+    // SAFETY: loading the per-CPU GDT just built for this CPU is the documented AP bring-up step.
+    unsafe { ffi::gdt_flush((&raw const p.gp) as u32) };
+    // SAFETY: `sel` is this CPU's TSS selector (`TSS_SLOT + cpu`) and that TSS is initialised.
+    unsafe { core::arch::asm!("ltr {0:x}", in(reg) sel, options(nomem, nostack)) };
+    // SAFETY: the shared kernel IDT is already built and loaded on the BSP; reloading it makes
+    // this AP use it too.
+    unsafe { ffi::idt_reload() };
+    // SAFETY: brings this AP online in the APIC layer; its LAPIC is mapped and enabled.
+    unsafe { ffi::apic_ap_online() };
 
-        core::arch::asm!("sti", options(nomem, nostack));
-    }
+    // Online in the energy governor and idle from the start.
+    // SAFETY: reads this CPU's own LAPIC id; the LAPIC is mapped and enabled.
+    let lapic_id = unsafe { ffi::apic_lapic_id() };
+    let _ = energy::energy_core_online(cpu as u32, lapic_id);
+    energy::energy_core_mark_idle(cpu as u32);
+    write_volatile(&raw mut p.online, 1);
+
+    // SAFETY: enables interrupts on this AP now that its GDT/TSS/IDT are installed.
+    unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
     loop {
         let _ = cstate::energy_cstate_idle(cpu as u32);
     }
@@ -332,6 +358,9 @@ fn stage_trampoline() -> i32 {
     }
 
     let dst = TRAMP_ADDR as *mut u8;
+    // SAFETY: `TRAMPOLINE_BIN_START`/`_END` bracket the linked-in trampoline blob and `len` was
+    // checked to be non-zero and at most one page, so source and destination (the identity-mapped
+    // `TRAMP_ADDR` page) are valid, non-overlapping regions of `len` bytes.
     unsafe {
         ptr::copy_nonoverlapping(start as *const u8, dst, len);
     }
@@ -349,6 +378,8 @@ fn stage_trampoline() -> i32 {
 /// to come up is reported through the energy table as still offline).
 #[no_mangle]
 pub extern "C" fn smp_init() -> i32 {
+    // SAFETY: `smp_init` runs once on the BSP during single-threaded boot bring-up, so nothing
+    // else can be reading or writing the `SMP_READY` static concurrently.
     unsafe {
         if SMP_READY {
             return 0;
@@ -373,6 +404,8 @@ pub extern "C" fn smp_init() -> i32 {
         }
         // Raw reads only (no energy locks): an AP must not be able to wedge
         // the BSP's bring-up loop.
+        // SAFETY: `cpu` is below `present`, which was clamped to `MAX_CPUS`, so `cpu_ptr(cpu)`
+        // addresses a live `CPU_TABLE` entry and the `lapic_id` read is in bounds.
         let lapic_id = unsafe { (*cpu_ptr(cpu)).lapic_id };
 
         // Stamp the shared info block for this worker.  INFO_ACK is cleared
@@ -387,14 +420,20 @@ pub extern "C" fn smp_init() -> i32 {
 
         // INIT-SIPI-SIPI wakeup sequence with 10 ms after INIT and a 1 ms
         // gap between the two SIPIs.
+        // SAFETY: `lapic_id` was read from this CPU's own `CPU_TABLE` entry, so it is that
+        // worker's real LAPIC id; the C helpers do the ICR register/MSR writes themselves.
         unsafe {
             ffi::apic_send_init_ipi(lapic_id);
         }
         delay_ms(INIT_SIPI_DELAY_MS);
+        // SAFETY: same LAPIC id as above, and `TRAMP_VECTOR` is the SIPI vector for the
+        // identity-mapped `TRAMP_ADDR` trampoline page.
         unsafe {
             ffi::apic_send_sipi(lapic_id, TRAMP_VECTOR);
         }
         delay_ms(SIPI_GAP_MS);
+        // SAFETY: the second SIPI is the same call as the first, per the INIT-SIPI-SIPI
+        // sequence this bring-up uses.
         unsafe {
             ffi::apic_send_sipi(lapic_id, TRAMP_VECTOR);
         }
@@ -423,6 +462,8 @@ pub extern "C" fn smp_init() -> i32 {
         }
     }
 
+    // SAFETY: still on the BSP during single-threaded boot bring-up; this records that bring-up
+    // has finished so a later call short-circuits.
     unsafe {
         SMP_READY = true;
     }
@@ -434,6 +475,8 @@ pub extern "C" fn smp_init() -> i32 {
 #[no_mangle]
 pub extern "C" fn smp_self_cpu() -> i32 {
     let sel: u32;
+    // SAFETY: `str` only copies the current task-register selector into an output register; it
+    // reads and writes no memory and does not touch the stack.
     unsafe {
         core::arch::asm!("str {0}", out(reg) sel, options(nomem, nostack));
     }

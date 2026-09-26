@@ -58,7 +58,11 @@ impl<'a> From<&str> for Box<dyn Error + Send + Sync + 'a> {
             }
         }
         impl Error for StrError {}
+        // SAFETY: `StrError` wraps only a `String`, which is already `Send`, so
+        // moving the whole value to another thread cannot violate any invariant.
         unsafe impl Send for StrError {}
+        // SAFETY: `StrError` wraps only a `String`, which is already `Sync`, so
+        // sharing `&StrError` across threads only shares `&String`.
         unsafe impl Sync for StrError {}
         Box::new(StrError(s.into()))
     }

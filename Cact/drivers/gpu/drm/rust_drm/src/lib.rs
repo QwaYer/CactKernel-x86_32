@@ -17,43 +17,42 @@
 //! comes from the kernel's `rust_net` crate, so no second one is defined here.
 
 #![no_std]
-#![allow(static_mut_refs)]
 // The driver-facing ABI carries `*mut drm_device` / `*mut drm_file`, whose Rust
 // types own `Vec`s.  A driver only ever holds those as opaque pointers, so the
 // pointee layout never crosses the boundary — which is exactly what this lint
-// cannot see.
-#![allow(improper_ctypes, improper_ctypes_definitions)]
+// cannot see.  Those types no longer travel through `extern "C"` declarations
+// of functions that this crate itself defines (they are called by crate path),
+// so the lint is denied: anything it reports is a real ABI boundary and needs a
+// local `#[allow]` with a reason.
+#![deny(improper_ctypes, improper_ctypes_definitions)]
+// Safety baseline: unsafe ops inside `unsafe fn` bodies must be explicit, and every
+// `unsafe` block needs a SAFETY comment (the latter enforced under clippy).
+#![deny(unsafe_op_in_unsafe_fn)]
+#![deny(unused_unsafe)]
+#![deny(static_mut_refs)]
+#![deny(clippy::undocumented_unsafe_blocks)]
+#![deny(clippy::missing_safety_doc)]
+// Additional safety lints (all verified zero-hit when enabled, 2026-09-26):
+// transmute misuse, byte-vs-element count confusion and assumptions that
+// uninitialised memory is valid become hard errors instead of silent warnings.
+#![deny(clippy::transmute_ptr_to_ref)]
+#![deny(clippy::transmute_ptr_to_ptr)]
+#![deny(clippy::useless_transmute)]
+#![deny(clippy::size_of_in_element_count)]
+#![deny(clippy::uninit_assumed_init)]
+#![deny(invalid_reference_casting)]
+// At most one unsafe operation per `unsafe` block, so every block is small
+// enough to audit on its own (the same maximal tightening applied to the
+// scheduler, the network stack and the memory manager).
+#![deny(clippy::multiple_unsafe_ops_per_block)]
 
 extern crate alloc;
 
-/// The core's `Vec`/`BTreeMap` storage comes from the kernel heap.
-///
-/// A `staticlib` that uses `alloc` has to name an allocator, so this crate
-/// carries the same `kmalloc_aligned`/`kfree` shim the other kernel Rust
-/// libraries do; at link time the archives provide one `__rust_alloc` between
-/// them.
-struct CactAllocator;
+// This crate's `Vec`/`BTreeMap` storage comes from the kernel heap, whose
+// single `#[global_allocator]` now lives in the link crate `cact_kernel`.
 
-// SAFETY: the kernel heap never returns a pointer that overlaps a live
-// allocation, and `kfree` accepts exactly what `kmalloc_aligned` returned.
-unsafe impl core::alloc::GlobalAlloc for CactAllocator {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        unsafe extern "C" {
-            fn kmalloc_aligned(size: usize, align: u32) -> *mut core::ffi::c_void;
-        }
-        kmalloc_aligned(layout.size(), layout.align() as u32) as *mut u8
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, _layout: core::alloc::Layout) {
-        unsafe extern "C" {
-            fn kfree(ptr: *mut core::ffi::c_void);
-        }
-        kfree(ptr as *mut core::ffi::c_void);
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: CactAllocator = CactAllocator;
+// The kernel Rust graph's single `#[global_allocator]` lives in the link
+// crate (`cact_kernel`); a crate graph may define exactly one.
 
 mod device;
 mod devfs;
@@ -75,12 +74,5 @@ mod vfs;
 #[path = "../../../kms/src/mod.rs"]
 mod kms;
 
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    // SAFETY: a static NUL-terminated byte string.
-    unsafe { ffi::printk(crate::ffi::PANIC_MSG.as_ptr()) };
-    loop {
-        // SAFETY: hlt is the only safe way to spin in a kernel panic.
-        unsafe { core::arch::asm!("hlt", options(nomem, nostack)); }
-    }
-}
+// The kernel Rust graph's single `#[panic_handler]` lives in `cact_mm`, which
+// this crate depends on, so one is not defined here.

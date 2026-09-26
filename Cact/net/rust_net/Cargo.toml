@@ -4,9 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["lib"]
 
 [dependencies]
+cact_mm = { path = "../../kernel/memory/rust_mm" }
+cact_sync = { path = "../../kernel/sync" }
+sched   = { path = "../../kernel/proc/sched" }
 cact_shim = { path = "../../crypto/cact_shim" }
 cact_crypto = { path = "../../crypto" }
 rustls = { path = "../../crypto/vendor/rustls-0.23.40/rustls", default-features = false, features = ["custom-provider", "hashbrown"] }

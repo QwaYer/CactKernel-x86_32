@@ -111,7 +111,7 @@ pub(crate) fn on_enqueue(level: u32) {
         }
         if cstate::energy_ipi_wake_worker(cpu) == 0 {
             let _ = energy::energy_core_set_cstate(cpu, CSTATE_C0);
-            let _ = monitor::energy_monitor_charge_energy(
+            monitor::energy_monitor_charge_energy(
                 cpu,
                 decision::energy_decision_cost(state) as u32,
             );

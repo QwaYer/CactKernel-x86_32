@@ -79,10 +79,15 @@ unsafe extern "C" {
 }
 
 fn cstates() -> &'static mut [CStateInfo; CSTATE_COUNT] {
+    // SAFETY: `CSTATES` is a statically initialised descriptor table that is only ever read at
+    // runtime (`energy_cstate_*` all read one entry), so no aliasing write can occur while the
+    // returned reference is live.
     unsafe { &mut *CSTATES.get() }
 }
 
 fn init_done() -> &'static mut bool {
+    // SAFETY: `CSTATE_INIT_DONE` is set exactly once by `energy_cstate_init`, which runs from
+    // single-threaded boot bring-up before the governor can be queried.
     unsafe { &mut *CSTATE_INIT_DONE.get() }
 }
 
@@ -91,6 +96,8 @@ fn cstate_in_range(state: u32) -> bool {
 }
 
 fn hlt() {
+    // SAFETY: `hlt` only halts this CPU until the next interrupt; it reads and writes no memory
+    // and leaves no flags to observe.
     unsafe {
         core::arch::asm!("hlt", options(nomem, nostack));
     }
@@ -194,10 +201,11 @@ pub extern "C" fn energy_ipi_init() -> i32 {
     }
     let halt = (ipi_halt_isr as unsafe extern "C" fn()) as usize as u32;
     let wake = (ipi_wake_isr as unsafe extern "C" fn()) as usize as u32;
-    unsafe {
-        ffi::set_idt_gate(IPI_HALT_VECTOR as i32, halt);
-        ffi::set_idt_gate(IPI_WAKE_VECTOR as i32, wake);
-    }
+    // SAFETY: `IPI_INIT_DONE` guarantees this runs once, during boot after the IDT is loaded;
+    // `IPI_HALT_VECTOR` is a valid IDT index and `halt` is the matching ISR stub.
+    unsafe { ffi::set_idt_gate(IPI_HALT_VECTOR as i32, halt) };
+    // SAFETY: as above, for the wake vector and its matching ISR stub.
+    unsafe { ffi::set_idt_gate(IPI_WAKE_VECTOR as i32, wake) };
     0
 }
 
@@ -220,6 +228,9 @@ fn ipi_send(dst_cpu: u32, vector: u32) -> i32 {
 
     // The C side owns the ICR encoding (two MMIO registers in xAPIC mode,
     // one 64-bit MSR in x2APIC mode).
+    // SAFETY: `lapic_id` has been checked for the invalid sentinel above and `vector` is one of
+    // this controller's own IDT vectors; `apic_send_ipi` takes them by value and does the ICR
+    // register/MSR write itself.
     unsafe { ffi::apic_send_ipi(lapic_id, vector) }
 }
 

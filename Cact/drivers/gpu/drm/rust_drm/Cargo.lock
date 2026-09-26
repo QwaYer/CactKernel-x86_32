@@ -5,3 +5,17 @@ version = 4
 [[package]]
 name = "cact_drm"
 version = "0.1.0"
+dependencies = [
+ "cact_mm",
+]
+
+[[package]]
+name = "cact_mm"
+version = "0.1.0"
+dependencies = [
+ "cact_sync",
+]
+
+[[package]]
+name = "cact_sync"
+version = "0.1.0"

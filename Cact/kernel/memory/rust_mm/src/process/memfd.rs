@@ -54,20 +54,26 @@ static MEMFD_LOCK: KStatic<IrqSpinlock> =
 static MEMFD_INITIALIZED: KStatic<i32> = KStatic::new(0);
 
 fn memfd_ensure_init() {
-    if *MEMFD_INITIALIZED.get_mut() != 0 {
+    // SAFETY: `MEMFD_INITIALIZED` is a boot/first-use latch; a benign race can only
+    // cause the idempotent `irq_spinlock_init` to run twice.
+    if *unsafe { KStatic::get_mut(MEMFD_INITIALIZED.as_ptr()) } != 0 {
         return;
     }
     // SAFETY: boot-time / first-use init, single-threaded.
-    unsafe { irq_spinlock_init(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock) };
-    *MEMFD_INITIALIZED.get_mut() = 1;
+    unsafe { irq_spinlock_init(MEMFD_LOCK.as_ptr()) };
+    // SAFETY: single-threaded first-use init: the latch is set after the lock is
+    // initialised.
+    *unsafe { KStatic::get_mut(MEMFD_INITIALIZED.as_ptr()) } = 1;
 }
 
 fn handle_valid(h: i32) -> bool {
-    h >= 1 && (h as usize) <= MEMFD_MAX && MEMFD_TABLE.get_mut()[(h - 1) as usize].valid != 0
+    // SAFETY: `MEMFD_TABLE` read; every `handle_valid` caller holds `MEMFD_LOCK`,
+    // so the entry cannot be freed under us.
+    h >= 1 && (h as usize) <= MEMFD_MAX && (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(h - 1) as usize].valid != 0
 }
 
 fn ceil_pages(bytes: u32) -> u32 {
-    (bytes + PAGE_SIZE - 1) / PAGE_SIZE
+    bytes.div_ceil(PAGE_SIZE)
 }
 
 /// Grow the object so it covers `need_pages` frames.  Caller holds MEMFD_LOCK.
@@ -84,7 +90,8 @@ fn grow_locked(s: &mut MemFd, need_pages: u32) -> bool {
         if p.is_null() {
             // Roll back the frames allocated in this call.
             for j in start..i {
-                free_page(s.pages[j as usize]);
+                // SAFETY: the frame is live and PMM-managed; this call releases exactly one reference to it.
+                unsafe { free_page(s.pages[j as usize]) };
                 s.pages[j as usize] = core::ptr::null_mut();
             }
             return false;
@@ -98,13 +105,16 @@ fn grow_locked(s: &mut MemFd, need_pages: u32) -> bool {
 
 /// Free the object once both reference counters are zero.  Caller holds lock.
 fn maybe_free_locked(slot: usize) {
-    let s = &mut MEMFD_TABLE.get_mut()[slot];
+    // SAFETY: `MEMFD_TABLE[slot]` freed while `MEMFD_LOCK` is held (the `_locked`
+    // suffix records that contract).
+    let s = &mut (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[slot];
     if s.valid == 0 || s.fds != 0 || s.maps != 0 {
         return;
     }
     for i in 0..s.num_pages as usize {
         if !s.pages[i].is_null() {
-            free_page(s.pages[i]);
+            // SAFETY: the frame is live and PMM-managed; this call releases exactly one reference to it.
+            unsafe { free_page(s.pages[i]) };
             s.pages[i] = core::ptr::null_mut();
         }
     }
@@ -115,22 +125,22 @@ fn maybe_free_locked(slot: usize) {
     s.valid = 0;
 }
 
+/// # Safety
+///
+/// `name` must be null or point to at least `name_len` readable bytes that stay
+/// valid for the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn memfd_create(name: *const u8, name_len: u32, flags: i32) -> i32 {
+pub unsafe extern "C" fn memfd_create(name: *const u8, name_len: u32, flags: i32) -> i32 {
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
 
-    let table = MEMFD_TABLE.get_mut();
-    let mut slot: usize = MEMFD_MAX;
-    for i in 0..MEMFD_MAX {
-        if table[i].valid == 0 {
-            slot = i;
-            break;
-        }
-    }
+    // SAFETY: `MEMFD_TABLE` mutated for the whole of `memfd_create`, with
+    // `MEMFD_LOCK` held.
+    let table = unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) };
+    let slot: usize = table.iter().position(|e| e.valid == 0).unwrap_or(MEMFD_MAX);
     if slot == MEMFD_MAX {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
-        kprint_str(b"[MEMFD] memfd_create: table full\n\0".as_ptr());
+        lock_release(MEMFD_LOCK.as_ptr());
+        kprint_str(c"[MEMFD] memfd_create: table full\n".as_ptr() as *const u8);
         return -1;
     }
 
@@ -153,7 +163,7 @@ pub extern "C" fn memfd_create(name: *const u8, name_len: u32, flags: i32) -> i3
     s.maps = 0;
     s.valid = 1;
 
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     (slot + 1) as i32
 }
 
@@ -161,13 +171,15 @@ pub extern "C" fn memfd_create(name: *const u8, name_len: u32, flags: i32) -> i3
 #[unsafe(no_mangle)]
 pub extern "C" fn memfd_ref(handle: i32) -> i32 {
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     if !handle_valid(handle) {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
-    MEMFD_TABLE.get_mut()[(handle - 1) as usize].fds += 1;
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    // SAFETY: `MEMFD_TABLE[handle-1].fds` incremented under `MEMFD_LOCK`, after
+    // `handle_valid` confirmed the entry.
+    (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize].fds += 1;
+    lock_release(MEMFD_LOCK.as_ptr());
     handle
 }
 
@@ -175,17 +187,19 @@ pub extern "C" fn memfd_ref(handle: i32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn memfd_close(handle: i32) -> i32 {
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     if !handle_valid(handle) {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
     let slot = (handle - 1) as usize;
-    if MEMFD_TABLE.get_mut()[slot].fds > 0 {
-        MEMFD_TABLE.get_mut()[slot].fds -= 1;
+    // SAFETY: `MEMFD_TABLE[slot].fds` read under `MEMFD_LOCK`.
+    if (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[slot].fds > 0 {
+        // SAFETY: decrement of the same reference count, still under `MEMFD_LOCK`.
+        (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[slot].fds -= 1;
     }
     maybe_free_locked(slot);
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     0
 }
 
@@ -193,13 +207,14 @@ pub extern "C" fn memfd_close(handle: i32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn memfd_map_inc(handle: i32) -> i32 {
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     if !handle_valid(handle) {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
-    MEMFD_TABLE.get_mut()[(handle - 1) as usize].maps += 1;
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    // SAFETY: `MEMFD_TABLE[handle-1].maps` incremented under `MEMFD_LOCK`.
+    (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize].maps += 1;
+    lock_release(MEMFD_LOCK.as_ptr());
     0
 }
 
@@ -207,39 +222,44 @@ pub extern "C" fn memfd_map_inc(handle: i32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn memfd_map_dec(handle: i32) -> i32 {
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     if !handle_valid(handle) {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
     let slot = (handle - 1) as usize;
-    if MEMFD_TABLE.get_mut()[slot].maps > 0 {
-        MEMFD_TABLE.get_mut()[slot].maps -= 1;
+    // SAFETY: `MEMFD_TABLE[slot].maps` read under `MEMFD_LOCK`.
+    if (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[slot].maps > 0 {
+        // SAFETY: decrement of the same mapping count, under `MEMFD_LOCK`.
+        (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[slot].maps -= 1;
     }
     maybe_free_locked(slot);
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     0
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn memfd_size(handle: i32) -> i32 {
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     let size = if handle_valid(handle) {
-        MEMFD_TABLE.get_mut()[(handle - 1) as usize].size as i32
+        // SAFETY: `MEMFD_TABLE[handle-1].size` read under `MEMFD_LOCK`.
+        (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize].size as i32
     } else {
         -1
     };
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     size
 }
 
 /// Grow the object to cover at least byte offset `end` (used by mmap).
 pub(crate) fn memfd_grow_to(handle: i32, end: u32) -> i32 {
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     let res = if handle_valid(handle) {
-        let s = &mut MEMFD_TABLE.get_mut()[(handle - 1) as usize];
+        // SAFETY: `MEMFD_TABLE[handle-1]` mutated by `memfd_grow_to`, which holds
+        // `MEMFD_LOCK`.
+        let s = &mut (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize];
         if grow_locked(s, ceil_pages(end)) {
             if end > s.size {
                 s.size = end;
@@ -251,7 +271,7 @@ pub(crate) fn memfd_grow_to(handle: i32, end: u32) -> i32 {
     } else {
         -1
     };
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     res
 }
 
@@ -263,9 +283,12 @@ pub(crate) fn memfd_grow_to(handle: i32, end: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn memfd_get_page(handle: i32, idx: u32) -> *mut u8 {
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     let page = if handle_valid(handle) {
-        let s = &MEMFD_TABLE.get_mut()[(handle - 1) as usize];
+        // SAFETY: `MEMFD_TABLE[handle-1]` read under `MEMFD_LOCK`; the returned frame
+        // stays owned by the memfd while `MEMFD_LOCK` is held and is refcounted by
+        // `page_ref_inc` for the caller.
+        let s = &(unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize];
         if idx < s.num_pages {
             s.pages[idx as usize]
         } else {
@@ -274,12 +297,16 @@ pub extern "C" fn memfd_get_page(handle: i32, idx: u32) -> *mut u8 {
     } else {
         core::ptr::null_mut()
     };
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     page
 }
 
+/// # Safety
+///
+/// `buf` must be null or point to at least `size` writable bytes that stay
+/// valid for the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn memfd_read(handle: i32, off: u32, buf: *mut u8, size: u32) -> i32 {
+pub unsafe extern "C" fn memfd_read(handle: i32, off: u32, buf: *mut u8, size: u32) -> i32 {
     if size == 0 {
         return 0;
     }
@@ -287,18 +314,26 @@ pub extern "C" fn memfd_read(handle: i32, off: u32, buf: *mut u8, size: u32) -> 
         return -1;
     }
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     if !handle_valid(handle) {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
-    let s = &MEMFD_TABLE.get_mut()[(handle - 1) as usize];
+    // SAFETY: `MEMFD_TABLE[handle-1]` read under `MEMFD_LOCK`; `grow_locked` (and
+    // thus its refcounted frames) cannot be freed while we hold the lock.
+    let s = &(unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize];
     if off >= s.size {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return 0;
     }
     let mut n = size;
-    if off + n > s.size || off + n < off {
+    // Overflow-safe replacement for the C `off + n < off` guard: a wrapped
+    // sum is treated exactly like the original overflow test.
+    let end_fits = match off.checked_add(n) {
+        Some(end) => end <= s.size,
+        None => false,
+    };
+    if !end_fits {
         n = s.size - off;
     }
     let mut copied = 0u32;
@@ -308,19 +343,28 @@ pub extern "C" fn memfd_read(handle: i32, off: u32, buf: *mut u8, size: u32) -> 
         let in_page = pos % PAGE_SIZE;
         let chunk = core::cmp::min(n - copied, PAGE_SIZE - in_page);
         let page = s.pages[page_idx as usize];
-        // SAFETY: page is a valid frame; buf is a valid C buffer (>= size).
-        unsafe {
-            core::ptr::copy_nonoverlapping(page.add(in_page as usize), buf.add(copied as usize), chunk as usize);
-        }
+        // SAFETY: `in_page < PAGE_SIZE` and `page` is a live frame, so this is a
+        // valid pointer to `chunk <= PAGE_SIZE - in_page` readable bytes.
+        let src = unsafe { page.add(in_page as usize) };
+        // SAFETY: `copied < size` and `buf` is a valid C buffer of at least `size`
+        // bytes, so this is a valid pointer to `chunk` writable bytes.
+        let dst = unsafe { buf.add(copied as usize) };
+        // SAFETY: `src`/`dst` are the in-bounds pointers computed above and the two
+        // ranges are distinct (a mapped frame vs the caller's buffer).
+        unsafe { core::ptr::copy_nonoverlapping(src, dst, chunk as usize) };
         copied += chunk;
         pos += chunk;
     }
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     copied as i32
 }
 
+/// # Safety
+///
+/// `buf` must be null or point to at least `size` readable bytes that stay
+/// valid for the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn memfd_write(handle: i32, off: u32, buf: *const u8, size: u32) -> i32 {
+pub unsafe extern "C" fn memfd_write(handle: i32, off: u32, buf: *const u8, size: u32) -> i32 {
     if size == 0 {
         return 0;
     }
@@ -328,19 +372,21 @@ pub extern "C" fn memfd_write(handle: i32, off: u32, buf: *const u8, size: u32) 
         return -1;
     }
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     if !handle_valid(handle) {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
     let end = off.saturating_add(size);
     if end < off || end > MEMFD_MAX_PAGES * PAGE_SIZE {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
-    let s = &mut MEMFD_TABLE.get_mut()[(handle - 1) as usize];
+    // SAFETY: `MEMFD_TABLE[handle-1]` read/updated under `MEMFD_LOCK`; the frames
+    // it owns stay live for the duration of the copy.
+    let s = &mut (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize];
     if !grow_locked(s, ceil_pages(end)) {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
     if end > s.size {
@@ -354,14 +400,19 @@ pub extern "C" fn memfd_write(handle: i32, off: u32, buf: *const u8, size: u32) 
         let in_page = pos % PAGE_SIZE;
         let chunk = core::cmp::min(size - written, PAGE_SIZE - in_page);
         let page = s.pages[page_idx as usize];
-        // SAFETY: page is a valid frame; buf is a valid C buffer (>= size).
-        unsafe {
-            core::ptr::copy_nonoverlapping(buf.add(written as usize), page.add(in_page as usize), chunk as usize);
-        }
+        // SAFETY: `written < size` and `buf` is a valid C buffer of at least `size`
+        // bytes, so this is a valid pointer to `chunk` readable bytes.
+        let src = unsafe { buf.add(written as usize) };
+        // SAFETY: `in_page < PAGE_SIZE` and `page` is a live frame, so this is a
+        // valid pointer to `chunk <= PAGE_SIZE - in_page` writable bytes.
+        let dst = unsafe { page.add(in_page as usize) };
+        // SAFETY: `src`/`dst` are the in-bounds pointers computed above and the two
+        // ranges are distinct (the caller's buffer vs a mapped frame).
+        unsafe { core::ptr::copy_nonoverlapping(src, dst, chunk as usize) };
         written += chunk;
         pos += chunk;
     }
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     written as i32
 }
 
@@ -371,21 +422,21 @@ pub extern "C" fn memfd_truncate(handle: i32, new_size: u32) -> i32 {
         return -1;
     }
     memfd_ensure_init();
-    lock_acquire(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_acquire(MEMFD_LOCK.as_ptr());
     if !handle_valid(handle) {
-        lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+        lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
-    let s = &mut MEMFD_TABLE.get_mut()[(handle - 1) as usize];
-    if new_size > s.size {
-        if !grow_locked(s, ceil_pages(new_size)) {
-            lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    // SAFETY: `MEMFD_TABLE[handle-1]` mutated under `MEMFD_LOCK`.
+    let s = &mut (unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize];
+    if new_size > s.size
+        && !grow_locked(s, ceil_pages(new_size)) {
+            lock_release(MEMFD_LOCK.as_ptr());
             return -1;
         }
-    }
     // Shrink only reduces the logical size; the backing frames are left in
     // place until object destruction so live MAP_SHARED mappings stay valid.
     s.size = new_size;
-    lock_release(MEMFD_LOCK.as_ptr() as *mut IrqSpinlock);
+    lock_release(MEMFD_LOCK.as_ptr());
     0
 }

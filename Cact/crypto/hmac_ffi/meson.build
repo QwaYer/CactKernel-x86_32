@@ -17,9 +17,5 @@ foreach f : _found.stdout().strip().split('\n')
   endif
 endforeach
 
-kernel_rust_libs += custom_target('rust-cact-hmac',
-  input: _rust_inputs,
-  output: 'libcact_hmac_ffi.a',
-  command: [bash, rust_build_script, meson.current_source_dir(),
-            'libcact_hmac_ffi.a', 'nightly', '@OUTPUT@'],
-  build_by_default: false)
+# `cact_hmac_ffi` is an rlib now and is linked into the kernel by
+# `Cact/kernel/kernel_rust`, which is the kernel's single Rust archive.

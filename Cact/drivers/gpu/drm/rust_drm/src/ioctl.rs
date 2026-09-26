@@ -163,7 +163,14 @@ unsafe fn cstrlen(p: *const u8) -> u32 {
         return 0;
     }
     let mut n = 0u32;
-    while *p.add(n as usize) != 0 {
+    loop {
+        // SAFETY: `p` is non-null (checked above) and the caller guarantees it points
+        // at a NUL-terminated string, so this offset is a readable byte.
+        let q = unsafe { p.add(n as usize) };
+        // SAFETY: `q` points at one byte of that string.
+        if unsafe { *q } == 0 {
+            break;
+        }
         n += 1;
     }
     n
@@ -179,7 +186,9 @@ pub extern "C" fn drm_ioctl_dispatch(file: *mut DrmFile, cmd: u32, arg: *mut c_v
     if size > DRM_IOCTL_MAX_SIZE {
         // SAFETY: fixed format string, no arguments.
         unsafe {
-            crate::ffi::printk(b"\x017  drm         : ioctl payload too large\n\0".as_ptr());
+            crate::ffi::printk(
+                c"\x017  drm         : ioctl payload too large\n".as_ptr() as *const u8,
+            );
         }
         return -22;
     }
@@ -193,7 +202,7 @@ pub extern "C" fn drm_ioctl_dispatch(file: *mut DrmFile, cmd: u32, arg: *mut c_v
      *                           core-owned just like the legacy band.
      * Getting this boundary wrong sends GETRESOURCES/SETCRTC to the driver,
      * which then has nothing to say about them. */
-    if nr < DRM_COMMAND_BASE || nr >= DRM_COMMAND_END {
+    if !(DRM_COMMAND_BASE..DRM_COMMAND_END).contains(&nr) {
         let rc = drm_legacy_ioctl(file, nr, arg);
         if rc != -38 {
             return rc; // -ENOSYS means "not mine"
@@ -208,17 +217,20 @@ pub extern "C" fn drm_ioctl_dispatch(file: *mut DrmFile, cmd: u32, arg: *mut c_v
     if file.is_null() {
         return -22;
     }
-    // SAFETY: caller's file; the ops table is the driver's.
-    unsafe {
-        let dev = (*file).dev;
-        if dev.is_null() {
-            return -22;
-        }
-        let ops = (*dev).ops;
-        if !ops.is_null() {
-            if let Some(f) = (*ops).ioctl {
-                return f(dev, file, cmd, arg, size);
-            }
+    // SAFETY: `file` is the caller's live client (checked non-null above), so this
+    // `dev` field read is in bounds.
+    let dev = unsafe { (*file).dev };
+    if dev.is_null() {
+        return -22;
+    }
+    // SAFETY: `dev` is the client's live device, so this ops-table read is in bounds.
+    let ops = unsafe { (*dev).ops };
+    if !ops.is_null() {
+        // SAFETY: `ops` is the driver's live ops table; this only copies the ioctl
+        // function pointer.
+        let dispatch = unsafe { (*ops).ioctl };
+        if let Some(dispatch) = dispatch {
+            return dispatch(dev, file, cmd, arg, size);
         }
     }
     -22
@@ -229,24 +241,32 @@ pub extern "C" fn drm_ioctl_dispatch(file: *mut DrmFile, cmd: u32, arg: *mut c_v
 /* Global GEM names (GEM_FLINK / GEM_OPEN).  Kept per device, one map entry per
  * named object, so there is no cap and a name is never reused. */
 unsafe fn drm_flink_name(dev: *mut DrmDevice, obj: *mut GemObject, name_out: *mut u32) -> c_int {
-    for (&name, &o) in (*dev).flink.iter() {
+    // SAFETY: `dev` is the caller's live device; the flink map is only touched here,
+    // under the caller's device lock, so this borrow is exclusive for the update.
+    let dev = unsafe { &mut *dev };
+    for (&name, &o) in dev.flink.iter() {
         if o == obj {
-            *name_out = name;
+            // SAFETY: `name_out` points at a caller-owned `u32` to receive the name.
+            unsafe { *name_out = name };
             return 0;
         }
     }
-    (*dev).next_flink_name += 1;
-    let name = (*dev).next_flink_name;
-    (*dev).flink.insert(name, obj);
+    dev.next_flink_name += 1;
+    let name = dev.next_flink_name;
+    dev.flink.insert(name, obj);
     drm_gem_ref(obj);
-    *name_out = name;
+    // SAFETY: as above — writing the freshly-assigned name to the caller's slot.
+    unsafe { *name_out = name };
     0
 }
 
 unsafe fn drm_flink_lookup(dev: *mut DrmDevice, name: u32) -> *mut GemObject {
-    match (*dev).flink.get(&name) {
-        Some(&o) => o,
-        None => core::ptr::null_mut(),
+    // SAFETY: `dev` is the caller's live device; this only reads its flink map.
+    unsafe {
+        match (*dev).flink.get(&name) {
+            Some(&o) => o,
+            None => core::ptr::null_mut(),
+        }
     }
 }
 
@@ -255,10 +275,13 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
     if file.is_null() {
         return -22;
     }
-    // SAFETY: caller's file; every handler validates its own payload.
-    unsafe {
-        let dev = (*file).dev;
+    // SAFETY: `file` is the caller's live client (checked non-null at entry), so
+    // this `dev` field read is in bounds.
+    let dev = unsafe { (*file).dev };
+    // SAFETY: `dev` is the client's live device, so this ops-table read is in bounds.
+    let ops = unsafe { (*dev).ops };
 
+    {
         match nr {
             NR_VERSION => {
                 let mut v = DrmVersion {
@@ -282,17 +305,25 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                     return -22;
                 }
 
-                let ops = (*dev).ops;
-                let name = if !ops.is_null() && !(*ops).name.is_null() {
-                    (*ops).name
+                let ops_name = if ops.is_null() {
+                    core::ptr::null()
                 } else {
-                    b"cact\0".as_ptr()
+                    // SAFETY: `ops` is the driver's live ops table (null was handled
+                    // above); this reads its `name` field.
+                    unsafe { (*ops).name }
+                };
+                let name = if !ops_name.is_null() {
+                    ops_name
+                } else {
+                    c"cact".as_ptr() as *const u8
                 };
 
                 /* Userspace passes the buffer it has; copy the name out and
                  * report the full length so the caller can resize and retry,
                  * as libdrm does. */
-                let n = cstrlen(name);
+                // SAFETY: `name` is a NUL-terminated string (a driver static or the
+                // literal below), so `cstrlen`'s contract is met.
+                let n = unsafe { cstrlen(name) };
                 if !v.name.is_null() && v.name_len != 0 {
                     let c = if n < v.name_len { n } else { v.name_len };
                     if drm_copy_out(v.name as *mut c_void, name as *const c_void, c) != 0 {
@@ -305,9 +336,13 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                 v.desc = core::ptr::null_mut();
                 v.desc_len = 0;
                 if !ops.is_null() {
-                    v.version_major = (*ops).major as c_int;
-                    v.version_minor = (*ops).minor as c_int;
-                    v.version_patchlevel = (*ops).patchlevel as c_int;
+                    // SAFETY: `ops` is the driver's live ops table; this reads its
+                    // major version.
+                    v.version_major = unsafe { (*ops).major } as c_int;
+                    // SAFETY: as above — the minor version.
+                    v.version_minor = unsafe { (*ops).minor } as c_int;
+                    // SAFETY: as above — the patchlevel.
+                    v.version_patchlevel = unsafe { (*ops).patchlevel } as c_int;
                 }
                 if drm_copy_out(
                     arg,
@@ -387,7 +422,9 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                 {
                     return -22;
                 }
-                a.magic = (*file).magic;
+                // SAFETY: `file` is the caller's live client, so this `magic` read is
+                // in bounds.
+                a.magic = unsafe { (*file).magic };
                 drm_copy_out(arg, &a as *const _ as *const c_void, core::mem::size_of::<DrmAuth>() as u32)
             }
 
@@ -395,20 +432,29 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                 /* DRM_IOCTL_SET_MASTER is `_IO` — no payload.  (The C version
                  * copied a `drm_auth` in against a zero-size command, which
                  * made the payload check fail, so it always answered -EINVAL.) */
-                if (*file).is_render != 0 {
+                // SAFETY: `file` is the caller's live client.
+                if unsafe { (*file).is_render } != 0 {
                     return -1;
                 }
-                for &o in (*dev).clients.iter() {
-                    if o != file && !o.is_null() && (*o).is_master != 0 {
-                        return -1; // already taken
+                // SAFETY: `dev` is the client's live device; this borrow of its client
+                // list is consumed by the scan below.
+                let clients = unsafe { &(*dev).clients };
+                for &o in clients.iter() {
+                    if o != file && !o.is_null() {
+                        // SAFETY: `o` is a live client (non-null, checked above).
+                        if unsafe { (*o).is_master } != 0 {
+                            return -1; // already taken
+                        }
                     }
                 }
-                (*file).is_master = 1;
+                // SAFETY: `file` is the caller's live client.
+                unsafe { (*file).is_master = 1 };
                 0
             }
 
             NR_DROP_MASTER => {
-                (*file).is_master = 0;
+                // SAFETY: `file` is the caller's live client.
+                unsafe { (*file).is_master = 0 };
                 0
             }
 
@@ -425,7 +471,8 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                 }
                 /* Single-user system: authentication is a formality, every
                  * client of the card node is trusted the moment it opens it. */
-                (*file).authenticated = 1;
+                // SAFETY: `file` is the caller's live client.
+                unsafe { (*file).authenticated = 1 };
                 0
             }
 
@@ -458,7 +505,9 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                 if obj.is_null() {
                     return -9; // -EBADF
                 }
-                if drm_flink_name(dev, obj, &mut fl.name) != 0 {
+                // SAFETY: `drm_flink_name`'s contract: `dev` and `obj` are the caller's
+                // live device and object, and `fl.name` is a local to receive the name.
+                if unsafe { drm_flink_name(dev, obj, &mut fl.name) } != 0 {
                     return -12;
                 }
                 drm_copy_out(arg, &fl as *const _ as *const c_void, core::mem::size_of::<DrmGemFlink>() as u32)
@@ -475,7 +524,9 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                 {
                     return -22;
                 }
-                let obj = drm_flink_lookup(dev, op.name);
+                // SAFETY: `drm_flink_lookup`'s contract: `dev` is the caller's live
+                // device, which it only reads.
+                let obj = unsafe { drm_flink_lookup(dev, op.name) };
                 if obj.is_null() {
                     return -2; // -ENOENT
                 }
@@ -555,12 +606,15 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                  * the CRTC *index* in the high bits of request.type
                  * (DRM_VBLANK_HIGH_CRTC), so decode it rather than guessing. */
                 let crtc_idx = (wv.vtype & _DRM_VBLANK_HIGH_CRTC_MASK) >> _DRM_VBLANK_HIGH_CRTC_SHIFT;
-                let crtcs: &[*mut c_void] = &(*dev).crtcs;
+                // SAFETY: `dev` is the client's live device; this borrow of its CRTC
+                // table is consumed by the lookups below.
+                let crtcs: &[*mut c_void] = unsafe { &(*dev).crtcs };
                 let mut crtc_id = 0u32;
                 if let Some(&p) = crtcs.get(crtc_idx as usize) {
                     let c = p as *mut Crtc;
                     if !c.is_null() {
-                        crtc_id = (*c).id;
+                        // SAFETY: `c` is a live, non-null CRTC.
+                        crtc_id = unsafe { (*c).id };
                     }
                 }
                 if crtc_id == 0 {
@@ -568,16 +622,21 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                      * is. */
                     for &p in crtcs.iter() {
                         let c = p as *mut Crtc;
-                        if !c.is_null() && (*c).enabled != 0 {
-                            crtc_id = (*c).id;
-                            break;
+                        if !c.is_null() {
+                            // SAFETY: `c` is a live, non-null CRTC.
+                            if unsafe { (*c).enabled } != 0 {
+                                // SAFETY: as above — the enabled CRTC's id.
+                                crtc_id = unsafe { (*c).id };
+                                break;
+                            }
                         }
                     }
                     if crtc_id == 0 {
                         if let Some(&p) = crtcs.first() {
                             let c = p as *mut Crtc;
                             if !c.is_null() {
-                                crtc_id = (*c).id;
+                                // SAFETY: `c` is a live, non-null CRTC.
+                                crtc_id = unsafe { (*c).id };
                             }
                         }
                     }
@@ -591,28 +650,36 @@ pub extern "C" fn drm_legacy_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void
                  * vblank interrupt), so bring it up to date first. */
                 drm_crtc_vblank_advance(crtc);
 
+                // SAFETY: `crtc` is the live CRTC located above.
+                let cur_seq = unsafe { (*crtc).vblank_count };
                 if wv.vtype & _DRM_VBLANK_EVENT != 0 {
-                    drm_file_queue_event(dev, crtc, DRM_EVENT_VBLANK, wv.signal as u64, (*crtc).vblank_count);
+                    drm_file_queue_event(dev, crtc, DRM_EVENT_VBLANK, wv.signal as u64, cur_seq);
                 } else {
                     /* A blocking wait: relative counts from now, absolute names
                      * the sequence to reach. */
                     let relative = wv.vtype & _DRM_VBLANK_RELATIVE != 0;
-                    let now = (*crtc).vblank_count;
                     let target = if relative {
-                        now.wrapping_add(wv.sequence)
+                        cur_seq.wrapping_add(wv.sequence)
                     } else {
                         wv.sequence
                     };
                     let mut ticks = 0u32;
-                    while (*crtc).vblank_count < target && ticks < VBLANK_WAIT_TICKS {
-                        sched_sleep_ticks(1);
+                    // SAFETY: `crtc` is the live CRTC located above; the counter is
+                    // re-read each iteration.
+                    while unsafe { (*crtc).vblank_count } < target && ticks < VBLANK_WAIT_TICKS {
+                        // SAFETY: `sched_sleep_ticks` is a kernel service that suspends
+                        // the calling task for the requested number of ticks.
+                        unsafe { sched_sleep_ticks(1) };
                         ticks += 1;
                         drm_crtc_vblank_advance(crtc);
                     }
                 }
 
-                let seq = (*crtc).vblank_count;
-                let usec = ktime_get_usec() as u32;
+                // SAFETY: `crtc` is the live CRTC located above.
+                let seq = unsafe { (*crtc).vblank_count };
+                // SAFETY: `ktime_get_usec` is a kernel C service reading the monotonic
+                // clock.
+                let usec = unsafe { ktime_get_usec() } as u32;
                 wv.vtype = 0;
                 wv.sequence = seq;
                 wv.signal = 0;

@@ -96,14 +96,21 @@ static ENERGY_STATE: SyncUnsafeCell<EnergyState> = SyncUnsafeCell::new(EnergySta
 static mut ENERGY_LOCK: irq_spinlock_t = irq_spinlock_t::new();
 
 fn state() -> &'static mut EnergyState {
+    // SAFETY: `ENERGY_STATE` is the governor's private global; every caller of `state()` holds
+    // `ENERGY_LOCK` (see `lock`/`unlock` and `query`), so the reference is exclusive for the
+    // duration of that critical section.
     unsafe { &mut *ENERGY_STATE.get() }
 }
 
 fn lock() {
+    // SAFETY: `ENERGY_LOCK` is a statically initialised `irq_spinlock_t` at a unique address, so
+    // `&raw mut ENERGY_LOCK` is a valid, aligned pointer to live lock storage.
     unsafe { irq_spinlock_acquire(&raw mut ENERGY_LOCK) };
 }
 
 fn unlock() {
+    // SAFETY: pairs with the `lock()` above on the same statically initialised `ENERGY_LOCK`,
+    // which this call site holds.
     unsafe { irq_spinlock_release(&raw mut ENERGY_LOCK) };
 }
 
@@ -136,18 +143,31 @@ unsafe extern "C" {
 
 unsafe fn enumerate_madt_workers(st: &mut EnergyState, bsp_lapic: u32) {
     let mut table: *mut u8 = ptr::null_mut();
-    if AcpiGetTable(b"APIC\0".as_ptr(), 1, &mut table) != AE_OK || table.is_null() {
+    // SAFETY: `AcpiGetTable` fills `table` and returns AE_OK on success; ACPI is initialised by
+    // the time this runs.
+    let rc = unsafe { AcpiGetTable(c"APIC".as_ptr().cast(), 1, &mut table) };
+    if rc != AE_OK || table.is_null() {
         return;
     }
 
     let base = table as *const u8;
-    let length = ptr::read_unaligned(base.add(4) as *const u32) as usize;
-    let x2apic = ffi::apic_x2apic_mode();
+    // SAFETY: the MADT header is at least 8 bytes, so the length word at offset 4 is in bounds.
+    let length_p = unsafe { base.add(4) } as *const u32;
+    // SAFETY: `length_p` is a valid, possibly-unaligned pointer inside the table.
+    let length = unsafe { ptr::read_unaligned(length_p) } as usize;
+    // SAFETY: `apic_x2apic_mode` reports the boot-selected APIC mode and has no preconditions.
+    let x2apic = unsafe { ffi::apic_x2apic_mode() };
     let mut off = MADT_HEADER_LEN;
 
     while off + 2 <= length && (st.present_count as usize) < MAX_CORES {
-        let sub_type = *base.add(off);
-        let sub_len = *base.add(off + 1) as usize;
+        // SAFETY: the loop guard `off + 2 <= length` keeps this byte inside the table.
+        let sub_type_p = unsafe { base.add(off) };
+        // SAFETY: `sub_type_p` is that in-bounds byte.
+        let sub_type = unsafe { *sub_type_p };
+        // SAFETY: as above, the second byte of the sub-entry header is in bounds.
+        let sub_len_p = unsafe { base.add(off + 1) };
+        // SAFETY: `sub_len_p` is that in-bounds byte.
+        let sub_len = unsafe { *sub_len_p } as usize;
         if sub_len == 0 {
             break;
         }
@@ -155,15 +175,27 @@ unsafe fn enumerate_madt_workers(st: &mut EnergyState, bsp_lapic: u32) {
         /* Both encodings may be present for the same processor; take the id
          * and flags from whichever this entry carries. */
         let entry = if sub_type == MADT_TYPE_LOCAL_APIC && sub_len >= MADT_LOCAL_APIC_LEN {
-            Some((
-                *base.add(off + 3) as u32,
-                ptr::read_unaligned(base.add(off + 4) as *const u32),
-            ))
+            // SAFETY: `sub_len >= MADT_LOCAL_APIC_LEN` (8), so the id byte and flags word lie
+            // inside this sub-entry.
+            let id_p = unsafe { base.add(off + 3) };
+            // SAFETY: `id_p` is that in-bounds byte.
+            let id = unsafe { *id_p } as u32;
+            // SAFETY: `off + 4` is inside the 8-byte sub-entry.
+            let flags_p = unsafe { base.add(off + 4) } as *const u32;
+            // SAFETY: `flags_p` is inside the sub-entry and may be unaligned.
+            let flags = unsafe { ptr::read_unaligned(flags_p) };
+            Some((id, flags))
         } else if sub_type == MADT_TYPE_LOCAL_X2APIC && sub_len >= MADT_LOCAL_X2APIC_LEN {
-            Some((
-                ptr::read_unaligned(base.add(off + 4) as *const u32),
-                ptr::read_unaligned(base.add(off + 8) as *const u32),
-            ))
+            // SAFETY: `sub_len >= MADT_LOCAL_X2APIC_LEN` (16), so the id and flags words lie
+            // inside this sub-entry.
+            let id_p = unsafe { base.add(off + 4) } as *const u32;
+            // SAFETY: `id_p` is inside the sub-entry and may be unaligned.
+            let id = unsafe { ptr::read_unaligned(id_p) };
+            // SAFETY: `off + 8` is likewise inside the 16-byte sub-entry.
+            let flags_p = unsafe { base.add(off + 8) } as *const u32;
+            // SAFETY: `flags_p` is inside the sub-entry and may be unaligned.
+            let flags = unsafe { ptr::read_unaligned(flags_p) };
+            Some((id, flags))
         } else {
             None
         };
@@ -214,6 +246,8 @@ pub extern "C" fn energy_init() -> i32 {
         st.present_count = 0;
         st.online_count = 0;
 
+        // SAFETY: `apic_lapic_id` is a leaf C helper that reads this CPU's LAPIC ID; it takes no
+        // pointers and returns a plain value.
         let bsp_lapic = unsafe { ffi::apic_lapic_id() };
 
         let master = &mut st.cores[MASTER_CPU];
@@ -225,7 +259,10 @@ pub extern "C" fn energy_init() -> i32 {
         st.present_count = 1;
         st.online_count = 1;
 
-        if unsafe { ffi::acpi_available() } != 0 {
+        if ffi::acpi_available() != 0 {
+            // SAFETY: `st` was just reset above and is still exclusively borrowed here;
+            // `enumerate_madt_workers` documents that it only walks the MADT with explicit
+            // length/sub-entry bounds checks before each read.
             unsafe { enumerate_madt_workers(st, bsp_lapic) };
         }
 
@@ -286,31 +323,31 @@ pub extern "C" fn energy_core_cstate(cpu: u32) -> u32 {
 #[no_mangle]
 pub extern "C" fn energy_core_is_idle(cpu: u32) -> i32 {
     core_index(cpu)
-        .map_or(false, |i| query(|st| st.cores[i].is_idle)) as i32
+        .is_some_and(|i| query(|st| st.cores[i].is_idle)) as i32
 }
 
 #[no_mangle]
 pub extern "C" fn energy_core_is_present(cpu: u32) -> i32 {
     core_index(cpu)
-        .map_or(false, |i| query(|st| st.cores[i].present)) as i32
+        .is_some_and(|i| query(|st| st.cores[i].present)) as i32
 }
 
 #[no_mangle]
 pub extern "C" fn energy_core_is_online(cpu: u32) -> i32 {
     core_index(cpu)
-        .map_or(false, |i| query(|st| st.cores[i].online)) as i32
+        .is_some_and(|i| query(|st| st.cores[i].online)) as i32
 }
 
 #[no_mangle]
 pub extern "C" fn energy_core_is_master(cpu: u32) -> i32 {
     core_index(cpu)
-        .map_or(false, |i| query(|st| st.cores[i].role == Role::Master)) as i32
+        .is_some_and(|i| query(|st| st.cores[i].role == Role::Master)) as i32
 }
 
 #[no_mangle]
 pub extern "C" fn energy_core_is_worker(cpu: u32) -> i32 {
     core_index(cpu)
-        .map_or(false, |i| query(|st| st.cores[i].role == Role::Worker)) as i32
+        .is_some_and(|i| query(|st| st.cores[i].role == Role::Worker)) as i32
 }
 
 #[no_mangle]
@@ -333,9 +370,7 @@ pub extern "C" fn energy_core_set_cstate(cpu: u32, state_value: u32) -> i32 {
     let st = state();
     let core = &mut st.cores[idx];
     let master_ok = idx != MASTER_CPU || cstate == CState::C0 || cstate == CState::C1;
-    let rc = if !core.online {
-        -1
-    } else if !master_ok {
+    let rc = if !core.online || !master_ok {
         -1
     } else {
         core.cstate = cstate;
@@ -360,7 +395,7 @@ pub extern "C" fn energy_core_mark_idle(cpu: u32) {
     let core = &mut st.cores[idx];
     if core.online && !core.is_idle {
         core.is_idle = true;
-        core.idle_since = unsafe { ffi::timer_ticks_get() };
+        core.idle_since = ffi::timer_ticks_get();
     }
 
     unlock();

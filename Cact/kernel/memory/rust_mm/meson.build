@@ -12,9 +12,5 @@ foreach f : _found.stdout().strip().split('\n')
   endif
 endforeach
 
-kernel_rust_libs += custom_target('rust-cact-mm',
-  input: _rust_inputs,
-  output: 'libcact_mm.a',
-  command: [bash, rust_build_script, meson.current_source_dir(),
-            'libcact_mm.a', 'stable', '@OUTPUT@'],
-  build_by_default: false)
+# `cact_mm` is an rlib now; the kernel's single Rust archive is built by
+# `Cact/kernel/kernel_rust` (see its src/lib.rs for why).

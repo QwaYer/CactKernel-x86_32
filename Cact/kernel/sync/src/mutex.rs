@@ -20,12 +20,25 @@ pub struct mutex_t {
     pub recursion_count: u32,
 }
 
+// SAFETY: `mutex_t` is a plain data record whose fields are only mutated while
+// its internal `guard` spinlock is held (or during single-threaded `init`), so
+// moving one between CPUs (Send) cannot expose a partially updated record.
 unsafe impl Send for mutex_t {}
+// SAFETY: shared references to `mutex_t` are safe because every read and write
+// of `locked`/`owner`/`waiters`/`waiter_count`/`recursion_count` happens under
+// `guard`, which serialises concurrent CPUs; the raw task pointers are never
+// dereferenced while not holding `guard`.
 unsafe impl Sync for mutex_t {}
 
+/// # Safety
+///
+/// `m` must be non-null and properly aligned, and must point to storage the
+/// caller owns exclusively for this call; it becomes an initialised mutex.
 #[no_mangle]
 pub unsafe extern "C" fn mutex_init(m: *mut mutex_t) {
-    mutex_init_impl(&mut *m);
+    // SAFETY: the caller contract (see # Safety) makes `m` a valid, aligned,
+    // unaliased pointer, so creating the unique `&mut` is sound.
+    mutex_init_impl(unsafe { &mut *m });
 }
 
 fn mutex_init_impl(m: &mut mutex_t) {
@@ -34,14 +47,19 @@ fn mutex_init_impl(m: &mut mutex_t) {
     m.owner = ptr::null_mut();
     m.waiter_count = 0;
     m.recursion_count = 0;
-    for slot in &mut m.waiters {
-        *slot = ptr::null_mut();
-    }
+    m.waiters.fill(ptr::null_mut());
 }
 
+/// # Safety
+///
+/// `m` must be non-null and properly aligned, must point to an initialised
+/// `mutex_t` that stays live for the duration of the call, and must not be
+/// accessed concurrently except through this mutex's own lock protocol.
 #[no_mangle]
 pub unsafe extern "C" fn mutex_lock(m: *mut mutex_t) {
-    mutex_lock_impl(&mut *m);
+    // SAFETY: the caller contract (see # Safety) makes `m` a valid, aligned,
+    // unaliased pointer for the duration of the call.
+    mutex_lock_impl(unsafe { &mut *m });
 }
 
 fn mutex_lock_impl(m: &mut mutex_t) {
@@ -83,9 +101,16 @@ fn mutex_lock_impl(m: &mut mutex_t) {
     }
 }
 
+/// # Safety
+///
+/// `m` must be non-null and properly aligned, must point to an initialised
+/// `mutex_t` that stays live for the duration of the call, and must not be
+/// accessed concurrently except through this mutex's own lock protocol.
 #[no_mangle]
 pub unsafe extern "C" fn mutex_trylock(m: *mut mutex_t) -> i32 {
-    mutex_trylock_impl(&mut *m)
+    // SAFETY: the caller contract (see # Safety) makes `m` a valid, aligned,
+    // unaliased pointer for the duration of the call.
+    mutex_trylock_impl(unsafe { &mut *m })
 }
 
 fn mutex_trylock_impl(m: &mut mutex_t) -> i32 {
@@ -106,9 +131,16 @@ fn mutex_trylock_impl(m: &mut mutex_t) -> i32 {
     -1
 }
 
+/// # Safety
+///
+/// `m` must be non-null and properly aligned, must point to an initialised
+/// `mutex_t` that stays live for the duration of the call, and must not be
+/// accessed concurrently except through this mutex's own lock protocol.
 #[no_mangle]
 pub unsafe extern "C" fn mutex_unlock(m: *mut mutex_t) {
-    mutex_unlock_impl(&mut *m);
+    // SAFETY: the caller contract (see # Safety) makes `m` a valid, aligned,
+    // unaliased pointer for the duration of the call.
+    mutex_unlock_impl(unsafe { &mut *m });
 }
 
 fn mutex_unlock_impl(m: &mut mutex_t) {
@@ -116,7 +148,7 @@ fn mutex_unlock_impl(m: &mut mutex_t) {
 
     if m.locked.load(Ordering::Relaxed) == 0 {
         m.guard.release();
-        sched_link::kprint_str(b"mutex: unlock of unlocked mutex!\n\0".as_ptr());
+        sched_link::kprint_str(c"mutex: unlock of unlocked mutex!\n".as_ptr() as *const u8);
         return;
     }
 

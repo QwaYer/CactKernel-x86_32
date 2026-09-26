@@ -32,25 +32,57 @@ static mut DNS_HANDLE: Option<SocketHandle> = None;
 /// make both fail.  Initialised to 1 in [`init_socket`]; a second resolver
 /// sleeps instead of corrupting the first one's exchange.
 static mut DNS_SEMA: Semaphore = Semaphore {
-    guard: crate::types::Spinlock { locked: 0 },
+    guard: cact_sync::spinlock_t::new(),
     count: core::sync::atomic::AtomicI32::new(0),
     waiters: [core::ptr::null_mut(); 64],
     waiter_count: 0,
 };
 
+/// # Safety
+///
+/// `socks` must be the crate's single `SocketSet`.  The caller must hold the
+/// stack lock (or be `stack_init`, before the stack is published), because the
+/// shared DNS socket handle and the `DNS_SEMA` semaphore below are also touched
+/// by `resolve_once`/`remove_socket` under that lock.
 pub unsafe fn init_socket(socks: &mut SocketSet<'static>) {
-    if DNS_HANDLE.is_some() {
+    // SAFETY: `DNS_HANDLE` is a `static mut Option<SocketHandle>` read and
+    // written only under the stack lock that the caller contract (see # Safety)
+    // requires, so this check cannot race `remove_socket`.
+    if unsafe { DNS_HANDLE }.is_some() {
         return;
     }
-    ffi_kernel::sema_init(core::ptr::addr_of_mut!(DNS_SEMA), 1);
-    let rx = udp::PacketBuffer::new(&mut DNS_RX_META[..], &mut DNS_RX_BUF[..]);
-    let tx = udp::PacketBuffer::new(&mut DNS_TX_META[..], &mut DNS_TX_BUF[..]);
+    // SAFETY: `sema_init` expects a pointer to a live `Semaphore`; `DNS_SEMA` is
+    // a kernel-lifetime static of exactly that type, and initialising it before
+    // any resolver can wait on it is serialized by the caller's stack lock.
+    unsafe { ffi_kernel::sema_init(core::ptr::addr_of_mut!(DNS_SEMA), 1) };
+    // SAFETY: `DNS_RX_META` is a kernel-lifetime packet-buffer static; it is
+    // handed to smoltcp only through this one shared socket, which the caller's
+    // stack lock keeps exclusive, and the slice stays inside the array.
+    let rx_meta = unsafe { &mut DNS_RX_META[..] };
+    // SAFETY: as above, for `DNS_RX_BUF`.
+    let rx_buf = unsafe { &mut DNS_RX_BUF[..] };
+    let rx = udp::PacketBuffer::new(rx_meta, rx_buf);
+    // SAFETY: as above — `DNS_TX_META` is a kernel-lifetime static whose only
+    // user is this shared socket, created under the stack lock.
+    let tx_meta = unsafe { &mut DNS_TX_META[..] };
+    // SAFETY: as above, for `DNS_TX_BUF`.
+    let tx_buf = unsafe { &mut DNS_TX_BUF[..] };
+    let tx = udp::PacketBuffer::new(tx_meta, tx_buf);
     let u = udp::Socket::new(rx, tx);
-    DNS_HANDLE = Some(socks.add(u));
+    // SAFETY: `DNS_HANDLE` is written under the same stack lock as every other
+    // access, so no other task can observe a half-updated handle.
+    unsafe { DNS_HANDLE = Some(socks.add(u)) };
 }
 
+/// # Safety
+///
+/// `socks` must be the same `SocketSet` passed to [`init_socket`], and the
+/// caller must hold the stack lock (or be tearing the stack down), so the shared
+/// DNS handle cannot be in use by a concurrent resolver.
 pub unsafe fn remove_socket(socks: &mut SocketSet<'static>) {
-    if let Some(h) = DNS_HANDLE.take() {
+    // SAFETY: as in `init_socket`, `DNS_HANDLE` is only mutated under the stack
+    // lock held by the caller, and `take` operates on that tear-free `Option`.
+    if let Some(h) = unsafe { (*core::ptr::addr_of_mut!(DNS_HANDLE)).take() } {
         let _ = socks.remove(h);
     }
 }
@@ -160,6 +192,9 @@ fn encode_qname(out: &mut [u8], host: &str) -> Option<usize> {
 }
 
 fn flush_dns_recv(socks: &mut SocketSet<'static>) {
+    // SAFETY: `DNS_HANDLE` is a `static mut Option<SocketHandle>` read and
+    // written only under the stack lock; an `Option` read is tear-free, and a
+    // stale `None` merely makes this flush a no-op.
     let Some(h) = (unsafe { DNS_HANDLE }) else {
         return;
     };
@@ -168,6 +203,8 @@ fn flush_dns_recv(socks: &mut SocketSet<'static>) {
 }
 
 fn pick_ephemeral_port() -> u16 {
+    // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+    // counter; it takes no pointers and is callable from task context.
     let t = unsafe { ffi_kernel::timer_ticks_get() };
     0xc000u16 | (t as u16 & 0x3fff)
 }
@@ -216,6 +253,8 @@ fn parse_dns_a_response(pkt: &[u8], expect_id: u16) -> Option<u32> {
 }
 
 fn try_recv_dns_reply(socks: &mut SocketSet<'static>, dns_host: u32, id: u16) -> Option<u32> {
+    // SAFETY: as in `flush_dns_recv`, `DNS_HANDLE` is only mutated under the stack
+    // lock; the tear-free `Option` read yields a live handle or `None`.
     let h = unsafe { DNS_HANDLE }?;
     let s = socks.get_mut::<udp::Socket>(h);
     let (data, meta) = s.recv().ok()?;
@@ -236,6 +275,8 @@ fn try_recv_dns_reply(socks: &mut SocketSet<'static>, dns_host: u32, id: u16) ->
 /// Returns false when the socket is gone or the query could not be queued.
 fn send_query(query: &[u8], dns_ip: Ipv4Addr, flush: bool) -> bool {
     stack::with_iface_sockets(|_iface, socks| {
+        // SAFETY: this closure runs under `with_iface_sockets` (stack lock held), the
+        // same lock every writer of `DNS_HANDLE` takes; the `Option` read cannot tear.
         let h = match unsafe { DNS_HANDLE } {
             Some(h) => h,
             None => return false,
@@ -257,6 +298,8 @@ fn send_query(query: &[u8], dns_ip: Ipv4Addr, flush: bool) -> bool {
 
 fn resolve_once(name: &str, dns_host: u32, query_buf: &mut [u8]) -> Option<u32> {
     let dns_ip = Ipv4Addr::from_bits(dns_host);
+    // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+    // counter; it takes no pointers and is callable from task context.
     let id = (unsafe { ffi_kernel::timer_ticks_get() } as u16) ^ 0xa5a5;
     let mut w = 0usize;
     query_buf.get_mut(w..w + 2)?.copy_from_slice(&id.to_be_bytes());
@@ -286,14 +329,20 @@ fn resolve_once(name: &str, dns_host: u32, query_buf: &mut [u8]) -> Option<u32> 
         return None;
     }
 
+    // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+    // counter; it takes no pointers and is callable from task context.
     let start = unsafe { ffi_kernel::timer_ticks_get() };
     let deadline = start.saturating_add(DNS_TIMEOUT_TICKS);
     let mut next_wake = start;
     // One retransmission: a single lost UDP packet (or a server that dropped
     // the first query) used to fail the whole lookup after a silent 3 s wait.
     let mut next_retry = start.saturating_add(DNS_RETRY_TICKS);
+    // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+    // counter; it takes no pointers and is callable from task context.
     while unsafe { ffi_kernel::timer_ticks_get() } < deadline {
         stack::stack_poll();
+        // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
+        // counter; it takes no pointers and is callable from task context.
         let now = unsafe { ffi_kernel::timer_ticks_get() };
         if now >= next_wake {
             if let Some(ip) =
@@ -309,36 +358,66 @@ fn resolve_once(name: &str, dns_host: u32, query_buf: &mut [u8]) -> Option<u32> 
             next_retry = deadline;
             let _ = send_query(&query_buf[..qlen], dns_ip, false);
         }
-        unsafe { ffi_kernel::sched_sleep_ticks(1) };
+        // SAFETY: `sched_sleep_ticks` is a kernel C service taking a plain tick
+        // count; it takes no pointers and is callable from task context.
+        unsafe { sched::timer_wheel::sched_sleep_ticks(1) };
     }
     None
 }
 
+/// Resolve a hostname or IPv4 literal to a host-order IPv4 address, writing the
+/// result to `out_ip_host`.  Returns 0 on success, -1 on failure.
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated C string readable up to and including its
+/// terminator, and `out_ip_host` must point to a writable, properly aligned
+/// `u32`.  Either may be null, in which case the call returns -1 without
+/// touching memory.
 #[no_mangle]
-pub extern "C" fn rust_net_dns_resolve_a(name: *const c_char, out_ip_host: *mut u32) -> c_int {
+pub unsafe extern "C" fn rust_net_dns_resolve_a(name: *const c_char, out_ip_host: *mut u32) -> c_int {
     if name.is_null() || out_ip_host.is_null() {
         return -1;
     }
+    // SAFETY: `STACK_READY` is a `static mut bool` set by `stack_init` and
+    // cleared by `stack_teardown`; a byte load cannot tear, and reading it as
+    // false fails the call closed.
     if !unsafe { stack::STACK_READY } {
         return -1;
     }
     let mut len = 0usize;
-    unsafe {
-        while *name.add(len) != 0 {
-            len += 1;
-            if len > 253 {
-                return -1;
-            }
+    loop {
+        if len > 253 {
+            return -1;
         }
+        // SAFETY: the caller contract (see # Safety) makes `name` a
+        // NUL-terminated string that is non-null (checked above); `len <= 253`
+        // here, so `add` stays within that string's first 254 bytes.
+        let p = unsafe { name.add(len) };
+        // SAFETY: `p` is the address checked just above; a conforming
+        // NUL-terminated string has a byte at each of those offsets.
+        if unsafe { *p } == 0 {
+            break;
+        }
+        len += 1;
     }
+    // SAFETY: `name` is a NUL-terminated string per the caller contract and `len`
+    // is the byte count just scanned (<= 253), so exactly those initialised bytes
+    // are readable.
     let host = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len) };
     // The resolver owns one shared socket, so only one query may be in flight:
     // a second task waits here instead of stealing the first one's reply.
+    // SAFETY: `DNS_SEMA` is a kernel-lifetime `Semaphore` initialised by
+    // `init_socket`; `down`/`up` are the matching kernel C services.
     unsafe { ffi_kernel::down(core::ptr::addr_of_mut!(DNS_SEMA)) };
     let resolved = resolve_a(host);
+    // SAFETY: as above — `DNS_SEMA` is a live kernel-lifetime semaphore and this is
+    // the matching release for the `down` taken just above.
     unsafe { ffi_kernel::up(core::ptr::addr_of_mut!(DNS_SEMA)) };
     match resolved {
         Some(ip) => {
+            // SAFETY: the caller contract (see # Safety) makes `out_ip_host` a writable,
+            // aligned `u32`; the null check at the top of the function excluded null.
             unsafe { *out_ip_host = ip };
             0
         }

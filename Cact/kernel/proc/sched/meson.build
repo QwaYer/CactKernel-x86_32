@@ -20,12 +20,5 @@ foreach f : _sched_found.stdout().strip().split('\n')
   endif
 endforeach
 
-kernel_rust_libs += custom_target('rust-sched',
-  input: _sched_inputs,
-  output: 'libsched.a',
-  command: [bash, rust_build_script, meson.current_source_dir(),
-            'libsched.a', 'nightly', '@OUTPUT@',
-            '-Z', 'json-target-spec',
-            '-Z', 'build-std=core,compiler_builtins',
-            '-Z', 'build-std-features=compiler-builtins-mem'],
-  build_by_default: false)
+# `sched` is an rlib now; the kernel's single Rust archive is built by
+# `Cact/kernel/kernel_rust` (see its src/lib.rs for why).

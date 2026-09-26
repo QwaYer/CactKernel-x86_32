@@ -10,6 +10,8 @@ unsafe extern "C" {
 }
 
 fn ticks() -> u64 {
+    // SAFETY: `timer_ticks_get` takes no arguments and only reads the kernel's
+    // monotonically increasing tick counter; it has no preconditions.
     unsafe { timer_ticks_get() as u64 }
 }
 

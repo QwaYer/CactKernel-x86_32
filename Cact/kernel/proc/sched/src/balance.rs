@@ -43,6 +43,9 @@ static BALANCE_STATE: SyncUnsafeCell<BalanceState> = SyncUnsafeCell::new(Balance
 static LAST_ATTEMPT_TICK: AtomicU32 = AtomicU32::new(0);
 
 fn state() -> &'static mut BalanceState {
+    // SAFETY: `BALANCE_STATE` is written once by `energy_balance_init` during boot and only
+    // read afterwards from `energy_balance_tick`, which the master core runs once per scheduler
+    // tick; no worker core ever touches it, so this reference is not aliased concurrently.
     unsafe { &mut *BALANCE_STATE.get() }
 }
 
@@ -138,5 +141,5 @@ pub extern "C" fn energy_balance_tick() {
     let _ = energy::energy_core_count_online();
     let _ = monitor::energy_monitor_load_avg(0);
     let _ = LAST_ATTEMPT_TICK.load(Ordering::Relaxed);
-    let _ = unsafe { ffi::timer_ticks_get() };
+    let _ = ffi::timer_ticks_get();
 }
