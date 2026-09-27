@@ -183,9 +183,15 @@ typedef struct usb_hc {
                                 void *data, uint16_t len);
     int  (*interrupt_transfer)(struct usb_hc *hc, usb_device_t *dev,
                                 uint8_t ep, void *buf, uint16_t len);
+    /* `timeout_ms` belongs to the caller: a network driver polls its RX
+     * endpoint in a tight loop and needs a short one (so the IN stays pending
+     * almost continuously, as Linux's URB-based drivers do), while a bulk-OUT
+     * carrying a frame wants a long one.  On timeout an IN is left armed and
+     * returns -1. */
     int  (*bulk_transfer)     (struct usb_hc *hc, usb_device_t *dev,
                                 uint8_t ep, uint8_t dir,
-                                void *buf, uint16_t len);
+                                void *buf, uint16_t len,
+                                uint32_t timeout_ms);
     int  (*port_reset)        (struct usb_hc *hc, uint8_t port);
     int  (*port_get_status)   (struct usb_hc *hc, uint8_t port);
     void (*device_removed)    (struct usb_hc *hc, struct usb_device *dev);
@@ -194,6 +200,11 @@ typedef struct usb_hc {
      * its devices.  Optional: a controller with no state to restore may leave
      * it NULL.  Returns 0 when the controller is usable again. */
     int  (*resume)            (struct usb_hc *hc);
+
+    /* Bring up the host-controller state for a device's non-control endpoints
+     * (rings + Configure Endpoint) once its descriptors are parsed.  Optional:
+     * a controller that configures endpoints lazily may leave it NULL. */
+    int  (*configure_endpoints)(struct usb_hc *hc, usb_device_t *dev);
 
     uint8_t  num_ports;
     void    *priv;
@@ -213,6 +224,12 @@ typedef struct usb_driver {
     void (*remove)(usb_device_t *dev);
 
     struct usb_driver *next;
+
+    /* Optional USB ID filter, checked after the class match.  0 means "any".
+     * A vendor-specific driver (class 0xFF) uses this to claim one chip out of
+     * the USB_CLASS_VENDOR crowd. */
+    uint16_t    id_vendor;
+    uint16_t    id_product;
 } usb_driver_t;
 
 
@@ -228,6 +245,7 @@ void usb_drop_devices_on(usb_hc_t *hc);
 
 int  usb_hc_register    (usb_hc_t    *hc);
 int  usb_driver_register(usb_driver_t *drv);
+int  usb_driver_unregister(usb_driver_t *drv);
 
 usb_device_t *usb_device_enumerate (usb_hc_t *hc, uint8_t port, uint8_t speed);
 void          usb_device_disconnect(usb_hc_t *hc, uint8_t port);

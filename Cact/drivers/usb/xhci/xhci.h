@@ -70,6 +70,7 @@
 #define XHCI_TRB_EVAL_CTX       13
 #define XHCI_TRB_RESET_EP       14
 #define XHCI_TRB_STOP_EP        15
+#define XHCI_TRB_SET_TR_DEQ     16
 #define XHCI_TRB_NOOP_CMD       23
 #define XHCI_TRB_TRANSFER_EVT   32
 #define XHCI_TRB_CMD_COMPLETE   33
@@ -134,6 +135,20 @@ typedef struct {
     uint32_t              enqueue;
     uint32_t              cycle;
     uint32_t              size;
+    /* Completion is per endpoint, not one flag for the whole controller.  The
+     * module drives its registers with control transfers, and with a single
+     * shared flag those waits swallowed a bulk-IN completion — after which the
+     * endpoint still looked armed and RX stayed dead for the rest of the scan. */
+    volatile uint8_t      done;
+    volatile uint8_t      err;
+    /* At most one transfer in flight per endpoint.  A bulk-IN that times out
+     * keeps its TRB armed (the frame may still land in the caller's buffer), so
+     * enqueuing a second transfer for the same endpoint would leave the chip
+     * free to rewrite that buffer while the caller is reading it.  A retry with
+     * the same buffer waits on the armed transfer instead of adding a TRB. */
+    void                 *xfer_buf;
+    uint16_t              xfer_len;
+    uint8_t               xfer_armed;
 } xhci_ring_t;
 
 typedef struct {
@@ -179,7 +194,6 @@ typedef struct {
     volatile uint8_t      cmd_done;
     volatile uint8_t      cmd_error;
     volatile uint32_t     cmd_result;
-    volatile uint8_t      transfer_done;
 
     uint8_t               slot_used[XHCI_MAX_SLOTS + 1];
     uint8_t               slot_port[XHCI_MAX_SLOTS + 1];

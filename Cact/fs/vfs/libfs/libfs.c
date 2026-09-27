@@ -42,6 +42,7 @@ typedef struct {
 
 static lib_subdir_t lib_inc_dir;
 static lib_subdir_t lib_mdls_dir;
+static lib_subdir_t lib_fw_dir;
 
 static int path_has_prefix(const char *s, const char *pre) {
     while (*pre) {
@@ -117,6 +118,7 @@ static void libfs_register_blobs(void) {
 
     sub_file_t *ih = 0, **it = &ih;
     sub_file_t *mh = 0, **mt = &mh;
+    sub_file_t *fh = 0, **ft = &fh;
 
     int n = initfs_modblob_count();
     for (int i = 0; i < n; i++) {
@@ -147,6 +149,25 @@ static void libfs_register_blobs(void) {
         }
 
         // Check for known subdirectories
+        if (path_has_prefix(base, "firmware/")) {
+            const char *name = base + 9;
+            if (!*name) continue;
+            if (!basename_only(name)) continue;
+            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
+            if (!slot) continue;
+            memset(slot, 0, sizeof(sub_file_t));
+            strlcpy(slot->node.name, name, 128);
+            slot->node.type = VFS_FILE;
+            slot->node.size = sz;
+            slot->node.mode = 0644;
+            slot->node.ops  = &sub_file_ops;
+            slot->node.priv = slot;
+            slot->data      = data;
+            slot->size      = sz;
+            *ft = slot;
+            ft = &slot->next;
+            continue;
+        }
         if (path_has_prefix(base, "include/")) {
             const char *name = base + 8;
             if (!*name) continue;
@@ -204,6 +225,16 @@ static void libfs_register_blobs(void) {
     lib_mdls_dir.node.priv = &lib_mdls_dir;
     lib_mdls_dir.prefix    = "mdls/";
     lib_mdls_dir.prefix_len = 5;
+
+    // Init firmware subdirectory node (Wi-Fi/GPU firmware blobs)
+    lib_fw_dir.files = fh;
+    memset(&lib_fw_dir.node, 0, sizeof(lib_fw_dir.node));
+    strlcpy(lib_fw_dir.node.name, "firmware", 128);
+    lib_fw_dir.node.type = VFS_DIRECTORY;
+    lib_fw_dir.node.mode = 0755;
+    lib_fw_dir.node.priv = &lib_fw_dir;
+    lib_fw_dir.prefix    = "firmware/";
+    lib_fw_dir.prefix_len = 9;
 
     for (lib_blob_t *b = lib_blobs; b; b = b->next) {
         vfs_node_t *lib = _lib_dir();
@@ -263,6 +294,10 @@ static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
         lib_mdls_dir.node.ops = &sub_dir_ops;
         return &lib_mdls_dir.node;
     }
+    if (streq(name, "firmware")) {
+        lib_fw_dir.node.ops = &sub_dir_ops;
+        return &lib_fw_dir.node;
+    }
     vfs_node_t *lib = _lib_dir();
     if (lib && lib->ops && lib->ops->walk) {
         vfs_node_t *disk = lib->ops->walk(lib, name);
@@ -285,8 +320,9 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     }
     uint32_t j = index - libfs_disk_count;
     // Emit subdirectories first
-    for (int s = 0; s < 2; s++) {
-        const char *dname = s == 0 ? "include" : "mdls";
+    static const char *const subdir_names[] = { "include", "mdls", "firmware" };
+    for (int s = 0; s < 3; s++) {
+        const char *dname = subdir_names[s];
         if (j == 0) {
             strlcpy(sup_de.name, dname, 128);
             sup_de.inode = 0;
@@ -316,6 +352,7 @@ static void _root_listdir(vfs_node_t *dir) {
     // List subdirectories
     if (lib_inc_dir.files) { printk("  include\n"); any = 1; }
     if (lib_mdls_dir.files) { printk("  mdls\n"); any = 1; }
+    if (lib_fw_dir.files) { printk("  firmware\n"); any = 1; }
 
     if (lib && lib->ops && lib->ops->readdir) {
         for (uint32_t i = 0; (de = lib->ops->readdir(lib, i)); i++) {

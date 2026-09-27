@@ -33,6 +33,7 @@ int memory_compare(const void* s1, const void* s2, int n);
 // memory operations (unsigned length)
 void* memset(void* dest, int val, unsigned int len);
 void* memcpy(void* dest, const void* src, unsigned int len);
+int   memcmp(const void* a, const void* b, unsigned int len);
 
 // bounded string operations
 int  strncmp(const char* a, const char* b);

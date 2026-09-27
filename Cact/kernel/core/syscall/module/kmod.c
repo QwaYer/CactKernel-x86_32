@@ -4,6 +4,7 @@
 #include "pci_loader.h"
 #include "pci_enum.h"
 #include "fs_mod.h"
+#include "usb_mod.h"
 #include "klib.h"
 #include "kernel.h"
 
@@ -188,6 +189,11 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
     if (fs_mod_detect(path) == 1)
         return fs_mod_load(path);
 
+    // USB driver modules (export usb_driver_init instead of a PCI manifest or
+    // fs_mount) load through the usb_mod class.
+    if (usb_mod_detect(path) == 1)
+        return usb_mod_load(path);
+
     char name[PCI_DRIVER_NAME_MAX];
     kmod_instance_name(path, name, (int)sizeof(name));
     if (!name[0])
@@ -273,6 +279,10 @@ int kmod_unload_kname(const char *name) {
     // Filesystem module instance names ("ext4", ...) unload through fs_mod.
     if (fs_mod_loaded(name))
         return fs_mod_unload(name);
+
+    // USB driver modules unload through usb_mod.
+    if (usb_mod_loaded(name))
+        return usb_mod_unload(name);
 
     if (user_str_all_decimal(name)) {
         int idx;

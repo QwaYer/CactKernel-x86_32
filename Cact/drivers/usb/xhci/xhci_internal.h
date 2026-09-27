@@ -87,7 +87,8 @@ void xhci_ring_init(xhci_ring_t *ring, xhci_trb_t *mem, uint32_t size);
 void xhci_ring_enqueue(xhci_ring_t *ring, xhci_trb_t *trb);
 int  xhci_send_cmd(xhci_priv_t *priv, xhci_trb_t *trb);
 /* Wait for the outstanding data transfer (not for a command completion). */
-int  xhci_wait_transfer(xhci_priv_t *priv, uint32_t timeout_ms);
+int  xhci_wait_transfer(xhci_priv_t *priv, xhci_ring_t *ring,
+                        uint32_t timeout_ms);
 void xhci_handle_irq(usb_hc_t *hc);
 
 /* Device/context management (xhci_dev.c). */
@@ -99,6 +100,7 @@ int  xhci_address_device(xhci_priv_t *priv, uint8_t slot, uint8_t port,
                          uint8_t speed, int bsr);
 int  xhci_configure_endpoint(xhci_priv_t *priv, uint8_t slot, uint8_t dci,
                              uint8_t ep_type, uint16_t mps, uint8_t interval);
+int  xhci_configure_device_endpoints(usb_hc_t *hc, usb_device_t *dev);
 uint8_t xhci_port_speed_to_usb(uint32_t portsc);
 int  xhci_port_reset(usb_hc_t *hc, uint8_t port);
 int  xhci_port_get_status(usb_hc_t *hc, uint8_t port);
@@ -110,7 +112,8 @@ int  xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
 int  xhci_interrupt_transfer(usb_hc_t *hc, usb_device_t *dev,
                              uint8_t ep_num, void *buf, uint16_t len);
 int  xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
-                        uint8_t ep_num, uint8_t dir, void *buf, uint16_t len);
+                        uint8_t ep_num, uint8_t dir, void *buf, uint16_t len,
+                        uint32_t timeout_ms);
 
 /* Host bring-up (xhci_hw.c). */
 int  xhci_init_one(uint32_t phys_base, uint32_t quirks);
