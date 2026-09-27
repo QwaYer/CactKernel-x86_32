@@ -257,6 +257,40 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     return 0;
 }
 
+int xhci_configure_device_endpoints(usb_hc_t *hc, usb_device_t *dev) {
+    xhci_priv_t *priv = (xhci_priv_t *)hc->priv;
+    uint8_t slot = dev->address;
+    int configured = 0;
+
+    for (int i = 0; i < dev->ep_count; i++) {
+        usb_endpoint_t *ep = &dev->ep[i];
+        uint8_t type;
+
+        /* Only bulk endpoints are brought up here; interrupt endpoints are
+         * configured by their class driver (e.g. HID) when it starts a
+         * transfer, so re-configuring them would disturb its ring. */
+        if (ep->transfer_type != USB_TRANSFER_BULK)
+            continue;
+
+        type = (ep->direction == USB_DIR_IN) ? XHCI_EP_CTX_TYPE_BULK_IN
+                                             : XHCI_EP_CTX_TYPE_BULK_OUT;
+
+        uint8_t dci = (uint8_t)((ep->address * 2) +
+                                (ep->direction == USB_DIR_IN ? 1 : 0));
+
+        int rc = xhci_configure_endpoint(priv, slot, dci, type,
+                                         ep->max_packet, ep->interval);
+        pr_info("  %-11s : bulk ep%u %s dci %u mps %u %s\n", "xhci-ep",
+                (unsigned)ep->address,
+                ep->direction == USB_DIR_IN ? "IN" : "OUT",
+                (unsigned)dci, (unsigned)ep->max_packet,
+                rc == 0 ? "ok" : "failed");
+        if (rc == 0)
+            configured++;
+    }
+    return configured;
+}
+
 uint8_t xhci_port_speed_to_usb(uint32_t portsc) {
     uint8_t ps = (portsc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
     switch (ps) {

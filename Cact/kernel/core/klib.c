@@ -330,6 +330,17 @@ void* memcpy(void* dest, const void* src, unsigned int len) {
     return dest;
 }
 
+// Compare memory regions
+int memcmp(const void* a, const void* b, unsigned int len) {
+    const unsigned char* p = (const unsigned char*)a;
+    const unsigned char* q = (const unsigned char*)b;
+    while (len-- > 0) {
+        if (*p != *q) return (int)*p - (int)*q;
+        p++; q++;
+    }
+    return 0;
+}
+
 // Compare up to first mismatch or until either string ends
 int strncmp(const char* a, const char* b) {
     while (*a && *a == *b) { a++; b++; }

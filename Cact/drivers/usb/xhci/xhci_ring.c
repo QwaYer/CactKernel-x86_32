@@ -14,6 +14,11 @@ void xhci_ring_init(xhci_ring_t *ring, xhci_trb_t *mem, uint32_t size) {
     ring->enqueue = 0;
     ring->cycle   = 1;
     ring->size    = size;
+    ring->done        = 0;
+    ring->err         = 0;
+    ring->xfer_buf   = 0;
+    ring->xfer_len   = 0;
+    ring->xfer_armed = 0;
     memset(mem, 0, size * sizeof(xhci_trb_t));
     xhci_trb_t *link = &mem[size - 1];
     link->param_lo = xhci_va_to_pa(mem);
@@ -93,20 +98,27 @@ void xhci_poll_events(xhci_priv_t *priv) {
  * arrives".  Both submission paths therefore clear the flag they are not
  * waiting on before they start. */
 static int xhci_wait_flag(xhci_priv_t *priv, volatile uint8_t *flag,
-                          uint32_t timeout_ms)
+                          volatile uint8_t *err, uint32_t timeout_ms,
+                          const char *what)
 {
     uint32_t loops = timeout_ms * 100;
     while (loops--) {
         if (*flag) {
             *flag = 0;
-            return priv->cmd_error ? -1 : 0;
+            int e = err ? *err : 0;
+            if (err)
+                *err = 0;
+            return e ? 1 : 0;
         }
         irq_spinlock_acquire(&xhci_evt_lock);
         xhci_drain_events(priv);
         irq_spinlock_release(&xhci_evt_lock);
         if (*flag) {
             *flag = 0;
-            return priv->cmd_error ? -1 : 0;
+            int e = err ? *err : 0;
+            if (err)
+                *err = 0;
+            return e ? 1 : 0;
         }
         /* A Host System Error halts the controller and no completion will ever
          * arrive: report it instead of burning the whole timeout. */
@@ -119,24 +131,31 @@ static int xhci_wait_flag(xhci_priv_t *priv, volatile uint8_t *flag,
         }
         xhci_udelay(10);
     }
-    pr_warn("xHCI event timeout");
+    /* Only named waits report.  A *transfer* timeout is ordinary traffic: a
+     * bulk-IN on a quiet endpoint just means "no data" (the device NAKs), and
+     * the cases that are real faults — a bulk-OUT or control transfer that
+     * never completed — are reported by xhci_recover_ep().  Logging every one
+     * of them buried the console in hundreds of lines per scan. */
+    if (what)
+        pr_warn("xHCI %s timeout\n", what);
     *flag = 0;
     return -1;
 }
 
-int xhci_wait_transfer(xhci_priv_t *priv, uint32_t timeout_ms) {
-    return xhci_wait_flag(priv, &priv->transfer_done, timeout_ms);
+/* 0 = completed, 1 = completed with an error, -1 = timed out (the TRB is still
+ * armed, which for a bulk-IN just means "no data yet"). */
+int xhci_wait_transfer(xhci_priv_t *priv, xhci_ring_t *ring, uint32_t timeout_ms) {
+    return xhci_wait_flag(priv, &ring->done, &ring->err, timeout_ms, NULL);
 }
 
 int xhci_send_cmd(xhci_priv_t *priv, xhci_trb_t *trb) {
     priv->cmd_error  = 0;
     priv->cmd_result = 0;
     priv->cmd_done   = 0;
-    /* A command is only ever submitted with no transfer in flight. */
-    priv->transfer_done = 0;
     xhci_ring_enqueue(&priv->cmd_ring, trb);
     xhci_db_write32(priv, 0, 0);
-    return xhci_wait_flag(priv, &priv->cmd_done, 500);
+    return xhci_wait_flag(priv, &priv->cmd_done, &priv->cmd_error, 500,
+                          "command") == 0 ? 0 : -1;
 }
 
 static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
@@ -153,29 +172,47 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
     case XHCI_TRB_TRANSFER_EVT: {
         uint8_t slot = (uint8_t)((evt->control >> 24) & 0xFF);
         uint8_t dci  = (uint8_t)((evt->control >> 16) & 0x1F);
+        int is_intr = 0;
 
-        if (cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET) {
-            for (int i = 0; i < priv->intr_ep_count; i++) {
-                xhci_intr_ep_slot_t *s = &priv->intr_slots[i];
-                if (s->active && s->slot_id == slot && s->dci == dci) {
-                    if (s->notify)
-                        s->notify(s->dev, s->buf, s->len, s->notify_priv);
+        /* Interrupt endpoints are re-armed continuously and complete on their
+         * own schedule.  Their events must NOT release the synchronous
+         * control/bulk transfer that is currently waiting on its endpoint: with
+         * a single shared flag a HID completion "finished" the control
+         * transfer early, leaving it with uninitialised (zero) data. */
+        for (int i = 0; i < priv->intr_ep_count; i++) {
+            xhci_intr_ep_slot_t *s = &priv->intr_slots[i];
+            if (!s->active || s->slot_id != slot || s->dci != dci)
+                continue;
 
-                    xhci_trb_t re_trb;
-                    memset(&re_trb, 0, sizeof(re_trb));
-                    re_trb.param_lo = xhci_va_to_pa(s->buf);
-                    re_trb.status   = s->len;
-                    re_trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
-                    xhci_ring_enqueue(&s->ring, &re_trb);
-                    xhci_db_write32(priv, slot, dci);
-                    break;
-                }
+            is_intr = 1;
+            if (cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET) {
+                if (s->notify)
+                    s->notify(s->dev, s->buf, s->len, s->notify_priv);
+
+                xhci_trb_t re_trb;
+                memset(&re_trb, 0, sizeof(re_trb));
+                re_trb.param_lo = xhci_va_to_pa(s->buf);
+                re_trb.status   = s->len;
+                re_trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
+                xhci_ring_enqueue(&s->ring, &re_trb);
+                xhci_db_write32(priv, slot, dci);
             }
-            priv->cmd_error = 0;
-        } else {
-            priv->cmd_error = 1;
+            break;
         }
-        priv->transfer_done = 1;
+
+        if (!is_intr) {
+            /* Release exactly the endpoint this completion belongs to.  The
+             * module's register access is control transfers on its own
+             * endpoint; with one controller-wide flag those waits consumed a
+             * bulk-IN completion, and the RX endpoint then looked armed for
+             * ever. */
+            if (dci >= 1 && dci <= 31) {
+                xhci_ring_t *er = &priv->ep_rings[slot][dci - 1];
+                er->err  = (cc == XHCI_CC_SUCCESS ||
+                            cc == XHCI_CC_SHORT_PACKET) ? 0 : 1;
+                er->done = 1;
+            }
+        }
         break;
     }
 

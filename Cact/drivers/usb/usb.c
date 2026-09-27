@@ -33,11 +33,37 @@ int usb_hc_register(usb_hc_t *hc) {
     return 0;
 }
 
+static usb_driver_t *usb_find_driver(usb_device_t *dev);
+
 int usb_driver_register(usb_driver_t *drv) {
     if (!drv) return -1;
     drv->next   = driver_list;
     driver_list = drv;
+
+    /* Bind to devices that were already enumerated before this driver
+     * appeared — a USB module is modloaded after boot, when the dongle may
+     * already be plugged in.  Only devices that no driver owns are offered,
+     * and each is offered only to the driver that matches it. */
+    for (usb_device_t *dev = device_list; dev; dev = dev->next) {
+        if (dev->driver_priv) continue;
+        if (usb_find_driver(dev) == drv && drv->probe)
+            drv->probe(dev);
+    }
     return 0;
+}
+
+int usb_driver_unregister(usb_driver_t *drv) {
+    if (!drv) return -1;
+    usb_driver_t **pp = &driver_list;
+    while (*pp) {
+        if (*pp == drv) {
+            *pp = drv->next;
+            drv->next = NULL;
+            return 0;
+        }
+        pp = &(*pp)->next;
+    }
+    return -1;
 }
 
 static usb_driver_t *usb_find_driver(usb_device_t *dev) {
@@ -45,6 +71,8 @@ static usb_driver_t *usb_find_driver(usb_device_t *dev) {
         if (d->class_code != 0xFF && d->class_code != dev->class_code) continue;
         if (d->subclass   != 0xFF && d->subclass   != dev->subclass)   continue;
         if (d->protocol   != 0xFF && d->protocol   != dev->protocol)   continue;
+        if (d->id_vendor  && d->id_vendor  != dev->dev_desc.idVendor)  continue;
+        if (d->id_product && d->id_product != dev->dev_desc.idProduct) continue;
         return d;
     }
     return NULL;
@@ -189,6 +217,9 @@ usb_device_t *usb_device_enumerate(usb_hc_t *hc, uint8_t port, uint8_t speed)
 
     usb_parse_config(dev);
     usb_set_configuration(dev, cfg_hdr.bConfigurationValue);
+
+    if (hc->configure_endpoints)
+        hc->configure_endpoints(hc, dev);
 
     dev->next   = device_list;
     device_list = dev;

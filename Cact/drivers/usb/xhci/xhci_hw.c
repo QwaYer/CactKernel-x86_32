@@ -222,6 +222,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
     hc->control_transfer   = xhci_control_transfer;
     hc->interrupt_transfer = xhci_interrupt_transfer;
     hc->bulk_transfer      = xhci_bulk_transfer;
+    hc->configure_endpoints = xhci_configure_device_endpoints;
     hc->port_reset         = xhci_port_reset;
     hc->port_get_status    = xhci_port_get_status;
     hc->device_removed     = xhci_device_removed;
@@ -385,6 +386,11 @@ static void xhci_scan_ports(xhci_priv_t *priv, usb_hc_t *hc)
                                     }
 
                                     usb_set_configuration(dev, cfg_hdr.bConfigurationValue);
+
+                                    /* Bring up rings for the device's bulk
+                                     * endpoints; unlike usb_device_enumerate
+                                     * this path parses the config inline. */
+                                    xhci_configure_device_endpoints(hc, dev);
                                 }
 
                                 usb_register_device(dev);
@@ -457,7 +463,6 @@ int xhci_resume(usb_hc_t *hc)
     priv->evt_cycle      = 1;
     priv->cmd_done       = 0;
     priv->cmd_error      = 0;
-    priv->transfer_done  = 0;
 
     xhci_op_write32(priv, XHCI_OP_DNCTRL, 0x2);
     xhci_op_write32(priv, XHCI_OP_CONFIG, priv->max_slots);

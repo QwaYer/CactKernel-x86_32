@@ -11,6 +11,9 @@
 #include "msi.h"
 #include "drm_drv.h"
 #include "validate.h"
+#include "usb.h"
+#include "firmware.h"
+#include "ktime.h"
 
 typedef struct {
     const char* name;
@@ -44,6 +47,7 @@ static const ksym_entry_t ksym_table[] = {
     { "copy_to_user",       (uint32_t)copy_to_user },
     { "snprintf",       (uint32_t)snprintf },
     { "memcpy",         (uint32_t)memcpy },
+    { "memcmp",         (uint32_t)memcmp },
     { "memset",         (uint32_t)memset },
     { "sema_init",      (uint32_t)sema_init },
     { "down",           (uint32_t)down },
@@ -152,6 +156,22 @@ static const ksym_entry_t ksym_table[] = {
     { "drm_gem_handle_close",        (uint32_t)drm_gem_handle_close },
     { "drm_gem_prime_handle_to_fd",  (uint32_t)drm_gem_prime_handle_to_fd },
     { "drm_gem_prime_fd_to_handle",  (uint32_t)drm_gem_prime_fd_to_handle },
+
+    /* USB — a USB driver module (see Cact/drivers/usb/loader/usb_mod.c) calls
+     * usb_driver_register() with a static usb_driver_t and drives transfers
+     * through the usb_device_t's host-controller ops. */
+    { "usb_driver_register",   (uint32_t)usb_driver_register },
+    { "usb_driver_unregister", (uint32_t)usb_driver_unregister },
+    { "usb_get_descriptor",    (uint32_t)usb_get_descriptor },
+    { "usb_set_configuration", (uint32_t)usb_set_configuration },
+    { "usb_set_interface",     (uint32_t)usb_set_interface },
+
+    /* Firmware — modules stage blobs (rt2870.bin) out of cctkfs. */
+    { "request_firmware", (uint32_t)request_firmware },
+    { "release_firmware", (uint32_t)release_firmware },
+
+    /* Timing — modules busy-wait for firmware boot and device settle. */
+    { "ktime_busy_wait_us", (uint32_t)ktime_busy_wait_us },
 };
 
 uint32_t ksym_resolve(const char* name) {
