@@ -77,7 +77,11 @@ void syscall_handler(struct syscall_frame* regs) {
 
     // exit() does not return a value to userspace
     if (num == SYS_EXIT) return;
-    regs->eax = (uint32_t)ret;
+    // sigreturn() restored eax from the signal frame — that saved value (the
+    // return of the syscall the handler interrupted) is what userspace must
+    // see, so the generic "eax = return value" write below would destroy it.
+    if (num != SYS_SIGRETURN)
+        regs->eax = (uint32_t)ret;
 
     // Deliver any pending signal before returning to Ring 3
     if (current_task && !current_task->is_kernel)

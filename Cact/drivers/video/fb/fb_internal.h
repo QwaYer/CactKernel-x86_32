@@ -33,7 +33,8 @@ void fb_mark_dirty_rows(uint32_t y0, uint32_t y1);
 /* Fast 32-bit-aligned forward copy via REP MOVSD with prefetch. */
 void fb_copy32(uint32_t* dst, const uint32_t* src, uint32_t n_words);
 
-/* Glyph rasteriser (fb_text.c). */
-void fb_draw_char_scaled(char c, int px, int py, uint32_t color);
+/* Glyph rasteriser (fb_text.c).  Set glyph pixels take `fg`, cleared ones take
+ * `bg`; a non-black `bg` is what fills a cell for SGR 7 (reverse video). */
+void fb_draw_char_scaled(char c, int px, int py, uint32_t fg, uint32_t bg);
 
 #endif

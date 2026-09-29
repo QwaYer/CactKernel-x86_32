@@ -267,7 +267,17 @@ fn handle_signal_bit(
         return;
     }
 
-    if term_by_default && (handler == SIG_DFL || handler == SIG_IGN) {
+    // A signal with a user handler is not acted on here — it is *delivered*, and
+    // that happens in deliver_pending_signal() on the way back to userspace,
+    // which builds the frame and then clears the bit.  Clearing it here without
+    // delivering is what made every custom handler unreachable (Ctrl-C into a
+    // userspace handler included): the bit was gone before the syscall return.
+    if handler != SIG_DFL && handler != SIG_IGN {
+        p.pending_signals |= sig;
+        return;
+    }
+
+    if term_by_default {
         let parent_pid = p.parent_pid;
         // SAFETY: signalling the parent requires `SCHEDULER_LOCK`, held by the caller.
         unsafe { task_signal_locked(parent_pid, SIGCHLD) };
