@@ -14,7 +14,7 @@
  * Returns 0 on success, negative on bad/missing image. */
 int initfs_modblob_load(uint32_t phys_addr, uint32_t size);
 
-/* Lookup a module image by canonical path (e.g. "/lib/ahci.cctk").
+/* Lookup a module image by canonical path (e.g. "/usr/lib/modules/ahci.cctk").
  * On hit, *out_data points into the staged buffer and *out_size is the
  * payload size.  Returns 0 on hit, -1 on miss. */
 int initfs_modblob_get(const char *path, const uint8_t **out_data,

@@ -141,7 +141,7 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
     tracker->page_dir = pd;
 
     vfs_node_t *base = (path[0] == '/') ? vfs_root : vfs_root;
-    struct vfs_node* file = vfs_walk_path(base, path);
+    struct vfs_node* file = vfs_walk_path_follow(base, path, 0);
     if (!file) {
         pr_warn("[ELF] file not found: %s\n", path);
         return 0;
@@ -271,7 +271,7 @@ int elf_get_interp_path(const char* path, char* out, int out_max)
 {
     if (!path || !out || out_max <= 0) return -1;
 
-    vfs_node_t* file = vfs_walk_path(vfs_root, (char*)path);
+    vfs_node_t* file = vfs_walk_path_follow(vfs_root, (char*)path, 0);
     if (!file) return -1;
 
     Elf32_Ehdr hdr;
@@ -309,12 +309,12 @@ void* load_elf_interp(char* path, char* interp_path, uint32_t* pd,
     if (!path || !interp_path || !pd || !tracker || !info) return 0;
     memset(info, 0, sizeof(*info));
 
-    vfs_node_t* main_file = vfs_walk_path(vfs_root, path);
+    vfs_node_t* main_file = vfs_walk_path_follow(vfs_root, path, 0);
     if (!main_file) {
         pr_warn("[ELF-I] main not found: %s\n", path);
         return 0;
     }
-    vfs_node_t* interp_file = vfs_walk_path(vfs_root, interp_path);
+    vfs_node_t* interp_file = vfs_walk_path_follow(vfs_root, interp_path, 0);
     if (!interp_file) {
         pr_warn("[ELF-I] interpreter not found: %s\n", interp_path);
         return 0;
@@ -379,7 +379,7 @@ void elf_load_exec_symtab(const char* path, struct proc_metadata* proc) {
     proc->exec_symtab_count = 0;
 
     vfs_node_t* base = (path[0] == '/') ? vfs_root : vfs_root;
-    struct vfs_node* file = vfs_walk_path(base, (char*)path);
+    struct vfs_node* file = vfs_walk_path_follow(base, (char*)path, 0);
     if (!file) return;
 
     Elf32_Ehdr hdr;

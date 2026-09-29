@@ -384,7 +384,10 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
         // SAFETY: `root` points at the kernel's VFS root node.
         let root_node = unsafe { *root };
         // SAFETY: `root_node` is a live VFS node and `path` a live string.
-        let main_node = unsafe { ffi::vfs_walk_path(root_node, path) };
+        // Follow symlinks: /bin, /sbin and /lib are usrmerge links into /usr.
+        let main_node = unsafe {
+            ffi::vfs_walk_path_follow(root_node, path, core::ptr::null_mut())
+        };
         let brk = if !main_node.is_null() {
             // SAFETY: `main_node` is a live VFS node (non-null checked here).
             unsafe { ffi::elf_get_brk_start(main_node) }

@@ -196,7 +196,7 @@ static inline uint32_t* get_current_pd(void) {
 // Hardware detection helpers
 int         detect_memory   (void);
 
-// Spawn the deferred bootstrap thread (mntfs init, /bin/init launch)
+// Spawn the deferred bootstrap thread (mntfs init, /usr/bin/init launch)
 void        kernel_spawn_bootstrap(multiboot_info_t* mbi);
 
 // Task scheduling

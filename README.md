@@ -44,7 +44,7 @@ CactKernel is one piece of a larger workspace. Typical pieces:
 | **[LocalRepoCactOS](../LocalRepoCactOS-x86_32)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
 | **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`ninja -C build-meson`** in this tree → **`build-meson/cact.iso`**. |
 
-**Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs** overlay files from that archive on top of ext4 (e.g. **`/bin/init`**, **`libc.so`**, optional **`*.cctk`** drivers). PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with **HMAC-SHA256** against the kernel's embedded static key before loading.
+**Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs / usrfs** overlay files from that archive on top of ext4 (e.g. **`/usr/bin/init`**, **`/usr/lib/libc.so`**, optional **`/usr/lib/modules/*.cctk`** drivers), and the bare **`/bin`, `/sbin`, `/lib`** are symlinks into **`/usr`**. PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with **HMAC-SHA256** against the kernel's embedded static key before loading.
 
 From the workspace root (QEMU-oriented full rebuild):
 
@@ -157,7 +157,7 @@ CactKernel-x86_32/
 │   ├── crypto/          Rustls — in-kernel TLS 1.3, HMAC-SHA256 signer, cact_shim
 │   ├── fs/
 │   │   ├── vfs/         core VFS, struct file, devfs, procfs, mntfs, etcfs, tmpfs,
-│   │   │                binfs, sbinfs, libfs, usrfs, varfs
+│   │   │                binfs, sbinfs, libfs, usrfs, varfs, cctkfs_tree
 │   │   └── pipe/        kernel pipe implementation
 │   └── net/             rust_net/ — pure-Rust stack (smoltcp: Ethernet/ARP/IP/ICMP/TCP/UDP/DNS) + rustls TLS + HTTP(S) client, C FFI header
 ├── meson.build
@@ -213,7 +213,7 @@ Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register).
 |---|--------|
 | 1 | **`pci_driver_probe_deferred_all()`** — attach PCI drivers that were not safe at pure boot time (all modules verified via HMAC-SHA256) |
 | 2 | **`mntfs_init`** — parse mount table, **mount ext4** on NVMe/AHCI (may **`sema_down`** waiting for IRQ completions — **illegal** from the raw boot stack, hence this thread) |
-| 3 | **`create_elf_task("bin/init")`** — first userspace process; binary resolved through **binfs** (ext4 `/bin` + **cctkfs** overlay) |
+| 3 | **`create_elf_task("usr/bin/init")`** — first userspace process; binary resolved through **binfs** (ext4 `/usr/bin` + **cctkfs** overlay) |
 
 **Typical serial / FB banner:**
 
@@ -302,7 +302,7 @@ The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as
 | **Block** | AHCI, NVMe, blkdev, page cache | In-tree drivers; additional storage stacks can ship as **`.cctk`** in **`cctkfs.img`** |
 | **USB** | xHCI, HID, hub | ~32 KiB host code path — PS/2 removed in 2.0 |
 | **Input** | USB HID keyboard & mouse | |
-| **Video** | Linear FB 32 bpp, PSF2 console font from cctkfs (`/lib/consolefont.psf`, ×2 scale), PAT WC + shadow | |
+| **Video** | Linear FB 32 bpp, PSF2 console font from cctkfs (`/usr/share/consolefont.psf`, ×2 scale), PAT WC + shadow | |
 | **PCI** | Config scan, driver table, **modblob** loader, HMAC-SHA256 signature verification | Loads ET_REL modules from **cctkfs** or path (user-driven via kmod syscalls) |
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
 | **ACPI** | ACPICA — RSDP, MADT, FADT, APIC table parsing | New in 2.0 |
@@ -322,10 +322,10 @@ All out-of-tree PCI drivers now register their interrupt through the kernel's **
 | **mntfs** | Active | User-visible mount table + auto-mount policy at boot |
 | **etcfs** | Active | passwd-like uid ↔ name mapping |
 | **tmpfs** | Active | RAM-backed files |
-| **binfs** | Active | **`/bin`** with **cctkfs** overlay (user ELF) |
-| **sbinfs** | Active | **`/sbin`** + cctkfs |
-| **libfs** | Active | **`/lib`** + **`libc.so`** from cctkfs |
-| **usrfs** | Active | **`/usr`** layout |
+| **binfs** | Active | **`/usr/bin`** + a synthesized **cctkfs** tree (**`cctkfs_tree`** builds the archive hierarchy); **`/bin`** → **`/usr/bin`** symlink |
+| **sbinfs** | Active | **`/usr/sbin`** + synthesized cctkfs tree; **`/sbin`** → **`/usr/sbin`** symlink |
+| **libfs** | Active | **`/usr/lib`** + synthesized cctkfs tree — **`modules/`**, **`firmware/`**, **`cactpkg/repo/`** and the whole **`cact-install/`** tree are reachable; **`/lib`** → **`/usr/lib`** symlink |
+| **usrfs** | Active | **`/usr`** + synthesized cctkfs tree (**`include/`**, **`share/`** and anything nested); **`bin`/`sbin`/`lib`** belong to their own mounts |
 | **varfs** | Active | **`/var`** layout |
 | **pipes** | Active | `pipe()` integrated with the fd table |
 | **btrfs / exFAT / ramfs** | Stub | Placeholder headers only |

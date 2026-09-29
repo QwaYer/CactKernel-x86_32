@@ -33,6 +33,7 @@ typedef struct {
     struct task_struct* owner;                          /* current lock owner */
     struct task_struct* waiters[MUTEX_WAIT_QUEUE_MAX];  /* FIFO waiter queue */
     uint32_t            waiter_count;
+    uint32_t            recursion_count;                /* recursive lock depth */
 } mutex_t;
 
 void mutex_init   (mutex_t* m);

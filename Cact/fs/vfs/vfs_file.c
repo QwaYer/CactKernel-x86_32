@@ -158,6 +158,7 @@ uint32_t vfs_type_to_mode(uint32_t type) {
     case VFS_CHARDEVICE:  return 0x2000;   // S_IFCHR
     case VFS_BLOCKDEVICE: return 0x6000;   // S_IFBLK
     case VFS_PIPE:        return 0x1000;   // S_IFIFO
+    case VFS_SYMLINK:     return 0xA000;   // S_IFLNK
     default:              return 0;
     }
 }

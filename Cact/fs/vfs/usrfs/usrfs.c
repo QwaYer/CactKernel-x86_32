@@ -3,93 +3,33 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
-#include "initfs_modblob.h"
+#include "cctkfs_tree.h"
 
-static vfs_node_t  usrfs_root;
-static vfs_node_t *ext4_root   = 0;
-static int         usrfs_ready = 0;
+// usrfs serves /usr: the on-disk ext4 /usr directory overlaid with a
+// synthesized tree of the archive's "/usr/..." entries.  /usr/bin, /usr/sbin
+// and /usr/lib are owned by their own overlays (separate mounts on this node),
+// so they are left out here; /usr/include and /usr/share and any nested data
+// below them are synthesized as real directories.  ext4 wins on a name clash.
+static vfs_node_t    usrfs_root;
+static vfs_node_t   *ext4_root   = 0;
+static int           usrfs_ready = 0;
+static uint32_t      usrfs_disk_count;
+static cctkfs_tree_t usr_tree;
 
-typedef struct usr_blob {
-    vfs_node_t        node;
-    const uint8_t    *data;
-    uint32_t          size;
-    int               shadowed;
-    struct usr_blob  *next;
-} usr_blob_t;
-
-static usr_blob_t *usr_blobs;
-static uint32_t    usrfs_disk_count;
-
-typedef struct inc_file {
-    vfs_node_t       node;
-    const uint8_t   *data;
-    uint32_t         size;
-    struct inc_file *next;
-} inc_file_t;
-
-typedef struct {
-    vfs_node_t  node;
-    inc_file_t *files;
-} usr_inc_dir_t;
-
-static usr_inc_dir_t usr_inc_dir;
-static vfs_dirent_t inc_de;
-
-static int path_has_prefix(const char *s, const char *pre) {
-    while (*pre) {
-        if (*s++ != *pre++) return 0;
-    }
-    return 1;
-}
-
-static int has_suffix(const char *s, const char *suf) {
-    int sl = strlen((char *)s), fl = strlen((char *)suf);
-    if (fl > sl) return 0;
-    return strcmp((char *)(s + sl - fl), (char *)suf) == 0;
-}
-
-static int basename_only(const char *base) {
-    if (!base || !*base) return 0;
-    for (const char *p = base; *p; p++) {
-        if (*p == '/') return 0;
-    }
-    return 1;
-}
+// Names mounted on the usrfs root by the other overlays (see mntfs_init).
+static const char *const usr_exclude[] = { "bin", "sbin", "lib", 0 };
 
 static vfs_node_t *_usr_dir(void) {
     if (!ext4_root || !ext4_root->ops || !ext4_root->ops->walk) return 0;
     return ext4_root->ops->walk(ext4_root, "usr");
 }
 
-static int usr_blob_read(vfs_node_t *node, uint32_t off, uint32_t size,
-                         char *buf) {
-    usr_blob_t *b = (usr_blob_t *)node->priv;
-    if (!b || !buf) return 0;
-    if (off >= b->size) return 0;
-    uint32_t avail = b->size - off;
-    uint32_t n = size < avail ? size : avail;
-    memcpy(buf, (const char *)b->data + off, n);
-    return (int)n;
+static int _on_disk(const char *name) {
+    vfs_node_t *usr = _usr_dir();
+    if (usr && usr->ops && usr->ops->walk && usr->ops->walk(usr, name))
+        return 1;
+    return 0;
 }
-
-static vfs_ops_t usr_blob_file_ops = {
-    .read = usr_blob_read,
-};
-
-static int inc_file_read(vfs_node_t *node, uint32_t off, uint32_t size,
-                         char *buf) {
-    inc_file_t *f = (inc_file_t *)node->priv;
-    if (!f || !buf) return 0;
-    if (off >= f->size) return 0;
-    uint32_t avail = f->size - off;
-    uint32_t n = size < avail ? size : avail;
-    memcpy(buf, (const char *)f->data + off, n);
-    return (int)n;
-}
-
-static vfs_ops_t inc_file_ops = {
-    .read = inc_file_read,
-};
 
 static void usrfs_count_disk(void) {
     vfs_node_t *usr = _usr_dir();
@@ -99,159 +39,31 @@ static void usrfs_count_disk(void) {
         usrfs_disk_count++;
 }
 
-static void usrfs_register_blobs(void) {
-    usr_blob_t *head = 0;
-    usr_blob_t **tail = &head;
-    inc_file_t *ih = 0, **it = &ih;
-
-    int n = initfs_modblob_count();
-    for (int i = 0; i < n; i++) {
-        const char *path;
-        const uint8_t *data;
-        uint32_t sz;
-        if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
-        if (!path_has_prefix(path, "/usr/")) continue;
-        if (has_suffix(path, ".cctk")) continue;
-        const char *base = path + 5;
-
-        if (path_has_prefix(base, "include/")) {
-            const char *inc_name = base + 8;
-            if (!*inc_name) continue;
-            int has_slash = 0;
-            for (const char *p = inc_name; *p; p++) {
-                if (*p == '/') { has_slash = 1; break; }
-            }
-            if (has_slash) continue;
-
-            inc_file_t *slot = (inc_file_t *)kmalloc(sizeof(inc_file_t));
-            if (!slot) continue;
-            memset(slot, 0, sizeof(inc_file_t));
-            strlcpy(slot->node.name, inc_name, 128);
-            slot->node.type = VFS_FILE;
-            slot->node.size = sz;
-            slot->node.mode = 0644;
-            slot->node.ops  = &inc_file_ops;
-            slot->node.priv = slot;
-            slot->data      = data;
-            slot->size      = sz;
-            *it = slot;
-            it = &slot->next;
-        } else {
-            if (!basename_only(base)) continue;
-
-            usr_blob_t *slot = (usr_blob_t *)kmalloc(sizeof(usr_blob_t));
-            if (!slot) continue;
-            memset(slot, 0, sizeof(usr_blob_t));
-            strlcpy(slot->node.name, base, 128);
-            slot->node.type = VFS_FILE;
-            slot->node.size = sz;
-            slot->node.mode = 0755;
-            slot->node.ops  = &usr_blob_file_ops;
-            slot->node.priv = slot;
-            slot->data      = data;
-            slot->size      = sz;
-            slot->next      = 0;
-
-            *tail = slot;
-            tail = &slot->next;
-        }
-    }
-
-    usr_blobs = head;
-    usr_inc_dir.files = ih;
-    memset(&usr_inc_dir.node, 0, sizeof(usr_inc_dir.node));
-    strlcpy(usr_inc_dir.node.name, "include", 128);
-    usr_inc_dir.node.type = VFS_DIRECTORY;
-    usr_inc_dir.node.mode = 0755;
-    usr_inc_dir.node.priv = &usr_inc_dir;
-
-    for (usr_blob_t *b = usr_blobs; b; b = b->next) {
-        vfs_node_t *usr = _usr_dir();
-        if (usr && usr->ops && usr->ops->walk &&
-            usr->ops->walk(usr, b->node.name))
-            b->shadowed = 1;
-    }
-}
-
-static vfs_node_t *_inc_walk(vfs_node_t *dir, const char *name) {
-    usr_inc_dir_t *inc = (usr_inc_dir_t *)dir->priv;
-    if (!inc) return 0;
-    for (inc_file_t *f = inc->files; f; f = f->next) {
-        if (streq(f->node.name, name)) return &f->node;
-    }
-    return 0;
-}
-
-static vfs_dirent_t *_inc_readdir(vfs_node_t *dir, uint32_t index) {
-    usr_inc_dir_t *inc = (usr_inc_dir_t *)dir->priv;
-    if (!inc) return 0;
-    uint32_t i = 0;
-    for (inc_file_t *f = inc->files; f; f = f->next) {
-        if (i++ == index) {
-            strlcpy(inc_de.name, f->node.name, 128);
-            inc_de.inode = i;
-            return &inc_de;
-        }
-    }
-    return 0;
-}
-
-static void _inc_listdir(vfs_node_t *dir) {
-    usr_inc_dir_t *inc = (usr_inc_dir_t *)dir->priv;
-    if (!inc || !inc->files) { printk("  (empty)\n"); return; }
-    for (inc_file_t *f = inc->files; f; f = f->next) {
-        printk("  "); printk(f->node.name); printk("\n");
-    }
-}
-
-static vfs_ops_t inc_dir_ops = {
-    .walk    = _inc_walk,
-    .readdir = _inc_readdir,
-    .listdir = _inc_listdir,
-};
-
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
-    if (streq(name, "include")) {
-        usr_inc_dir.node.ops = &inc_dir_ops;
-        return &usr_inc_dir.node;
-    }
     vfs_node_t *usr = _usr_dir();
     if (usr && usr->ops && usr->ops->walk) {
         vfs_node_t *disk = usr->ops->walk(usr, name);
         if (disk) return disk;
     }
-    for (usr_blob_t *b = usr_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
-        if (streq(b->node.name, name)) return &b->node;
-    }
-    return 0;
+    return cctkfs_tree_walk(&usr_tree, name);
 }
 
 static vfs_dirent_t sup_de;
 static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     (void)dir;
-    int has_inc = (usr_inc_dir.files != 0);
     vfs_node_t *usr = _usr_dir();
-
     if (usr && usr->ops && usr->ops->readdir) {
         vfs_dirent_t *e = usr->ops->readdir(usr, index);
         if (e) return e;
     }
-
     uint32_t j = index - usrfs_disk_count;
-    if (has_inc) {
+    cctkfs_iter_t it;
+    for (vfs_node_t *n = cctkfs_tree_first(&usr_tree, &it); n;
+         n = cctkfs_iter_next(&it)) {
+        if (_on_disk(n->name)) continue;
         if (j == 0) {
-            strlcpy(sup_de.name, "include", 128);
-            sup_de.inode = 0;
-            return &sup_de;
-        }
-        j--;
-    }
-    for (usr_blob_t *b = usr_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
-        if (j == 0) {
-            strlcpy(sup_de.name, b->node.name, 128);
+            strlcpy(sup_de.name, n->name, 128);
             sup_de.inode = 0;
             return &sup_de;
         }
@@ -265,6 +77,7 @@ static void _root_listdir(vfs_node_t *dir) {
     vfs_node_t *usr = _usr_dir();
     vfs_dirent_t *de;
     int any = 0;
+
     if (usr && usr->ops && usr->ops->readdir) {
         for (uint32_t i = 0; (de = usr->ops->readdir(usr, i)); i++) {
             if (de->name[0] == '.') continue;
@@ -272,25 +85,19 @@ static void _root_listdir(vfs_node_t *dir) {
             any = 1;
         }
     }
-    if (usr_inc_dir.files) {
-        printk("  include/  [headers]\n");
-        any = 1;
-    }
-    for (usr_blob_t *b = usr_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
-        int dup = 0;
-        if (usr && usr->ops && usr->ops->readdir) {
-            for (uint32_t i = 0; (de = usr->ops->readdir(usr, i)); i++) {
-                if (streq(de->name, b->node.name)) { dup = 1; break; }
-            }
-        }
-        if (dup) continue;
-        printk("  "); printk(b->node.name); printk("  [cctkfs]\n");
+    cctkfs_iter_t it;
+    for (vfs_node_t *n = cctkfs_tree_first(&usr_tree, &it); n;
+         n = cctkfs_iter_next(&it)) {
+        if (_on_disk(n->name)) continue;
+        printk("  "); printk(n->name);
+        printk(n->type == VFS_DIRECTORY ? "/" : "  [cctkfs]");
+        printk("\n");
         any = 1;
     }
     if (!any) printk("  (empty)\n");
 }
 
+// Forward create/delete/mkdir/rmdir to ext4 /usr
 static int _root_create(vfs_node_t *dir, const char *name) {
     (void)dir;
     vfs_node_t *usr = _usr_dir();
@@ -342,6 +149,7 @@ void usrfs_init(vfs_node_t *ext4_node) {
     usrfs_root.mode = 0755;
     usrfs_root.ops  = &root_ops;
 
+    // Ensure /usr exists on ext4
     if (ext4_root && ext4_root->ops && ext4_root->ops->walk) {
         if (!ext4_root->ops->walk(ext4_root, "usr")) {
             if (ext4_root->ops->mkdir)
@@ -349,15 +157,14 @@ void usrfs_init(vfs_node_t *ext4_node) {
         }
     }
 
-    usrfs_register_blobs();
+    cctkfs_tree_build(&usr_tree, "/usr/", 0644, usr_exclude);
     usrfs_count_disk();
 
-    uint32_t overlay = 0;
-    for (usr_blob_t *b = usr_blobs; b; b = b->next)
-        if (!b->shadowed) overlay++;
+    uint32_t files = 0, dirs = 0;
+    cctkfs_tree_count(&usr_tree, &files, &dirs);
 
-    pr_info("  %-11s : root ready (%u on disk, %u cctkfs overlay)\n",
-            "usrfs", usrfs_disk_count, overlay);
+    pr_info("  %-11s : root ready (%u on disk, %u cctkfs files, %u dirs)\n",
+            "usrfs", usrfs_disk_count, files, dirs);
 
     usrfs_ready = 1;
 }
