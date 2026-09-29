@@ -118,6 +118,7 @@ vfs_node_t *vfs_symlink_alloc(const char *target, uint32_t target_len) {
             symlink_pool[i].node.refcount   = 1;
             symlink_pool[i].node.ops        = 0;
             symlink_pool[i].node.inode      = 0;
+            symlink_pool[i].node.mode       = 0777;   /* lrwxrwxrwx, like Linux */
             symlink_pool[i].node.name[0]    = '\0';
             uint32_t copy_len = target_len < VFS_SYMLINK_TARGET_MAX - 1
                                 ? target_len : VFS_SYMLINK_TARGET_MAX - 1;

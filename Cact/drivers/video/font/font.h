@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 /* Path of the console font inside the boot cctkfs archive (see font_boot.c). */
-#define CONSOLE_FONT_CCTKFS_PATH "/lib/consolefont.psf"
+#define CONSOLE_FONT_CCTKFS_PATH "/usr/share/consolefont.psf"
 
 /* Parser sanity limits.  The console rasteriser scales glyphs by
  * FB_CONSOLE_FONT_SCALE (2), so a 32x64 font already yields a 64x128 cell —

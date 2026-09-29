@@ -4,7 +4,7 @@
 #include "klib.h"
 #include "kernel.h"
 
-#define FW_DIR "/lib/firmware/"
+#define FW_DIR "/usr/lib/firmware/"
 
 /* Look a path up in the cctkfs archive and return a private copy.  The archive
  * itself is a shared staging buffer, so callers must not hold into it across
@@ -36,8 +36,8 @@ int request_firmware(const char *name, const uint8_t **data, uint32_t *len) {
     snprintf(path, sizeof(path), "%s%s", FW_DIR, name);
     copy = fw_load(path, &size);
     if (!copy) {
-        /* The packer also accepts /lib/<name>; allow that shape too. */
-        snprintf(path, sizeof(path), "/lib/%s", name);
+        /* The packer also accepts /usr/lib/<name>; allow that shape too. */
+        snprintf(path, sizeof(path), "/usr/lib/%s", name);
         copy = fw_load(path, &size);
     }
     if (!copy) {

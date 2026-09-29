@@ -36,6 +36,15 @@ static void _mount(vfs_node_t *host, const char *name, vfs_node_t *target,
     }
 }
 
+// Register a usrmerge symlink at the root: /bin -> usr/bin and friends.
+static void _symlink(const char *name, const char *target) {
+    if (vfs_symlink(vfs_root, name, target) == 0) {
+        pr_info("  %-11s : /%-6s -> %s\n", "mntfs", name, target);
+    } else {
+        pr_warn("  %-11s : symlink /%s -> %s failed\n", "mntfs", name, target);
+    }
+}
+
 void mntfs_init(void) {
     if (mntfs_ready) return;
     mntfs_ready = 1;
@@ -78,7 +87,9 @@ void mntfs_init(void) {
     usrfs_init(ext4);
 
     // 3. Create the mountpoint directories (and /home, /mnt) on the root fs,
-    //    so the tree looks like a real Linux root.
+    //    so the tree looks like a real Linux root.  /bin, /sbin and /lib are
+    //    still created as directories so readdir("/") lists them; step 4 then
+    //    shadows each with a symlink into /usr.
     static const char *dirs[] = {
         "bin", "sbin", "lib", "usr", "etc", "var",
         "tmp", "dev",  "proc",
@@ -90,17 +101,21 @@ void mntfs_init(void) {
         }
     }
 
-    // 4. Register the layout.
-    _mount(vfs_root, "bin",   binfs_get_root(),   "binfs");
-    _mount(vfs_root, "sbin",  sbinfs_get_root(),  "sbinfs");
-    _mount(vfs_root, "lib",   libfs_get_root(),   "libfs");
+    // 4. Register the layout.  Userland is usrmerge: /usr/<bin,sbin,lib> are
+    //    the real mounts and /bin, /sbin, /lib are symlinks pointing into /usr.
     _mount(vfs_root, "usr",   usrfs_get_root(),   "usrfs");
+    _mount(usrfs_get_root(), "bin",  binfs_get_root(),  "binfs");
+    _mount(usrfs_get_root(), "sbin", sbinfs_get_root(), "sbinfs");
+    _mount(usrfs_get_root(), "lib",  libfs_get_root(),  "libfs");
     _mount(vfs_root, "etc",   etcfs_get_root(),   "etcfs");
     _mount(vfs_root, "var",   varfs_get_root(),   "varfs");
     _mount(vfs_root, "tmp",   tmpfs_get_root(),   "tmpfs");
     _mount(vfs_root, "dev",   devfs_get_root(),   "devfs");
     _mount(vfs_root, "proc",  procfs_get_root(),  "procfs");
+    _symlink("bin",  "usr/bin");
+    _symlink("sbin", "usr/sbin");
+    _symlink("lib",  "usr/lib");
 
-    pr_info("  %-11s : layout ready: /bin /dev /etc /home /lib /mnt /proc"
-            " /sbin /tmp /usr /var\n", "mntfs");
+    pr_info("  %-11s : layout ready: /usr/{bin,sbin,lib} mounted, /bin /sbin"
+            " /lib symlinked, /dev /etc /home /mnt /proc /tmp /var\n", "mntfs");
 }

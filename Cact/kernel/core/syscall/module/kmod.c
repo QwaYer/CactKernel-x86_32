@@ -87,8 +87,8 @@ typedef struct {
 static kmod_slot_t kmod_slots[KMOD_MAX_SLOTS];
 
 // Instance name: module basename with the trailing ".cctk" stripped, spaces
-// folded to underscores ("/lib/virtio_net.cctk" -> "virtio_net").  This is the
-// name the module is registered and unloaded under.
+// folded to underscores ("/usr/lib/modules/virtio_net.cctk" -> "virtio_net").
+// This is the name the module is registered and unloaded under.
 static void kmod_instance_name(const char *path, char *out, int out_sz) {
     const char *base = path;
     for (const char *p = path; p && *p; p++)

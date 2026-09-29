@@ -3,108 +3,42 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
-#include "initfs_modblob.h"
+#include "cctkfs_tree.h"
 
-/* sbinfs: ext4 /sbin + cctkfs overlay entries named /sbin/<file> (initfs_modblob). */
-static vfs_node_t  sbinfs_root;
-static vfs_node_t *ext4_root    = 0;
-static int         sbinfs_ready = 0;
+// sbinfs serves /usr/sbin: the on-disk ext4 /usr/sbin directory overlaid with a
+// synthesized tree of every "/usr/sbin/..." entry in the boot archive (the
+// privileged / network helpers).  ext4 wins on a name clash.  /sbin is a
+// symlink into /usr/sbin.
+static vfs_node_t    sbinfs_root;
+static vfs_node_t   *ext4_root   = 0;
+static int           sbinfs_ready = 0;
+static uint32_t      sbinfs_disk_count;
+static cctkfs_tree_t sbin_tree;
 
-typedef struct sbin_blob {
-    vfs_node_t         node;
-    const uint8_t     *data;
-    uint32_t           size;
-    int                shadowed;
-    struct sbin_blob  *next;
-} sbin_blob_t;
-
-static sbin_blob_t *sbin_blobs;
-static uint32_t     sbinfs_disk_sbin_count;
-
-static int path_has_prefix(const char *s, const char *pre) {
-    while (*pre) {
-        if (*s++ != *pre++) return 0;
-    }
-    return 1;
-}
-
-static int basename_only(const char *base) {
-    if (!base || !*base) return 0;
-    for (const char *p = base; *p; p++) {
-        if (*p == '/') return 0;
-    }
-    return 1;
-}
-
+// Resolve ext4 /usr/sbin lazily (usrmerge: admin tools live under /usr).
 static vfs_node_t *_sbin_dir(void) {
     if (!ext4_root || !ext4_root->ops || !ext4_root->ops->walk) return 0;
-    return ext4_root->ops->walk(ext4_root, "sbin");
+    vfs_node_t *usr = ext4_root->ops->walk(ext4_root, "usr");
+    if (!usr || !usr->ops || !usr->ops->walk) return 0;
+    return usr->ops->walk(usr, "sbin");
 }
 
-static int sbin_blob_read(vfs_node_t *node, uint32_t off, uint32_t size,
-                          char *buf) {
-    sbin_blob_t *b = (sbin_blob_t *)node->priv;
-    if (!b || !buf) return 0;
-    if (off >= b->size) return 0;
-    uint32_t avail = b->size - off;
-    uint32_t n = size < avail ? size : avail;
-    memcpy(buf, (const char *)b->data + off, n);
-    return (int)n;
-}
-
-static vfs_ops_t sbin_blob_file_ops = {
-    .read = sbin_blob_read,
-};
-
-static void sbinfs_count_disk_sbin(void) {
+static int _on_disk(const char *name) {
     vfs_node_t *sd = _sbin_dir();
-    sbinfs_disk_sbin_count = 0;
+    if (sd && sd->ops && sd->ops->walk && sd->ops->walk(sd, name))
+        return 1;
+    return 0;
+}
+
+static void sbinfs_count_disk(void) {
+    vfs_node_t *sd = _sbin_dir();
+    sbinfs_disk_count = 0;
     if (!sd || !sd->ops || !sd->ops->readdir) return;
-    while (sd->ops->readdir(sd, sbinfs_disk_sbin_count))
-        sbinfs_disk_sbin_count++;
+    while (sd->ops->readdir(sd, sbinfs_disk_count))
+        sbinfs_disk_count++;
 }
 
-static void sbinfs_register_init_sbin_blobs(void) {
-    sbin_blob_t *head = 0;
-    sbin_blob_t **tail = &head;
-
-    int n = initfs_modblob_count();
-    for (int i = 0; i < n; i++) {
-        const char *path;
-        const uint8_t *data;
-        uint32_t sz;
-        if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
-        if (!path_has_prefix(path, "/sbin/")) continue;
-        const char *base = path + 6;
-        if (!basename_only(base)) continue;
-
-        sbin_blob_t *slot = (sbin_blob_t *)kmalloc(sizeof(sbin_blob_t));
-        if (!slot) continue;
-        memset(slot, 0, sizeof(sbin_blob_t));
-        strlcpy(slot->node.name, base, 128);
-        slot->node.type = VFS_FILE;
-        slot->node.size = sz;
-        slot->node.mode = 0755;
-        slot->node.ops  = &sbin_blob_file_ops;
-        slot->node.priv = slot;
-        slot->data      = data;
-        slot->size      = sz;
-        slot->next      = 0;
-
-        *tail = slot;
-        tail = &slot->next;
-    }
-
-    sbin_blobs = head;
-
-    for (sbin_blob_t *b = sbin_blobs; b; b = b->next) {
-        vfs_node_t *sd = _sbin_dir();
-        if (sd && sd->ops && sd->ops->walk &&
-            sd->ops->walk(sd, b->node.name))
-            b->shadowed = 1;
-    }
-}
-
+// Resolve entry from ext4 first, then the synthesized tree.
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     vfs_node_t *sd = _sbin_dir();
@@ -112,11 +46,7 @@ static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
         vfs_node_t *disk = sd->ops->walk(sd, name);
         if (disk) return disk;
     }
-    for (sbin_blob_t *b = sbin_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
-        if (streq(b->node.name, name)) return &b->node;
-    }
-    return 0;
+    return cctkfs_tree_walk(&sbin_tree, name);
 }
 
 static vfs_dirent_t sup_de;
@@ -127,11 +57,13 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
         vfs_dirent_t *e = sd->ops->readdir(sd, index);
         if (e) return e;
     }
-    uint32_t j = index - sbinfs_disk_sbin_count;
-    for (sbin_blob_t *b = sbin_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
+    uint32_t j = index - sbinfs_disk_count;
+    cctkfs_iter_t it;
+    for (vfs_node_t *n = cctkfs_tree_first(&sbin_tree, &it); n;
+         n = cctkfs_iter_next(&it)) {
+        if (_on_disk(n->name)) continue;
         if (j == 0) {
-            strlcpy(sup_de.name, b->node.name, 128);
+            strlcpy(sup_de.name, n->name, 128);
             sup_de.inode = 0;
             return &sup_de;
         }
@@ -143,30 +75,29 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     vfs_node_t *sd = _sbin_dir();
-    if (!sd || !sd->ops || !sd->ops->readdir) {
-        printk("  (empty)\n");
-        return;
-    }
     vfs_dirent_t *de;
     int any = 0;
-    for (uint32_t i = 0; (de = sd->ops->readdir(sd, i)); i++) {
-        if (de->name[0] == '.') continue;
-        printk("  "); printk(de->name); printk("\n");
-        any = 1;
-    }
-    for (sbin_blob_t *b = sbin_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
-        int dup = 0;
+
+    if (sd && sd->ops && sd->ops->readdir) {
         for (uint32_t i = 0; (de = sd->ops->readdir(sd, i)); i++) {
-            if (streq(de->name, b->node.name)) { dup = 1; break; }
+            if (de->name[0] == '.') continue;
+            printk("  "); printk(de->name); printk("\n");
+            any = 1;
         }
-        if (dup) continue;
-        printk("  "); printk(b->node.name); printk("  [cctkfs]\n");
+    }
+    cctkfs_iter_t it;
+    for (vfs_node_t *n = cctkfs_tree_first(&sbin_tree, &it); n;
+         n = cctkfs_iter_next(&it)) {
+        if (_on_disk(n->name)) continue;
+        printk("  "); printk(n->name);
+        printk(n->type == VFS_DIRECTORY ? "/" : "  [cctkfs]");
+        printk("\n");
         any = 1;
     }
     if (!any) printk("  (empty)\n");
 }
 
+// Forward create/delete/mkdir/rmdir to ext4 /usr/sbin
 static int _root_create(vfs_node_t *dir, const char *name) {
     (void)dir;
     vfs_node_t *sd = _sbin_dir();
@@ -218,22 +149,26 @@ void sbinfs_init(vfs_node_t *ext4_node) {
     sbinfs_root.mode = 0755;
     sbinfs_root.ops  = &root_ops;
 
+    // Ensure /usr/sbin exists on ext4
     if (ext4_root && ext4_root->ops && ext4_root->ops->walk) {
-        if (!ext4_root->ops->walk(ext4_root, "sbin")) {
-            if (ext4_root->ops->mkdir)
-                ext4_root->ops->mkdir(ext4_root, "sbin");
+        vfs_node_t *usr = ext4_root->ops->walk(ext4_root, "usr");
+        if (!usr) {
+            if (ext4_root->ops->mkdir) ext4_root->ops->mkdir(ext4_root, "usr");
+            usr = ext4_root->ops->walk(ext4_root, "usr");
         }
+        if (usr && usr->ops && usr->ops->walk && usr->ops->mkdir &&
+            !usr->ops->walk(usr, "sbin"))
+            usr->ops->mkdir(usr, "sbin");
     }
 
-    sbinfs_register_init_sbin_blobs();
-    sbinfs_count_disk_sbin();
+    cctkfs_tree_build(&sbin_tree, "/usr/sbin/", 0755, 0);
+    sbinfs_count_disk();
 
-    uint32_t overlay = 0;
-    for (sbin_blob_t *b = sbin_blobs; b; b = b->next)
-        if (!b->shadowed) overlay++;
+    uint32_t files = 0, dirs = 0;
+    cctkfs_tree_count(&sbin_tree, &files, &dirs);
 
-    pr_info("  %-11s : root ready (%u on disk, %u cctkfs overlay)\n",
-            "sbinfs", sbinfs_disk_sbin_count, overlay);
+    pr_info("  %-11s : root ready (%u on disk, %u cctkfs files, %u dirs)\n",
+            "sbinfs", sbinfs_disk_count, files, dirs);
 
     sbinfs_ready = 1;
 }

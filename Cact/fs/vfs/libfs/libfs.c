@@ -3,103 +3,32 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
-#include "initfs_modblob.h"
+#include "cctkfs_tree.h"
 
-// libfs serves /lib by overlaying cctkfs blobs (e.g. libc.so) on top of
-// the on-disk ext4 /lib directory. cctkfs entries with prefix "/lib/" and
-// a non-.cctk suffix are registered here; .cctk PCI modules stay private
-// to initfs_modblob_get() and are not exposed through VFS.
-static vfs_node_t  libfs_root;
-static vfs_node_t *ext4_root   = 0;
-static int         libfs_ready = 0;
+// libfs serves /usr/lib: the on-disk ext4 /usr/lib directory overlaid with a
+// synthesized tree of every "/usr/lib/..." entry in the boot archive.  That
+// covers the shared libraries, /usr/lib/modules/*.cctk, /usr/lib/firmware/*
+// and the nested cactpkg / cact-install payloads.  ext4 wins on a name clash.
+static vfs_node_t    libfs_root;
+static vfs_node_t   *ext4_root   = 0;
+static int           libfs_ready = 0;
+static uint32_t      libfs_disk_count;
+static cctkfs_tree_t lib_tree;
 
-typedef struct lib_blob {
-    vfs_node_t        node;
-    const uint8_t    *data;
-    uint32_t          size;
-    int               shadowed; /* ext4 already has this name */
-    struct lib_blob  *next;
-} lib_blob_t;
-
-static lib_blob_t *lib_blobs;
-static uint32_t    libfs_disk_count;
-
-// Subdirectory file entry (for include/, mdls/)
-typedef struct sub_file {
-    vfs_node_t        node;
-    const uint8_t    *data;
-    uint32_t          size;
-    struct sub_file  *next;
-} sub_file_t;
-
-// Subdirectory descriptor
-typedef struct {
-    vfs_node_t   node;
-    const char  *prefix;
-    int          prefix_len;
-    sub_file_t  *files;
-} lib_subdir_t;
-
-static lib_subdir_t lib_inc_dir;
-static lib_subdir_t lib_mdls_dir;
-static lib_subdir_t lib_fw_dir;
-
-static int path_has_prefix(const char *s, const char *pre) {
-    while (*pre) {
-        if (*s++ != *pre++) return 0;
-    }
-    return 1;
-}
-
-static int has_suffix(const char *s, const char *suf) {
-    int sl = strlen((char *)s), fl = strlen((char *)suf);
-    if (fl > sl) return 0;
-    return strcmp((char *)(s + sl - fl), (char *)suf) == 0;
-}
-
-static int basename_only(const char *base) {
-    if (!base || !*base) return 0;
-    for (const char *p = base; *p; p++) {
-        if (*p == '/') return 0;
-    }
-    return 1;
-}
-
-// Resolve ext4 /lib lazily.
+// Resolve ext4 /usr/lib lazily (usrmerge: shared libraries live under /usr).
 static vfs_node_t *_lib_dir(void) {
     if (!ext4_root || !ext4_root->ops || !ext4_root->ops->walk) return 0;
-    return ext4_root->ops->walk(ext4_root, "lib");
+    vfs_node_t *usr = ext4_root->ops->walk(ext4_root, "usr");
+    if (!usr || !usr->ops || !usr->ops->walk) return 0;
+    return usr->ops->walk(usr, "lib");
 }
 
-static int lib_blob_read(vfs_node_t *node, uint32_t off, uint32_t size,
-                         char *buf) {
-    lib_blob_t *b = (lib_blob_t *)node->priv;
-    if (!b || !buf) return 0;
-    if (off >= b->size) return 0;
-    uint32_t avail = b->size - off;
-    uint32_t n = size < avail ? size : avail;
-    memcpy(buf, (const char *)b->data + off, n);
-    return (int)n;
+static int _on_disk(const char *name) {
+    vfs_node_t *lib = _lib_dir();
+    if (lib && lib->ops && lib->ops->walk && lib->ops->walk(lib, name))
+        return 1;
+    return 0;
 }
-
-static vfs_ops_t lib_blob_file_ops = {
-    .read = lib_blob_read,
-};
-
-static int sub_file_read(vfs_node_t *node, uint32_t off, uint32_t size,
-                         char *buf) {
-    sub_file_t *f = (sub_file_t *)node->priv;
-    if (!f || !buf) return 0;
-    if (off >= f->size) return 0;
-    uint32_t avail = f->size - off;
-    uint32_t n = size < avail ? size : avail;
-    memcpy(buf, (const char *)f->data + off, n);
-    return (int)n;
-}
-
-static vfs_ops_t sub_file_ops = {
-    .read = sub_file_read,
-};
 
 static void libfs_count_disk(void) {
     vfs_node_t *lib = _lib_dir();
@@ -109,205 +38,15 @@ static void libfs_count_disk(void) {
         libfs_disk_count++;
 }
 
-// Register cctkfs blobs under /lib/
-// Flat files (libc.so, hello.c, ...) → lib_blobs
-// Subdirectory files (include/*, mdls/*) → subdir file lists
-static void libfs_register_blobs(void) {
-    lib_blob_t *head = 0;
-    lib_blob_t **tail = &head;
-
-    sub_file_t *ih = 0, **it = &ih;
-    sub_file_t *mh = 0, **mt = &mh;
-    sub_file_t *fh = 0, **ft = &fh;
-
-    int n = initfs_modblob_count();
-    for (int i = 0; i < n; i++) {
-        const char *path;
-        const uint8_t *data;
-        uint32_t sz;
-        if (initfs_modblob_at(i, &path, &data, &sz) != 0) continue;
-        if (!path_has_prefix(path, "/lib/")) continue;
-        const char *base = path + 5;
-
-        // Driver modules (*.cctk) are exposed under /lib/mdls/<name>.cctk.
-        if (has_suffix(base, ".cctk")) {
-            if (!basename_only(base)) continue;
-            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
-            if (!slot) continue;
-            memset(slot, 0, sizeof(sub_file_t));
-            strlcpy(slot->node.name, base, 128);
-            slot->node.type = VFS_FILE;
-            slot->node.size = sz;
-            slot->node.mode = 0644;
-            slot->node.ops  = &sub_file_ops;
-            slot->node.priv = slot;
-            slot->data      = data;
-            slot->size      = sz;
-            *mt = slot;
-            mt = &slot->next;
-            continue;
-        }
-
-        // Check for known subdirectories
-        if (path_has_prefix(base, "firmware/")) {
-            const char *name = base + 9;
-            if (!*name) continue;
-            if (!basename_only(name)) continue;
-            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
-            if (!slot) continue;
-            memset(slot, 0, sizeof(sub_file_t));
-            strlcpy(slot->node.name, name, 128);
-            slot->node.type = VFS_FILE;
-            slot->node.size = sz;
-            slot->node.mode = 0644;
-            slot->node.ops  = &sub_file_ops;
-            slot->node.priv = slot;
-            slot->data      = data;
-            slot->size      = sz;
-            *ft = slot;
-            ft = &slot->next;
-            continue;
-        }
-        if (path_has_prefix(base, "include/")) {
-            const char *name = base + 8;
-            if (!*name) continue;
-            if (!basename_only(name)) continue;
-            sub_file_t *slot = (sub_file_t *)kmalloc(sizeof(sub_file_t));
-            if (!slot) continue;
-            memset(slot, 0, sizeof(sub_file_t));
-            strlcpy(slot->node.name, name, 128);
-            slot->node.type = VFS_FILE;
-            slot->node.size = sz;
-            slot->node.mode = 0644;
-            slot->node.ops  = &sub_file_ops;
-            slot->node.priv = slot;
-            slot->data      = data;
-            slot->size      = sz;
-            *it = slot;
-            it = &slot->next;
-        } else {
-            if (!basename_only(base)) continue;
-            lib_blob_t *slot = (lib_blob_t *)kmalloc(sizeof(lib_blob_t));
-            if (!slot) continue;
-            memset(slot, 0, sizeof(lib_blob_t));
-            strlcpy(slot->node.name, base, 128);
-            slot->node.type = VFS_FILE;
-            slot->node.size = sz;
-            slot->node.mode = 0755;
-            slot->node.ops  = &lib_blob_file_ops;
-            slot->node.priv = slot;
-            slot->data      = data;
-            slot->size      = sz;
-            slot->next      = 0;
-            *tail = slot;
-            tail = &slot->next;
-        }
-    }
-
-    lib_blobs = head;
-
-    // Init include subdirectory node
-    lib_inc_dir.files = ih;
-    memset(&lib_inc_dir.node, 0, sizeof(lib_inc_dir.node));
-    strlcpy(lib_inc_dir.node.name, "include", 128);
-    lib_inc_dir.node.type = VFS_DIRECTORY;
-    lib_inc_dir.node.mode = 0755;
-    lib_inc_dir.node.priv = &lib_inc_dir;
-    lib_inc_dir.prefix    = "include/";
-    lib_inc_dir.prefix_len = 8;
-
-    // Init mdls subdirectory node (bundled driver modules)
-    lib_mdls_dir.files = mh;
-    memset(&lib_mdls_dir.node, 0, sizeof(lib_mdls_dir.node));
-    strlcpy(lib_mdls_dir.node.name, "mdls", 128);
-    lib_mdls_dir.node.type = VFS_DIRECTORY;
-    lib_mdls_dir.node.mode = 0755;
-    lib_mdls_dir.node.priv = &lib_mdls_dir;
-    lib_mdls_dir.prefix    = "mdls/";
-    lib_mdls_dir.prefix_len = 5;
-
-    // Init firmware subdirectory node (Wi-Fi/GPU firmware blobs)
-    lib_fw_dir.files = fh;
-    memset(&lib_fw_dir.node, 0, sizeof(lib_fw_dir.node));
-    strlcpy(lib_fw_dir.node.name, "firmware", 128);
-    lib_fw_dir.node.type = VFS_DIRECTORY;
-    lib_fw_dir.node.mode = 0755;
-    lib_fw_dir.node.priv = &lib_fw_dir;
-    lib_fw_dir.prefix    = "firmware/";
-    lib_fw_dir.prefix_len = 9;
-
-    for (lib_blob_t *b = lib_blobs; b; b = b->next) {
-        vfs_node_t *lib = _lib_dir();
-        if (lib && lib->ops && lib->ops->walk &&
-            lib->ops->walk(lib, b->node.name))
-            b->shadowed = 1;
-    }
-}
-
-// Subdirectory walk handler
-static vfs_node_t *_sub_walk(vfs_node_t *dir, const char *name) {
-    lib_subdir_t *sd = (lib_subdir_t *)dir->priv;
-    if (!sd) return 0;
-    for (sub_file_t *f = sd->files; f; f = f->next) {
-        if (streq(f->node.name, name)) return &f->node;
-    }
-    return 0;
-}
-
-static vfs_dirent_t sub_de;
-static vfs_dirent_t *_sub_readdir(vfs_node_t *dir, uint32_t index) {
-    lib_subdir_t *sd = (lib_subdir_t *)dir->priv;
-    if (!sd) return 0;
-    uint32_t i = 0;
-    for (sub_file_t *f = sd->files; f; f = f->next) {
-        if (i++ == index) {
-            strlcpy(sub_de.name, f->node.name, 128);
-            sub_de.inode = i;
-            return &sub_de;
-        }
-    }
-    return 0;
-}
-
-static void _sub_listdir(vfs_node_t *dir) {
-    lib_subdir_t *sd = (lib_subdir_t *)dir->priv;
-    if (!sd || !sd->files) { printk("  (empty)\n"); return; }
-    for (sub_file_t *f = sd->files; f; f = f->next) {
-        printk("  "); printk(f->node.name); printk("\n");
-    }
-}
-
-static vfs_ops_t sub_dir_ops = {
-    .walk    = _sub_walk,
-    .readdir = _sub_readdir,
-    .listdir = _sub_listdir,
-};
-
-// Resolve entry from ext4 first, then overlay.
+// Resolve entry from ext4 first, then the synthesized tree.
 static vfs_node_t *_root_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
-    if (streq(name, "include")) {
-        lib_inc_dir.node.ops = &sub_dir_ops;
-        return &lib_inc_dir.node;
-    }
-    if (streq(name, "mdls")) {
-        lib_mdls_dir.node.ops = &sub_dir_ops;
-        return &lib_mdls_dir.node;
-    }
-    if (streq(name, "firmware")) {
-        lib_fw_dir.node.ops = &sub_dir_ops;
-        return &lib_fw_dir.node;
-    }
     vfs_node_t *lib = _lib_dir();
     if (lib && lib->ops && lib->ops->walk) {
         vfs_node_t *disk = lib->ops->walk(lib, name);
         if (disk) return disk;
     }
-    for (lib_blob_t *b = lib_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
-        if (streq(b->node.name, name)) return &b->node;
-    }
-    return 0;
+    return cctkfs_tree_walk(&lib_tree, name);
 }
 
 static vfs_dirent_t sup_de;
@@ -319,21 +58,12 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
         if (e) return e;
     }
     uint32_t j = index - libfs_disk_count;
-    // Emit subdirectories first
-    static const char *const subdir_names[] = { "include", "mdls", "firmware" };
-    for (int s = 0; s < 3; s++) {
-        const char *dname = subdir_names[s];
+    cctkfs_iter_t it;
+    for (vfs_node_t *n = cctkfs_tree_first(&lib_tree, &it); n;
+         n = cctkfs_iter_next(&it)) {
+        if (_on_disk(n->name)) continue;
         if (j == 0) {
-            strlcpy(sup_de.name, dname, 128);
-            sup_de.inode = 0;
-            return &sup_de;
-        }
-        j--;
-    }
-    for (lib_blob_t *b = lib_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
-        if (j == 0) {
-            strlcpy(sup_de.name, b->node.name, 128);
+            strlcpy(sup_de.name, n->name, 128);
             sup_de.inode = 0;
             return &sup_de;
         }
@@ -342,17 +72,12 @@ static vfs_dirent_t *_root_readdir(vfs_node_t *dir, uint32_t index) {
     return 0;
 }
 
-// List ext4 /lib + cctkfs overlay with empty fallback.
+// List ext4 /usr/lib + the cctkfs overlay with empty fallback.
 static void _root_listdir(vfs_node_t *dir) {
     (void)dir;
     vfs_node_t *lib = _lib_dir();
     vfs_dirent_t *de;
     int any = 0;
-
-    // List subdirectories
-    if (lib_inc_dir.files) { printk("  include\n"); any = 1; }
-    if (lib_mdls_dir.files) { printk("  mdls\n"); any = 1; }
-    if (lib_fw_dir.files) { printk("  firmware\n"); any = 1; }
 
     if (lib && lib->ops && lib->ops->readdir) {
         for (uint32_t i = 0; (de = lib->ops->readdir(lib, i)); i++) {
@@ -361,22 +86,19 @@ static void _root_listdir(vfs_node_t *dir) {
             any = 1;
         }
     }
-    for (lib_blob_t *b = lib_blobs; b; b = b->next) {
-        if (b->shadowed) continue;
-        int dup = 0;
-        if (lib && lib->ops && lib->ops->readdir) {
-            for (uint32_t i = 0; (de = lib->ops->readdir(lib, i)); i++) {
-                if (streq(de->name, b->node.name)) { dup = 1; break; }
-            }
-        }
-        if (dup) continue;
-        printk("  "); printk(b->node.name); printk("  [cctkfs]\n");
+    cctkfs_iter_t it;
+    for (vfs_node_t *n = cctkfs_tree_first(&lib_tree, &it); n;
+         n = cctkfs_iter_next(&it)) {
+        if (_on_disk(n->name)) continue;
+        printk("  "); printk(n->name);
+        printk(n->type == VFS_DIRECTORY ? "/" : "  [cctkfs]");
+        printk("\n");
         any = 1;
     }
     if (!any) printk("  (empty)\n");
 }
 
-// Forward create/delete/mkdir/rmdir to ext4 /lib
+// Forward create/delete/mkdir/rmdir to ext4 /usr/lib
 static int _root_create(vfs_node_t *dir, const char *name) {
     (void)dir;
     vfs_node_t *lib = _lib_dir();
@@ -419,7 +141,7 @@ static vfs_ops_t root_ops = {
 // Return the libfs root node (registered in VFS mount table)
 vfs_node_t *libfs_get_root(void) { return &libfs_root; }
 
-// Initialize libfs and ensure /lib exists.
+// Initialize libfs and ensure /usr/lib exists.
 void libfs_init(vfs_node_t *ext4_node) {
     if (libfs_ready) return;
 
@@ -431,25 +153,26 @@ void libfs_init(vfs_node_t *ext4_node) {
     libfs_root.mode = 0755;
     libfs_root.ops  = &root_ops;
 
-    // Ensure /lib exists on ext4
+    // Ensure /usr/lib exists on ext4
     if (ext4_root && ext4_root->ops && ext4_root->ops->walk) {
-        if (!ext4_root->ops->walk(ext4_root, "lib")) {
-            if (ext4_root->ops->mkdir)
-                ext4_root->ops->mkdir(ext4_root, "lib");
+        vfs_node_t *usr = ext4_root->ops->walk(ext4_root, "usr");
+        if (!usr) {
+            if (ext4_root->ops->mkdir) ext4_root->ops->mkdir(ext4_root, "usr");
+            usr = ext4_root->ops->walk(ext4_root, "usr");
         }
+        if (usr && usr->ops && usr->ops->walk && usr->ops->mkdir &&
+            !usr->ops->walk(usr, "lib"))
+            usr->ops->mkdir(usr, "lib");
     }
 
-    libfs_register_blobs();
+    cctkfs_tree_build(&lib_tree, "/usr/lib/", 0755, 0);
     libfs_count_disk();
 
-    uint32_t overlay = 0, headers = 0, modules = 0;
-    for (lib_blob_t *b = lib_blobs; b; b = b->next)
-        if (!b->shadowed) overlay++;
-    for (sub_file_t *f = lib_inc_dir.files; f; f = f->next) headers++;
-    for (sub_file_t *f = lib_mdls_dir.files; f; f = f->next) modules++;
+    uint32_t files = 0, dirs = 0;
+    cctkfs_tree_count(&lib_tree, &files, &dirs);
 
-    pr_info("  %-11s : root ready (%u on disk, %u cctkfs, %u headers, %u modules)\n",
-            "libfs", libfs_disk_count, overlay, headers, modules);
+    pr_info("  %-11s : root ready (%u on disk, %u cctkfs files, %u dirs)\n",
+            "libfs", libfs_disk_count, files, dirs);
 
     libfs_ready = 1;
 }

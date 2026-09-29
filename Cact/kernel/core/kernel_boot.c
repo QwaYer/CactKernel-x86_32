@@ -25,7 +25,7 @@ static void kernel_bootstrap_main(void) {
 
     // Module loading (PCI kmods, filesystem driver) is a userspace concern —
     // nothing is auto-loaded here. Without a filesystem module mntfs falls
-    // back to a virtual nodisk root and the kernel still boots to /bin/init.
+    // back to a virtual nodisk root and the kernel still boots to /usr/bin/init.
     mntfs_init();
 
     if (bootstrap_mbi) {
@@ -49,12 +49,12 @@ static void kernel_bootstrap_main(void) {
 
     printk_color("Kernel is ready. Launching init...\n", COLOR_LIGHT_GREEN);
 
-    struct task_struct* init = create_elf_task("bin/init");
+    struct task_struct* init = create_elf_task("usr/bin/init");
     if (!init) {
-        pr_err("  boot        : FAILED — /bin/init not found\n");
+        pr_err("  boot        : FAILED — /usr/bin/init not found\n");
     } else {
         task_comm_set(init->pid, "init");
-        pr_info("  boot        : /bin/init spawned as pid %d\n",
+        pr_info("  boot        : /usr/bin/init spawned as pid %d\n",
                 (int)init->pid);
     }
 

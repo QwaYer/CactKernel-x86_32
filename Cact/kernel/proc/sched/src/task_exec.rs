@@ -134,7 +134,10 @@ pub unsafe extern "C" fn task_exec(
         // SAFETY: `root` points at the kernel's VFS root node.
         let root_node = unsafe { *root };
         // SAFETY: `root_node` is a live VFS node and `path` a live string.
-        let exec_node = unsafe { ffi::vfs_walk_path(root_node, path) };
+        // Follow symlinks: /bin, /sbin and /lib are usrmerge links into /usr.
+        let exec_node = unsafe {
+            ffi::vfs_walk_path_follow(root_node, path, core::ptr::null_mut())
+        };
         // SAFETY: `exec_node` is null or a live VFS node.
         let perm_ok = !exec_node.is_null()
             && unsafe { ffi::vfs_check_perm(exec_node, 0x01) } >= 0;
@@ -210,7 +213,9 @@ pub unsafe extern "C" fn task_exec(
         // SAFETY: `root` points at the kernel's VFS root node.
         let root_node = unsafe { *root };
         // SAFETY: `root_node` is a live VFS node and `path` a live string.
-        let file = unsafe { ffi::vfs_walk_path(root_node, path) };
+        let file = unsafe {
+            ffi::vfs_walk_path_follow(root_node, path, core::ptr::null_mut())
+        };
         if !file.is_null() {
             // SAFETY: `file` is a live VFS node (non-null checked here).
             let brk = unsafe { ffi::elf_get_brk_start(file) };

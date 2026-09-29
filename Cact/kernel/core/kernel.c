@@ -453,7 +453,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     /* Spawn the bootstrap kernel thread. It will run mntfs_init, mount ext4
      * (which sleeps on NVMe IRQ via down — only legal from a real task,
      * not from the boot context that was claimed by idle), then start
-     * /bin/init. The boot context becomes the idle task (HLT loop below),
+     * /usr/bin/init. The boot context becomes the idle task (HLT loop below),
      * so the scheduler always has something to fall back to. */
     kernel_spawn_bootstrap(mbi);
 

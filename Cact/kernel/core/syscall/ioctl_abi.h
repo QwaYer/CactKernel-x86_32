@@ -25,6 +25,7 @@
 //   CACT_TIMERFDCTL_* 0x3A00 ioctl on /dev/timerfd      -> timerfd_create
 //   CACT_SIGNALFDCTL_* 0x3B00 ioctl on /dev/signalfd    -> signalfd_create
 //   CACT_EPOLLCTL_*   0x3C00 ioctl on /dev/epoll        -> epoll_create
+//   CACT_WLANCTL_*    0x3F00 ioctl on /dev/wlan0        -> raw 802.11 radio
 // Device-specific ioctls (FB/TIOC, ...) keep their legacy numbers and are
 // routed straight to the node's own ops; they must stay outside 0x3000-0x3FFF.
 //
@@ -628,5 +629,71 @@ typedef struct cact_vt_state {
 // ===========================================================================
 #define CACT_PTYCTL_GET_NUMBER  0x3E00  // master: arg=int* -> pts number
 #define CACT_PTYCTL_LOCK        0x3E01  // master: arg=int* -> 1 lock, 0 unlock the slave
+
+// ===========================================================================
+// Wireless control (ioctls on /dev/wlan0). RANGE 0x3F00.
+//
+// The driver is a dumb radio: it scans and keeps the AP list (served as text by
+// read()), moves raw 802.11 frames both ways, and runs the 802.11<->802.3
+// datapath with the CCMP keys it is given.  Association / authentication / WPA2
+// live in userspace (the wljoin utility), which drives this interface.
+// ===========================================================================
+#define CACT_WLANCTL_SCAN        0x3F00  // arg=NULL;          rescan, returns AP count
+#define CACT_WLANCTL_TX          0x3F01  // arg=cact_wlan_frame_t*   (raw 802.11 MPDU)
+#define CACT_WLANCTL_RX          0x3F02  // arg=cact_wlan_frame_t*   (out; len 0 = empty)
+#define CACT_WLANCTL_SET_CHANNEL 0x3F03  // arg=cact_wlan_channel_t*
+#define CACT_WLANCTL_SET_BSSID   0x3F04  // arg=cact_wlan_bssid_t*
+#define CACT_WLANCTL_SET_KEY     0x3F05  // arg=cact_wlan_key_t*
+#define CACT_WLANCTL_STATUS      0x3F06  // arg=cact_wlan_status_t*  (out)
+#define CACT_WLANCTL_SET_LINK    0x3F07  // arg=int*   1 = datapath up, 0 = down
+#define CACT_WLANCTL_SET_RATES   0x3F08  // arg=cact_wlan_rates_t*   (AP basic rates + ERP)
+
+#define CACT_WLAN_FRAME_MAX  2312   // max 802.11 MPDU
+#define CACT_WLAN_SSID_MAX   33
+#define CACT_WLAN_KEY_MAX    32
+
+#define CACT_WLAN_KEY_PAIRWISE 0    // TK: enables the CCMP data path
+#define CACT_WLAN_KEY_GROUP    1    // GTK: group-addressed frames
+
+// cact_wlan_rates_t.flags — what the AP's beacon says about these timings.
+#define CACT_WLAN_ERP_SHORT_PREAMBLE 0x0001  // use the short preamble
+#define CACT_WLAN_ERP_CTS_PROT       0x0002  // AP wants CTS-to-self protection
+#define CACT_WLAN_ERP_SHORT_SLOT     0x0004  // 9 us slot, else 20 us
+
+typedef struct cact_wlan_frame {
+    uint32_t len;                          // in/out: bytes used in data[]
+    uint8_t  data[CACT_WLAN_FRAME_MAX];    // raw 802.11 frame (no FCS)
+} cact_wlan_frame_t;
+
+typedef struct cact_wlan_channel { uint32_t channel; } cact_wlan_channel_t;
+typedef struct cact_wlan_bssid   { uint8_t  bssid[6]; } cact_wlan_bssid_t;
+
+// What the AP's beacon advertises: the basic-rate set (the rates management
+// frames and EAPOL must use) and the ERP timings.  Taken from the beacon's
+// information elements by wljoin and programmed before the first frame goes
+// out, mirroring mac80211's BSS_CHANGED_BASIC_RATES/ERP handling.
+typedef struct cact_wlan_rates {
+    uint16_t basic;                        // bit0=1M, 1=2M, 2=5.5M, 3=11M,
+                                           // 4=6M, 5=9M, 6=12M, 7=18M, 8=24M,
+                                           // 9=36M, 10=48M, 11=54M; 0 = unknown
+    uint16_t flags;                        // CACT_WLAN_ERP_*
+} cact_wlan_rates_t;
+
+typedef struct cact_wlan_key {
+    uint32_t kind;                         // CACT_WLAN_KEY_*
+    uint32_t key_id;                       // GTK key id (0 for the pairwise key)
+    uint32_t key_len;
+    uint8_t  key[CACT_WLAN_KEY_MAX];
+} cact_wlan_key_t;
+
+typedef struct cact_wlan_status {
+    int32_t  linked;                       // 1 = datapath usable
+    uint8_t  mac[6];                       // this station's MAC (SA for auth/assoc)
+    uint8_t  bssid[6];
+    uint32_t channel;
+    uint8_t  ssid[CACT_WLAN_SSID_MAX];
+    int32_t  last_error;                   // -errno of the last failure (0 = none);
+                                           // the only channel for bring-up errors
+} cact_wlan_status_t;
 
 #endif
