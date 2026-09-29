@@ -158,6 +158,11 @@ typedef struct {
     struct usb_device    *dev;
     uint8_t               ep_num;
     uint8_t               active;
+    /* A completion that is not Success/Short Packet means the report in the
+     * buffer is unusable, but the endpoint still needs its next TRB.  Report
+     * the first bad code per slot and stay quiet after that: a device that is
+     * really broken would otherwise print on every poll interval. */
+    uint8_t               err_logged;
     usb_irq_notify_fn_t   notify;
     void                 *notify_priv;
     uint8_t               slot_id;

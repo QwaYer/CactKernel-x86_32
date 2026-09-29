@@ -188,15 +188,26 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
             if (cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET) {
                 if (s->notify)
                     s->notify(s->dev, s->buf, s->len, s->notify_priv);
-
-                xhci_trb_t re_trb;
-                memset(&re_trb, 0, sizeof(re_trb));
-                re_trb.param_lo = xhci_va_to_pa(s->buf);
-                re_trb.status   = s->len;
-                re_trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
-                xhci_ring_enqueue(&s->ring, &re_trb);
-                xhci_db_write32(priv, slot, dci);
+            } else if (!s->err_logged) {
+                s->err_logged = 1;
+                pr_warn("xHCI: interrupt EP slot %u dci %u completion code %u\n",
+                        (unsigned)slot, (unsigned)dci, (unsigned)cc);
             }
+
+            /* Re-arm whatever the completion said.  The event consumed the
+             * TRB, so tying the re-arm to a good completion code left the
+             * endpoint idle for good after a single transient error (babble,
+             * missed service, ring underrun, a device that answered late) —
+             * the keyboard then delivered nothing at all until it was
+             * re-plugged.  A halted endpoint simply ignores the doorbell, so
+             * the extra TRB costs nothing in that case. */
+            xhci_trb_t re_trb;
+            memset(&re_trb, 0, sizeof(re_trb));
+            re_trb.param_lo = xhci_va_to_pa(s->buf);
+            re_trb.status   = s->len;
+            re_trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
+            xhci_ring_enqueue(&s->ring, &re_trb);
+            xhci_db_write32(priv, slot, dci);
             break;
         }
 

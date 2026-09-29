@@ -372,6 +372,13 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // no DHCP replies).
     net_init();
 
+    // USB HID key repeat.  The keyboard runs with SET_IDLE(0), so a held key
+    // delivers a single report and the repeat has to be generated in the
+    // driver; its task is spawned here for the same reason net_poll_task is,
+    // and usb_init() (which registers the HID driver) has long since run.
+    extern void usb_hid_repeat_init(void);
+    usb_hid_repeat_init();
+
     pr_info("  %-11s : hardware setup complete — scheduler live\n", "boot");
 }
 
