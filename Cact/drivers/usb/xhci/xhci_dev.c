@@ -198,12 +198,57 @@ void xhci_device_removed(usb_hc_t *hc, usb_device_t *dev) {
     }
 }
 
+/* Encode an interrupt endpoint's bInterval into the Endpoint Context Interval
+ * field.
+ *
+ * The two mean different things, so the descriptor value cannot be dropped in
+ * raw.  The field is a power of two in 125 us microframes (2^n * 125 us), while
+ * bInterval is a count of microframes for a high-speed endpoint but a count of
+ * 1 ms frames for a low/full-speed one.  A full-speed keyboard reports
+ * bInterval 10, which is 8 ms and therefore 6 in the field; passing 10 through
+ * programmed the endpoint to be polled every 2^10 * 125 us = 128 ms.  At that
+ * rate a keystroke is pressed and released between two polls, so the keyboard
+ * has no report to send when it is finally asked — the key is simply lost, and
+ * only keys held long enough to survive a poll ever register. */
+static uint8_t xhci_encode_intr_interval(uint8_t speed, uint8_t binterval) {
+    if (speed == USB_SPEED_HIGH) {
+        /* bInterval = 2^(bInterval-1) microframes -> field = bInterval-1. */
+        if (binterval < 1)  binterval = 1;
+        if (binterval > 16) binterval = 16;
+        return (uint8_t)(binterval - 1);
+    }
+
+    /* Low/full speed: bInterval is in 1 ms frames.  The field can only express
+     * periods that are a power of two, so round down to the next one: polling
+     * faster than the device promised is harmless, polling slower loses keys.
+     * Values 3..10 cover the legal 1..128 ms range; bInterval 0 means "no
+     * interval given" and gets the 1 ms floor. */
+    uint32_t uframes = (uint32_t)binterval * 8;   /* 1 frame = 8 microframes */
+    uint8_t  exp     = 3;
+    while (exp < 10 && (1u << (exp + 1)) <= uframes)
+        exp++;
+    return exp;
+}
+
 int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
                                uint8_t ep_num, void *buf, uint16_t len,
                                usb_irq_notify_fn_t notify, void *notify_priv) {
     xhci_priv_t *priv = (xhci_priv_t *)hc->priv;
 
-    if (priv->intr_ep_count >= XHCI_MAX_INTR_EP) {
+    /* Take the first free slot, not the next index.  A slot is released when
+     * its device is unplugged (xhci_device_removed), but the count only ever
+     * grew, so eight plug/unplug cycles exhausted the table and every later
+     * HID probe failed with "slots full" — the keyboard was gone for good. */
+    xhci_intr_ep_slot_t *s = NULL;
+    int s_idx = 0;
+    for (int i = 0; i < XHCI_MAX_INTR_EP; i++) {
+        if (!priv->intr_slots[i].active) {
+            s     = &priv->intr_slots[i];
+            s_idx = i;
+            break;
+        }
+    }
+    if (!s) {
         pr_warn("xHCI interrupt endpoint slots full");
         return -1;
     }
@@ -225,16 +270,21 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     }
     uint16_t mps = ep ? ep->max_packet : 8;
     if (len > mps) len = mps;
-    uint8_t interval = ep ? ep->interval : 8;
+    uint8_t binterval = ep ? ep->interval : 8;
+    uint8_t interval  = xhci_encode_intr_interval(dev->speed, binterval);
 
-    pr_info("  %-11s : ep%u slot %u dci %u mps %u interval %u len %u\n",
+    pr_info("  %-11s : ep%u slot %u dci %u mps %u interval %u (bInterval %u) len %u\n",
             "xhci-ep", (unsigned)ep_num, (unsigned)slot, (unsigned)dci,
-            (unsigned)mps, (unsigned)interval, (unsigned)len);
+            (unsigned)mps, (unsigned)interval, (unsigned)binterval, (unsigned)len);
 
     if (xhci_configure_endpoint(priv, slot, dci, XHCI_EP_CTX_TYPE_INTR_IN, mps, interval) < 0)
         return -1;
 
-    xhci_intr_ep_slot_t *s = &priv->intr_slots[priv->intr_ep_count++];
+    /* The event path only scans slots below intr_ep_count, so keep it one past
+     * the highest slot in use. */
+    if (s_idx + 1 > priv->intr_ep_count)
+        priv->intr_ep_count = s_idx + 1;
+
     s->slot_id     = slot;
     s->dci         = dci;
     s->dev         = dev;
@@ -243,6 +293,7 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     s->len         = len;
     s->notify      = notify;
     s->notify_priv = notify_priv;
+    s->err_logged  = 0;
     s->active      = 1;
     s->ring        = priv->ep_rings[slot][dci - 1];
 

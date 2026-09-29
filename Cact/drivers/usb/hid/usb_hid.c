@@ -8,6 +8,10 @@
 #include "klib.h"
 #include "keyboard.h"
 #include "tty.h"
+#include "sync.h"
+#include "tick.h"
+
+extern void sched_sleep_ticks(uint32_t ticks);
 
 /* HID usage IDs for Ctrl-combo keys */
 #define HID_KEY_C      0x06   /* 'c'  — Ctrl-C → SIGINT   */
@@ -59,14 +63,136 @@ static const char *const hid_ext_keymap[0x80] = {
     [0x52] = "\033[A",    /* Up       */
 };
 
-static void hid_post_sequence(const char *seq) {
-    char last = 0;
+/* ── Software key repeat ──────────────────────────────────────────────────
+ * The keyboard is told SET_IDLE(0), so it reports only when its report
+ * changes: a held key produces exactly one report and then silence, and only
+ * a device-side repeat could produce more (SET_IDLE with a duration is the
+ * other way to get them, but it makes the keyboard talk every few
+ * milliseconds for as long as it is plugged in).  The repeat is generated
+ * here instead, which works the same on every keyboard and costs no USB
+ * traffic while nothing is held.
+ *
+ * The report handler records what the last newly-pressed key emitted; the
+ * task below walks those bytes back out on the 100 Hz tick and stops as soon
+ * as a report no longer contains that key.  Only keys that emit something
+ * repeat: Caps Lock, the control combos and Alt+F<n> turn the repeat off
+ * rather than repeating the key before them. */
+
+#define HID_REPEAT_DELAY_TICKS 25   /* 250 ms hold before the first repeat  */
+#define HID_REPEAT_RATE_TICKS   3   /* then one every 30 ms                 */
+#define HID_REPEAT_IDLE_TICKS   4   /* task tick when nothing is repeating  */
+#define HID_REPEAT_SEQ_MAX      4   /* "\033[3~" is the longest unit        */
+
+static irq_spinlock_t hid_repeat_lock;
+static struct {
+    hid_priv_t *owner;              /* keyboard whose key is down           */
+    uint8_t     kc;                 /* HID usage, matched against reports   */
+    uint8_t     out_len;
+    char        out[HID_REPEAT_SEQ_MAX];
+    uint32_t    due_tick;           /* when the next repeat is owed         */
+} hid_repeat;
+
+/* Start repeating what the key that just went down emitted. */
+static void hid_repeat_arm(hid_priv_t *priv, uint8_t kc,
+                           const char *out, uint8_t out_len) {
+    if (out_len > HID_REPEAT_SEQ_MAX)
+        out_len = HID_REPEAT_SEQ_MAX;
+
+    irq_spinlock_acquire(&hid_repeat_lock);
+    hid_repeat.owner   = priv;
+    hid_repeat.kc      = kc;
+    hid_repeat.out_len = out_len;
+    for (uint8_t i = 0; i < out_len; i++)
+        hid_repeat.out[i] = out[i];
+    hid_repeat.due_tick = timer_ticks_get() + HID_REPEAT_DELAY_TICKS;
+    irq_spinlock_release(&hid_repeat_lock);
+}
+
+/* A newly pressed key takes the repeat over: whatever was repeating stops. */
+static void hid_repeat_clear(void) {
+    irq_spinlock_acquire(&hid_repeat_lock);
+    hid_repeat.owner = NULL;
+    irq_spinlock_release(&hid_repeat_lock);
+}
+
+/* Forget a keyboard that is going away, so the repeat can never outlive the
+ * device its state points into. */
+static void hid_repeat_forget(hid_priv_t *priv) {
+    irq_spinlock_acquire(&hid_repeat_lock);
+    if (hid_repeat.owner == priv)
+        hid_repeat.owner = NULL;
+    irq_spinlock_release(&hid_repeat_lock);
+}
+
+/* The repeating key is still held only while it is still in the report; its
+ * release (or a roll-over onto another key) ends the repeat. */
+static void hid_repeat_sync(hid_priv_t *priv, const hid_kbd_report_t *rep) {
+    irq_spinlock_acquire(&hid_repeat_lock);
+    if (hid_repeat.owner == priv) {
+        int held = 0;
+        for (int i = 0; i < 6; i++)
+            if (rep->keycode[i] == hid_repeat.kc) { held = 1; break; }
+        if (!held)
+            hid_repeat.owner = NULL;
+    }
+    irq_spinlock_release(&hid_repeat_lock);
+}
+
+/* One pass per repeat due.  It sleeps exactly as long as the next repeat is
+ * away, so an idle keyboard costs a wake-up every 40 ms and a stationary
+ * held key never misses its slot. */
+static void hid_repeat_task(void) {
+    while (1) {
+        uint32_t wait = HID_REPEAT_IDLE_TICKS;
+        uint32_t now;
+
+        irq_spinlock_acquire(&hid_repeat_lock);
+        now = timer_ticks_get();
+        if (hid_repeat.owner && hid_repeat.out_len) {
+            int32_t left = (int32_t)(hid_repeat.due_tick - now);
+            if (left <= 0) {
+                /* One character per overdue tick at most: a task that was
+                 * held off for a while should carry on repeating, not dump a
+                 * burst of characters into the console. */
+                for (uint8_t i = 0; i < hid_repeat.out_len; i++)
+                    keyboard_post_key(hid_repeat.out[i]);
+                hid_repeat.due_tick = now + HID_REPEAT_RATE_TICKS;
+                wait = HID_REPEAT_RATE_TICKS;
+            } else {
+                wait = (uint32_t)left;
+            }
+        }
+        irq_spinlock_release(&hid_repeat_lock);
+
+        sched_sleep_ticks(wait);
+    }
+}
+
+/* Spawned from the boot sequence once the scheduler is live: usb_init() runs
+ * before task_init(), and a task created earlier is wiped with the task
+ * list. */
+void usb_hid_repeat_init(void) {
+    if (!create_task(hid_repeat_task)) {
+        pr_warn("USB HID: key repeat task could not be created");
+        return;
+    }
+    pr_info("  %-11s : key repeat up (%u ms delay, %u ms rate)\n", "usb-hid",
+            (unsigned)(HID_REPEAT_DELAY_TICKS * 10),
+            (unsigned)(HID_REPEAT_RATE_TICKS * 10));
+}
+
+static void hid_post_sequence(hid_priv_t *priv, uint8_t kc, const char *seq) {
+    char    last = 0;
+    uint8_t len  = 0;
     for (const char *q = seq; *q; q++) {
         keyboard_post_key(*q);
         last = *q;
+        if (len < HID_REPEAT_SEQ_MAX)
+            len++;
     }
     usb_last_char  = last;
     usb_key_event  = 1;
+    hid_repeat_arm(priv, kc, seq, len);
 }
 
 static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
@@ -90,6 +216,11 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         for (int j = 0; j < 6; j++)
             if (priv->prev_kbd.keycode[j] == kc) { already = 1; break; }
         if (already) continue;
+
+        /* This key becomes the one that repeats.  The paths below that emit
+         * nothing (Caps Lock, the control combos, Alt+F<n>) leave the repeat
+         * off instead of keeping the previous key repeating under them. */
+        hid_repeat_clear();
 
         /* Alt+F1..F12 -> switch virtual terminal, as on a Linux console.
          * HID 0x3A..0x45 are F1..F12; tty_activate() ignores VTs that do not
@@ -130,7 +261,7 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
 
         /* Arrows / Home / End / PgUp / PgDn / Del / Ins → xterm CSI bytes. */
         if (!ctrl && hid_ext_keymap[kc]) {
-            hid_post_sequence(hid_ext_keymap[kc]);
+            hid_post_sequence(priv, kc, hid_ext_keymap[kc]);
             continue;
         }
 
@@ -142,6 +273,7 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         if (!c) continue;
 
         keyboard_post_key(c);
+        hid_repeat_arm(priv, kc, &c, 1);
 
         usb_last_char = c;
         usb_key_event = 1;
@@ -152,6 +284,7 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         key_event_happened = 1;
     }
 
+    hid_repeat_sync(priv, rep);
     priv->prev_kbd = *rep;
 }
 
@@ -333,6 +466,7 @@ static void hid_remove(usb_device_t *dev) {
         hid_priv_t *priv = (hid_priv_t *)dev->driver_priv;
         priv->removed = 1;
         __sync_synchronize();
+        hid_repeat_forget(priv);
         kfree(priv);
         dev->driver_priv = NULL;
     }
@@ -349,5 +483,9 @@ static usb_driver_t hid_driver = {
 };
 
 void usb_hid_init(void) {
+    /* The repeat lock must exist before the first keyboard report; the task
+     * that drains it is spawned from the boot sequence (usb_hid_repeat_init)
+     * because it needs the scheduler. */
+    irq_spinlock_init(&hid_repeat_lock);
     usb_driver_register(&hid_driver);
 }

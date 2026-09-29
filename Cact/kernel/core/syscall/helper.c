@@ -36,7 +36,20 @@ void deliver_pending_signal(struct task_struct *t, struct syscall_frame *regs) {
 
         if (new_esp < USER_SPACE_START || new_esp >= KERNEL_BASE) continue;
         uint32_t page_off = new_esp & 0xFFFu;
-        if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) continue;
+        if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) {
+            // The frame would straddle a page boundary (user ESP lies within
+            // sizeof(signal_frame_t) of a page start).  Only the single page
+            // holding `new_esp` is walked below, so park the frame at the end
+            // of the previous page instead — the user stack is mapped as a
+            // whole, so that page is present for any task that has not
+            // overrun it.  Bailing out here instead would strand the signal:
+            // the tty read path returns -EINTR while a catchable signal is
+            // pending, so the interrupted syscall could never progress again.
+            new_esp = (regs->useresp & ~0xFFFu) - sizeof(signal_frame_t);
+            if (new_esp < USER_SPACE_START || new_esp >= KERNEL_BASE) continue;
+            page_off = new_esp & 0xFFFu;
+            if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) continue;
+        }
 
         uint32_t *pd  = t->page_directory;
         if (!pd) continue;
