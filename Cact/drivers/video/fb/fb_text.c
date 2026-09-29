@@ -26,8 +26,10 @@ uint32_t fb_char_cell_h(void) {
 
 /* Rasterise one glyph from the active PSF2 font at (px, py) into the shadow
  * (or, when the shadow is inactive, the real framebuffer).  Each glyph row is
- * expanded `scale` times horizontally and stamped down `scale` times. */
-void fb_draw_char_scaled(char c, int px, int py, uint32_t color) {
+ * expanded `scale` times horizontally and stamped down `scale` times.  Set
+ * pixels take `fg`, cleared pixels take `bg`, so a non-black `bg` paints the
+ * whole cell — the primitive behind SGR 7 (reverse video). */
+void fb_draw_char_scaled(char c, int px, int py, uint32_t fg, uint32_t bg) {
     const console_font_t *f = font_get_active();
     if (unlikely(!f)) return;
 
@@ -62,7 +64,7 @@ void fb_draw_char_scaled(char c, int px, int py, uint32_t color) {
 
         for (uint32_t col = 0; col < fw; col++) {
             uint8_t  mask = (uint8_t)(0x80u >> (col & 7u));
-            uint32_t v    = (rb[col >> 3] & mask) ? color : COLOR_BLACK;
+            uint32_t v    = (rb[col >> 3] & mask) ? fg : bg;
             uint32_t *sp  = &scanline[col * scale];
             for (uint32_t k = 0; k < scale; k++)
                 sp[k] = v;
@@ -129,6 +131,10 @@ static void _console_emit(const char* message, uint32_t len, uint32_t color,
     int have_fb = (w != 0 && h != 0);
 
     current_fb_color = color;
+    // SGR 7 paints each cell with the current colour and the glyph in black.
+    // Reset per call: tty_write() splits long buffers into console_puts()
+    // chunks and each one starts from the colour it was handed.
+    int reverse = 0;
 
     if (unlikely(!have_fb)) {
         if (!to_serial) return;
@@ -183,8 +189,14 @@ static void _console_emit(const char* message, uint32_t len, uint32_t color,
                                 current_fb_color = ansi_colors[params[p] - 30];
                             else if (params[p] >= 90 && params[p] <= 97)
                                 current_fb_color = ansi_colors[8 + params[p] - 90];
-                            else if (params[p] == 0)
+                            else if (params[p] == 7)
+                                reverse = 1;
+                            else if (params[p] == 27)
+                                reverse = 0;
+                            else if (params[p] == 0) {
                                 current_fb_color = color;
+                                reverse = 0;
+                            }
                         }
                     } else if (message[i] == 'H') {
                         int row = (np > 0) ? params[0] : 1;
@@ -234,7 +246,9 @@ static void _console_emit(const char* message, uint32_t len, uint32_t color,
             int tab_w = (int)cellw * 4;
             cursor_x = (cursor_x / tab_w + 1) * tab_w;
         } else {
-            fb_draw_char_scaled(c, cursor_x, cursor_y, current_fb_color);
+            fb_draw_char_scaled(c, cursor_x, cursor_y,
+                                reverse ? COLOR_BLACK : current_fb_color,
+                                reverse ? current_fb_color : COLOR_BLACK);
             cursor_x += (int)cellw;
         }
 

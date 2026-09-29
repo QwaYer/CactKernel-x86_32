@@ -6,6 +6,10 @@
 #include "validate.h"
 #include "ioctl_abi.h"
 
+#ifndef EINTR
+#define EINTR 4
+#endif
+
 // tty.c — virtual terminal core.
 //
 // One physical console (keyboard in, framebuffer out) is multiplexed into
@@ -137,7 +141,17 @@ int tty_read(int idx, uint32_t off, uint32_t size, char *buf) {
         // Input belongs to the active VT: a reader on a background terminal
         // waits until its terminal is switched to.
         if (i != tty_cur) { schedule(); continue; }
-        if (in_rd[i] == in_wr[i]) { schedule(); continue; }
+        if (in_rd[i] == in_wr[i]) {
+            // A signal with a user handler has to reach the process, and the
+            // scheduler-side delivery path cannot run while we sit in here, so
+            // report EINTR: the syscall return then builds the handler frame.
+            // The job-control notifications are excluded — SIGCHLD/SIGWINCH are
+            // reported to the app, not delivered, and must not abort a read.
+            if (task_signal_pending_current() & ~(SIGCHLD | SIGWINCH))
+                return -EINTR;
+            schedule();
+            continue;
+        }
 
         __asm__ __volatile__("" ::: "memory");
         char c = in_buf[i][in_rd[i]];

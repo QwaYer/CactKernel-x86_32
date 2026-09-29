@@ -43,6 +43,32 @@ static const char hid_keymap_shift[0x80] = {
 
 #define HID_KEY_CAPSLOCK 0x39
 
+/* Extended (non-character) keys, emitted as the xterm CSI sequences every
+ * terminal program already parses — cactsole's readline handles exactly these,
+ * and full-screen tools (ced) rely on them for navigation.  HID 0x49..0x52. */
+static const char *const hid_ext_keymap[0x80] = {
+    [0x49] = "\033[2~",   /* Insert   */
+    [0x4A] = "\033[H",    /* Home     */
+    [0x4B] = "\033[5~",   /* PageUp   */
+    [0x4C] = "\033[3~",   /* Delete   */
+    [0x4D] = "\033[F",    /* End      */
+    [0x4E] = "\033[6~",   /* PageDown */
+    [0x4F] = "\033[C",    /* Right    */
+    [0x50] = "\033[D",    /* Left     */
+    [0x51] = "\033[B",    /* Down     */
+    [0x52] = "\033[A",    /* Up       */
+};
+
+static void hid_post_sequence(const char *seq) {
+    char last = 0;
+    for (const char *q = seq; *q; q++) {
+        keyboard_post_key(*q);
+        last = *q;
+    }
+    usb_last_char  = last;
+    usb_key_event  = 1;
+}
+
 static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
     uint8_t shift = (rep->modifier & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) ? 1 : 0;
     uint8_t ctrl  = (rep->modifier & (HID_MOD_LCTRL  | HID_MOD_RCTRL))  ? 1 : 0;
@@ -99,6 +125,12 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         if (ctrl && kc == HID_KEY_BSLASH) {
             uint32_t fg = terminal_fg_pid;
             if (fg) task_signal(fg, SIGQUIT);
+            continue;
+        }
+
+        /* Arrows / Home / End / PgUp / PgDn / Del / Ins → xterm CSI bytes. */
+        if (!ctrl && hid_ext_keymap[kc]) {
+            hid_post_sequence(hid_ext_keymap[kc]);
             continue;
         }
 
