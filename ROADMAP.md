@@ -33,6 +33,66 @@ HTTP client.
   exists anywhere in the tree — see [GPU / Intel (i915)](#gpu--intel-i915) for
   what a port still needs from the kernel.
 
+## CPU topology: SMP, SMT (Hyper-Threading) & core power
+
+Assessed 2026-09-30. SMP works and the energy governor already parks, offlines
+and re-wakes individual CPUs (`smp_cpu_offline` / `smp_cpu_online_sipi` in
+`kernel/proc/sched/src/smp.rs`, gated by `energy_core_offline_enable()`), but the
+CPU map is **flat**: one entry per MADT LAPIC id (`energy.rs`,
+`MAX_CORES = MAX_CPUS = 64`) and nothing records that two of those entries are
+the two **threads of one physical core**. SMT siblings already come up — MADT
+enumeration counts every enabled LAPIC entry — they are simply indistinguishable
+from real cores, so a 4-core / 8-thread CPU is reported and scheduled as 8
+independent cores.
+
+What is missing to make the machine's own topology real (4 cores → 8 CPUs, each
+logical processor tied to its core and switchable):
+
+- **No topology decode.** `cpu_has_htt()` reads CPUID.01H:EDX[28]
+  (`kernel/cpudev/cpudev.c`) but **nothing consumes it**, and neither leaf `4`
+  (cores/package) nor leaf `0xB`/`0x1F` (package/core/SMT bit widths) is
+  decoded — so there is no `core_id`, `package_id` or sibling mask anywhere.
+- **Core vs thread is absent from the model.** `EnergyCore` carries only
+  `lapic_id`/`role`/`cstate`/`online`; there is no parent core or sibling set to
+  reason about, and the "core" wording is really a logical CPU.
+- **Power is per CPU only.** `energy_core_set_cstate` lets a thread enter C3/C6
+  while its sibling runs, and there is no "all threads of a core idle → the
+  core may go deep" rule; the offline path also acts on one CPU, not on a core
+  as a unit. Powering a core off means parking **both** threads, not one.
+- **Placement is sibling-blind.** `balance.rs` / `decision.rs` scan
+  `1..MAX_CORES` and treat every entry as an independent core, so two runnable
+  tasks can land on the two threads of one core while another physical core
+  idles.
+- **S3 loses the workers.** `smp_init()` runs only from boot
+  (`kernel/core/kernel.c`); after an S3 resume no AP (let alone a sibling set)
+  is re-woken — the existing gap, and the topology work has to close it.
+- **Reporting.** `/proc/cpuinfo` (`fs/vfs/procfs/procfs_std.c`) prints
+  `processor`/`apicid`/`role`/`cstate`/`online`/`idle` but no `core id`,
+  `physical id`, `siblings` or `cpu cores`, so userspace cannot see the
+  topology; `sysinfo` has no "N cores / M threads" line.
+
+### Phases
+
+1. **Topology.** Decode CPUID leaf `0xB`/`0x1F` into `package_id` / `core_id` /
+   `smt_sibling_mask`, falling back to leaf `4` + leaf `1` HTT and then to MADT
+   ordering; expose it through `energy.h` and add `core id`, `physical id`,
+   `siblings` and `cpu cores` to `/proc/cpuinfo`.
+2. **Core-level power.** Deep C-states only when *every* sibling is idle; a
+   core-offline that parks and INITs all threads of the core as one unit
+   (reuse the park protocol already in `smp_cpu_offline`).
+3. **Sibling-aware placement.** In `balance.rs` / `decision.rs`, prefer a
+   physical core with no busy thread over an SMT sibling of a busy one.
+4. **S3.** Re-wake all logical CPUs on resume (closes the gap above).
+5. **Self-test** in `CactUserBins`: with `-smp 4,threads=2`, print present
+   cores/threads, check the sibling masks, offline one thread and confirm its
+   sibling keeps running.
+
+**Acceptance:** with `-smp 4,threads=2` the boot `smp` line reports 7 worker(s)
+online (8 logical CPUs) and `/proc/cpuinfo` groups them under 4 `physical id`s
+with correct `siblings`; two CPU-bound threads are placed on different physical
+cores before any core is shared; offlining one thread leaves its sibling running
+and offlining both powers the core down; after S3 all 8 are online again.
+
 ## GPU / Intel (i915)
 
 Assessed 2026-09-25. There is no Intel driver and no groundwork for one; what is
