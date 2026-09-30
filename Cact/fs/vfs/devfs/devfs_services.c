@@ -49,6 +49,9 @@
 #ifndef EFAULT
 #define EFAULT 14
 #endif
+#ifndef ENODEV
+#define ENODEV 19
+#endif
 #ifndef ENOMEM
 #define ENOMEM 12
 #endif
@@ -393,6 +396,15 @@ static int _net_ioctl(void *p, uint32_t cmd, void *arg) {
         if (g.link_up)
             rust_net_get_mac(g.mac);
         return copy_to_user(arg, &g, sizeof(g));
+    }
+
+    case CACT_NETCTL_IFNAME: {
+        char name[CACT_IFNAME_MAX];
+        if (!arg) return -EINVAL;
+        if (!validate_user_ptr(arg, CACT_IFNAME_MAX)) return -EFAULT;
+        memset(name, 0, sizeof(name));
+        if (rust_net_get_ifname(name, sizeof(name)) < 0) return -ENODEV;
+        return copy_to_user(arg, name, sizeof(name));
     }
 
     default:

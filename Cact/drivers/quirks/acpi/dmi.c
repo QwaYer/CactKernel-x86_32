@@ -274,3 +274,20 @@ int dmi_is_hp_290g1(void)
 
     return 1;
 }
+
+/* Raw SMBIOS identity for /proc/dmi — see dmi.h.  The probe result is cached
+ * in `dmi_state`, so repeated calls cost a load. */
+const char *dmi_vendor_string(void)
+{
+    return dmi_collect_once() > 0 ? dmi_vendor : 0;
+}
+
+const char *dmi_product_string(void)
+{
+    return dmi_collect_once() > 0 ? dmi_product : 0;
+}
+
+const char *dmi_bios_string(void)
+{
+    return dmi_collect_once() > 0 ? dmi_bios_version : 0;
+}

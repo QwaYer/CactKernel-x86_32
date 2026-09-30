@@ -40,5 +40,6 @@ int _uname_read(uint32_t off, uint32_t size, char *buf);
 int _mounts_read(uint32_t off, uint32_t size, char *buf);
 int _modules_read(uint32_t off, uint32_t size, char *buf);
 int _usb_read(uint32_t off, uint32_t size, char *buf);
+int _dmi_read(uint32_t off, uint32_t size, char *buf);
 
 #endif

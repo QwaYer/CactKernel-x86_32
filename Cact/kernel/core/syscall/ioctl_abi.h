@@ -298,6 +298,13 @@ typedef struct cact_recvfrom_arg {
 #define CACT_NETCTL_SOCKETPAIR   0x3405  // arg=cact_socketpair_arg_t*; fds[2] out
 #define CACT_NETCTL_NETCFG_GET   0x3406  // arg=cact_netcfg_get_t* (out): read link config
 #define CACT_NETCTL_PING_WAIT    0x3407  // arg=cact_ping_wait_arg_t*; returns RTT us or <0
+#define CACT_NETCTL_IFNAME       0x3408  // arg=char[CACT_IFNAME_MAX] (out): NIC name, -ENODEV if none
+
+// Interface name as the driver registered it ("eth0", "wlan0").  A separate
+// ioctl rather than a field in cact_netcfg_get_t so that binaries built against
+// the older struct keep working: the kernel copies exactly CACT_IFNAME_MAX
+// bytes, so a caller must pass a buffer of at least that size.
+#define CACT_IFNAME_MAX          16
 
 typedef struct cact_socket_arg { uint32_t domain; uint32_t type; uint32_t proto; } cact_socket_arg_t;
 typedef struct cact_socketpair_arg { uint32_t type; uint32_t fds[2]; } cact_socketpair_arg_t;

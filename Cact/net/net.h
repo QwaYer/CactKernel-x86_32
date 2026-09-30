@@ -71,7 +71,7 @@ typedef struct net_driver {
     int  (*send)(skb_t* skb);          /* transmit raw frame           */
     void (*poll)(void);                /* poll for received frames     */
     void (*get_mac)(mac_addr_t* out);  /* read MAC from hardware       */
-    const char* name;
+    const char* name;                  /* interface name: "eth0", "wlan0"        */
 } net_driver_t;
 
 extern net_driver_t* active_nic;

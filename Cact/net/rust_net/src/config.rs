@@ -1,10 +1,12 @@
 //! Runtime IPv4 settings in **host** byte order (mutable globals updated from C).
 //!
-//! Defaults are compile-time placeholders; `rust_net_set_ipv4_config` overwrites them
-//! and, when the stack is up, pushes the new addresses into smoltcp.
-//!
-//! The kernel keeps no DHCP client: whatever address/gateway/DNS is stored here
-//! was chosen by userspace (static configuration or a userspace DHCP daemon).
+//! The boot state is all-zero — "no address, no route, no resolver" — and
+//! `rust_net_set_ipv4_config` overwrites it, pushing the new addresses into
+//! smoltcp when the stack is up.  There is deliberately no compiled-in address:
+//! the kernel keeps no DHCP client, and whatever is stored here was chosen by
+//! userspace (static configuration or a userspace DHCP daemon), so a fresh
+//! interface must report itself unconfigured rather than a placeholder that
+//! `sysinfo`/`ip` would show as if the user had set it.
 
 /// The four IPv4 values as one object, so a reader/writer needs a single
 /// dereference rather than one per field.
@@ -16,10 +18,10 @@ struct NetCfg {
 }
 
 static mut NET_CFG: NetCfg = NetCfg {
-    ip: (10u32 << 24) | (2 << 8) | 15,
-    mask: (255u32 << 24) | (255 << 16) | (255 << 8),
-    gateway: (10u32 << 24) | (2 << 8) | 2,
-    dns: (8u32 << 24) | (8 << 16) | (8 << 8) | 8,
+    ip: 0,
+    mask: 0,
+    gateway: 0,
+    dns: 0,
 };
 
 #[inline]

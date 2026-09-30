@@ -34,6 +34,12 @@ void deliver_pending_signal(struct task_struct *t, struct syscall_frame *regs) {
 
         uint32_t new_esp = regs->useresp - sizeof(signal_frame_t);
 
+        // The handler is entered with `new_esp` as its stack pointer (iretd, no
+        // call), and clang may emit aligned SSE stores into its frame, so place
+        // the frame where a `call` would leave esp — ≡ 12 (mod 16).  Rounding
+        // down only adds a ≤15-byte gap below the interrupted esp.
+        new_esp = ((new_esp - 12u) & ~0xFu) + 12u;
+
         if (new_esp < USER_SPACE_START || new_esp >= KERNEL_BASE) continue;
         uint32_t page_off = new_esp & 0xFFFu;
         if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) {
@@ -46,6 +52,7 @@ void deliver_pending_signal(struct task_struct *t, struct syscall_frame *regs) {
             // the tty read path returns -EINTR while a catchable signal is
             // pending, so the interrupted syscall could never progress again.
             new_esp = (regs->useresp & ~0xFFFu) - sizeof(signal_frame_t);
+            new_esp = ((new_esp - 12u) & ~0xFu) + 12u;
             if (new_esp < USER_SPACE_START || new_esp >= KERNEL_BASE) continue;
             page_off = new_esp & 0xFFFu;
             if (page_off + sizeof(signal_frame_t) > PAGE_SIZE) continue;
