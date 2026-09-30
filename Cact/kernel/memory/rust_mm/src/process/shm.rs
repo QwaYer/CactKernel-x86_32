@@ -236,6 +236,24 @@ pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
     slot + 1
 }
 
+/// Bytes of physical frames backing all live shared-memory segments.  Reported
+/// by /proc/meminfo as `Shmem`.
+#[unsafe(no_mangle)]
+pub extern "C" fn shm_total_bytes() -> u32 {
+    let mut bytes: u32 = 0;
+    lock_acquire(SHM_LOCK.as_ptr());
+    // SAFETY: `SHM_TABLE` read while holding `SHM_LOCK`, so the segment fields
+    // cannot change under us.
+    let table = unsafe { KStatic::get_mut(SHM_TABLE.as_ptr()) };
+    for seg in table.iter() {
+        if seg.valid != 0 {
+            bytes = bytes.saturating_add(seg.num_pages.saturating_mul(PAGE_SIZE));
+        }
+    }
+    lock_release(SHM_LOCK.as_ptr());
+    bytes
+}
+
 #[path = "shm_api.rs"]
 mod shm_api;
 pub use shm_api::*;

@@ -4,6 +4,9 @@
 #include "vfs.h"
 #include "kernel.h"
 #include "memory.h"
+#include "slab.h"
+#include "shm.h"
+#include "swap.h"
 #include "klib.h"
 #include "task.h"
 #include "version.h"
@@ -285,21 +288,63 @@ int _apic_read(uint32_t off, uint32_t size, char *buf) {
 }
 
 // /proc/meminfo generator
+//
+// Physical accounting comes from the PMM (frames), not from the fixed kernel
+// heap window: MemTotal is the usable RAM the boot map handed to the PMM minus
+// the hard-reserved low 32 MB (kernel image + static page tables), MemFree is
+// the PMM free list plus the unused part of the kernel heap window, and MemUsed
+// is the remainder.  The kernel heap / slab / shm figures are reported
+// separately so `free` can show them without disturbing the physical numbers.
 int _meminfo_read(uint32_t off, uint32_t size, char *buf) {
-    char tmp[256]; int p = 0;
+    char tmp[768]; int p = 0;
 
-    unsigned int free_kb  = get_free_heap_memory() / 1024;
-    unsigned int total_kb = _get_total_memory_kb();
-    unsigned int used_kb  = total_kb > free_kb ? total_kb - free_kb : 0;
+    const uint32_t frame_kb    = PAGE_SIZE / 1024u;      /* 4 KiB per frame      */
+    const uint32_t reserved_kb = RESERVED_END / 1024u;   /* 32 MB kernel reserve */
+
+    uint32_t pmm_total_kb = pmm_total_frames() * frame_kb;
+    uint32_t pmm_free_kb  = pmm_free_frames()  * frame_kb;
+
+    /* Fall back to the multiboot total if the PMM was not probed. */
+    if (pmm_total_kb == 0) pmm_total_kb = _get_total_memory_kb();
+
+    uint32_t mem_total_kb = pmm_total_kb > reserved_kb ? pmm_total_kb - reserved_kb
+                                                       : pmm_total_kb;
+
+    uint32_t heap_total_kb = HEAP_SIZE / 1024u;
+    uint32_t heap_free_kb  = get_free_heap_memory() / 1024u;
+    if (heap_free_kb > heap_total_kb) heap_free_kb = heap_total_kb;
+    uint32_t heap_used_kb  = heap_total_kb - heap_free_kb;
+
+    uint32_t mem_free_kb = pmm_free_kb + heap_free_kb;
+    if (mem_free_kb > mem_total_kb) mem_free_kb = mem_total_kb;
+    uint32_t mem_used_kb  = mem_total_kb - mem_free_kb;
+    uint32_t mem_avail_kb = mem_free_kb;
+
+    uint32_t slab_kb  = slab_total_bytes() / 1024u;
+    uint32_t shmem_kb = shm_total_bytes()  / 1024u;
+
+    swap_stats_t sw = swap_get_stats();
+    uint32_t swap_total_kb = sw.total_slots * frame_kb;
+    uint32_t swap_used_kb  = sw.used_slots  * frame_kb;
+    uint32_t swap_free_kb  = swap_total_kb > swap_used_kb ? swap_total_kb - swap_used_kb : 0;
 
     #define _A(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
     #define _N(n) { char _b[16]; snprintf(_b, sizeof(_b), "%d", (int)(n)); _A(_b); }
 
-    _A("MemTotal:     "); _N(total_kb); _A(" kB\n");
-    _A("MemFree:      "); _N(free_kb);  _A(" kB\n");
-    _A("MemUsed:      "); _N(used_kb);  _A(" kB\n");
-    _A("SwapTotal:    0 kB\n");
-    _A("SwapFree:     0 kB\n");
+    _A("MemTotal:        "); _N(mem_total_kb); _A(" kB\n");
+    _A("MemFree:         "); _N(mem_free_kb);  _A(" kB\n");
+    _A("MemAvailable:    "); _N(mem_avail_kb); _A(" kB\n");
+    _A("MemUsed:         "); _N(mem_used_kb);  _A(" kB\n");
+    _A("Buffers:         0 kB\n");
+    _A("Cached:          0 kB\n");
+    _A("Slab:            "); _N(slab_kb);      _A(" kB\n");
+    _A("Shmem:           "); _N(shmem_kb);     _A(" kB\n");
+    _A("SwapTotal:       "); _N(swap_total_kb); _A(" kB\n");
+    _A("SwapFree:        "); _N(swap_free_kb);  _A(" kB\n");
+    _A("SwapUsed:        "); _N(swap_used_kb);  _A(" kB\n");
+    _A("HeapTotal:       "); _N(heap_total_kb); _A(" kB\n");
+    _A("HeapFree:        "); _N(heap_free_kb);  _A(" kB\n");
+    _A("HeapUsed:        "); _N(heap_used_kb);  _A(" kB\n");
 
     #undef _A
     #undef _N

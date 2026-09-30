@@ -508,6 +508,27 @@ pub unsafe extern "C" fn slab_print_stats(cache: *const SlabCache) {
     kprint_str(c"\n".as_ptr() as *const u8);
 }
 
+/// Bytes of physical frames currently held by all slab caches (full + partial +
+/// free slabs).  Reported by /proc/meminfo as `Slab`.
+#[unsafe(no_mangle)]
+pub extern "C" fn slab_total_bytes() -> u32 {
+    let mut bytes: u32 = 0;
+    lock_acquire(G_CACHE_LOCK.as_ptr());
+    // SAFETY: `G_CACHE_LIST` head read while holding `G_CACHE_LOCK`, which
+    // serialises it against cache creation/destruction and the list relinks.
+    let mut c = unsafe { *KStatic::get_mut(G_CACHE_LIST.as_ptr()) };
+    while !c.is_null() {
+        // SAFETY: `c` walks the locked cache list, so `total_slabs` is a live,
+        // exclusively-read counter.
+        let slabs = unsafe { (*c).total_slabs };
+        bytes = bytes.saturating_add(slabs.saturating_mul(PAGE_SIZE));
+        // SAFETY: following `(*c).next` in the locked cache list.
+        c = unsafe { (*c).next };
+    }
+    lock_release(G_CACHE_LOCK.as_ptr());
+    bytes
+}
+
 #[path = "slab_generic.rs"]
 mod slab_generic;
 pub use slab_generic::*;

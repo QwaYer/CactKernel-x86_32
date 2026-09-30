@@ -11,6 +11,11 @@ static PAGE_REFCOUNTS: KStatic<[u16; TOTAL_PAGES as usize]> =
 
 static FIRST_AVAILABLE_PAGE: KStatic<u32> = KStatic::new(0);
 
+/// Number of frames the PMM was ever handed by the boot map (MMAP type=available
+/// below the PCI hole).  Fixed after `init_memory_manager`; reported as the
+/// machine's usable RAM (see `pmm_total_frames`).
+static TOTAL_USABLE_FRAMES: KStatic<u32> = KStatic::new(0);
+
 pub(crate) static PAGE_LOCK: KStatic<IrqSpinlock> =
     KStatic::new(IrqSpinlock { spin_locked: 0, saved_flags: 0 });
 
@@ -108,6 +113,10 @@ pub extern "C" fn init_memory_manager() {
     let mmap = unsafe { KStatic::get_mut(MMAP_TABLE.as_ptr()) };
     let have_mmap = mmap.count > 0;
 
+    // Frames the boot map offers to the PMM (later the low reservation and the
+    // heap window are re-marked used, but they still count as installed RAM).
+    let mut usable_frames: u32 = 0;
+
     if have_mmap {
         for &e in &mmap.entries[..mmap.count as usize] {
             if e.ty != MB2_MMAP_TYPE_AVAILABLE { continue; }
@@ -124,6 +133,7 @@ pub extern "C" fn init_memory_manager() {
             for pg in first_page..last_page {
                 if pg < TOTAL_PAGES {
                     bitmap_clear(pg);
+                    usable_frames += 1;
                 }
             }
         }
@@ -132,8 +142,13 @@ pub extern "C" fn init_memory_manager() {
         let first_free = addr_to_page(RESERVED_END);
         for pg in first_free..TOTAL_PAGES {
             bitmap_clear(pg);
+            usable_frames += 1;
         }
     }
+
+    // SAFETY: `TOTAL_USABLE_FRAMES` written once during single-threaded boot, before
+    // any `kalloc`/`free_page` caller can run.
+    *unsafe { KStatic::get_mut(TOTAL_USABLE_FRAMES.as_ptr()) } = usable_frames;
 
     let reserved_pages = addr_to_page(RESERVED_END); // = 32 MB / 4096 = 8192
     for pg in 0..reserved_pages {
@@ -313,3 +328,31 @@ pub(crate) fn page_ref_get_locked(phys: *const u8) -> u16 {
     // function's documented contract — every caller already holds `PAGE_LOCK`.
     (unsafe { KStatic::get_mut(PAGE_REFCOUNTS.as_ptr()) })[idx as usize]
 }
+
+/// Installed RAM the PMM recognised at boot, in 4 KiB frames (fixed after
+/// `init_memory_manager`).  Includes the hard-reserved low region and the heap
+/// window; callers subtract what they want to exclude.
+#[unsafe(no_mangle)]
+pub extern "C" fn pmm_total_frames() -> u32 {
+    // SAFETY: `TOTAL_USABLE_FRAMES` is written once during single-threaded boot
+    // and only read afterwards, so this borrow cannot race a writer.
+    unsafe { *KStatic::get_mut(TOTAL_USABLE_FRAMES.as_ptr()) }
+}
+
+/// Frames currently on the free list (bit clear in the PMM bitmap), in 4 KiB
+/// frames.  This excludes the low reservation and the heap window.
+#[unsafe(no_mangle)]
+pub extern "C" fn pmm_free_frames() -> u32 {
+    let mut free: u32 = 0;
+    lock_acquire(PAGE_LOCK.as_ptr());
+    // SAFETY: `MEMORY_BITMAP` read while holding `PAGE_LOCK`, which serialises it
+    // against every bitmap writer (`init_memory_manager`, `kalloc`, `free_page`).
+    let bm = unsafe { KStatic::get_mut(MEMORY_BITMAP.as_ptr()) };
+    for b in bm.iter() {
+        // A set bit means "in use"; the rest of the byte is free.
+        free += 8 - b.count_ones();
+    }
+    lock_release(PAGE_LOCK.as_ptr());
+    free
+}
+
