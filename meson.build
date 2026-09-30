@@ -70,6 +70,15 @@ if _date.returncode() == 0
   cact_build_time = _date.stdout().strip()
 endif
 
+cact_compiler = cc.get_id() + ' ' + cc.version()
+
+cact_builder = 'unknown'
+_id   = run_command('id', '-un', check: false)
+_host = run_command('hostname', check: false)
+if _id.returncode() == 0 and _host.returncode() == 0
+  cact_builder = _id.stdout().strip() + '@' + _host.stdout().strip()
+endif
+
 # ------------------------------------------------------------------------------
 # Include paths — same list, same order as the Makefile's CFLAGS
 #
@@ -177,6 +186,8 @@ kernel_c_args = [
   # version.c stringifies this with STR(), and the Makefile let the shell strip
   # the quotes, so the macro body must stay bare tokens to match its banner.
   '-DCACT_BUILD_TIME=' + cact_build_time,
+  '-DCACT_COMPILER=' + cact_compiler,
+  '-DCACT_BUILDER=' + cact_builder,
 ]
 
 if get_option('kern_debug')

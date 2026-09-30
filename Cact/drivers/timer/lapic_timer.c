@@ -129,7 +129,6 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
 
     lapic_ticks_per_ms = ticks_per_ms;
     lapic_timer_armed = 1;
-    pr_info("LAPIC timer: periodic 100 Hz armed");
 }
 
 uint32_t lapic_timer_ticks_per_ms(void)
