@@ -64,6 +64,8 @@ void*     kmalloc_aligned(uint32_t size, uint32_t align);
 void      kfree(void* ptr);
 void      kfree(void* ptr);
 uint32_t  get_free_heap_memory(void);
+uint32_t  pmm_total_frames(void);
+uint32_t  pmm_free_frames(void);
 void      vmm_map(uint32_t* pd, uint32_t virtual_addr, uint32_t physical_addr, int flags);
 uint32_t  vmm_get_phys(uint32_t* pd, uint32_t virtual_addr);
 void      vmm_sync_kernel_mmio_mappings(uint32_t* pd);

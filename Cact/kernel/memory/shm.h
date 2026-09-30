@@ -34,5 +34,6 @@ uint32_t shm_at(int shmid, uint32_t shmaddr, int flags);
 int      shm_dt(uint32_t shmaddr);
 int      shm_ctl(int shmid, int cmd, void* buf);
 void     shm_detach_all(uint32_t pid, uint32_t* page_directory);
+uint32_t shm_total_bytes(void);
 
 #endif
