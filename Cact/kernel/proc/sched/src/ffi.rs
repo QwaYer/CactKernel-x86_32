@@ -102,6 +102,9 @@ unsafe extern "C" {
     pub static sys_sigreturn_num: u32;
     
     pub fn syscall_set_esp0(esp: u32);
+    /// Set `cpu`'s entry stack in the per-CPU `syscall_esp0[]` table that the
+    /// AMD SYSCALL entry path indexes (`syscall_entries.asm`).
+    pub fn syscall_set_cpu_esp0(cpu: u32, esp0: u32);
     pub fn elf_load_exec_symtab(path: *const u8, proc: *mut c_void);
 
     pub fn apic_lapic_id() -> u32;
@@ -115,6 +118,23 @@ unsafe extern "C" {
     pub fn apic_ap_online();
     pub fn apic_send_init_ipi(dest_lapic: u32);
     pub fn apic_send_sipi(dest_lapic: u32, vector: u32);
+
+    /// BSP-calibrated LAPIC tick rate (ticks per millisecond); 0 before calibration.
+    pub fn lapic_timer_ticks_per_ms() -> u32;
+    /// Arm the calling CPU's LAPIC timer at `ticks_per_ms`, periodic on the
+    /// scheduler vector.
+    pub fn lapic_timer_start_periodic(ticks_per_ms: u32);
+
+    /// Enable x87+SSE (CR0/CR4) on the calling CPU.
+    pub fn fpu_global_init() -> i32;
+    /// Program the calling CPU's IA32_PAT MSR.
+    pub fn pat_init();
+    /// Program the calling CPU's fast-syscall MSRs (SYSENTER/STAR/FMASK).
+    pub fn cpu_syscall_commit() -> i32;
+    /// Non-zero when the CPU advertises MONITOR/MWAIT (CPUID.01H:ECX bit 3).
+    pub fn cpu_has_monitor() -> i32;
+    /// Read the processor `_CST` package and publish C-states (ACPI cstates.c).
+    pub fn acpi_cstates_probe() -> i32;
 }
 
 // Value-only kernel helpers: no pointer arguments and no preconditions, so

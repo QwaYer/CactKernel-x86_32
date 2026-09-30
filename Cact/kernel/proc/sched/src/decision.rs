@@ -25,6 +25,8 @@ use crate::energy::{self, MAX_CORES};
 use crate::monitor;
 use crate::cstate;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 pub const CSTATE_C0: u32 = cstate::CSTATE_C0;
 pub const CSTATE_C1: u32 = cstate::CSTATE_C1;
 pub const CSTATE_C3: u32 = cstate::CSTATE_C3;
@@ -195,9 +197,144 @@ pub extern "C" fn energy_decision_tick() {
             }
         }
     }
+
+    // Worker-initiated help: a saturated worker that still saw queued work asked
+    // for a peer.  Consume the requests and wake one sleeping worker so the
+    // queue drains on two cores (subject to the same idle/benefit rules).
+    let mut help = false;
+    for cpu in 1..MAX_CORES {
+        if monitor::energy_monitor_take_help(cpu as u32) != 0 {
+            help = true;
+        }
+    }
+    if help && monitor::energy_monitor_queue_length(0) > 0 {
+        for cpu in 1..MAX_CORES {
+            let cpu = cpu as u32;
+            if energy::energy_core_is_present(cpu) == 0
+                || energy::energy_core_is_online(cpu) == 0
+                || energy::energy_core_role(cpu) != 2
+            {
+                continue;
+            }
+            let state = energy::energy_core_cstate(cpu);
+            if state == CSTATE_C0 || idle_ms_of(cpu) < IDLE_WAKE_MS {
+                continue;
+            }
+            if cstate::energy_ipi_wake_worker(cpu) == 0 {
+                let _ = energy::energy_core_set_cstate(cpu, CSTATE_C0);
+                monitor::energy_monitor_charge_energy(cpu, energy_decision_cost(state) as u32);
+            }
+            break; // one helper per tick
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn energy_decision_init() -> i32 {
     0
+}
+
+// ---------------------------------------------------------------------------
+// Physical core offlining / onlining (the slow tier)
+// ---------------------------------------------------------------------------
+
+/// Physical offlining/onlining of workers: a long-idle worker is parked and
+/// INIT'd, and wakes again through the boot trampoline when work appears.
+///
+/// Two bugs in that path caused the reported "`cat /proc/cpuinfo` freezes QEMU"
+/// (2026-09-30, QEMU, 4 vCPUs): the guest requested a machine reset while the
+/// command's output was on the console, and QEMU — started with `-no-reboot
+/// -no-shutdown` — stops the VM instead of rebooting, so the output froze
+/// mid-line.
+///   1. `smp::stack_top` rounded the stack top *up*, past the end of
+///      `idle_stack`, so the first two pushes of every bring-up landed on
+///      `lapic_id`/`online`.  Every worker's recorded LAPIC id became garbage and
+///      the re-online sent its INIT to that value — APIC id 0, the BSP, which
+///      resets the machine.
+///   2. A re-onlined core re-ran `ltr` with the TSS descriptor still marked busy
+///      by the first bring-up.  The #GP that follows happens before the AP has
+///      an IDT, so it becomes a triple fault.
+/// Both are fixed (`smp.rs`), and the IPI helpers now refuse a destination that
+/// is the BSP's own id or the invalid sentinel, so a bad core-map entry cannot
+/// take the machine down either.
+///
+/// Kill switch: `energy_core_offline_enable(0)`.
+static ALLOW_CORE_OFFLINE: AtomicBool = AtomicBool::new(true);
+
+/// Park a worker after it has been idle at least this long.
+const OFFLINE_IDLE_MS: u32 = 3000;
+/// Never offline below this many online cores (master + one worker).
+const MIN_ONLINE_CORES: u32 = 2;
+
+/// Enable/disable physical offlining (on by default; 0 is the kill switch).
+#[no_mangle]
+pub extern "C" fn energy_core_offline_enable(on: i32) {
+    ALLOW_CORE_OFFLINE.store(on != 0, Ordering::Relaxed);
+}
+
+/// Run from the master's idle loop (task context — the online sequence must not
+/// block the timer ISR).  Brings an offlined worker back when queued work has
+/// no online core free, otherwise parks a long-idle worker while capacity is in
+/// excess.  At most one transition per pass.
+#[no_mangle]
+pub extern "C" fn energy_core_manage() {
+    if !ALLOW_CORE_OFFLINE.load(Ordering::Relaxed) {
+        return;
+    }
+
+    // Bring one offlined worker back when there is work and every online worker
+    // is busy (C0); a parked core is otherwise invisible to the tick's scan.
+    if monitor::energy_monitor_queue_length(0) != 0 {
+        let mut any_offline = false;
+        let mut online_workers = 0u32;
+        let mut busy_online_workers = 0u32;
+        for cpu in 1..MAX_CORES {
+            let cpu = cpu as u32;
+            if energy::energy_core_is_present(cpu) == 0 || energy::energy_core_role(cpu) != 2 {
+                continue;
+            }
+            if energy::energy_core_is_online(cpu) == 0 {
+                any_offline = true;
+            } else {
+                online_workers += 1;
+                if energy::energy_core_cstate(cpu) == CSTATE_C0 {
+                    busy_online_workers += 1;
+                }
+            }
+        }
+        if any_offline && online_workers > 0 && busy_online_workers == online_workers {
+            for cpu in 1..MAX_CORES {
+                let cpu = cpu as u32;
+                if energy::energy_core_is_present(cpu) != 0
+                    && energy::energy_core_role(cpu) == 2
+                    && energy::energy_core_is_online(cpu) == 0
+                    && crate::smp::smp_cpu_online_sipi(cpu) == 0
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    // Park a long-idle worker while nothing is queued and capacity is in excess.
+    if energy::energy_core_count_online() <= MIN_ONLINE_CORES
+        || monitor::energy_monitor_queue_length(0) != 0
+    {
+        return;
+    }
+    for cpu in 1..MAX_CORES {
+        let cpu = cpu as u32;
+        if energy::energy_core_is_present(cpu) == 0
+            || energy::energy_core_is_online(cpu) == 0
+            || energy::energy_core_role(cpu) != 2
+            || energy::energy_core_is_idle(cpu) == 0
+        {
+            continue;
+        }
+        if idle_ms_of(cpu) < OFFLINE_IDLE_MS {
+            continue;
+        }
+        let _ = crate::smp::smp_cpu_offline(cpu);
+        return;
+    }
 }

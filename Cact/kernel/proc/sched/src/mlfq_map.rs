@@ -16,11 +16,9 @@
 //! that core may idle, and enqueueing into a queue that needs a shallower
 //! core wakes a too-deep worker (after a benefit/cost check).
 
-use crate::energy::{self, MAX_CORES};
+use crate::energy;
 use crate::mlfq;
-use crate::monitor;
 use crate::cstate;
-use crate::decision;
 
 use cstate::{CSTATE_C0, CSTATE_C1, CSTATE_C3, CSTATE_C6};
 
@@ -77,44 +75,14 @@ pub extern "C" fn energy_mlfq_idle_target(cpu: u32) -> u32 {
     }
 }
 
-/// Called whenever a task lands in `level`: if a worker sleeping too deep for
-/// that class exists, wake it — but only when the benefit/cost model says the
-/// pending work is worth the transition energy.
+/// Called whenever a task lands in `level`.
+///
+/// Worker wakeups are driven entirely by the master's decision engine
+/// (`decision::energy_decision_tick`, once per tick), which applies the same
+/// benefit/cost gate.  Doing the scan here — on *every* enqueue, under the
+/// scheduler lock, from *every* core — turned the hottest path into a cross-CPU
+/// lock/IPI storm (tens of thousands of scans per second) without buying any
+/// real promptness, so it is deliberately a no-op now.
 pub(crate) fn on_enqueue(level: u32) {
-    // UP build: no online workers yet, nothing to wake.
-    if energy::energy_core_count_online() <= 1 {
-        return;
-    }
-    let required = idle_cap_for_level(level);
-
-    for cpu in 1..MAX_CORES {
-        let cpu = cpu as u32;
-        if energy::energy_core_is_present(cpu) == 0 || energy::energy_core_is_online(cpu) == 0 {
-            continue;
-        }
-        if energy::energy_core_role(cpu) != 2 {
-            continue;
-        }
-
-        let state = energy::energy_core_cstate(cpu);
-        if state == CSTATE_C0 || state <= required {
-            continue; // awake or shallow enough for this class
-        }
-
-        // The core is deeper than this queue class tolerates: run the
-        // benefit/cost gate before issuing the wakeup IPI.
-        let queue_len = mlfq::mlfq_runnable_count();
-        let load = monitor::energy_monitor_load_avg(cpu);
-        let trend = monitor::energy_monitor_trend(cpu);
-        if decision::energy_decision_should_wake(state, queue_len, level + 1, load, trend) == 0 {
-            continue;
-        }
-        if cstate::energy_ipi_wake_worker(cpu) == 0 {
-            let _ = energy::energy_core_set_cstate(cpu, CSTATE_C0);
-            monitor::energy_monitor_charge_energy(
-                cpu,
-                decision::energy_decision_cost(state) as u32,
-            );
-        }
-    }
+    let _ = level;
 }

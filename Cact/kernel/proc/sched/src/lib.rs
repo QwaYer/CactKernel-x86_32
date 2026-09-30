@@ -28,6 +28,7 @@ pub mod ffi;
 pub mod task;
 pub mod mlfq;
 pub mod mlfq_map;
+pub mod percpu;
 pub mod energy;
 pub mod cstate;
 pub mod monitor;

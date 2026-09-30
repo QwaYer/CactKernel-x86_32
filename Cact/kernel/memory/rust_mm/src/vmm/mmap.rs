@@ -8,9 +8,9 @@ use crate::process::memfd::{memfd_get_page, memfd_grow_to, memfd_map_dec, memfd_
 use crate::safe::{zero_page, flush_tlb, kprint_str};
 
 fn fd_to_node(fd: i32) -> *mut VfsNode {
-    // SAFETY: `current_task` is the C scheduler's global task pointer; it may be
-    // null, which the test below handles.
-    let t = unsafe { *current_task.get() };
+    // SAFETY: `cact_current_task_get` is the scheduler's per-CPU accessor; it may return null,
+    // which the test below handles.
+    let t = unsafe { cact_current_task_get() };
     if t.is_null() {
         return core::ptr::null_mut();
     }

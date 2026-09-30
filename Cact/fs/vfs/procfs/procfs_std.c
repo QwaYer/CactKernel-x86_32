@@ -44,10 +44,14 @@ static uint32_t _tsc_mhz(void) {
 
 // /proc/cpuinfo generator — uses cpudev.c cached data + the energy core map
 int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
-    char tmp[1536];
+    /* Sized for 16 logical CPUs including the feature line.  Both the generator
+     * and the per-core loop are bounds-checked, so more cores truncate the file
+     * instead of running past this frame (the previous 1.5 KB buffer with an
+     * unbounded append smashed the kernel stack from ~6 CPUs up). */
+    char tmp[4096];
     int  p = 0;
 
-    #define _APP(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
+    #define _APP(s) { const char *_s=(s); while (*_s && p < (int)sizeof(tmp) - 1) tmp[p++]=*_s++; }
     #define _APPN(n) { char _nb[16]; snprintf(_nb, sizeof(_nb), "%d", (int)(n)); _APP(_nb); }
 
     uint32_t mhz = _tsc_mhz();
@@ -55,7 +59,9 @@ int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
     if (present == 0) present = 1;
 
     for (uint32_t cpu = 0; cpu < present; cpu++) {
-        if (p > (int)sizeof(tmp) - 200)
+        /* Reserve room for one full core block (the cpu0 feature line is the
+         * largest single append). */
+        if (p > (int)sizeof(tmp) - 512)
             break;
 
         uint32_t apic_id = energy_core_lapic_id(cpu);

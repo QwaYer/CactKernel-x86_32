@@ -41,6 +41,11 @@ struct CStateInfo {
     min_residency_us: u32,
     wakeup_energy: u32,
     cache_harm_energy: u32,
+    /// MWAIT hint (EAX) that enters this state, or -1 when it has no MWAIT
+    /// encoding (C0) or is not yet known (deep states await the ACPI `_CST`
+    /// probe).  When non-negative and the CPU has MONITOR/MWAIT, the idle path
+    /// uses `mwait` instead of `hlt`.
+    mwait_hint: i32,
 }
 
 const fn cstate_info_default(
@@ -49,6 +54,7 @@ const fn cstate_info_default(
     min_residency_us: u32,
     wakeup_energy: u32,
     cache_harm_energy: u32,
+    mwait_hint: i32,
 ) -> CStateInfo {
     CStateInfo {
         available,
@@ -56,6 +62,7 @@ const fn cstate_info_default(
         min_residency_us,
         wakeup_energy,
         cache_harm_energy,
+        mwait_hint,
     }
 }
 
@@ -64,10 +71,10 @@ const fn cstate_info_default(
 // below keep the benefit/cost model monotonic until a calibration driver
 // exists.
 static CSTATES: SyncUnsafeCell<[CStateInfo; CSTATE_COUNT]> = SyncUnsafeCell::new([
-    cstate_info_default(true, 0, 0, 0, 0),            // C0
-    cstate_info_default(true, 2, 40, 5, 1),           // C1
-    cstate_info_default(false, 60, 300, 40, 30),      // C3
-    cstate_info_default(false, 200, 2000, 160, 100),  // C6
+    cstate_info_default(true, 0, 0, 0, 0, -1),            // C0
+    cstate_info_default(true, 2, 40, 5, 1, 0x00),         // C1  (MWAIT hint 0x00)
+    cstate_info_default(false, 60, 300, 40, 30, -1),      // C3  (hint from _CST)
+    cstate_info_default(false, 200, 2000, 160, 100, -1),  // C6  (hint from _CST)
 ]);
 
 static CSTATE_INIT_DONE: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);
@@ -103,6 +110,62 @@ fn hlt() {
     }
 }
 
+/// Enter a hardware C-state with the MONITOR/MWAIT hint `hint`.  Only valid
+/// when CPUID advertises MONITOR/MWAIT (the caller checks); otherwise the
+/// instruction is undefined.
+fn mwait_idle(hint: u32) {
+    // MONITOR a private stack word (never written) so MWAIT exits only on an
+    // interrupt, then `sti; mwait` with ECX bit 0 = interrupt-break: interrupts
+    // must be enabled at the exact moment MWAIT executes or a queued timer
+    // would be missed and the core would sleep past its next tick.
+    let line: u32 = 0;
+    // SAFETY: `monitor`/`mwait` only affect this CPU's idle state.  The
+    // monitored address is a live stack local that nothing writes, so MWAIT
+    // wakes on an interrupt (ECX bit 0 requests interrupt-break).
+    unsafe {
+        core::arch::asm!(
+            "monitor",
+            in("eax") (&line as *const u32) as u32,
+            in("ecx") 0u32,
+            in("edx") 0u32,
+            options(nostack)
+        );
+        core::arch::asm!(
+            "sti; mwait",
+            in("eax") hint,
+            in("ecx") 1u32,     // MWAIT_ECX_INTERRUPT_BREAK
+            options(nostack)
+        );
+    }
+}
+
+/// Publish a C-state's real characteristics, from the ACPI `_CST` probe: its
+/// MWAIT hint, wake latency, and whether the platform offers it.  Until this is
+/// called for a deep state it stays unavailable and the governor never picks it.
+///
+/// # Safety
+///
+/// Must be called during single-threaded boot bring-up (the `_CST` probe), before
+/// any worker core runs.
+#[no_mangle]
+pub unsafe extern "C" fn energy_cstate_configure(
+    state: u32,
+    available: i32,
+    latency_us: u32,
+    mwait_hint: i32,
+) -> i32 {
+    if !cstate_in_range(state) {
+        return -1;
+    }
+    let c = &mut cstates()[state as usize];
+    c.available = available != 0;
+    if latency_us != 0 {
+        c.latency_us = latency_us;
+    }
+    c.mwait_hint = mwait_hint;
+    0
+}
+
 // ---------------------------------------------------------------------------
 // C ABI
 // ---------------------------------------------------------------------------
@@ -112,8 +175,13 @@ pub extern "C" fn energy_cstate_init() -> i32 {
     if *init_done() {
         return 0;
     }
-    // C3/C6 need a real deep-idle mechanism. Until the ACPI _CST / MWAIT
-    // driver lands they stay unavailable so the governor never selects them.
+    // Read the platform's C-state descriptors (`_CST`) and publish their real
+    // latencies and MWAIT hints.  If the firmware exposes none, the deep states
+    // stay unavailable and the governor keeps using C1.
+    // SAFETY: single-threaded boot bring-up, after ACPI is initialised;
+    // `acpi_cstates_probe` only evaluates ACPI methods and calls back into
+    // `energy_cstate_configure`.
+    unsafe { ffi::acpi_cstates_probe() };
     *init_done() = true;
     0
 }
@@ -182,9 +250,33 @@ pub extern "C" fn energy_cstate_idle(cpu: u32) -> i32 {
     let target = crate::mlfq_map::energy_mlfq_idle_target(cpu);
     let _ = energy::energy_core_set_cstate(cpu, target);
 
-    // All sleep states currently end in HLT. When a MWAIT/_CST driver is
-    // added, deeper states execute their own instruction stream here.
-    hlt();
+    // Cooperate with a physical-offline request.  Park HERE, where this core
+    // holds no global lock (the energy/mlfq calls above have all returned): the
+    // master waits for `parked` and only then sends INIT, so the INIT can never
+    // strand a lock this core was holding (which would deadlock everyone else).
+    if crate::percpu::claim_park_request() {
+        crate::percpu::set_parked();
+        loop {
+            // SAFETY: parking this core for a physical offline.  Interrupts are
+            // masked so that no lock is ever taken between the `parked` store
+            // above and the INIT that resets the core.
+            unsafe {
+                core::arch::asm!("cli; hlt", options(nomem, nostack));
+            }
+        }
+    }
+
+    // Execute the selected depth.  With MONITOR/MWAIT and a known hint, enter
+    // the state directly (C1 = hint 0; deeper states carry their `_CST` hint);
+    // otherwise fall back to HLT, which is C1.
+    let hint = cstates()[target as usize].mwait_hint;
+    // SAFETY: `cpu_has_monitor` is a value-only CPUID accessor.
+    let has_mwait = unsafe { ffi::cpu_has_monitor() } != 0;
+    if hint >= 0 && has_mwait {
+        mwait_idle(hint as u32);
+    } else {
+        hlt();
+    }
     0
 }
 

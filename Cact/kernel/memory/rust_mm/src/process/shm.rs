@@ -83,8 +83,8 @@ pub(crate) fn find_shm_va(num_pages: u32) -> u32 {
     let size = num_pages * PAGE_SIZE;
     let mut candidate = SHM_VA_BASE;
 
-    // SAFETY: `current_task` is a valid kernel global.
-    let t = unsafe { *current_task.get() };
+    // SAFETY: `cact_current_task_get` is the scheduler's per-CPU accessor.
+    let t = unsafe { cact_current_task_get() };
     if t.is_null() {
         return 0;
     }
@@ -211,9 +211,9 @@ pub extern "C" fn shm_get(key: i32, size: u32, flags: i32) -> i32 {
         s.pages[i] = p;
     }
 
-    // SAFETY: `current_task` is a valid kernel global; it may be null, which the
-    // test below handles.
-    let cur_task = unsafe { *current_task.get() };
+    // SAFETY: `cact_current_task_get` is the scheduler's per-CPU accessor; it may return
+    // null, which the test below handles.
+    let cur_task = unsafe { cact_current_task_get() };
     let cur_pid = if !cur_task.is_null() {
         // SAFETY: `cur_task` is the live current task (non-null, checked above), so
         // this `pid` field read is in bounds.

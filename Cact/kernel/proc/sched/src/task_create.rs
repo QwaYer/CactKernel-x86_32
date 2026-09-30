@@ -183,8 +183,7 @@ fn create_user_task_internal(entry_point: *const c_void, add_to_list: bool) -> *
     unsafe { next_pid = pid + 1 };
     t_ref.is_kernel = 0;
 
-    // SAFETY: `current_task` is a scheduler-owned global; the null case is handled below.
-    let cur_raw = unsafe { current_task };
+    let cur_raw = current_task();
     if cur_raw.is_null() {
         p_ref.parent_pid = 0;
         p_ref.uid  = 0;

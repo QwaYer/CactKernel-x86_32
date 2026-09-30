@@ -11,8 +11,8 @@ use crate::process::shm::{
 pub extern "C" fn shm_at(shmid: i32, shmaddr: u32, flags: i32) -> u32 {
     shm_ensure_init();
 
-    // SAFETY: current_task is a valid kernel global.
-    let t = unsafe { *current_task.get() };
+    // SAFETY: `cact_current_task_get` is the scheduler's per-CPU accessor.
+    let t = unsafe { cact_current_task_get() };
     // SAFETY: `t` is the live current task, checked non-null; `is_kernel` and `proc`
     // are plain fields of that `TaskStruct`.
     if t.is_null() || unsafe { (*t).is_kernel } != 0 || unsafe { (*t).proc.is_null() } {
@@ -100,8 +100,8 @@ pub extern "C" fn shm_at(shmid: i32, shmaddr: u32, flags: i32) -> u32 {
 pub extern "C" fn shm_dt(shmaddr: u32) -> i32 {
     shm_ensure_init();
 
-    // SAFETY: current_task is a valid kernel global.
-    let t = unsafe { *current_task.get() };
+    // SAFETY: `cact_current_task_get` is the scheduler's per-CPU accessor.
+    let t = unsafe { cact_current_task_get() };
     // SAFETY: `t` is the live current task, checked non-null; `is_kernel`/`proc` are
     // plain fields of it.
     if t.is_null() || unsafe { (*t).is_kernel } != 0 || unsafe { (*t).proc.is_null() } {

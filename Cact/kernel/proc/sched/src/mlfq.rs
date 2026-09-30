@@ -71,9 +71,10 @@ impl MlfqQueue {
         t
     }
 
-    fn remove(&mut self, task: *mut TaskStruct) {
+    /// Unlink `task` from this queue.  Returns `true` if it was present.
+    fn remove(&mut self, task: *mut TaskStruct) -> bool {
         if task.is_null() {
-            return;
+            return false;
         }
         let mut prev: *mut TaskStruct = ptr::null_mut();
         let mut cur = self.head;
@@ -96,12 +97,13 @@ impl MlfqQueue {
                 // SAFETY: `task` is live and owned by this queue, so clearing its link is in
                 // bounds.
                 unsafe { (*task).queue_next = ptr::null_mut() };
-                return;
+                return true;
             }
             prev = cur;
             // SAFETY: `cur` was reached by walking this queue's chain, so it is a live task.
             cur = unsafe { (*cur).queue_next };
         }
+        false
     }
 }
 
@@ -135,7 +137,6 @@ impl MlfqState {
 
 static MLFQ_STATE: SyncUnsafeCell<MlfqState> = SyncUnsafeCell::new(MlfqState::new());
 
-static SCHEDULE_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
 static REAP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 #[inline]
@@ -228,12 +229,14 @@ pub unsafe fn mlfq_sleep_locked(task: *mut TaskStruct) {
     s.sleep_queue.push(t);
 }
 
-pub fn mlfq_remove_from_sleep(task: *mut TaskStruct) {
+/// Unlink `task` from the blocked queue.  Returns `true` if it was there, i.e.
+/// if the task had already parked (see `sched_park_prev`).
+pub fn mlfq_remove_from_sleep(task: *mut TaskStruct) -> bool {
     // SAFETY: `mlfq_state_mut` yields the static `MLFQ_STATE`; callers hold `SCHEDULER_LOCK`, so
     // the unlink from the sleep queue cannot race another CPU.
     unsafe {
         let s = &mut *mlfq_state_mut();
-        s.sleep_queue.remove(task);
+        s.sleep_queue.remove(task)
     }
 }
 
@@ -287,7 +290,7 @@ fn do_priority_boost() {
     }
     // SAFETY: `current_task` is the scheduler-owned running task, read with `SCHEDULER_LOCK`
     // held (its null case is checked below).
-    let cur = unsafe { crate::task::current_task };
+    let cur = crate::task::current_task();
     if !cur.is_null() {
         // SAFETY: `cur` is the live running task (non-null checked here).
         let cur_ref = unsafe { &mut *cur };
@@ -298,6 +301,86 @@ fn do_priority_boost() {
     }
 }
 
+/// Park the task `switch_to` just switched away from.
+///
+/// This is the second half of `schedule()`: the outgoing task is made runnable
+/// again only *after* `switch_to` has committed the switch and saved its stack
+/// pointer (`mov [prev_esp], esp`), so no other CPU can pop it and resume it on
+/// a stale stack.  Called from `switch_to` on the incoming task's stack, with
+/// interrupts disabled.
+///
+/// # Safety
+///
+/// `prev` must be null or the live `TaskStruct` whose `esp` `switch_to` has
+/// just saved; the caller must not hold `SCHEDULER_LOCK`.
+#[no_mangle]
+pub unsafe extern "C" fn sched_park_prev(prev: *mut TaskStruct) {
+    if prev.is_null() {
+        return;
+    }
+    // This core's idle context is never queued (see `schedule`), so there is
+    // nothing to park: it resumes the next time this core goes idle.
+    if prev == crate::percpu::idle() {
+        return;
+    }
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; `switch_to` released it
+    // before the switch (see # Safety).
+    unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
+
+    // SAFETY: `prev` is the live task just switched away from (see # Safety); the lock is held.
+    let state = unsafe { (*prev).state };
+    match state {
+        TaskState::Running => {
+            // Preempted while still runnable: put it back on a ready queue.
+            // SAFETY: `prev` is live.
+            unsafe { (*prev).state = TaskState::Ready };
+            // SAFETY: `prev` is live.
+            let prev_pri = unsafe { (*prev).priority };
+            // SAFETY: `prev` is live and the lock is held.
+            unsafe { mlfq_enqueue_locked(prev, prev_pri) };
+        }
+        TaskState::Sleeping => {
+            // A task is in a blocking structure only after it has parked.  A
+            // deadline sleep enters the timer wheel here; a deadlineless block
+            // (semaphore/mutex) enters the blocked queue.  Wakers rely on that
+            // invariant to never queue a task another core is still running.
+            // SAFETY: `prev` is live, so its `proc` field is in bounds.
+            let prev_proc = unsafe { (*prev).proc };
+            let sleep_until = if prev_proc.is_null() {
+                0
+            } else {
+                // SAFETY: `prev_proc` is the live `ProcMeta` (null-checked just above).
+                unsafe { (*prev_proc).sleep_until }
+            };
+            if sleep_until == 0 {
+                // SAFETY: `prev` is live and the lock is held.
+                unsafe { mlfq_sleep_locked(prev) };
+            } else {
+                // SAFETY: `prev` is live with a non-null `proc`, and the lock is held.
+                unsafe { crate::timer_wheel::timer_wheel_insert(prev) };
+            }
+        }
+        TaskState::Waiting | TaskState::Stopped => {
+            // Blocked with no deadline (waitpid / SIGSTOP): the blocked queue,
+            // same "parked" invariant as a semaphore wait.
+            // SAFETY: `prev` is live and the lock is held.
+            unsafe { mlfq_sleep_locked(prev) };
+        }
+        TaskState::Ready => {
+            // A waker made us runnable while we were still on the CPU and
+            // deliberately did not queue us; we are parked now, so queue here.
+            // SAFETY: `prev` is live.
+            let prev_pri = unsafe { (*prev).priority };
+            // SAFETY: `prev` is live and the lock is held.
+            unsafe { mlfq_enqueue_locked(prev, prev_pri) };
+        }
+        TaskState::Zombie => {}
+    }
+
+    // SAFETY: the lock was acquired above.
+    unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+}
+
 /// # Safety
 ///
 /// Must be called from a task context with the scheduler free on this CPU; the
@@ -305,7 +388,7 @@ fn do_priority_boost() {
 /// returns only when this task is scheduled again.
 #[no_mangle]
 pub unsafe extern "C" fn schedule() {
-    if SCHEDULE_IN_PROGRESS
+    if crate::percpu::schedule_guard()
         .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
         .is_err()
     {
@@ -322,13 +405,13 @@ pub unsafe extern "C" fn schedule() {
     unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
 
     // SAFETY: `current_task` is a scheduler-owned global, read under `SCHEDULER_LOCK`.
-    let prev = unsafe { crate::task::current_task };
+    let prev = crate::task::current_task();
     // SAFETY: `task_list_head` is a scheduler-owned global, read under `SCHEDULER_LOCK`.
     let head = unsafe { crate::task::task_list_head };
     if prev.is_null() || head.is_null() {
         // SAFETY: the lock was acquired above.
         unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
-        SCHEDULE_IN_PROGRESS.store(0, Ordering::Release);
+        crate::percpu::schedule_guard().store(0, Ordering::Release);
         return;
     }
 
@@ -347,12 +430,17 @@ pub unsafe extern "C" fn schedule() {
                 // SAFETY: `parent` is a live task (non-null checked here).
                 let parent_state = unsafe { (*parent).state };
                 if matches!(parent_state, TaskState::Waiting) {
+                    // Only queue a parked parent; a still-running one is left
+                    // Ready and its own park step queues it.
+                    let parent_parked = mlfq_remove_from_sleep(parent);
                     // SAFETY: `parent` is live.
                     unsafe { (*parent).state = TaskState::Ready };
-                    // SAFETY: `parent` is live.
-                    let parent_pri = unsafe { (*parent).priority };
-                    // SAFETY: `parent` is live and the lock is held.
-                    unsafe { mlfq_enqueue_locked(parent, parent_pri) };
+                    if parent_parked {
+                        // SAFETY: `parent` is live.
+                        let parent_pri = unsafe { (*parent).priority };
+                        // SAFETY: `parent` is live and the lock is held.
+                        unsafe { mlfq_enqueue_locked(parent, parent_pri) };
+                    }
                 }
             }
         }
@@ -360,60 +448,46 @@ pub unsafe extern "C" fn schedule() {
 
     wake_expired_sleepers();
 
-    let next = pick_next_task();
+    let mut next = pick_next_task();
+
+    if next.is_null() {
+        // Nothing else is runnable.  A still-Running `prev` simply keeps the
+        // CPU (a Running task belongs on no queue); otherwise hand the CPU to
+        // this core's own idle context.  Idle tasks are CPU-pinned and never
+        // queued — each lives on its own core's stack, so letting another core
+        // run it would alias that stack.
+        // SAFETY: `prev` is the live running task (non-null checked above).
+        let prev_now = unsafe { (*prev).state };
+        if matches!(prev_now, TaskState::Running) {
+            // SAFETY: the lock was acquired above.
+            unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+            crate::percpu::schedule_guard().store(0, Ordering::Release);
+            return;
+        }
+        next = crate::percpu::idle();
+    }
 
     if next.is_null() || next == prev {
         // SAFETY: the lock was acquired above.
         unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
-        SCHEDULE_IN_PROGRESS.store(0, Ordering::Release);
+        crate::percpu::schedule_guard().store(0, Ordering::Release);
         return;
     }
 
-    // SAFETY: `prev` is the live task being switched away from.
-    let prev_state = unsafe { (*prev).state };
-    match prev_state {
-        TaskState::Running => {
-            // SAFETY: `prev` is live.
-            unsafe { (*prev).state = TaskState::Ready };
-            // SAFETY: `prev` is live.
-            let prev_pri = unsafe { (*prev).priority };
-            // SAFETY: `prev` is live and the lock is held.
-            unsafe { mlfq_enqueue_locked(prev, prev_pri) };
-        }
-        TaskState::Sleeping => {
-            // A task sleeping *with a deadline* is owned by the timer wheel,
-            // which wakes it and enqueues it itself.  Only a task with no
-            // deadline (blocked on a semaphore/mutex) belongs to the sleep
-            // queue: pushing a wheel-tracked task there as well would leave it
-            // in two intrusive lists chained through `queue_next`, and
-            // `wake_expired_sleepers()` then walks the corrupted chain.
-            // SAFETY: `prev` is live, so its `proc` field is in bounds.
-            let prev_proc = unsafe { (*prev).proc };
-            if prev_proc.is_null() {
-                // SAFETY: `prev` is live and the lock is held.
-                unsafe { mlfq_sleep_locked(prev) };
-            } else {
-                // SAFETY: `prev_proc` is the live `ProcMeta` of the running task.
-                let prev_sleep_until = unsafe { (*prev_proc).sleep_until };
-                if prev_sleep_until == 0 {
-                    // SAFETY: `prev` is live and the lock is held.
-                    unsafe { mlfq_sleep_locked(prev) };
-                }
-            }
-        }
-        TaskState::Waiting | TaskState::Zombie | TaskState::Stopped => {}
-        TaskState::Ready => {}
-    }
+    // `prev` is NOT parked here: it must stay off the shared ready queue until
+    // `switch_to` has saved its stack pointer, or another CPU could pop it and
+    // resume it on a stale stack.  `switch_to` calls `sched_park_prev` for that
+    // once the switch is committed.
 
     // SAFETY: `next` is the live ready task just popped from the scheduler's own queues.
     unsafe { (*next).state = TaskState::Running };
-    // SAFETY: `current_task` is the scheduler-owned current-task pointer, switched here under the
-    // scheduler's own lock protocol.
-    unsafe { crate::task::current_task = next };
+    // Switches this CPU's running-task pointer under the scheduler's own lock protocol.
+    crate::task::set_current_task(next);
 
     // SAFETY: `next` is live.
     let next_pid = unsafe { (*next).pid };
-    crate::energy::observe_schedule(0, next_pid);
+    let me = crate::percpu::this_cpu() as u32;
+    crate::energy::observe_schedule(me, next_pid);
 
     // SAFETY: the lock was acquired above.
     unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
@@ -444,19 +518,32 @@ pub unsafe extern "C" fn schedule() {
         let stack_base = unsafe { (*next_proc).stack_base };
         if !stack_base.is_null() {
             let esp0 = stack_base as u32 + crate::task::KERNEL_STACK_SIZE as u32;
-            // SAFETY: `tss_entry` is the kernel TSS, exclusively updated under `SCHEDULER_LOCK`.
-            let tss_ptr = unsafe { ffi::tss_entry.get() };
-            // SAFETY: `tss_ptr` is that global's address, used only here.
-            let tss = unsafe { &mut *tss_ptr };
-            tss.esp0 = esp0;
-            // SAFETY: sets the ring-0 stack for the upcoming user entry.
+            // The ring-0 stack for the next task, set on THIS core: the BSP's TSS
+            // is the C `tss_entry`, each AP's is its own `SmpCpu` slot.  Both are
+            // used by the CPU on ring3->ring0 transitions (interrupts, faults),
+            // so they must track the running task per core.
+            let me = crate::percpu::this_cpu();
+            if me == 0 {
+                // SAFETY: `tss_entry` is the BSP TSS, exclusively updated under `SCHEDULER_LOCK`.
+                let tss_ptr = unsafe { ffi::tss_entry.get() };
+                // SAFETY: `tss_ptr` is that global's address, used only here.
+                let tss = unsafe { &mut *tss_ptr };
+                tss.esp0 = esp0;
+            } else {
+                crate::smp::set_tss_esp0(me, esp0);
+            }
+            // SAFETY: sets the ring-0 stack for the upcoming user entry in this
+            // core's own SYSENTER ESP MSR.
             unsafe { ffi::syscall_set_esp0(esp0) };
+            // SAFETY: value-only setter for this CPU's slot in the per-CPU
+            // AMD-SYSCALL entry-stack table.
+            unsafe { ffi::syscall_set_cpu_esp0(me as u32, esp0) };
         }
     }
 
     // SAFETY: disables interrupts around the context switch.
     unsafe { ffi::cli() };
-    SCHEDULE_IN_PROGRESS.store(0, Ordering::Release);
+    crate::percpu::schedule_guard().store(0, Ordering::Release);
     // SAFETY: `prev` is live; its saved-stack-pointer slot is handed to the switch routine.
     let prev_esp_slot = unsafe { core::ptr::addr_of_mut!((*prev).esp) };
     // SAFETY: `next` is live.
@@ -468,7 +555,7 @@ pub unsafe extern "C" fn schedule() {
     unsafe { ffi::sti() };
 
     // SAFETY: `current_task` is the scheduler-owned global, read after the switch.
-    let cur = unsafe { crate::task::current_task };
+    let cur = crate::task::current_task();
     if !cur.is_null() {
         // SAFETY: `cur` is the live task now running.
         unsafe { crate::task::task_handle_signals(cur) };
@@ -524,12 +611,16 @@ fn wake_expired_sleepers() {
 /// Must be called only from the timer interrupt path, with the scheduler lock free.
 #[no_mangle]
 pub unsafe extern "C" fn on_timer_tick() {
+    // Global scheduler state (queues, boost, timer wheel, governor) is owned by
+    // the master core; worker cores run only the per-CPU parts of the tick.
+    let me = crate::percpu::this_cpu();
+
     // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the timer path holds no lock
     // when it calls in (see # Safety).
     unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
 
     // SAFETY: `current_task` is a scheduler-owned global, read under `SCHEDULER_LOCK`.
-    let cur = unsafe { crate::task::current_task };
+    let cur = crate::task::current_task();
     if cur.is_null() {
         // SAFETY: the lock was acquired above.
         unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
@@ -539,8 +630,14 @@ pub unsafe extern "C" fn on_timer_tick() {
     // SAFETY: `cur` is the live running task (non-null checked above).
     let cur_t = unsafe { &mut *cur };
 
-    // Energy governor load sampling (master core, one sample per tick).
-    crate::monitor::sample_tick();
+    // Every core samples its own load (so the governor has real per-core
+    // numbers).  A saturated worker that still sees queued work asks the master
+    // for help — the governor's reverse direction.
+    const HELP_LOAD_PERMILLE: u32 = 850;
+    let load = crate::monitor::sample_tick();
+    if me != 0 && load >= HELP_LOAD_PERMILLE && mlfq_runnable_count() > 0 {
+        crate::monitor::request_help(me as u32);
+    }
 
     cur_t.ticks_used += 1;
     let quantum = MLFQ_QUANTUM[cur_t.priority.min(MLFQ_LEVELS as u32 - 1) as usize];
@@ -554,7 +651,7 @@ pub unsafe extern "C" fn on_timer_tick() {
         cur_t.ticks_used = 0;
     }
 
-    {
+    if me == 0 {
         // SAFETY: `mlfq_state_mut` yields the static `MLFQ_STATE`, mutated under
         // `SCHEDULER_LOCK`.
         let s = unsafe { &mut *mlfq_state_mut() };
@@ -568,22 +665,27 @@ pub unsafe extern "C" fn on_timer_tick() {
     // SAFETY: the lock was acquired above.
     unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
 
-    // SAFETY: expires per-task timers; the scheduler state is reachable from the timer path.
-    unsafe { crate::task::task_check_timers() };
+    // Global timekeeping (the timer wheel) is advanced on the master core only.
+    if me == 0 {
+        // SAFETY: expires per-task timers; the scheduler state is reachable from the timer path.
+        unsafe { crate::task::task_check_timers() };
+    }
     crate::task::task_check_kernel_stack();
 
     // SAFETY: `current_task` is the scheduler-owned global, read here.
-    let live = unsafe { crate::task::current_task };
+    let live = crate::task::current_task();
     if !live.is_null() {
         // SAFETY: `live` is the live task now running.
         unsafe { crate::task::task_handle_signals(live) };
     }
 
-    // Energy decision engine pass (master core, once per tick).
-    crate::decision::energy_decision_tick();
+    if me == 0 {
+        // Energy decision engine pass (master core, once per tick).
+        crate::decision::energy_decision_tick();
 
-    // Load-balancing / migration pass (master core, once per tick).
-    crate::balance::energy_balance_tick();
+        // Load-balancing / migration pass (master core, once per tick).
+        crate::balance::energy_balance_tick();
+    }
 
     if need_preempt {
         // SAFETY: `schedule` is the scheduler's core switch routine, called here with the lock
@@ -627,21 +729,36 @@ pub unsafe fn mlfq_wake_task_locked(task: *mut TaskStruct) {
     let state = unsafe { (*task).state };
     match state {
         TaskState::Sleeping => {
-            mlfq_remove_from_sleep(task);
+            // A task sits in a blocking structure only once it has parked.  If
+            // it is still running on its way to block it is in neither, so it is
+            // *not* safe to queue it here (another core is still running it):
+            // just mark it Ready and let its own `sched_park_prev` queue it.
+            let parked = mlfq_remove_from_sleep(task)
+                || {
+                    // SAFETY: `task` is a live Sleeping task with a `ProcMeta`, and the caller
+                    // holds `SCHEDULER_LOCK`.
+                    unsafe { crate::timer_wheel::timer_wheel_remove(task) }
+                };
             // SAFETY: `task` is live.
             unsafe { (*task).state = TaskState::Ready };
-            // SAFETY: `task` is live.
-            let pri = unsafe { (*task).priority };
-            // SAFETY: `task` is live and the lock is held.
-            unsafe { mlfq_enqueue_locked(task, pri) };
+            if parked {
+                // SAFETY: `task` is live.
+                let pri = unsafe { (*task).priority };
+                // SAFETY: `task` is live and the lock is held.
+                unsafe { mlfq_enqueue_locked(task, pri) };
+            }
         }
         TaskState::Waiting | TaskState::Stopped => {
+            // Parked Waiting/Stopped tasks live in the blocked queue too.
+            let parked = mlfq_remove_from_sleep(task);
             // SAFETY: `task` is live.
             unsafe { (*task).state = TaskState::Ready };
-            // SAFETY: `task` is live.
-            let pri = unsafe { (*task).priority };
-            // SAFETY: `task` is live and the lock is held.
-            unsafe { mlfq_enqueue_locked(task, pri) };
+            if parked {
+                // SAFETY: `task` is live.
+                let pri = unsafe { (*task).priority };
+                // SAFETY: `task` is live and the lock is held.
+                unsafe { mlfq_enqueue_locked(task, pri) };
+            }
         }
         _ => {}
     }

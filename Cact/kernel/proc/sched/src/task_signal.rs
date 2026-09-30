@@ -49,8 +49,7 @@ pub unsafe extern "C" fn task_signal(pid: u32, signal: u32) {
 /// Must be called from a task context with `SCHEDULER_LOCK` free (it only reads).
 #[no_mangle]
 pub unsafe extern "C" fn task_signal_pending_current() -> u32 {
-    // SAFETY: `current_task` is a scheduler-owned global; this function only reads it.
-    let t = unsafe { crate::task::current_task };
+    let t = crate::task::current_task();
     if t.is_null() {
         return 0;
     }
@@ -110,13 +109,17 @@ pub unsafe extern "C" fn task_signal_locked(pid: u32, signal: u32) {
         && matches!(t_state, TaskState::Sleeping)
         && (signal & !signal_mask) != 0
     {
-        mlfq::mlfq_remove_from_sleep(t);
+        // Only queue the task if it has already parked; a still-running one is
+        // left Ready and its own `sched_park_prev` queues it.
+        let parked = mlfq::mlfq_remove_from_sleep(t);
         // SAFETY: `t` is live.
         unsafe { (*t).state = TaskState::Ready };
-        // SAFETY: `t` is live.
-        let pri = unsafe { (*t).priority };
-        // SAFETY: `t` is live; the caller holds `SCHEDULER_LOCK`.
-        unsafe { mlfq::mlfq_enqueue_locked(t, pri) };
+        if parked {
+            // SAFETY: `t` is live.
+            let pri = unsafe { (*t).priority };
+            // SAFETY: `t` is live; the caller holds `SCHEDULER_LOCK`.
+            unsafe { mlfq::mlfq_enqueue_locked(t, pri) };
+        }
     }
 }
 
@@ -209,12 +212,17 @@ unsafe fn notify_parent_of_stop(t: *mut TaskStruct) {
             // SAFETY: `parent` is a live task (non-null checked here).
             let parent_state = unsafe { (*parent).state };
             if matches!(parent_state, TaskState::Waiting) {
+                // Only queue a parked parent; a still-running one is left Ready
+                // and its own park step queues it.
+                let parent_parked = mlfq::mlfq_remove_from_sleep(parent);
                 // SAFETY: `parent` is live.
                 unsafe { (*parent).state = TaskState::Ready };
-                // SAFETY: `parent` is live.
-                let pri = unsafe { (*parent).priority };
-                // SAFETY: `parent` is live and the lock is held.
-                unsafe { mlfq::mlfq_enqueue_locked(parent, pri) };
+                if parent_parked {
+                    // SAFETY: `parent` is live.
+                    let pri = unsafe { (*parent).priority };
+                    // SAFETY: `parent` is live and the lock is held.
+                    unsafe { mlfq::mlfq_enqueue_locked(parent, pri) };
+                }
             }
         }
     }
@@ -439,12 +447,16 @@ fn wake_if_sigsuspend(t: *mut TaskStruct, signal: u32) {
         && matches!(t_state, TaskState::Sleeping)
         && (signal & !signal_mask) != 0
     {
-        mlfq::mlfq_remove_from_sleep(t);
+        // Only queue the task if it has already parked; a still-running one is
+        // left Ready and its own `sched_park_prev` queues it.
+        let parked = mlfq::mlfq_remove_from_sleep(t);
         // SAFETY: `t` is live.
         unsafe { (*t).state = TaskState::Ready };
-        // SAFETY: `t` is live.
-        let pri = unsafe { (*t).priority };
-        // SAFETY: `t` is live and `SCHEDULER_LOCK` is held by the caller.
-        unsafe { mlfq::mlfq_enqueue_locked(t, pri) };
+        if parked {
+            // SAFETY: `t` is live.
+            let pri = unsafe { (*t).priority };
+            // SAFETY: `t` is live and `SCHEDULER_LOCK` is held by the caller.
+            unsafe { mlfq::mlfq_enqueue_locked(t, pri) };
+        }
     }
 }

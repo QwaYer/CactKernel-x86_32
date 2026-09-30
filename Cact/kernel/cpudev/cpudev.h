@@ -192,6 +192,7 @@ int cpu_has_avx2(void);
 int cpu_has_fma(void);
 int cpu_has_aes(void);
 int cpu_has_vmx(void);
+int cpu_has_monitor(void);
 int cpu_has_smep(void);
 int cpu_has_smap(void);
 int cpu_has_umip(void);
@@ -231,5 +232,10 @@ void    cpu_syscall_set_use_sysexit(uint8_t v);
 // Update IA32_SYSENTER_ESP to the current task's kernel-stack top. Called by
 // the scheduler on every context switch (mirrors tss_entry.esp0).
 void syscall_set_esp0(uint32_t esp);
+
+// Update `cpu`'s entry in the per-CPU syscall_esp0[] table that the AMD SYSCALL
+// entry path indexes. Called by the scheduler on every context switch, next to
+// syscall_set_esp0() and the per-CPU TSS esp0 update.
+void syscall_set_cpu_esp0(uint32_t cpu, uint32_t esp0);
 
 #endif

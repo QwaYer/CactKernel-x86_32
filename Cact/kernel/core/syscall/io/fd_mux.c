@@ -4,6 +4,8 @@
 #include "pipe.h"
 #include "kernel.h"   // terminal_winsize
 
+extern void sched_sleep_ticks(uint32_t ticks);
+
 int sys_pipe(struct syscall_frame *regs) {
     int *user_fds = (int *)regs->ebx;
     if (!validate_user_ptr(user_fds, sizeof(int) * 2)) return -1;
@@ -132,9 +134,13 @@ int sys_poll(struct syscall_frame *regs) {
     if (nfds <= 0) {
         if (timeout_ms == 0) return 0;
         if (timeout_ms < 0) { for (;;) schedule(); }
+        // Sleep on the timer wheel rather than busy-yielding on the tick.  A
+        // full-CPU busy-wait per sleeper turned the one global scheduler lock
+        // into a cross-CPU storm once workers ran tasks, and the storm starved
+        // the master core's timer (so wall time barely advanced and every
+        // timing feature — sleep, caret blink, key repeat — stalled).
         uint32_t ticks = (uint32_t)((timeout_ms + (1000 / 100) - 1) / (1000 / 100));
-        uint32_t deadline = timer_ticks_get() + ticks;
-        while ((int32_t)(timer_ticks_get() - deadline) < 0) schedule();
+        sched_sleep_ticks(ticks);
         return 0;
     }
     if ((uint32_t)nfds > UINT32_MAX / sizeof(struct pollfd)) return -1;

@@ -2,7 +2,10 @@
 #include "task.h"
 #include "memory.h"
 
-struct task_struct* volatile fpu_owner = 0;
+/* Each core owns its own lazy-FPU state pointer; resolves to the calling CPU's
+ * slot (sched/src/percpu.rs). */
+struct task_struct** cact_fpu_owner_slot(void);
+#define fpu_owner (*cact_fpu_owner_slot())
 
 int fpu_global_init(void) {
     uint32_t eax, ebx, ecx, edx;

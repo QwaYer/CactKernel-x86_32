@@ -1,6 +1,7 @@
 #include "klog.h"
 #include "klib.h"
 #include "ktime.h"
+#include "sync.h"
 
 /* klog.c — kernel message log ring buffer (Linux-compatible records).
  *
@@ -32,15 +33,10 @@ static uint32_t klog_pend_len = 0;
 static uint32_t klog_pend_trunc = 0;       /* chars dropped (line too long) */
 static int      klog_pend_level = KLOG_LEVEL_DEFAULT;
 
-static uint32_t klog_irq_save(void) {
-    uint32_t flags;
-    __asm__ __volatile__("pushfl\n\tpopl %0\n\tcli" : "=r"(flags) : : "memory");
-    return flags;
-}
-
-static void klog_irq_restore(uint32_t flags) {
-    __asm__ __volatile__("pushl %0\n\tpopfl" : : "r"(flags) : "memory", "cc");
-}
+/* Serialises the ring, the partial-line buffer and the escape-parser state
+ * across CPUs.  Taken for a whole klog_feed()/klog_write_user() call so two
+ * cores cannot interleave into the same record. */
+static irq_spinlock_t klog_lock;
 
 /* Append raw bytes to the ring, dropping oldest bytes on overflow.  Caller
  * holds the log lock (interrupts disabled). */
@@ -62,7 +58,7 @@ static void klog_emit(int level, uint32_t flags, const char *text, uint32_t len)
     char     rec[KLOG_REC_MAX];
     uint32_t total;
 
-    uint32_t lock = klog_irq_save();
+    /* Caller holds klog_lock. */
     uint32_t seq  = klog_next_seq;
     int hn = snprintf(rec, sizeof(rec), "%u,%u,%llu,%x;",
                       (unsigned)(level & 7), (unsigned)seq,
@@ -79,7 +75,6 @@ static void klog_emit(int level, uint32_t flags, const char *text, uint32_t len)
     klog_append(rec, total);
     klog_next_seq++;
     klog_recs++;
-    klog_irq_restore(lock);
 }
 
 /* Complete the current pending line (if any) as one log record. */
@@ -96,6 +91,8 @@ static void klog_flush_line(void) {
 void klog_feed(int level, const char *text, uint32_t len) {
     if (!text || len == 0) return;
     if (level < 0 || level > 7) level = KLOG_LEVEL_DEFAULT;
+
+    irq_spinlock_acquire(&klog_lock);
 
     for (uint32_t i = 0; i < len; i++) {
         char c = text[i];
@@ -148,10 +145,14 @@ void klog_feed(int level, const char *text, uint32_t len) {
             klog_pend_trunc++;
         }
     }
+
+    irq_spinlock_release(&klog_lock);
 }
 
 int klog_write_user(const char *text, uint32_t len) {
     if (!text || len == 0) return 0;
+
+    irq_spinlock_acquire(&klog_lock);
 
     int      level = KLOG_LEVEL_DEFAULT;
     uint32_t pos   = 0;
@@ -198,6 +199,8 @@ int klog_write_user(const char *text, uint32_t len) {
             start = i + 1;
         }
     }
+
+    irq_spinlock_release(&klog_lock);
     return (int)len;
 }
 
@@ -220,15 +223,16 @@ uint32_t klog_seq(void) {
 int klog_read(uint32_t off, uint32_t size, char *buf) {
     if (!buf || size == 0) return 0;
 
+    irq_spinlock_acquire(&klog_lock);
+
     /* Include a trailing line that has not seen '\n' yet. */
     klog_flush_line();
 
-    uint32_t flags = klog_irq_save();
     uint32_t first = klog_first;
     uint32_t next  = klog_next;
     uint32_t avail = next - first;
     if (off >= avail) {
-        klog_irq_restore(flags);
+        irq_spinlock_release(&klog_lock);
         return 0;
     }
     if (size > avail - off) size = avail - off;
@@ -243,6 +247,6 @@ int klog_read(uint32_t off, uint32_t size, char *buf) {
         copied += chunk;
         idx    += chunk;
     }
-    klog_irq_restore(flags);
+    irq_spinlock_release(&klog_lock);
     return (int)copied;
 }

@@ -43,8 +43,7 @@ pub unsafe extern "C" fn task_exec(
         return -1;
     }
 
-    // SAFETY: `current_task` is a scheduler-owned global; the null case is checked below.
-    let t = unsafe { current_task };
+    let t = current_task();
     if t.is_null() {
         return -1;
     }

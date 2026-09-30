@@ -65,6 +65,19 @@ void syscall_set_esp0(uint32_t esp) {
     wrmsr(IA32_SYSENTER_ESP, (uint64_t)esp);
 }
 
+/* Per-CPU ring-0 stack for the AMD SYSCALL fast path.  SYSCALL does not switch
+ * stacks, so `syscall_entry` (syscall_entries.asm) must load the current CPU's
+ * entry stack itself; it indexes this table by the loaded TSS selector instead
+ * of reading the single global TSS.  The scheduler updates the calling CPU's
+ * slot on every context switch, next to the TSS and SYSENTER_ESP updates. */
+#define SYSCALL_ESP0_MAX 64
+uint32_t syscall_esp0[SYSCALL_ESP0_MAX];
+
+void syscall_set_cpu_esp0(uint32_t cpu, uint32_t esp0) {
+    if (cpu < SYSCALL_ESP0_MAX)
+        syscall_esp0[cpu] = esp0;
+}
+
 uint8_t cpu_syscall_use_sysexit(void) { return g_syscall_use_sysexit; }
 void   cpu_syscall_set_use_sysexit(uint8_t v) { g_syscall_use_sysexit = v ? 1 : 0; }
 
@@ -160,6 +173,7 @@ int cpu_has_avx2(void)   { return !!(g_features_leaf7_ebx & CPU_FEATURE_AVX2); }
 int cpu_has_fma(void)    { return !!(g_features_ecx & CPU_FEATURE_FMA); }
 int cpu_has_aes(void)    { return !!(g_features_ecx & CPU_FEATURE_AES); }
 int cpu_has_vmx(void)    { return !!(g_features_ecx & CPU_FEATURE_VMX); }
+int cpu_has_monitor(void){ return !!(g_features_ecx & CPU_FEATURE_MONITOR); }
 int cpu_has_smep(void)   { return !!(g_features_leaf7_ebx & CPU_FEATURE_SMEP); }
 int cpu_has_smap(void)   { return !!(g_features_leaf7_ebx & CPU_FEATURE_SMAP); }
 int cpu_has_umip(void)   { return !!(g_features_leaf7_ecx & CPU_FEATURE_UMIP); }
@@ -326,8 +340,16 @@ int cpu_syscall_commit(void) {
     extern void sysenter_entry(void);
     extern void syscall_entry(void);
     extern uint8_t early_kernel_stack[4096];
+    extern int smp_self_cpu(void);
     uint32_t boot_esp = (uint32_t)(uintptr_t)
         (early_kernel_stack + sizeof(early_kernel_stack));
+
+    // Seed this CPU's AMD-SYSCALL entry stack (the scheduler overwrites it with
+    // the running task's kernel stack on the first context switch).
+    {
+        int me = smp_self_cpu();
+        syscall_set_cpu_esp0((uint32_t)(me < 0 ? 0 : me), boot_esp);
+    }
 
     // SYSENTER/SYSEXIT is always wired when the CPU has SEP, even on AMD, so
     // both entry paths stay functional.  The scheduler keeps

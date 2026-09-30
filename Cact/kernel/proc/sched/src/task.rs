@@ -106,9 +106,7 @@ pub unsafe fn kstack_ok(base: *mut c_void) -> bool {
 pub fn task_check_kernel_stack() {
     use core::sync::atomic::{AtomicBool, Ordering};
     static REPORTED: AtomicBool = AtomicBool::new(false);
-    // SAFETY: `current_task` is a scheduler-owned global; when non-null it is the live task
-    // running on this CPU.
-    let t = unsafe { current_task };
+    let t = current_task();
     if t.is_null() || REPORTED.load(Ordering::Relaxed) {
         return;
     }
@@ -141,8 +139,18 @@ pub use cact_sync::task_abi::{TaskShmAttach, TaskState, TaskStruct};
 
 pub use crate::ffi::VfsNode;
 
-#[no_mangle]
-pub static mut current_task: *mut TaskStruct = ptr::null_mut();
+/// The task running on the calling CPU.  Backed by [`crate::percpu`] so every
+/// core has its own running-task pointer.
+#[inline]
+pub fn current_task() -> *mut TaskStruct {
+    crate::percpu::current()
+}
+
+/// Set the calling CPU's running task.
+#[inline]
+pub fn set_current_task(t: *mut TaskStruct) {
+    crate::percpu::set_current(t);
+}
 
 #[no_mangle]
 pub static mut task_list_head: *mut TaskStruct = ptr::null_mut();
@@ -355,9 +363,9 @@ pub(crate) fn task_zero_init(t: *mut TaskStruct, p: *mut ProcMeta) -> bool {
 /// scheduler globals or `SCHEDULER_LOCK`.
 #[no_mangle]
 pub unsafe extern "C" fn task_init() {
-    // SAFETY: single-threaded boot entry: these are the scheduler's own globals, written before
-    // any other CPU or interrupt can observe them (see # Safety).
-    unsafe { current_task = ptr::null_mut() };
+    // Single-threaded boot entry: this is the scheduler's own per-CPU state, written before any
+    // other CPU or interrupt can observe it (see # Safety).
+    set_current_task(ptr::null_mut());
     // SAFETY: as above.
     unsafe { task_list_head = ptr::null_mut() };
     // SAFETY: as above.
@@ -373,16 +381,18 @@ pub unsafe extern "C" fn task_init() {
     unsafe { ffi::printk(c"\x01\x36  sched       : MLFQ, timer wheel, scheduler lock\n".as_ptr().cast()) };
 }
 
+/// Allocate and initialise a bare idle task: pid 0, ring-0, running, with no
+/// address space and no `ProcMeta`.  The BSP's fallback context and every AP's
+/// fallback context are built from this.
+///
 /// # Safety
 ///
-/// Must be called once from single-threaded boot after `task_init`, with interrupts disabled.
-#[no_mangle]
-pub unsafe extern "C" fn init_scheduler() -> i32 {
+/// Must be called during single-threaded bring-up (boot, or an AP before that
+/// AP runs any other code).
+pub unsafe fn alloc_idle_task() -> *mut TaskStruct {
     let idle = cact_mm::kmalloc(core::mem::size_of::<TaskStruct>() as u32) as *mut TaskStruct;
     if idle.is_null() {
-        // SAFETY: `printk` takes a static NUL-terminated byte string.
-        unsafe { ffi::printk(c"\x01\x33  sched       : cannot allocate idle task\n".as_ptr().cast()) };
-        return -1;
+        return ptr::null_mut();
     }
     // SAFETY: `idle` is a fresh allocation of exactly `TaskStruct`'s size; zeroing it is in
     // bounds.
@@ -398,10 +408,25 @@ pub unsafe extern "C" fn init_scheduler() -> i32 {
     idle_t.next           = idle;
     idle_t.priority       = mlfq::MLFQ_LEVEL_BACKGROUND;
     idle_t.ticks_used     = 0;
+    idle
+}
 
+/// # Safety
+///
+/// Must be called once from single-threaded boot after `task_init`, with interrupts disabled.
+#[no_mangle]
+pub unsafe extern "C" fn init_scheduler() -> i32 {
+    // SAFETY: single-threaded boot; `alloc_idle_task` only allocates and initialises a task.
+    let idle = unsafe { alloc_idle_task() };
+    if idle.is_null() {
+        // SAFETY: `printk` takes a static NUL-terminated byte string.
+        unsafe { ffi::printk(c"\x01\x33  sched       : cannot allocate idle task\n".as_ptr().cast()) };
+        return -1;
+    }
+
+    crate::percpu::set_idle_for(0, idle);
+    set_current_task(idle);
     // SAFETY: boot-time writes to the scheduler globals, before interrupts are enabled.
-    unsafe { current_task = idle };
-    // SAFETY: as above.
     unsafe { task_list_head = idle };
     // SAFETY: as above.
     unsafe { task_list_tail = idle };
