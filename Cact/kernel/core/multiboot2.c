@@ -26,6 +26,36 @@ static void copy_module_name(char* dst, const char* src, uint32_t max) {
     dst[i] = '\0';
 }
 
+// Fallback direct-color layout for a type-1 tag that omits the channel info,
+// keyed off the pixel depth.  Covers the layouts VBE/GRUB actually hand over.
+static void fb_default_color_layout(multiboot_info_t* out) {
+    switch (out->framebuffer_bpp) {
+    case 32:
+    case 24:  // XRGB8888 / BGR888
+        out->framebuffer_red_pos = 16; out->framebuffer_red_size = 8;
+        out->framebuffer_green_pos = 8; out->framebuffer_green_size = 8;
+        out->framebuffer_blue_pos = 0;  out->framebuffer_blue_size = 8;
+        break;
+    case 16:  // RGB565
+        out->framebuffer_red_pos = 11; out->framebuffer_red_size = 5;
+        out->framebuffer_green_pos = 5; out->framebuffer_green_size = 6;
+        out->framebuffer_blue_pos = 0;  out->framebuffer_blue_size = 5;
+        break;
+    case 15:  // RGB555
+        out->framebuffer_red_pos = 10; out->framebuffer_red_size = 5;
+        out->framebuffer_green_pos = 5; out->framebuffer_green_size = 5;
+        out->framebuffer_blue_pos = 0;  out->framebuffer_blue_size = 5;
+        break;
+    case 8:   // RGB332
+        out->framebuffer_red_pos = 5;  out->framebuffer_red_size = 3;
+        out->framebuffer_green_pos = 2; out->framebuffer_green_size = 3;
+        out->framebuffer_blue_pos = 0;  out->framebuffer_blue_size = 2;
+        break;
+    default:
+        break;
+    }
+}
+
 // Parse multiboot2 tag list into simplified kernel structure
 void multiboot2_parse(uint32_t mb2_info_addr,
                       multiboot_info_t*  out,
@@ -46,6 +76,12 @@ void multiboot2_parse(uint32_t mb2_info_addr,
     out->framebuffer_height= 0;
     out->framebuffer_bpp   = 0;
     out->framebuffer_type  = 0;
+    out->framebuffer_red_pos   = 0;
+    out->framebuffer_red_size  = 0;
+    out->framebuffer_green_pos = 0;
+    out->framebuffer_green_size= 0;
+    out->framebuffer_blue_pos  = 0;
+    out->framebuffer_blue_size = 0;
 
     if (mmap_out) {
         mmap_out->count = 0;
@@ -161,7 +197,7 @@ void multiboot2_parse(uint32_t mb2_info_addr,
         }
 
         case MB2_TAG_FRAMEBUFFER: {
-            if (tag->size < sizeof(struct mb2_tag_framebuffer)) break;
+            if (tag->size < MB2_FB_TAG_BASE_SIZE) break;
             struct mb2_tag_framebuffer* t =
                 (struct mb2_tag_framebuffer*)(uintptr_t)cursor;
             out->framebuffer_addr   = t->framebuffer_addr;
@@ -170,6 +206,18 @@ void multiboot2_parse(uint32_t mb2_info_addr,
             out->framebuffer_height = t->framebuffer_height;
             out->framebuffer_bpp    = t->framebuffer_bpp;
             out->framebuffer_type   = t->framebuffer_type;
+            // Direct-color tags carry the channel layout; use it verbatim,
+            // otherwise fall back to the standard layout for this depth.
+            if (t->framebuffer_type == 1 && tag->size >= MB2_FB_TAG_RGB_SIZE) {
+                out->framebuffer_red_pos    = t->red_field_position;
+                out->framebuffer_red_size   = t->red_mask_size;
+                out->framebuffer_green_pos  = t->green_field_position;
+                out->framebuffer_green_size = t->green_mask_size;
+                out->framebuffer_blue_pos   = t->blue_field_position;
+                out->framebuffer_blue_size  = t->blue_mask_size;
+            } else {
+                fb_default_color_layout(out);
+            }
             out->flags |= MB2_FLAG_FRAMEBUFFER;
             break;
         }

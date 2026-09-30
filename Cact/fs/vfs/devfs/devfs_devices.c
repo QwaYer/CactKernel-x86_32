@@ -120,7 +120,7 @@ static int _fb_ioctl(void *p, uint32_t cmd, void *arg) {
         info->yres_virtual  = fb_get_height();
         info->xoffset       = 0;
         info->yoffset       = 0;
-        info->bits_per_pixel = 32;
+        info->bits_per_pixel = fb_get_bpp();
         info->grayscale     = 0;
         return 0;
     }

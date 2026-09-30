@@ -12,7 +12,14 @@ uint32_t  fb_width       = 0;
 uint32_t  fb_height      = 0;
 uint32_t  fb_pitch       = 0;
 uint8_t   fb_bpp         = 0;
+uint8_t   fb_bytespp     = 0;
 static fb_init_result_t fb_last_status = FB_INIT_OK;
+
+/* Direct-colour channel layout, taken verbatim from the bootloader's
+ * framebuffer tag so a pixel is packed the way this mode expects. */
+static uint8_t fb_red_pos = 16, fb_red_size = 8;
+static uint8_t fb_green_pos = 8, fb_green_size = 8;
+static uint8_t fb_blue_pos = 0,  fb_blue_size = 8;
 
 /* ------------------------------------------------------------------------ *
  *  Shadow buffer (optional back buffer in WB kernel RAM)
@@ -61,12 +68,18 @@ void fb_mark_dirty_rows(uint32_t y0, uint32_t y1) {
     if (y1 - 1 > fb_dirty_y_max) fb_dirty_y_max = y1 - 1;
 }
 
-void fb_copy32(uint32_t* dst, const uint32_t* src, uint32_t n_words) {
-    __builtin_prefetch(src, 0, 3);
-    __asm__ __volatile__ ("rep movsl"
-        : "+D"(dst), "+S"(src), "+c"(n_words)
-        :
-        : "memory");
+/* Scale an 8-bit channel value into the field the hardware uses. */
+static inline uint32_t fb_pack_channel(uint32_t v8, uint32_t pos, uint32_t size) {
+    if (size == 0) return 0;
+    if (size < 8)      v8 >>= (8 - size);
+    else if (size > 8) v8 <<= (size - 8);
+    return v8 << pos;
+}
+
+uint32_t fb_pack_color(uint32_t rgb) {
+    return fb_pack_channel((rgb >> 16) & 0xFFu, fb_red_pos,   fb_red_size)
+         | fb_pack_channel((rgb >> 8)  & 0xFFu, fb_green_pos, fb_green_size)
+         | fb_pack_channel( rgb        & 0xFFu, fb_blue_pos,  fb_blue_size);
 }
 
 fb_init_result_t fb_init(multiboot_info_t* mbi) {
@@ -90,7 +103,10 @@ fb_init_result_t fb_init(multiboot_info_t* mbi) {
         return FB_INIT_BAD_TYPE;
     }
 
-    if (mbi->framebuffer_bpp != 32) {
+    /* The pixel depth is whatever the bootloader chose; only whole-byte
+     * depths up to 32 bpp are representable by the rasteriser. */
+    uint8_t bpp = mbi->framebuffer_bpp;
+    if (bpp != 8 && bpp != 15 && bpp != 16 && bpp != 24 && bpp != 32) {
         fb_width = 0;
         fb_last_status = FB_INIT_BAD_BPP;
         return FB_INIT_BAD_BPP;
@@ -102,11 +118,34 @@ fb_init_result_t fb_init(multiboot_info_t* mbi) {
         return FB_INIT_NULL_PARAM;
     }
 
+    /* 15 bpp is a 5:5:5 mode packed into 16 bits, so round up to whole bytes. */
+    uint8_t bytespp = (uint8_t)((bpp + 7u) / 8u);
+    if ((uint64_t)mbi->framebuffer_pitch < (uint64_t)mbi->framebuffer_width * bytespp) {
+        fb_width = 0;
+        fb_last_status = FB_INIT_BAD_PITCH;
+        return FB_INIT_BAD_PITCH;
+    }
+
     fb_buffer = (uint32_t*)(uintptr_t)addr;
     fb_width  = mbi->framebuffer_width;
     fb_height = mbi->framebuffer_height;
     fb_pitch  = mbi->framebuffer_pitch;
-    fb_bpp    = mbi->framebuffer_bpp;
+    fb_bpp    = bpp;
+    fb_bytespp= bytespp;
+
+    fb_red_pos    = mbi->framebuffer_red_pos;
+    fb_red_size   = mbi->framebuffer_red_size;
+    fb_green_pos  = mbi->framebuffer_green_pos;
+    fb_green_size = mbi->framebuffer_green_size;
+    fb_blue_pos   = mbi->framebuffer_blue_pos;
+    fb_blue_size  = mbi->framebuffer_blue_size;
+    /* Guard against a tag that carried no channel info at all. */
+    if (fb_red_size == 0 && fb_green_size == 0 && fb_blue_size == 0) {
+        fb_red_pos = 16; fb_red_size = 8;
+        fb_green_pos = 8; fb_green_size = 8;
+        fb_blue_pos = 0;  fb_blue_size = 8;
+    }
+
     fb_last_status = FB_INIT_OK;
     return FB_INIT_OK;
 }
@@ -118,12 +157,13 @@ fb_init_result_t fb_get_init_status(void) {
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     if (unlikely(!fb_buffer || x >= fb_width || y >= fb_height))
         return;
-
-    uint32_t wpr = fb_pitch / 4u;
-    if (unlikely(wpr == 0))
+    if (unlikely(fb_bytespp == 0))
         return;
 
-    fb_render_buf()[(size_t)y * (size_t)wpr + (size_t)x] = color;
+    uint8_t* p = (uint8_t*)fb_render_buf()
+               + (size_t)y * (size_t)fb_pitch
+               + (size_t)x * (size_t)fb_bytespp;
+    fb_store_pixel(p, fb_pack_color(color));
     fb_mark_dirty_row(y);
 }
 
@@ -134,29 +174,21 @@ void fb_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint3
         width = fb_width - x;
     if ((uint64_t)y + (uint64_t)height > (uint64_t)fb_height)
         height = fb_height - y;
-
-    uint32_t wpr = fb_pitch / 4u;
-    if (unlikely(wpr == 0 || width == 0 || height == 0))
+    if (unlikely(fb_bytespp == 0 || width == 0 || height == 0))
         return;
 
-    uint32_t* buf = fb_render_buf();
+    const uint32_t px = fb_pack_color(color);
+    uint8_t* row = (uint8_t*)fb_render_buf()
+                 + (size_t)y * (size_t)fb_pitch
+                 + (size_t)x * (size_t)fb_bytespp;
 
-    /* Full‑width rect: rows are contiguous — single REP STOSD over all
-     * scanlines instead of one per row.  This is the common case for
-     * scroll() (clear bottom band) and fb_clear(). */
-    if (likely(x == 0 && width == wpr)) {
-        uint32_t* start  = buf + (size_t)y * (size_t)wpr;
-        uint32_t  total  = height * wpr;
-        __asm__ __volatile__ ("rep stosl" : "+D"(start), "+c"(total) : "a"(color) : "memory");
-    } else {
-        uint32_t* row_ptr = buf + (size_t)y * (size_t)wpr + (size_t)x;
-        uint32_t  full_w  = width;
-        for (uint32_t row = 0; row < height; row++) {
-            uint32_t* line = row_ptr;
-            uint32_t  n    = full_w;
-            __asm__ __volatile__ ("rep stosl" : "+D"(line), "+c"(n) : "a"(color) : "memory");
-            row_ptr += wpr;
+    for (uint32_t r = 0; r < height; r++) {
+        uint8_t* p = row;
+        for (uint32_t c = 0; c < width; c++) {
+            fb_store_pixel(p, px);
+            p += fb_bytespp;
         }
+        row += fb_pitch;
     }
     fb_mark_dirty_rows(y, y + height);
 }
@@ -164,12 +196,7 @@ void fb_fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint3
 void fb_clear(uint32_t color) {
     if (unlikely(!fb_buffer || fb_width == 0 || fb_height == 0))
         return;
-    uint32_t* buf = fb_render_buf();
-    uint32_t count = (fb_pitch / 4u) * fb_height;
-    if (unlikely(count == 0)) return;
-    uint32_t* dst = buf;
-    __asm__ __volatile__ ("rep stosl" : "+D"(dst), "+c"(count) : "a"(color) : "memory");
-    fb_mark_dirty_rows(0, fb_height);
+    fb_fill_rect(0, 0, fb_width, fb_height, color);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -222,9 +249,6 @@ void fb_flush(void) {
     if (unlikely(!fb_buffer || !fb_shadow || !fb_dirty_row)) return;
     if (fb_dirty_y_min > fb_dirty_y_max)      return;
 
-    uint32_t wpr = fb_pitch / 4u;
-    if (wpr == 0) return;
-
     uint32_t y_lo = fb_dirty_y_min;
     uint32_t y_hi = fb_dirty_y_max;
     if (y_hi >= fb_height) y_hi = fb_height - 1;
@@ -238,16 +262,12 @@ void fb_flush(void) {
             y++;
         }
         uint32_t run_len = y - run_start;
-        uint32_t words   = run_len * wpr;
         /* Prefetch the shadow rows ahead so the CPU can start the
-         * WB→L1 transfer while the current MOVSD is in flight. */
-        __builtin_prefetch(fb_shadow + (size_t)(run_start + 4) * (size_t)wpr, 0, 2);
-        uint32_t* dst = fb_buffer + (size_t)run_start * (size_t)wpr;
-        uint32_t* src = fb_shadow + (size_t)run_start * (size_t)wpr;
-        __asm__ __volatile__ ("rep movsl"
-            : "+D"(dst), "+S"(src), "+c"(words)
-            :
-            : "memory");
+         * WB→L1 transfer while the current copy is in flight. */
+        __builtin_prefetch(fb_shadow + (size_t)(run_start + 4) * (size_t)fb_pitch, 0, 2);
+        uint8_t* dst = (uint8_t*)fb_buffer + (size_t)run_start * (size_t)fb_pitch;
+        uint8_t* src = (uint8_t*)fb_shadow + (size_t)run_start * (size_t)fb_pitch;
+        memcpy(dst, src, run_len * fb_pitch);
     }
     fb_dirty_y_min = fb_height;
     fb_dirty_y_max = 0;
@@ -266,6 +286,9 @@ uint32_t fb_get_height(void) {
 }
 uint32_t fb_get_pitch(void) {
     return fb_pitch;
+}
+uint8_t fb_get_bpp(void) {
+    return fb_bpp;
 }
 uint32_t* fb_get_buffer(void) {
     return fb_buffer;

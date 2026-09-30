@@ -53,33 +53,37 @@ void fb_draw_char_scaled(char c, int px, int py, uint32_t fg, uint32_t bg) {
     const uint8_t *glyph = font_glyph_bits(f, (uint32_t)gi);
     if (unlikely(!glyph)) return;
 
-    uint32_t wpr = fb_pitch / 4u;
-    if (unlikely(wpr == 0)) return;
+    uint32_t bpp = fb_bytespp;
+    if (unlikely(bpp == 0)) return;
 
     uint32_t* buf = fb_render_buf();
     if (unlikely(!buf)) return;
 
+    const uint32_t fg_px = fb_pack_color(fg);
+    const uint32_t bg_px = fb_pack_color(bg);
+
     uint32_t scanline[CONSOLE_FONT_MAX_WIDTH * FB_CONSOLE_FONT_SCALE];
 
-    uint32_t* const base_row = buf + (size_t)py * (size_t)wpr + (size_t)px;
+    uint8_t* const base_row = (uint8_t*)buf + (size_t)py * (size_t)fb_pitch
+                            + (size_t)px * (size_t)bpp;
 
     for (uint32_t row = 0; row < fh; row++) {
         const uint8_t *rb = glyph + (size_t)row * (size_t)f->bytes_per_row;
 
         for (uint32_t col = 0; col < fw; col++) {
             uint8_t  mask = (uint8_t)(0x80u >> (col & 7u));
-            uint32_t v    = (rb[col >> 3] & mask) ? fg : bg;
+            uint32_t v    = (rb[col >> 3] & mask) ? fg_px : bg_px;
             uint32_t *sp  = &scanline[col * scale];
             for (uint32_t k = 0; k < scale; k++)
                 sp[k] = v;
         }
 
         for (uint32_t s = 0; s < scale; s++) {
-            uint32_t* dst = base_row + (size_t)(row * scale + s) * (size_t)wpr;
-            uint32_t  cnt = out_w;
-            uint32_t* src = scanline;
-            __asm__ __volatile__ ("rep movsl"
-                : "+D"(dst), "+S"(src), "+c"(cnt) : : "memory");
+            uint8_t* d = base_row + (size_t)(row * scale + s) * (size_t)fb_pitch;
+            for (uint32_t c = 0; c < out_w; c++) {
+                fb_store_pixel(d, scanline[c]);
+                d += bpp;
+            }
         }
     }
 
@@ -99,16 +103,14 @@ void scroll(void) {
     if (unlikely(!buf || w == 0 || h == 0))
         return;
 
-    uint32_t wpr = fb_pitch / 4u;
-    if (unlikely(wpr == 0))
-        return;
-
     uint32_t shift = fb_char_cell_h();
     if (unlikely(shift >= h))
         return;
 
-    uint32_t words = (h - shift) * wpr;
-    fb_copy32(buf, buf + (size_t)shift * (size_t)wpr, words);
+    uint8_t* base = (uint8_t*)buf;
+    uint32_t bytes = (h - shift) * fb_pitch;
+    /* dst < src, so a forward byte copy is safe. */
+    memcpy(base, base + (size_t)shift * (size_t)fb_pitch, bytes);
 
     fb_fill_rect(0, h - shift, w, shift, COLOR_BLACK);
 
@@ -355,8 +357,9 @@ void init_framebuffer(void) {
             [FB_INIT_NO_FLAG]    = "multiboot2 framebuffer tag missing",
             [FB_INIT_HIGH_ADDR]  = "framebuffer address above 4 GB (not mappable)",
             [FB_INIT_BAD_TYPE]   = "framebuffer type != 1 (not RGB direct-color)",
-            [FB_INIT_BAD_BPP]    = "bpp != 32 (only 32-bit color supported)",
+            [FB_INIT_BAD_BPP]    = "unsupported pixel depth (need 8/15/16/24/32 bpp)",
             [FB_INIT_NULL_PARAM] = "null address or zero width/height",
+            [FB_INIT_BAD_PITCH]  = "pitch smaller than one scanline of pixels",
         };
         pr_err("  %-11s : %s\n", "framebuffer", fb_errors[status]);
         pr_crit("  %-11s : cannot continue without display\n", "framebuffer");
