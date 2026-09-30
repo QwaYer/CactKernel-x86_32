@@ -26,6 +26,9 @@ int rust_net_get_ipv4_config(uint32_t* ip_h, uint32_t* mask_h, uint32_t* gw_h, u
 int rust_net_link_is_up(void);
 /* Copy the registered NIC MAC address into out[6]; returns 0, or -1 when no NIC/NULL. */
 int rust_net_get_mac(uint8_t out[6]);
+/* Copy the registered NIC interface name into out as a NUL-terminated string
+   (at most cap bytes); returns the name length, or -1 when no NIC/NULL/cap==0. */
+int rust_net_get_ifname(char* out, uint32_t cap);
 int rust_net_dns_resolve_a(const char* name, uint32_t* out_ip_host);
 
 /*

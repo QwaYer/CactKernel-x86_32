@@ -149,6 +149,52 @@ pub unsafe extern "C" fn rust_net_get_mac(out: *mut u8) -> i32 {
     0
 }
 
+/// Copy the registered NIC's interface name into `out` as a NUL-terminated
+/// string (at most `cap` bytes).  Returns the number of bytes before the
+/// terminator, or -1 when no NIC is registered, `out` is NULL, or `cap` is 0.
+///
+/// # Safety
+///
+/// `out` may be null (the call then returns -1); if non-null it must point to
+/// at least `cap` writable bytes that stay live for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn rust_net_get_ifname(out: *mut u8, cap: u32) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -1;
+    }
+    // SAFETY: `active_nic` is a kernel-lifetime `static mut` pointer read from a
+    // syscall path; an aligned pointer load cannot tear.
+    if unsafe { active_nic.is_null() } {
+        return -1;
+    }
+    // SAFETY: the null test above proved `active_nic` points at a live
+    // `NetDriver` (it is only cleared by `unregister_netdev`, on the
+    // single-threaded teardown path), so reading its `name` field is valid.
+    let name = unsafe { (*active_nic).name };
+    if name.is_null() {
+        return -1;
+    }
+    let cap = cap as usize;
+    // SAFETY: every in-tree driver points `name` at a `'static` NUL-terminated
+    // literal, so byte `n` is in bounds while `n < cap`; `out` is the caller's
+    // `cap`-byte writable buffer (the null / zero-size checks above excluded the
+    // degenerate cases).  The loop stops at the terminator or at `cap - 1`,
+    // whichever comes first, so it never writes past `out[cap - 1]`.
+    unsafe {
+        let mut n = 0usize;
+        while n + 1 < cap {
+            let c = *name.add(n) as u8;
+            *out.add(n) = c;
+            if c == 0 {
+                return n as i32;
+            }
+            n += 1;
+        }
+        *out.add(cap - 1) = 0;
+        (cap - 1) as i32
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn net_init() {
     // SAFETY: `net_sema` is a kernel-lifetime semaphore static; `sema_init`

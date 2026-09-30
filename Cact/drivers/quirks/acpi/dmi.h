@@ -13,4 +13,15 @@
  */
 int dmi_is_hp_290g1(void);
 
+/*
+ * Raw SMBIOS identity (system vendor / product name / BIOS version) as the
+ * firmware reported it, for /proc/dmi.  Each returns a NUL-terminated string
+ * that lives for the kernel lifetime, or NULL when the firmware exposes no
+ * SMBIOS.  The first call runs the one-shot probe, so no separate init step is
+ * needed.
+ */
+const char *dmi_vendor_string(void);
+const char *dmi_product_string(void);
+const char *dmi_bios_string(void);
+
 #endif

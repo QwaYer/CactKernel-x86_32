@@ -98,6 +98,77 @@ The order that unblocks the most:
 5. Then the driver itself, **in-tree**, because it needs the
    property/framebuffer/ACPI/PAT surface the module ABI does not export.
 
+## Threads & POSIX pthreads
+
+Assessed 2026-09-30. **No threads exist.** `pthread_create()` in
+`CactLibc/src/pthread.c` is a stub returning `ENOSYS`; there is no `clone`, no
+`futex`, and no `tid`. A `task_struct` owns its own `proc_metadata_t` and page
+directory, and `task_reap` tears all of it down at process exit — so "several
+threads, one address space" is a new model, not a flag.
+
+**ABI decision:** the 15-trap syscall set stays final. Thread creation and
+futex join as ioctl ranges — thread ops on `/proc/self/ctl` (`CACT_PROCCTL_*`),
+wait/wake on a new `/dev/futex` node — exactly how the rest of the kernel
+exposes non-trap facilities.
+
+### Kernel prerequisites
+
+- **Thread identity.** Add `tid` (unique) and `tgid` (thread-group leader) to
+  `task_struct`; `pid` stays the process id and a `find_task_by_tid` joins the
+  pid lookup. `/proc` lists only group leaders under `<pid>/`.
+- **Shared address space.** `proc_metadata_t` gains a shared-mm refcount and a
+  live-thread count; threads share `proc` and `page_directory`. `task_reap` and
+  `SYS_EXIT` free `mm`/fds/cwd/`proc_metadata_t` **only when the last thread
+  exits**; a non-last thread frees just its kernel stack and `task_struct`.
+  COW / `vmm_free_address_space` must not run twice.
+- **Thread create.** `CACT_PROCCTL_THREAD_CREATE {entry, stack_top, arg,
+  tls_base, detached}` allocates a task + kernel stack, shares the mm, and arms
+  a trap frame so the first schedule `iretd`s to `entry` in ring 3 with
+  `esp = stack_top` and `eax = arg`. Returns the new `tid`.
+- **TLS.** Per-thread `%gs` base (a GDT entry per thread, or one selector with a
+  per-task base field loaded by `switch_to`) — needed for `errno` and
+  `pthread_*` keys.
+- **Futex.** `CACT_FUTEX_WAIT {uaddr, expected, timeout}` /
+  `CACT_FUTEX_WAKE {uaddr, n}`, keyed by (shared mm, uaddr), parked on the
+  scheduler `sleep_queue`; `FUTEX_WAIT` re-checks the word under the mm lock to
+  close the lost-wakeup race.
+- **Signals.** Handlers and pending signals are process-wide (already in
+  `proc_metadata_t`); per-thread masks (`pthread_sigmask`) need a mask on
+  `task_struct`. `SIGSEGV`/`SIGFPE`/`SIGILL` terminate the whole group.
+- **Entry alignment.** A thread's first ring-3 entry must satisfy the i386 SSE
+  contract (`esp ≡ 12 mod 16`), the same invariant the fixed `start.S` now
+  establishes; the trampoline lands via `iretd`, so set `stack_top` accordingly.
+
+### libc (`CactLibc`) — full POSIX set
+
+- **Threads:** `pthread_create`/`_join`/`_exit`/`_detach`/`_self`/`_equal`,
+  `pthread_attr_*` (stack size, detach state, guard size), `pthread_kill`,
+  `pthread_sigmask`.
+- **Synchronisation:** mutex (normal, error-check, recursive; `_timedlock`),
+  condition variables (`_wait`/`_timedwait`/`_signal`/`_broadcast`), read/write
+  locks (`rdlock`/`wrlock`/`trylock`/`timed*`/`unlock`), spinlocks, barriers,
+  `pthread_once`.
+- **TLS & lifecycle:** `pthread_key_create`/`_delete`/`setspecific`/`getspecific`
+  backed by real `%gs` TLS (today's globals are per-process only),
+  `pthread_cleanup_push`/`_pop` (needs an unwind-aware trampoline), and deferred
+  **cancellation** (`pthread_cancel`/`_testcancel`/`_setcancelstate`/`_setcanceltype`).
+- **Semaphores:** POSIX `sem_*` on the same futex.
+- Everything futex-backed; the stubs in `src/pthread.c` are replaced, not wrapped.
+
+### Phases
+
+1. Kernel identity + shared mm/refcount + per-thread `SYS_EXIT` semantics.
+2. `THREAD_CREATE` + TLS base + entry alignment; a ring-3 smoke test where two
+   threads share a global and exit.
+3. `/dev/futex` wait/wake; mutex/cond in libc.
+4. Full libc surface (rwlock, barriers, once, cleanup, cancel, per-thread signal
+   masks) and a multithreaded self-test in `CactUserBins`.
+
+**Acceptance:** `pthread_create` runs two threads on different CPUs, a mutex
+serialises a counter to the expected total, `join` returns the thread's value,
+and a thread `SIGSEGV`/`exit` tears down the group without leaking the address
+space.
+
 ## Storage & filesystems
 
 - **ext4** is read/write in-tree; FAT32 ships as an out-of-tree `.cctk` module.

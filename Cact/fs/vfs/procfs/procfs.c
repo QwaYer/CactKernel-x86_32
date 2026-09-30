@@ -145,6 +145,7 @@ void procfs_init(void) {
     procfs_register_file("mounts",  _mounts_read);
     procfs_register_file("modules", _modules_read);
     procfs_register_file("usb",     _usb_read);
+    procfs_register_file("dmi",     _dmi_read);
 
     uint32_t nfiles = 0;
     for (proc_file_t *f = file_list; f; f = f->next) nfiles++;

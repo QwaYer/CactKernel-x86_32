@@ -20,6 +20,7 @@
 #include "module/kmod.h"
 #include "fs_mod.h"
 #include "usb.h"
+#include "dmi.h"
 
 // Mutable host name reported by /proc/uname (default "cact").  Bounded to the
 // kernel's 65-byte utsname field.
@@ -380,6 +381,27 @@ int _uname_read(uint32_t off, uint32_t size, char *buf) {
     if (off >= len) return 0;
     if (size > len - off) size = len - off;
     memcpy(buf, (const char *)&u + off, size);
+    return (int)size;
+}
+
+// /proc/dmi — SMBIOS system identity (vendor / product / BIOS version) as
+// "key: value" lines.  Zero-length when the firmware exposes no SMBIOS, so a
+// reader simply sees an empty file.
+int _dmi_read(uint32_t off, uint32_t size, char *buf) {
+    char tmp[256];
+    int p = 0;
+    const char *vendor  = dmi_vendor_string();
+    const char *product = dmi_product_string();
+    const char *bios    = dmi_bios_string();
+
+    if (vendor)  p += snprintf(tmp + p, (int)sizeof(tmp) - p, "vendor: %s\n", vendor);
+    if (product) p += snprintf(tmp + p, (int)sizeof(tmp) - p, "product: %s\n", product);
+    if (bios)    p += snprintf(tmp + p, (int)sizeof(tmp) - p, "bios: %s\n", bios);
+
+    uint32_t len = (uint32_t)p;
+    if (off >= len) return 0;
+    if (size > len - off) size = len - off;
+    memcpy(buf, tmp + off, size);
     return (int)size;
 }
 
