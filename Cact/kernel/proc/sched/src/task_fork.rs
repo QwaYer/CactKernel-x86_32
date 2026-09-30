@@ -26,8 +26,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     // hold it (see # Safety).
     unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
 
-    // SAFETY: `current_task` is a scheduler-owned global, read under `SCHEDULER_LOCK`.
-    let parent_raw = unsafe { current_task };
+    let parent_raw = current_task();
     if parent_raw.is_null() {
         // SAFETY: the lock was acquired above.
         unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
@@ -328,8 +327,7 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
 /// Must be called from the exiting task's own context with `SCHEDULER_LOCK` free.
 #[no_mangle]
 pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
-    // SAFETY: `current_task` is a scheduler-owned global; the null case is checked just below.
-    let t = unsafe { current_task };
+    let t = current_task();
     if t.is_null() {
         return;
     }
@@ -381,8 +379,7 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32, option
     // SIGSTOP's bit index, reported as the stopping signal (WSTOPSIG).
     const SIGSTOP_INDEX: i32 = 2;
 
-    // SAFETY: `current_task` is a scheduler-owned global; the null case is checked below.
-    let cur = unsafe { current_task };
+    let cur = current_task();
     if cur.is_null() {
         return -1;
     }

@@ -6,6 +6,7 @@
 #include "serial.h"
 #include "kernel.h"
 #include "klog.h"
+#include "sync.h"
 #include <stddef.h>
 #include <stdarg.h>
 
@@ -13,6 +14,9 @@ int cursor_x = 0;
 int cursor_y = 0;
 
 uint32_t current_fb_color = COLOR_WHITE;
+
+/* Serialises console text rendering across CPUs (cursor + framebuffer state). */
+static irq_spinlock_t console_lock;
 
 uint32_t fb_char_cell_w(void) {
     const console_font_t *f = font_get_active();
@@ -174,13 +178,16 @@ static void _console_emit(const char* message, uint32_t len, uint32_t color,
                     has_val = 1;
                     i++;
                 } else if (message[i] == ';') {
-                    if (has_val) params[np++] = val;
-                    else params[np++] = 0;
+                    /* params[] is fixed at 4: a CSI with more parameters (any
+                     * program can emit one) must not index past it — that is a
+                     * kernel-stack write reachable from userspace.  Extra
+                     * parameters are dropped. */
+                    if (np < 4) params[np++] = has_val ? val : 0;
                     val = 0; has_val = 0;
                     if (to_serial) serial_putc(';');
                     i++;
                 } else {
-                    if (has_val) params[np++] = val;
+                    if (has_val && np < 4) params[np++] = val;
                     if (to_serial) serial_putc(message[i]);
 
                     if (message[i] == 'm') {
@@ -275,12 +282,19 @@ static void _console_emit(const char* message, uint32_t len, uint32_t color,
  * so repainting a terminal does not duplicate its own history. */
 void console_puts(char* message, uint32_t color) {
     uint32_t len = strlen(message);
+    /* Serialise console rendering across CPUs: the cursor position and the
+     * framebuffer text state are shared, and tty scrolling depends on the
+     * writes arriving whole. */
+    irq_spinlock_acquire(&console_lock);
     console_on_write(message, len);
     _console_emit(message, len, color, 1);
+    irq_spinlock_release(&console_lock);
 }
 
 void console_replay(const char* message, uint32_t len, uint32_t color) {
+    irq_spinlock_acquire(&console_lock);
     _console_emit(message, len, color, 0);
+    irq_spinlock_release(&console_lock);
 }
 
 /* Console line with no explicit level: render it and log it at the default

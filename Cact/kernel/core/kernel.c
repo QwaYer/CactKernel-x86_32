@@ -471,45 +471,30 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
 
     /* Watchdog: on real hardware a dead system timer silently freezes the
      * machine here (no IRQ ever wakes the idle hlt).  Wait for the first
-     * scheduler tick against the kernel wall clock; if none comes, re-arm
-     * the LAPIC timer as a last resort and only then give up. */
+     * scheduler tick against the kernel wall clock, sampling the LAPIC while
+     * it is missing, and give up loudly if it never comes. */
     {
         uint32_t wd_ticks = timer_ticks_get();
-        int wd_attempts = 0;
 
-        for (;;) {
-            /* Live telemetry: while the tick is missing, sample the LAPIC
-             * every 250 ms so the log reads as a timeline — counter moving?
-             * tick pending (irr)? delivered (isr/ticks)? — instead of two
-             * snapshots.  A healthy boot leaves the loop on the first tick,
-             * before any sample prints. */
-            uint64_t wd_usec = ktime_get_usec();
-            uint32_t wd_probe_ms = 0;
+        /* Live telemetry: sample the LAPIC every 250 ms so the log reads as a
+         * timeline — counter moving? tick pending (irr)? delivered
+         * (isr/ticks)? — instead of two snapshots.  A healthy boot leaves the
+         * loop on the first tick, before any sample prints. */
+        uint64_t wd_usec = ktime_get_usec();
+        uint32_t wd_probe_ms = 0;
 
-            while (timer_ticks_get() == wd_ticks) {
-                uint32_t waited = (uint32_t)((ktime_get_usec() - wd_usec) / 1000ull);
-                if (waited >= 2000u)
-                    break;   /* 2 s with no scheduler tick */
-                if (waited >= wd_probe_ms + 250u) {
-                    apic_probe("no-tick", waited, timer_ticks_get());
-                    wd_probe_ms = waited;
-                }
-                __asm__ __volatile__("pause");
+        while (timer_ticks_get() == wd_ticks) {
+            uint32_t waited = (uint32_t)((ktime_get_usec() - wd_usec) / 1000ull);
+            if (waited >= 2000u)
+                break;   /* 2 s with no scheduler tick */
+            if (waited >= wd_probe_ms + 250u) {
+                apic_probe("no-tick", waited, timer_ticks_get());
+                wd_probe_ms = waited;
             }
-            if (timer_ticks_get() != wd_ticks)
-                break;   /* timer alive — normal boot */
+            __asm__ __volatile__("pause");
+        }
 
-            if (wd_attempts++ < 1) {
-                printk_color_level(KLOG_LEVEL_WARN,
-                             "  timer       : WARNING — no tick for 2 s, re-arming LAPIC timer\n",
-                             COLOR_LIGHT_RED);
-                apic_dump_state("no-tick");
-                uint32_t per_ms = lapic_timer_calibrate();
-                if (per_ms)
-                    lapic_timer_start_periodic(per_ms);
-                continue;
-            }
-
+        if (timer_ticks_get() == wd_ticks) {
             printk_color_level(KLOG_LEVEL_CRIT,
                          "  timer       : FATAL — no tick for 2 s (LAPIC timer dead), "
                          "scheduler cannot start\n",
@@ -520,6 +505,9 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
     }
 
     while (1) {
+        /* Physical core offlining/onlining (the slow tier) runs here, in task
+         * context: the online sequence must not block the timer ISR. */
+        energy_core_manage();
         energy_cstate_idle(energy_master_cpu());
     }
 }

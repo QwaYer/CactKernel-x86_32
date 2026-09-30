@@ -117,10 +117,10 @@ fn kill_current(fault_addr: u32, _err: u32, _eip: u32, regs: *mut ContextFrame, 
         dump_context_frame(regs, fault_addr, SIGSEGV);
     }
 
-    // SAFETY: `current_task` is the C scheduler's global task pointer; reading it
+    // SAFETY: `cact_current_task_get` is the scheduler's per-CPU accessor; reading it
     // from the #PF handler is valid and the pointer, if non-null, stays live
     // until the handler schedules away.
-    let t = unsafe { *current_task.get() };
+    let t = unsafe { cact_current_task_get() };
     // SAFETY: `t` is non-null here and points to a live `TaskStruct`.
     if !t.is_null() && unsafe { (*t).is_kernel } == 0 {
         // SAFETY: `(*t).pid` of the live current task.
@@ -183,8 +183,8 @@ pub unsafe extern "C" fn page_fault_handler(regs: *mut ContextFrame) {
     // disabled on this CPU, and a cross-CPU lost count is only cosmetic.
     (unsafe { KStatic::get_mut(G_STATS.as_ptr()) }).total_faults += 1;
 
-    // SAFETY: `current_task` global read from the #PF handler.
-    let t = unsafe { *current_task.get() };
+    // SAFETY: `cact_current_task_get` reads the per-CPU accessor from the #PF handler.
+    let t = unsafe { cact_current_task_get() };
     // SAFETY: `t` is non-null and live; `page_directory` is a valid pointer or null.
     let pd = if !t.is_null() && !unsafe { (*t).page_directory }.is_null() {
         // SAFETY: same live `TaskStruct`; the non-null check is the enclosing `if`.

@@ -119,15 +119,19 @@ pub unsafe fn timer_wheel_add(task: *mut TaskStruct, sleep_ticks: u32) {
 ///
 /// `task` must be null or a live `TaskStruct` whose `proc` is null or a live `ProcMeta`; the
 /// caller must be running on the timer/scheduler path (the wheel is not otherwise locked).
-pub unsafe fn timer_wheel_remove(task: *mut TaskStruct) {
+pub unsafe fn timer_wheel_remove(task: *mut TaskStruct) -> bool {
     if task.is_null() {
-        return;
+        return false;
+    }
+    // SAFETY: `task` is live (see # Safety), so reading its `proc` field is in bounds.
+    let task_p = unsafe { (*task).proc };
+    if task_p.is_null() {
+        // Only tasks with a `ProcMeta` ever enter the wheel.
+        return false;
     }
     // SAFETY: `sleep_wheel_mut` points at the statically allocated `SLEEP_WHEEL`, whose intrusive
     // lists are only mutated from the timer/scheduler path (see # Safety).
     let sw = unsafe { &mut *sleep_wheel_mut() };
-    // SAFETY: `task` is live (see # Safety), so reading its `proc` field is in bounds.
-    let task_p = unsafe { (*task).proc };
     // SAFETY: `task_p` is the task's live `ProcMeta` (the wheel only ever holds such tasks).
     let sleep_until = unsafe { (*task_p).sleep_until };
     let slot_idx = (sleep_until as usize) % WHEEL_SIZE;
@@ -151,7 +155,7 @@ pub unsafe fn timer_wheel_remove(task: *mut TaskStruct) {
             slot.count -= 1;
             // SAFETY: `task_p` is live.
             unsafe { (*task_p).wait_next = ptr::null_mut() };
-            return;
+            return true;
         }
         prev = cur;
         // SAFETY: `cur` was reached by walking this slot's chain, so it is a live task.
@@ -163,21 +167,51 @@ pub unsafe fn timer_wheel_remove(task: *mut TaskStruct) {
             unsafe { (*cur_p).wait_next }
         };
     }
+    false
+}
+
+/// Enter `task` into the wheel slot for its `proc.sleep_until`.  Called by the
+/// scheduler *after* the task has parked, so that "in the wheel" means "parked".
+///
+/// # Safety
+///
+/// `task` must be null or a live `TaskStruct` with a live `ProcMeta` and a
+/// non-zero `sleep_until`; the caller must hold `SCHEDULER_LOCK`.
+pub unsafe fn timer_wheel_insert(task: *mut TaskStruct) {
+    if task.is_null() {
+        return;
+    }
+    // SAFETY: `task` is live (see # Safety), so reading its `proc` field is in bounds.
+    let p = unsafe { (*task).proc };
+    if p.is_null() {
+        return;
+    }
+    // SAFETY: `sleep_wheel_mut` is the statically allocated `SLEEP_WHEEL`, mutated here under
+    // `SCHEDULER_LOCK` from the scheduler park path.
+    let sw = unsafe { &mut *sleep_wheel_mut() };
+    // SAFETY: `p` is the task's live `ProcMeta`.
+    let sleep_until = unsafe { (*p).sleep_until };
+    let slot_idx = (sleep_until as usize) % WHEEL_SIZE;
+    sw.slots[slot_idx].push(task);
 }
 
 pub fn timer_wheel_tick() {
     // SAFETY: `sleep_wheel_mut` points at the statically allocated `SLEEP_WHEEL`; the timer path
     // that calls this is running alone for this wheel, and all list mutation below happens under
     // `SCHEDULER_LOCK`.
+    // Take the lock BEFORE touching the wheel: `timer_wheel_insert` runs from
+    // `sched_park_prev` on any CPU, so an unlocked drain could drop a sleeper
+    // another core is inserting into the same slot.
+    //
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the timer path holds no lock
+    // when it calls in.
+    unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
+
     let sw = unsafe { &mut *sleep_wheel_mut() };
     sw.current_tick = sw.current_tick.wrapping_add(1);
     let now = sw.current_tick;
     let slot_idx = (now as usize) % WHEEL_SIZE;
     let mut cur = sw.slots[slot_idx].drain();
-
-    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the timer path holds no lock
-    // when it calls in.
-    unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
 
     while !cur.is_null() {
         // SAFETY: `cur` was placed on this slot by this module, so it is a live task.
@@ -223,8 +257,7 @@ pub unsafe extern "C" fn sched_sleep_ticks(ticks: u32) {
     // (see # Safety).
     unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
 
-    // SAFETY: `current_task` is a scheduler-owned global, read under `SCHEDULER_LOCK`.
-    let cur = unsafe { crate::task::current_task };
+    let cur = crate::task::current_task();
     // SAFETY: `cur` is the live current task (non-null checked just below).
     let cur_p = if cur.is_null() { ptr::null_mut() } else { unsafe { (*cur).proc } };
     if cur.is_null() || cur_p.is_null() {
@@ -241,8 +274,9 @@ pub unsafe extern "C" fn sched_sleep_ticks(ticks: u32) {
     unsafe { (*cur).state = TaskState::Sleeping };
     // SAFETY: `cur_p` is the live current task's `ProcMeta` (non-null checked above).
     unsafe { (*cur_p).sleep_until = sleep_until };
-    let future_slot = (sleep_until as usize) % WHEEL_SIZE;
-    sw.slots[future_slot].push(cur);
+    // The wheel insertion itself is done by `sched_park_prev` once this task has
+    // actually parked, so "in the wheel" means "parked" and a concurrent waker
+    // never queues a task another core is still running.
 
     // SAFETY: the lock was acquired above.
     unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };

@@ -15,6 +15,8 @@ use core::ptr;
 use crate::energy;
 use crate::cstate;
 use crate::ffi;
+use crate::percpu;
+use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 
 const MAX_CPUS: usize = 64;
 const TSS_SLOT: usize = 5;
@@ -22,6 +24,17 @@ const TSS_SLOT: usize = 5;
 // Copy destination + SIPI vector of the trampoline.
 const TRAMP_ADDR: u32 = 0x8000;
 const TRAMP_VECTOR: u32 = TRAMP_ADDR >> 12;
+
+/// Enables worker task execution: when true, each AP arms its LAPIC timer and
+/// calls `schedule()`, so tasks may run on any core.  Set false to fall back to
+/// BSP-only scheduling (the system then behaves like a uniprocessor build).
+///
+/// The scheduler's block/wake protocol, the kernel log and the console were
+/// made SMP-safe before this could be turned back on: a waker only queues a
+/// task that has actually parked (otherwise the task's own park step queues
+/// it), `klog_emit` and the console take real spinlocks.  Flip to false only to
+/// bisect an SMP problem.
+const WORKERS_RUN_TASKS: bool = true;
 // Info block offsets inside the trampoline page (INFO_BASE in trampoline.asm).
 // The vector lands an AP on offset 0, which trampoline.asm must keep as entry
 // code, so the BSP-patched block sits at a fixed offset near the top instead.
@@ -36,7 +49,11 @@ const INFO_CPU: usize = 0x0F0C;
 const INFO_ACK: usize = 0x0F10;
 const AP_STAGE_TRAMP_READ: u32 = 1;
 
-const IDLE_STACK_SIZE: usize = 8192;
+/// Bring-up / idle stack per worker.  A worker runs its whole idle life on this
+/// stack (the trampoline loads it as ESP and the idle task keeps it), so the
+/// tick, the governor and any console output they do nest here: 16 KB leaves
+/// real headroom for that.
+const IDLE_STACK_SIZE: usize = 16384;
 
 // INIT-SIPI-SIPI timing: 10 ms after INIT, 1 ms between the two SIPIs.
 const INIT_SIPI_DELAY_MS: u32 = 10;
@@ -212,8 +229,12 @@ fn stack_top(cpu: usize) -> u32 {
     // SAFETY: `p` points at a `CPU_TABLE` entry for a bounds-checked `cpu`, so `idle_stack` is a
     // live in-bounds array and taking its address is valid.
     let base = unsafe { (&raw mut (*p).idle_stack) as usize };
-    let aligned = (base + 15) & !15usize;
-    (aligned + IDLE_STACK_SIZE) as u32
+    // Round *down* so the whole stack stays inside `idle_stack`.  Rounding the
+    // top *up* used to start the stack a few bytes past the array, on top of the
+    // fields that follow it (`lapic_id`, `online`) — the fix for that is here,
+    // because it made every worker's recorded LAPIC id garbage and the re-online
+    // path then INIT'd APIC id 0, the BSP, which resets the machine.
+    ((base + IDLE_STACK_SIZE) & !15usize) as u32
 }
 
 fn write_volatile<T: Copy>(addr: *mut T, val: T) {
@@ -233,6 +254,24 @@ fn set_gdt(entry: &mut GdtEntry, base: u32, limit: u32, access: u8, gran: u8) {
     entry.limit_low = (limit & 0xFFFF) as u16;
     entry.granularity = (((limit >> 16) & 0x0F) as u8) | (gran & 0xF0);
     entry.access = access;
+}
+
+/// (Re)write `cpu`'s TSS descriptor in its per-CPU GDT.
+///
+/// `ltr` marks the descriptor *busy* (type 0xB) and the processor refuses to
+/// load a busy TSS with #GP.  The bit is never cleared, so a core that is
+/// brought up a second time (the physical re-online path) must have its
+/// descriptor rebuilt first — otherwise `smp_ap_entry`'s `ltr` faults before the
+/// AP has an IDT, which becomes a triple fault and resets the machine.
+fn install_tss_descriptor(p: &mut SmpCpu, cpu: usize) {
+    let tss_base = (&raw mut p.tss) as u32;
+    set_gdt(
+        &mut p.gdt[TSS_SLOT + cpu],
+        tss_base,
+        core::mem::size_of::<Tss>() as u32 - 1,
+        0xE9,
+        0x00,
+    );
 }
 
 fn build_cpu_env(cpu: usize, lapic_id: u32) {
@@ -264,14 +303,7 @@ fn build_cpu_env(cpu: usize, lapic_id: u32) {
     set_gdt(&mut p.gdt[4], 0, 0xFFFF_FFFF, 0xF2, 0xCF);
 
     // Per-CPU TSS at slot TSS_SLOT + cpu (str() identifies the CPU).
-    let tss_base = (&raw mut p.tss) as u32;
-    set_gdt(
-        &mut p.gdt[TSS_SLOT + cpu],
-        tss_base,
-        core::mem::size_of::<Tss>() as u32 - 1,
-        0xE9,
-        0x00,
-    );
+    install_tss_descriptor(p, cpu);
 
     p.tss.ss0 = 0x10;
     p.tss.esp0 = stack_top(cpu);
@@ -328,8 +360,27 @@ pub extern "C" fn smp_ap_entry() -> ! {
     // SAFETY: the shared kernel IDT is already built and loaded on the BSP; reloading it makes
     // this AP use it too.
     unsafe { ffi::idt_reload() };
+
+    // Per-CPU CPU setup the BSP does once at boot.  These touch *per-core*
+    // registers/MSRs, so every core must do them itself; skipping them is what
+    // made `-smp 4` fault with #UD (SIGILL) the moment ring-3 code ran an SSE
+    // instruction (CR4.OSFXSR was set only on the BSP).
+    // SAFETY: each call programs only the calling CPU's own registers/MSRs.
+    let _ = unsafe { ffi::fpu_global_init() };
+    // SAFETY: as above, for the calling CPU's IA32_PAT MSR.
+    unsafe { ffi::pat_init() };
+    // SAFETY: as above, for the calling CPU's fast-syscall MSRs.
+    let _ = unsafe { ffi::cpu_syscall_commit() };
+
     // SAFETY: brings this AP online in the APIC layer; its LAPIC is mapped and enabled.
     unsafe { ffi::apic_ap_online() };
+
+    // Adopt this CPU's idle task as its running context.  `this_cpu()` resolves
+    // correctly now that this AP's per-CPU TSS is loaded.
+    percpu::set_current(percpu::idle());
+    // A fresh bring-up (including a re-online after a physical offline) clears
+    // any leftover park request/flag for this core.
+    percpu::clear_park_state(cpu as usize);
 
     // Online in the energy governor and idle from the start.
     // SAFETY: reads this CPU's own LAPIC id; the LAPIC is mapped and enabled.
@@ -340,7 +391,31 @@ pub extern "C" fn smp_ap_entry() -> ! {
 
     // SAFETY: enables interrupts on this AP now that its GDT/TSS/IDT are installed.
     unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
+
+    if WORKERS_RUN_TASKS {
+        // Arm this core's own LAPIC timer at the BSP-calibrated rate so the
+        // scheduler tick and local preemption work here too.  (The BSP arms itself
+        // in apic_init(), which runs before bring-up, so the rate is ready.)
+        // SAFETY: `lapic_timer_ticks_per_ms` is a value-only getter; the LAPIC is
+        // mapped and enabled on this CPU (apic_ap_online above).
+        let per_ms = unsafe { ffi::lapic_timer_ticks_per_ms() };
+        if per_ms != 0 {
+            // SAFETY: `per_ms` is the calibrated rate and this programs the calling
+            // CPU's own LAPIC timer.
+            unsafe { ffi::lapic_timer_start_periodic(per_ms) };
+        }
+    }
+
+    // Worker loop.  With WORKERS_RUN_TASKS the core runs whatever the governor
+    // has made runnable and otherwise halts in its target C-state until the next
+    // tick or a wake IPI; without it, the core just idles (no timer, no
+    // scheduling) and the system runs on the BSP alone.
     loop {
+        if WORKERS_RUN_TASKS {
+            // SAFETY: `schedule` is the scheduler switch routine; this CPU's
+            // GDT/TSS/IDT and per-CPU scheduler state are installed.
+            unsafe { crate::mlfq::schedule() };
+        }
         let _ = cstate::energy_cstate_idle(cpu as u32);
     }
 }
@@ -392,6 +467,15 @@ pub extern "C" fn smp_init() -> i32 {
     // Build per-CPU environments from the energy core map (single-threaded).
     for cpu in 0..present {
         build_cpu_env(cpu, energy::energy_core_lapic_id(cpu as u32));
+        if cpu != 0 {
+            // A fallback context for this worker, allocated on the BSP while
+            // bring-up is still single-threaded.  The AP adopts it as its
+            // running task in `smp_ap_entry`.
+            // SAFETY: BSP bring-up is single-threaded here; `alloc_idle_task` only allocates
+            // and initialises a task.
+            let idle = unsafe { crate::task::alloc_idle_task() };
+            percpu::set_idle_for(cpu, idle);
+        }
     }
 
     if stage_trampoline() != 0 {
@@ -468,6 +552,176 @@ pub extern "C" fn smp_init() -> i32 {
         SMP_READY = true;
     }
     0
+}
+
+/// True when `lapic` is not a usable AP destination: the invalid sentinel, or
+/// this CPU's own LAPIC id.  `smp_cpu_offline` and `smp_cpu_online_sipi` always
+/// run on the BSP, and an INIT delivered to the BSP resets the machine, so a
+/// destination equal to the local LAPIC id must be refused.  Read the id from the
+/// APIC itself: the core map's copy is only as trustworthy as the map.
+fn lapic_is_bsp_or_invalid(lapic: u32) -> bool {
+    if lapic == 0xFFFF_FFFF {
+        return true;
+    }
+    // SAFETY: `apic_lapic_id` reads the calling CPU's own LAPIC id register only.
+    lapic == unsafe { ffi::apic_lapic_id() }
+}
+
+/// Physically take worker `cpu` offline.
+///
+/// It is NOT safe to INIT a core that might be holding a global lock: its idle
+/// path takes the energy lock and its tick the scheduler/monitor locks, and a
+/// core reset mid-lock strands that lock forever, deadlocking every other core.
+/// So we ask the core to park *itself* at a lock-free point
+/// (`percpu::park_request` -> `parked`, observed in `energy_cstate_idle`), wait
+/// for it to report parked, and only then send INIT.  Only an idle core with an
+/// empty runqueue is asked, and the check runs under `SCHEDULER_LOCK`.
+pub fn smp_cpu_offline(cpu: u32) -> i32 {
+    if cpu == 0 || (cpu as usize) >= MAX_CPUS {
+        return -1;
+    }
+    let lapic = energy::energy_core_lapic_id(cpu);
+    if lapic_is_bsp_or_invalid(lapic) {
+        return -1;
+    }
+    let idx = cpu as usize;
+
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; this runs
+    // from task context (the master's idle loop), which does not hold it.
+    unsafe { irq_spinlock_acquire(&raw mut crate::task::SCHEDULER_LOCK) };
+    let idle_task = crate::percpu::cpu_idle(idx);
+    let safe = !idle_task.is_null()
+        && crate::percpu::cpu_current(idx) == idle_task
+        && crate::mlfq::mlfq_runnable_count() == 0;
+    if safe {
+        crate::percpu::set_park_request(idx);
+    }
+    // SAFETY: the lock was acquired above.
+    unsafe { irq_spinlock_release(&raw mut crate::task::SCHEDULER_LOCK) };
+    if !safe {
+        return -1;
+    }
+
+    // Wait for the core to reach its parking point (it wakes on its next tick).
+    let mut waits = 0;
+    while crate::percpu::cpu_parked(idx) == 0 && waits < 20 {
+        delay_ms(5);
+        waits += 1;
+    }
+    if crate::percpu::cpu_parked(idx) == 0 {
+        // Not parked yet.  If the core never claimed the request it went on to
+        // run a task -> cancel and leave it alone.  If it did claim the request
+        // it is about to park (and holds no lock), so the INIT below is safe.
+        if crate::percpu::cancel_park_request(idx) {
+            return -1;
+        }
+    }
+
+    // The core is parked at a lock-free point, so INIT cannot strand a lock.
+    // SAFETY: see above; the C helper does the ICR write itself.
+    unsafe { ffi::apic_send_init_ipi(lapic) };
+    // The info block is now free for a later wake: clearing the ACK here is what
+    // lets `smp_cpu_online_sipi` tell "fresh core" from "previous wake died".
+    write_volatile((TRAMP_ADDR as usize + INFO_ACK) as *mut u32, 0);
+    crate::percpu::clear_park_state(idx);
+
+    let p = cpu_ptr(idx);
+    // SAFETY: `cpu` is bounds-checked above, so `p` addresses a live `CPU_TABLE`
+    // entry and this clears that core's online flag.
+    unsafe { write_volatile(&raw mut (*p).online, 0) };
+    energy::energy_core_offline(cpu);
+    0
+}
+
+/// Bring an offlined worker `cpu` back up by re-running the boot trampoline
+/// sequence (INIT-SIPI-SIPI), reusing the info block still staged at
+/// `TRAMP_ADDR`.  Returns 0 once the core reports online again.
+pub fn smp_cpu_online_sipi(cpu: u32) -> i32 {
+    if cpu == 0 || (cpu as usize) >= MAX_CPUS {
+        return -1;
+    }
+    let p = cpu_ptr(cpu as usize);
+    // SAFETY: `cpu` is bounds-checked above, so `p` addresses a live `CPU_TABLE`
+    // entry and reading its LAPIC id is in bounds.
+    let lapic = unsafe { (*p).lapic_id };
+    // As in `smp_cpu_offline`: never INIT/SIPI the BSP or an invalid id — an
+    // INIT to the BSP resets the machine.
+    if lapic_is_bsp_or_invalid(lapic) {
+        return -1;
+    }
+
+    // A previous wake that got as far as consuming the info block (ACK set) and
+    // then failed leaves a core that may still be executing out of that page.
+    // Re-stamping it could feed the core a mixed stack/cpu pair, so refuse and
+    // leave the core offline: `smp_cpu_offline` clears ACK when it parks a core,
+    // so a set ACK here can only mean a failed wake.
+    if read_info(INFO_ACK) != 0 {
+        return -1;
+    }
+
+    // The trampoline page was reserved at boot, so the blob there is still
+    // intact — only the info block needs refreshing for this core.  (Do NOT
+    // re-copy the blob here: 0x8000 is reserved and holds our own data.)
+    write_volatile((TRAMP_ADDR as usize + INFO_ACK) as *mut u32, 0);
+    write_volatile((TRAMP_ADDR as usize + INFO_STACK) as *mut u32, stack_top(cpu as usize));
+    write_volatile((TRAMP_ADDR as usize + INFO_CPU) as *mut u32, cpu);
+    // `ltr` set this core's TSS descriptor busy during the first bring-up and the
+    // processor refuses to load a busy TSS, so rewrite it before `smp_ap_entry`
+    // runs `ltr` again.
+    // SAFETY: `cpu` is bounds-checked at the top of this function, so `p` addresses a live
+    // `CPU_TABLE` entry, exclusively owned by the BSP until the AP starts.
+    unsafe { install_tss_descriptor(&mut *p, cpu as usize) };
+
+    // SAFETY: the LAPIC id and SIPI vector are the same values the boot-time
+    // bring-up used for this core; the helpers do the ICR writes.
+    unsafe { ffi::apic_send_init_ipi(lapic) };
+    delay_ms(INIT_SIPI_DELAY_MS);
+    // SAFETY: as above.
+    unsafe { ffi::apic_send_sipi(lapic, TRAMP_VECTOR) };
+    delay_ms(SIPI_GAP_MS);
+    // SAFETY: as above.
+    unsafe { ffi::apic_send_sipi(lapic, TRAMP_VECTOR) };
+
+    // Wait for the core to consume the block, then to finish bring-up.
+    let mut ack_waits = 0;
+    while read_info(INFO_ACK) != AP_STAGE_TRAMP_READ && ack_waits < 200 {
+        delay_ms(10);
+        ack_waits += 1;
+    }
+    if read_info(INFO_ACK) != AP_STAGE_TRAMP_READ {
+        // The core never consumed the block, so it is not executing out of the
+        // shared page and a retry is safe.
+        return -1;
+    }
+
+    let mut online_waits = 0;
+    while smp_cpu_online(cpu) == 0 && online_waits < 500 {
+        delay_ms(10);
+        online_waits += 1;
+    }
+    // Whether it came back or not, the core's state is visible in
+    // `/proc/cpuinfo` (online/cstate); a core that consumed the block and then
+    // failed is left offline for good, because the ACK it leaves makes further
+    // attempts refuse.
+    if smp_cpu_online(cpu) == 0 {
+        -1
+    } else {
+        0
+    }
+}
+
+/// Point `cpu`'s TSS ring-0 stack pointer at `esp0`.  The BSP's TSS is the C
+/// `tss_entry` (owned by the scheduler); each AP's TSS lives in `CPU_TABLE`.
+/// Called by the scheduler per context switch so ring3→ring0 transitions
+/// (interrupts, faults) land on the running task's kernel stack on that core.
+pub fn set_tss_esp0(cpu: usize, esp0: u32) {
+    if cpu == 0 || cpu >= MAX_CPUS {
+        return;
+    }
+    let p = cpu_ptr(cpu);
+    // SAFETY: `cpu` is bounds-checked against `MAX_CPUS` above, so `p` addresses a live
+    // `CPU_TABLE` entry and the `tss.esp0` store is in bounds.
+    unsafe { (*p).tss.esp0 = esp0 };
 }
 
 /// Current CPU index derived from the loaded TSS selector

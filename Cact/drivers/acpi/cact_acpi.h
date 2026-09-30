@@ -49,6 +49,10 @@ int  acpi_init(void);
 int  acpi_available(void);
 void acpi_osc_pcie_init(void);
 
+/* Read the processor _CST package and publish the C-states to the scheduler's
+ * energy model (cstates.c).  0 when a processor was configured, -1 otherwise. */
+int  acpi_cstates_probe(void);
+
 /* System power transitions (power.c).  The transition helpers never return;
  * acpi_suspend() returns 0 after a successful resume and -state if the
  * platform refused to enter the requested sleep state. */

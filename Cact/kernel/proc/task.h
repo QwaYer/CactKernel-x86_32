@@ -244,7 +244,11 @@ struct task_struct* create_task_with_entry(void*                entry,
 uint32_t* vmm_create_address_space();
 void vmm_free_address_space(uint32_t* pd);
 
-extern struct task_struct* volatile current_task;
+/* Each core keeps its own running-task pointer; this resolves to the calling
+ * CPU's slot (sched/src/percpu.rs). */
+struct task_struct** cact_current_task_slot(void);
+#define current_task (*cact_current_task_slot())
+
 extern struct task_struct* volatile task_list_head;
 extern uint32_t next_pid;
 extern irq_spinlock_t scheduler_lock;

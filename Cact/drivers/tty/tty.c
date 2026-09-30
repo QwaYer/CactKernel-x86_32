@@ -6,6 +6,8 @@
 #include "validate.h"
 #include "ioctl_abi.h"
 
+extern void sched_sleep_ticks(uint32_t ticks);
+
 #ifndef EINTR
 #define EINTR 4
 #endif
@@ -139,8 +141,10 @@ int tty_read(int idx, uint32_t off, uint32_t size, char *buf) {
     uint32_t k = 0;
     while (k < size) {
         // Input belongs to the active VT: a reader on a background terminal
-        // waits until its terminal is switched to.
-        if (i != tty_cur) { schedule(); continue; }
+        // waits until its terminal is switched to.  Sleep a tick rather than
+        // busy-yielding: a spinning reader hammered the one global scheduler
+        // lock and starved the master core's timer.
+        if (i != tty_cur) { sched_sleep_ticks(1); continue; }
         if (in_rd[i] == in_wr[i]) {
             // A signal with a user handler has to reach the process, and the
             // scheduler-side delivery path cannot run while we sit in here, so
@@ -149,7 +153,7 @@ int tty_read(int idx, uint32_t off, uint32_t size, char *buf) {
             // reported to the app, not delivered, and must not abort a read.
             if (task_signal_pending_current() & ~(SIGCHLD | SIGWINCH))
                 return -EINTR;
-            schedule();
+            sched_sleep_ticks(1);
             continue;
         }
 

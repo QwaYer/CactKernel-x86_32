@@ -14,7 +14,8 @@ unsafe extern "C" {
     fn schedule();
     fn sched_mlfq_wake_task_locked(task: *mut TaskStruct);
     fn printk(s: *const u8);
-    static mut current_task: *mut TaskStruct;
+    /// Per-CPU `current_task` accessor supplied by the `sched` crate.
+    fn cact_current_task_get() -> *mut TaskStruct;
     #[link_name = "scheduler_lock"]
     static mut SCHEDULER_LOCK: irq_spinlock_t;
 }
@@ -46,10 +47,9 @@ pub(crate) fn kprint_str(p: *const u8) {
 
 #[inline]
 pub(crate) fn current_task_ptr() -> *mut TaskStruct {
-    // SAFETY: `current_task` is a `static mut` owned by the scheduler; reading
-    // its pointer value is atomic on x86 and does not form a reference, so it
-    // cannot alias anything.
-    unsafe { current_task }
+    // SAFETY: `cact_current_task_get` is the scheduler's per-CPU accessor; it takes no
+    // arguments and returns this CPU's live running-task pointer (possibly null).
+    unsafe { cact_current_task_get() }
 }
 
 /// Returns `&'static mut` to the global scheduler IRQ spinlock.

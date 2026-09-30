@@ -54,6 +54,18 @@ uint32_t energy_cstate_cache_harm_energy(uint32_t state);
 int energy_cstate_enter(uint32_t cpu, uint32_t state);
 int energy_cstate_idle(uint32_t cpu);
 
+/* Physical core offlining/onlining (the slow tier).  Must run from task
+ * context (the master's idle loop): the online sequence (INIT-SIPI-SIPI +
+ * waits) must not block the timer ISR.
+ *
+ * On by default.  The re-online path re-runs `smp_ap_entry` through the boot
+ * trampoline, so it depends on per-CPU state a first bring-up does not need
+ * (the TSS descriptor's busy bit) — see the notes in sched/src/smp.rs and
+ * sched/src/decision.rs for what that cost the last time it broke.  Kill
+ * switch: energy_core_offline_enable(0). */
+void energy_core_manage(void);
+void energy_core_offline_enable(int on);
+
 int energy_ipi_init(void);
 int energy_ipi_halt_worker(uint32_t cpu);
 int energy_ipi_wake_worker(uint32_t cpu);

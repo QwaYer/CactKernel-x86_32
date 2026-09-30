@@ -207,7 +207,9 @@ void                 schedule      (void);
 void                 list_tasks    (void);
 struct task_struct*  create_task   (void (*entry_point)(void));
 extern void          switch_to     (uint32_t* old_esp, uint32_t new_esp);
-extern struct task_struct* volatile current_task;
+/* Per-CPU running-task pointer (see Cact/kernel/proc/task.h). */
+struct task_struct** cact_current_task_slot(void);
+#define current_task (*cact_current_task_slot())
 
 int  fpu_global_init(void);
 void fpu_cleanup_task(struct task_struct* task);

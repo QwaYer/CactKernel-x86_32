@@ -8,11 +8,12 @@
 //! window is 100 samples.  When a sub-10 ms master timer appears, only the
 //! window constant needs to change.
 //!
-//! On this UP port all samples describe the single online core (cpu0 = master)
-//! and are taken from the global MLFQ runqueue.  Per-core accounting for
-//! worker cores will fill the same slots once per-core runqueues exist.
+//! Every core samples *itself* each tick (`sample_tick`), so worker loads are
+//! real and drive the governor's scaling.  The runqueue itself is still the
+//! single global MLFQ, so a core's "queue_length" is the global runnable count.
 
 use core::cell::SyncUnsafeCell;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::energy::MAX_CORES;
 use crate::mlfq;
@@ -144,27 +145,33 @@ fn update_trend(core: &mut CoreLoad) {
 // Sampling (invoked from the scheduler tick on the master core)
 // ---------------------------------------------------------------------------
 
-/// Sample the master core. Runs on every scheduler tick with the scheduler
-/// lock held and IRQs off.
-pub(crate) fn sample_tick() {
-    // SAFETY: `sample_tick` is only reached from `on_timer_tick`, which has already returned
-    // early when `current_task` is null, so it points at the live task currently running on
-    // this CPU.
-    let cur = unsafe { current_task };
+/// Sample the *calling* core.  Runs on every scheduler tick on every core with
+/// the scheduler lock held and IRQs off, so workers keep their own load fresh
+/// (the governor scales cores from per-core load, not just the master's).
+/// Returns the calling core's smoothed load (per-mille).
+pub(crate) fn sample_tick() -> u32 {
+    // `on_timer_tick` returns early when the current task is null, so this points at the live
+    // task currently running on this CPU.
+    let cur = current_task();
     // SAFETY: `cur` is that live task pointer, so reading its `pid` field is in bounds.
     let pid = unsafe { (*cur).pid };
     let busy = pid != 0;
     let queue_len = mlfq::mlfq_runnable_count();
     let instant = if busy { PERMILLE } else { 0 };
+    let cpu = crate::percpu::this_cpu() as u32;
+    let idx = match core_index(cpu) {
+        Some(i) => i,
+        None => return 0,
+    };
 
     lock();
     let st = state();
     if !st.initialized {
         unlock();
-        return;
+        return 0;
     }
 
-    let core = &mut st.cores[0]; // master slot (cpu0)
+    let core = &mut st.cores[idx];
     core.queue_length = queue_len;
     update_load_avg(core, instant);
     update_trend(core);
@@ -182,7 +189,42 @@ pub(crate) fn sample_tick() {
         core.energy_budget = DEFAULT_ENERGY_BUDGET;
     }
 
+    let load = core.load_avg;
     unlock();
+    load
+}
+
+// ---------------------------------------------------------------------------
+// Worker "request help" signal
+// ---------------------------------------------------------------------------
+//
+// A saturated worker sets its flag when it still sees queued work; the master's
+// decision pass consumes the flags and wakes a peer.  This is the reverse of
+// the master's own scan: the overloaded core asks for help instead of waiting
+// to be noticed.
+
+static HELP_REQUEST: [AtomicBool; MAX_CORES] = [const { AtomicBool::new(false) }; MAX_CORES];
+
+/// Raise `cpu`'s help request (called from that core's own tick).
+pub(crate) fn request_help(cpu: u32) {
+    if let Some(i) = core_index(cpu) {
+        HELP_REQUEST[i].store(true, Ordering::Relaxed);
+    }
+}
+
+/// Take and clear `cpu`'s help request.  1 when one was pending.
+#[no_mangle]
+pub extern "C" fn energy_monitor_take_help(cpu: u32) -> i32 {
+    match core_index(cpu) {
+        Some(i) => {
+            if HELP_REQUEST[i].swap(false, Ordering::Relaxed) {
+                1
+            } else {
+                0
+            }
+        }
+        None => 0,
+    }
 }
 
 // ---------------------------------------------------------------------------

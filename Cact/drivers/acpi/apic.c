@@ -710,6 +710,17 @@ static void apic_icr_send(uint32_t dest_lapic, uint32_t icrlo)
     if (!apic_lapic_ready())
         return;
 
+    /* INIT/SIPI may only target a *worker*: one delivered to this CPU (the BSP,
+     * which is the only sender here) resets the machine, and an all-ones id is
+     * the invalid sentinel.  Both mean the core map is wrong — refuse and say so
+     * instead of taking the system down.  Compare against the reading of this
+     * CPU's own LAPIC id, not against 0: the BSP's id need not be 0. */
+    if (dest_lapic == 0xFFFFFFFFu || dest_lapic == apic_lapic_id()) {
+        pr_warn("  %-11s : refusing IPI icrlo=0x%x to APIC id %u (this CPU)\n",
+                "apic", (unsigned)icrlo, (unsigned)dest_lapic);
+        return;
+    }
+
     for (int i = 0; i < 100000 && apic_icr_busy(); i++)
         __asm__ __volatile__("pause");
 

@@ -347,7 +347,7 @@ pub struct Mb2MmapTable {
 
 // SAFETY: Each function and static in this block is backed by a C definition
 // in the kernel.  All pointer parameters must be non-null and correctly
-// aligned.  `current_task`, `task_list_head`, and `scheduler_lock` are
+// aligned.  `task_list_head` and `scheduler_lock` are
 // mutated under the scheduler spinlock — callers must hold that lock or be
 // in a single-threaded context (boot / IRQ-off) before accessing them.
 unsafe extern "C" {
@@ -381,7 +381,8 @@ unsafe extern "C" {
         obj_off_out: *mut u32,
     ) -> i32;
 
-    pub static current_task: SyncMut<*mut TaskStruct>;
+    /// Per-CPU `current_task` accessor supplied by the `sched` crate.
+    pub fn cact_current_task_get() -> *mut TaskStruct;
     pub static task_list_head: SyncMut<*mut TaskStruct>;
     pub static scheduler_lock: SyncMut<IrqSpinlock>;
 

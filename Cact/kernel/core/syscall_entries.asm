@@ -4,8 +4,8 @@ global sysenter_entry
 global syscall_entry
 
 extern syscall_handler
-extern tss_entry
 extern g_syscall_use_sysexit
+extern syscall_esp0
 
 section .text
 
@@ -123,7 +123,7 @@ sysenter_entry:
 ;   ESP = user ESP  (CPU leaves it untouched — grabbed here before switching)
 ;
 ; We grab the user ESP straight from ESP, switch to the per-task kernel stack
-; kept current in tss_entry.esp0 by the scheduler, then build the exact same
+; kept current in `syscall_esp0[]` by the scheduler, then build the exact same
 ; 60-byte syscall_frame the C dispatcher already understands.  Return is via
 ; IRET only: SYSRET's selector math (+0/+8 split for CS/SS) is incompatible
 ; with this GDT's user-code-then-user-data ordering, and IRET is fully general
@@ -133,9 +133,14 @@ sysenter_entry:
 ; ---------------------------------------------------------------------------
 syscall_entry:
     ; IF is already cleared by FMASK — safe to touch the user stack.
-    mov edx, esp              ; EDX = user ESP (SYSCALL doesn't save it)
-    mov esp, [tss_entry + 4]  ; switch to kernel stack (tss_entry.esp0)
-    sti                       ; on the kernel stack now — interrupts may run
+    mov edx, esp                     ; EDX = user ESP (SYSCALL doesn't save it)
+    push eax                         ; stash the syscall number at [user_esp-4]
+    str ax                           ; AX = TR selector = (TSS_SLOT + cpu) << 3
+    shr eax, 3
+    sub eax, 5                       ; EAX = cpu index (TSS_SLOT = 5)
+    mov esp, [syscall_esp0 + eax*4]  ; this CPU's kernel entry stack (per-CPU esp0)
+    mov eax, [edx - 4]               ; reload the syscall number
+    sti                              ; on the kernel stack now — interrupts may run
 
     sub esp, 60               ; allocate the 60-byte syscall_frame
 
