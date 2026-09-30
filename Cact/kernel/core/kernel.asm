@@ -28,15 +28,17 @@ ireq_start:
     dd 8                                         ; FRAMEBUFFER
 ireq_end:
 
-    ; Framebuffer tag: ask for 1024x768x32
+    ; Framebuffer tag: no preferred mode.  width/height/bpp = 0 tells the
+    ; bootloader to pick the mode itself (multiboot2 spec); the kernel then
+    ; uses whatever geometry/format GRUB reports in the framebuffer info tag.
     align 8
 fbtag_start:
     dw 5                                         ; type = framebuffer
     dw 0                                         ; flags (0 = required)
     dd fbtag_end - fbtag_start                   ; size
-    dd 1024                                      ; width
-    dd 768                                       ; height
-    dd 32                                        ; bpp
+    dd 0                                         ; width  (0 = bootloader chooses)
+    dd 0                                         ; height (0 = bootloader chooses)
+    dd 0                                         ; bpp    (0 = bootloader chooses)
 fbtag_end:
 
     ; End tag

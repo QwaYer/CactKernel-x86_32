@@ -34,6 +34,11 @@ typedef struct {
     uint32_t framebuffer_height;
     uint8_t  framebuffer_bpp;
     uint8_t  framebuffer_type;
+    // Direct-color channel layout (type 1 only): bit position and width of
+    // the red/green/blue fields, as reported by the bootloader.
+    uint8_t  framebuffer_red_pos,   framebuffer_red_size;
+    uint8_t  framebuffer_green_pos, framebuffer_green_size;
+    uint8_t  framebuffer_blue_pos,  framebuffer_blue_size;
 } multiboot_info_t;
 
 // Parse raw multiboot2 info into multiboot_info_t and MMAP table

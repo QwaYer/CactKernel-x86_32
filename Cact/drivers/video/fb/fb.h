@@ -15,8 +15,9 @@ typedef enum {
     FB_INIT_NO_FLAG    = 1,   // multiboot2 framebuffer tag missing
     FB_INIT_HIGH_ADDR  = 2,   // address above 4 GiB — not mappable on i386
     FB_INIT_BAD_TYPE   = 3,   // not direct-colour (type != 1)
-    FB_INIT_BAD_BPP    = 4,   // not 32bpp
+    FB_INIT_BAD_BPP    = 4,   // depth not a supported 8/15/16/24/32 bpp
     FB_INIT_NULL_PARAM = 5,   // zero address or zero dimensions
+    FB_INIT_BAD_PITCH  = 6,   // pitch smaller than one scanline of pixels
 } fb_init_result_t;
 
 // Initialise the framebuffer from a multiboot2 info structure
@@ -38,6 +39,7 @@ uint32_t fb_char_cell_h(void);
 uint32_t  fb_get_width(void);
 uint32_t  fb_get_height(void);
 uint32_t  fb_get_pitch(void);
+uint8_t   fb_get_bpp(void);
 uint32_t* fb_get_buffer(void);
 
 /* Post-paging verification / diagnostics (calls printk/klog). */

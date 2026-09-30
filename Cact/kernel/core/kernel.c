@@ -185,9 +185,9 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         // printk(). Must run AFTER PAT enables WC (the seeding memcpy reads
         // the FB once; under UC this would stall, under WC it's bearable).
         fb_enable_shadow();
-        pr_info("  %-11s : %ux%u @ 32bpp, %s(PAT) + WB shadow ready\n",
+        pr_info("  %-11s : %ux%u @ %ubpp, %s(PAT) + WB shadow ready\n",
                 "framebuffer",
-                fb_get_width(), fb_get_height(),
+                fb_get_width(), fb_get_height(), (unsigned)fb_get_bpp(),
                 (fbwc == 0) ? "WC" : "UC");
     }
 

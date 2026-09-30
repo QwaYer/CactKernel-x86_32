@@ -78,8 +78,20 @@ struct mb2_tag_framebuffer {
     uint8_t  framebuffer_bpp;
     uint8_t  framebuffer_type;   // 0=indexed, 1=RGB, 2=EGA
     uint16_t reserved;
-    // Color info follows (variable, depends on framebuffer_type)
+    // Type 1 (RGB direct color) appends the bit layout of each channel.
+    // Absent for type 0 (palette follows instead) and type 2 (EGA).
+    uint8_t  red_field_position;
+    uint8_t  red_mask_size;
+    uint8_t  green_field_position;
+    uint8_t  green_mask_size;
+    uint8_t  blue_field_position;
+    uint8_t  blue_mask_size;
 } __attribute__((packed));
+
+// Size of the fixed part of the tag, before the type-dependent color/palette
+// info.  A type-2 (EGA) tag is exactly this size; a type-1 tag is 6 bytes more.
+#define MB2_FB_TAG_BASE_SIZE 32u
+#define MB2_FB_TAG_RGB_SIZE  (MB2_FB_TAG_BASE_SIZE + 6u)
 
 // String tag (type 1,2, etc.)
 struct mb2_tag_string {
