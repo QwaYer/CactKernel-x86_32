@@ -48,7 +48,7 @@ pub mod sync {
 
 const _ABI_CHECK: () = {
     use core::mem::offset_of;
-    use cact_sync::task_abi::{ProcMeta, TaskStruct};
+    use cact_sync::task_abi::{ProcMeta, ProcShared, TaskStruct};
 
     assert!(offset_of!(TaskStruct, esp)             ==  0, "esp offset mismatch");
     assert!(offset_of!(TaskStruct, page_directory)  ==  4, "page_directory offset mismatch");
@@ -101,5 +101,17 @@ const _ABI_CHECK: () = {
     assert!(offset_of!(ProcMeta, exec_symtab)          == 580, "exec_symtab offset mismatch");
     assert!(offset_of!(ProcMeta, exec_strtab)          == 584, "exec_strtab offset mismatch");
     assert!(offset_of!(ProcMeta, exec_symtab_count)    == 588, "exec_symtab_count offset mismatch");
-    assert!(core::mem::size_of::<ProcMeta>() == 592, "ProcMeta size mismatch");
+    assert!(offset_of!(ProcMeta, tgid)                 == 592, "tgid offset mismatch");
+    assert!(offset_of!(ProcMeta, is_thread)            == 596, "is_thread offset mismatch");
+    assert!(offset_of!(ProcMeta, shared)               == 600, "shared offset mismatch");
+    assert!(offset_of!(ProcMeta, clr_tid)              == 604, "clr_tid offset mismatch");
+    assert!(offset_of!(ProcMeta, intr_wait)            == 608, "intr_wait offset mismatch");
+    assert!(core::mem::size_of::<ProcMeta>() == 612, "ProcMeta size mismatch");
+
+    assert!(offset_of!(ProcShared, refcount)    ==  0, "ProcShared refcount offset mismatch");
+    assert!(offset_of!(ProcShared, brk_start)   ==  4, "ProcShared brk_start offset mismatch");
+    assert!(offset_of!(ProcShared, brk_current) ==  8, "ProcShared brk_current offset mismatch");
+    assert!(offset_of!(ProcShared, tgid)        == 12, "ProcShared tgid offset mismatch");
+    assert!(offset_of!(ProcShared, mm)          == 16, "ProcShared mm offset mismatch");
+    assert!(core::mem::size_of::<ProcShared>() == 32, "ProcShared size mismatch");
 };

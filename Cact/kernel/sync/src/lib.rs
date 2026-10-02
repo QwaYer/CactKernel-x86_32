@@ -42,4 +42,4 @@ pub use kernel_types::{MmapTable, ProcPageTracker, TaskFdTable, VfsNode};
 pub use mutex::*;
 pub use semaphore::*;
 pub use spinlock::*;
-pub use task_abi::{ProcMeta, TaskShmAttach, TaskState, TaskStruct, NSIG, TASK_SHM_MAX};
+pub use task_abi::{ProcMeta, ProcShared, TaskShmAttach, TaskState, TaskStruct, NSIG, TASK_SHM_MAX};

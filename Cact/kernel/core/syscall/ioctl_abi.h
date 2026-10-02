@@ -180,6 +180,29 @@ typedef struct cact_uname {
 #define CACT_PROCCTL_SHMAT       0x320F  // self; arg=cact_shmat_arg_t* -> addr
 #define CACT_PROCCTL_SHMDT       0x3210  // self; arg=uint32_t* addr
 #define CACT_PROCCTL_SHMCTL      0x3211  // self; arg=cact_shmctl_arg_t*
+#define CACT_PROCCTL_THREAD_CREATE 0x3212 // self; arg=cact_thread_create_arg_t*; returns tid
+#define CACT_PROCCTL_THREAD_EXIT 0x3213  // self; arg=uint32_t* exit code (may be NULL)
+#define CACT_PROCCTL_FUTEX       0x3214  // self; arg=cact_futex_arg_t*
+#define CACT_PROCCTL_GET_TID     0x3215  // self; arg=NULL; returns the calling task's tid
+
+typedef struct cact_thread_create_arg {
+    void*    entry;      // user entry point (called as entry(arg))
+    uint32_t user_esp;   // initial user stack pointer (libc lays out the frame)
+    uint32_t flags;      // reserved, 0
+    uint32_t tls;        // reserved, 0
+    uint32_t set_child_tid;   // kernel writes the new tid here before it runs (0 = none)
+    uint32_t clear_child_tid; // join futex word the kernel zeroes on exit (0 = none)
+} cact_thread_create_arg_t;
+
+#define CACT_FUTEX_WAIT 0
+#define CACT_FUTEX_WAKE 1
+
+typedef struct cact_futex_arg {
+    uint32_t uaddr;      // futex word, user VA
+    int32_t  op;         // CACT_FUTEX_WAIT | CACT_FUTEX_WAKE
+    int32_t  val;        // WAIT: expected value; WAKE: count
+    int32_t  timeout_ms; // WAIT: <= 0 means wait forever
+} cact_futex_arg_t;
 
 typedef struct cact_pgid_arg { uint32_t pid; uint32_t pgid; } cact_pgid_arg_t;
 typedef struct cact_signal_arg { uint32_t pid; uint32_t signum; } cact_signal_arg_t;

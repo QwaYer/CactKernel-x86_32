@@ -56,6 +56,20 @@ pub unsafe extern "C" fn task_exec(
     let p = unsafe { (*t).proc };
 
     // SAFETY: `p` is the live current task's `ProcMeta`.
+    let shared = unsafe { (*p).shared };
+    if shared.is_null() {
+        return -1;
+    }
+    // exec replaces the whole address space, so it is only meaningful when this
+    // task is alone in its thread group; a second thread would keep running on
+    // the address space being torn down.  Refuse rather than corrupt it.
+    // SAFETY: `shared` is the live thread-group state (non-null checked above).
+    let group_refs = unsafe { (*shared).refcount };
+    if group_refs > 1 {
+        return -1;
+    }
+
+    // SAFETY: `p` is the live current task's `ProcMeta`.
     let old_ustack_phys = unsafe { (*p).ustack_phys };
     // SAFETY: `p` is live, so the saved-page array is in bounds.
     let old_ustack_extra = unsafe { (*p).ustack_phys_extra };
@@ -86,8 +100,8 @@ pub unsafe extern "C" fn task_exec(
     // dynlink is gone; the old address space's frames are reclaimed when
     // old_pd is released below.  Free the stale tracker array here so execs
     // do not leak it.
-    // SAFETY: `p` is the live current task's `ProcMeta`.
-    let old_tracker_pages = unsafe { (*p).mm.pages };
+    // SAFETY: `shared` is the live thread-group state (non-null checked above).
+    let old_tracker_pages = unsafe { (*shared).mm.pages };
     if !old_tracker_pages.is_null() {
         // SAFETY: `old_tracker_pages` is the tracker array owned by this task.
         unsafe { cact_mm::kfree((old_tracker_pages as *mut c_void) as *mut u8) };
@@ -104,8 +118,8 @@ pub unsafe extern "C" fn task_exec(
         return -1;
     }
 
-    // SAFETY: the pointer is derived from `p`, so the tracker reset is in bounds.
-    let mm_ptr = unsafe { core::ptr::addr_of_mut!((*p).mm) };
+    // SAFETY: `shared` is the live thread-group state; resetting its tracker is in bounds.
+    let mm_ptr = unsafe { core::ptr::addr_of_mut!((*shared).mm) };
     // SAFETY: `mm_ptr` is the live current task's page tracker.
     unsafe { ffi::proc_tracker_init(mm_ptr) };
     // SAFETY: the lock was acquired above.
@@ -152,9 +166,9 @@ pub unsafe extern "C" fn task_exec(
     }
 
     let entry = if has_interp {
-        // SAFETY: `p` is the live current task's `ProcMeta`, so this tracker address is in
-        // bounds.
-        let mm_ptr = unsafe { core::ptr::addr_of_mut!((*p).mm) };
+        // SAFETY: `shared` is the live current task's thread-group state, so this tracker
+        // address is in bounds.
+        let mm_ptr = unsafe { core::ptr::addr_of_mut!((*shared).mm) };
         // SAFETY: `path`/`interp_path` are strings, `new_pd` the address space just created,
         // `mm_ptr` this task's tracker and `interp_info` a live local.
         unsafe {
@@ -167,9 +181,9 @@ pub unsafe extern "C" fn task_exec(
             )
         }
     } else {
-        // SAFETY: `p` is the live current task's `ProcMeta`, so this tracker address is in
-        // bounds.
-        let mm_ptr = unsafe { core::ptr::addr_of_mut!((*p).mm) };
+        // SAFETY: `shared` is the live current task's thread-group state, so this tracker
+        // address is in bounds.
+        let mm_ptr = unsafe { core::ptr::addr_of_mut!((*shared).mm) };
         // SAFETY: `path` is a live string, `new_pd` the fresh address space and `mm_ptr` this
         // task's tracker.
         unsafe { ffi::load_elf(path, new_pd, mm_ptr) }
@@ -218,10 +232,10 @@ pub unsafe extern "C" fn task_exec(
         if !file.is_null() {
             // SAFETY: `file` is a live VFS node (non-null checked here).
             let brk = unsafe { ffi::elf_get_brk_start(file) };
-            // SAFETY: `p` is the live current task's `ProcMeta`.
-            unsafe { (*p).brk_start = brk };
-            // SAFETY: `p` is live.
-            unsafe { (*p).brk_current = brk };
+            // SAFETY: `shared` is the live current task's thread-group state.
+            unsafe { (*shared).brk_start = brk };
+            // SAFETY: `shared` is live.
+            unsafe { (*shared).brk_current = brk };
         }
     }
 

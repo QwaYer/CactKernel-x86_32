@@ -428,6 +428,21 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         return shm_ctl((int)a.shmid, (int)a.cmd, a.buf);
     }
 
+    case CACT_PROCCTL_THREAD_CREATE:
+        return proc_thread_create(arg);
+
+    case CACT_PROCCTL_THREAD_EXIT: {
+        uint32_t code = 0;
+        if (arg && copy_from_user(&code, arg, sizeof(code)) != 0) return -EFAULT;
+        return proc_thread_exit(code);   /* sched_task_exit never returns */
+    }
+
+    case CACT_PROCCTL_FUTEX:
+        return proc_futex(arg);
+
+    case CACT_PROCCTL_GET_TID:
+        return proc_thread_gettid();
+
     default:
         pr_debug("  %-11s : unknown ctl ioctl 0x%x\n", "proc", cmd);
         return -1;

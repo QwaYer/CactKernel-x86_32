@@ -90,6 +90,19 @@ struct context_frame {
 typedef uint32_t uid_t;
 typedef uint32_t gid_t;
 
+/* Refcounted thread-group state (mirrors Rust `ProcShared`).  A process is a
+   thread group: the leader and every thread created by CACT_PROCCTL_THREAD_CREATE
+   point at one of these.  The address space, fd table and mmap table are shared
+   by pointer through each ProcMeta; the value-typed fields below are released
+   once, when `refcount` reaches zero in reap_task_free(). */
+typedef struct proc_shared {
+    uint32_t            refcount;
+    uint32_t            brk_start;
+    uint32_t            brk_current;
+    uint32_t            tgid;
+    proc_page_tracker_t mm;
+} proc_shared_t;
+
 typedef struct proc_metadata {
     void*    stack_base;
     void*    ustack_phys;
@@ -141,6 +154,15 @@ typedef struct proc_metadata {
     Elf32_Sym* exec_symtab;
     char*      exec_strtab;
     int        exec_symtab_count;
+
+    /* --- threads (appended; existing offsets above are unchanged) --- */
+    uint32_t   tgid;         /* leader pid; == pid for a process leader */
+    uint8_t    is_thread;    /* 1 for a CACT_PROCCTL_THREAD_CREATE thread */
+    uint8_t    _pad_thread[3];
+    proc_shared_t* shared;   /* thread-group state (NULL for a kernel task) */
+    uint32_t   clr_tid;      /* join futex word cleared on thread exit (0 = none) */
+    uint8_t    intr_wait;    /* 1 while blocked in an interruptible futex wait */
+    uint8_t    _pad3[3];
 } proc_metadata_t;
 
 struct task_struct {
@@ -236,6 +258,26 @@ void task_reap();
 void schedule();
 int init_scheduler();
 void task_set_state(struct task_struct* t, task_state old_state, task_state new_state);
+
+/* --- threads (sched/src/task_thread.rs, syscall/process/thread.c) --- */
+
+/* Create a thread in the calling task's group: ring-3 entry at `entry` with the
+ * user stack pointer `user_esp`.  `clr_tid` is a user word the kernel zeroes
+ * (and futex-wakes) when the thread exits, or 0.  Returns the new tid (>0) or a
+ * negative error. */
+int  sched_create_thread(void* entry, uint32_t user_esp, uint32_t tls,
+                         uint32_t set_tid, uint32_t clr_tid);
+/* Wake up to `count` futex waiters on `uaddr` in address space `pd` (kernel FFI
+ * used by the scheduler's thread-exit path). */
+int  cact_futex_wake_addr(uint32_t* pd, uint32_t* uaddr, int count);
+/* Send `signal` to every task of the calling task's group except `except_pid`. */
+void task_signal_group(uint32_t except_pid, uint32_t signal);
+/* Ioctl helpers for /proc/self/ctl (CACT_PROCCTL_THREAD_*); `arg` is the raw
+ * userspace pointer the ioctl received. */
+int  proc_thread_create(const void* arg);
+int  proc_thread_exit(uint32_t code);
+int  proc_thread_gettid(void);
+int  proc_futex(const void* arg);
 
 struct task_struct* create_task_with_entry(void*                entry,
                                              uint32_t*            pd,

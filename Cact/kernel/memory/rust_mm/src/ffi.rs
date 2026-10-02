@@ -231,6 +231,7 @@ pub struct ShmInfo {
 // re-exported here so an `MmapTable`/`ProcPageTracker` pointer has one Rust
 // type in `sched`, `cact_mm` and every other kernel Rust crate.
 pub use cact_sync::kernel_types::{MmapRegion, MmapTable, ProcPageTracker};
+pub use cact_sync::task_abi::ProcShared;
 
 #[repr(C)]
 pub struct TaskFdTable {
@@ -293,6 +294,19 @@ pub struct ProcMeta {
     pub sid:                u32,
     pub umask:              u32,
     pub root:               *mut VfsNode,
+    // The sched crate's full `ProcMeta` carries the cached exec symbol table
+    // here; keep the offsets aligned so `shared` lands at the same place.
+    pub exec_base:          u32,
+    pub exec_symtab:        *mut u8,
+    pub exec_strtab:        *mut u8,
+    pub exec_symtab_count:  i32,
+    pub tgid:               u32,
+    pub is_thread:          u8,
+    pub _pad2:              [u8; 3],
+    pub shared:             *mut ProcShared,
+    pub clr_tid:            u32,
+    pub intr_wait:          u8,
+    pub _pad3:              [u8; 3],
 }
 
 #[repr(C)]
