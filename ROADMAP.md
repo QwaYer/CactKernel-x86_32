@@ -119,10 +119,9 @@ the DDI encoder, so the console keeps working through the driver's own modeset.
 `set_config()` programs a client framebuffer the same way.  CDCLK/WRPLL are
 still inherited from firmware — programming them is the remaining stage-3 work.
 
-Kernel side: `ksym.c` exports the boot framebuffer geometry
-(`fb_get_buffer/width/height/pitch/bpp` + `fb_get_red_pos`) so a display driver
-can scan the console out before any DRM client exists.  Two driver-side fixes
-came out of this: the module is registered in `CactBridge build.py`'s `DRIVERS`
+Kernel side: `ksym.c` exports `__divdi3`/`__moddi3`/`__udivdi3` (the driver's
+WRPLL calculator does 64-bit division).  Two driver-side fixes came out of this:
+the module is registered in `CactBridge build.py`'s `DRIVERS`
 (a missing entry meant it was silently never rebuilt), and `intel_probe_ports()`
 now keeps the DDI index instead of compacting the port array (it mislabelled
 every sink as DDI-A, which would have programmed the wrong port).

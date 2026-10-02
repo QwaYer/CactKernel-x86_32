@@ -7,7 +7,8 @@ use crate::ffi::{self, ContextFrame, MmapTable, VfsNode, PAGE_PRESENT, PAGE_RW, 
 use crate::mlfq;
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 use crate::task::{
-    kstack_alloc, kstack_free, current_task, find_task_by_pid, next_pid, task_list_add, task_list_head,
+    kstack_alloc, kstack_free, current_task, find_task_by_pid, next_pid, proc_shared_alloc,
+    proc_shared_unref_locked, task_list_add, task_list_head,
     task_list_remove, task_setup_sigreturn, ustack_phys_by_idx, ProcMeta, TaskStruct,
     TaskState, KERNEL_STACK_SIZE, MAX_FD, SCHEDULER_LOCK,
     USER_STACK_PAGES,
@@ -152,9 +153,44 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     child_p.pending_signals   = 0;
     child_p.wait_next         = ptr::null_mut();
 
-    // SAFETY: the pointer is derived from `child_p`, so the tracker reset is in bounds.
-    unsafe { ffi::proc_tracker_init(core::ptr::addr_of_mut!(child_p.mm)) };
-    child_p.mm.page_dir = child_pd;
+    // The child is a new process: its own thread-group state, refcount 1, and
+    // it inherits the parent's brk bounds.  The address space is freshly
+    // forked, so the tracker's page_dir names it.
+    // SAFETY: `child_pd` is the address space just created (non-null checked above).
+    let child_shared = unsafe { proc_shared_alloc(child_pd) };
+    if child_shared.is_null() {
+        for page in ustack_pages {
+            // SAFETY: each entry is a page allocated by `kalloc` above.
+            unsafe { cact_mm::free_page((page) as *mut u8) };
+        }
+        // SAFETY: `kstack` is a live kernel stack owned here.
+        unsafe { kstack_free(kstack as *mut c_void) };
+        // SAFETY: `child_p` is a live allocation owned here.
+        unsafe { cact_mm::kfree((child_p as *mut ProcMeta as *mut c_void) as *mut u8) };
+        // SAFETY: `child` is a live allocation owned here.
+        unsafe { cact_mm::kfree((child as *mut TaskStruct as *mut c_void) as *mut u8) };
+        // SAFETY: `child_pd` is a live address space owned here.
+        unsafe { cact_mm::vmm_free_address_space(child_pd) };
+        // SAFETY: the lock was acquired above.
+        unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+        return ptr::null_mut();
+    }
+    child_p.shared    = child_shared;
+    child_p.tgid      = pid;
+    child_p.is_thread = 0;
+    // SAFETY: `parent_p_ref` is the live parent's `ProcMeta`, so its `shared` is either null or
+    // a live `ProcShared`; the bounds are copied from it into the child's live state.
+    let parent_shared = parent_p_ref.shared;
+    if !parent_shared.is_null() {
+        // SAFETY: `parent_shared` is the live parent group state (non-null checked here).
+        let p_start = unsafe { (*parent_shared).brk_start };
+        // SAFETY: `parent_shared` is live.
+        let p_cur = unsafe { (*parent_shared).brk_current };
+        // SAFETY: `child_shared` is the child's live group state allocated above.
+        unsafe { (*child_shared).brk_start = p_start };
+        // SAFETY: `child_shared` is live.
+        unsafe { (*child_shared).brk_current = p_cur };
+    }
 
     let child_fds = cact_mm::kmalloc(core::mem::size_of::<ffi::TaskFdTable>() as u32) as *mut ffi::TaskFdTable;
     if child_fds.is_null() {
@@ -334,6 +370,12 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
     // SAFETY: `t` is the live current task (non-null checked above).
     let p = unsafe { (*t).proc };
 
+    // If this is a thread, publish its exit to any joiner: clear the join word
+    // and wake its futex.  Done before taking the scheduler lock (the wake
+    // takes it internally) and while we still own our address space.
+    // SAFETY: `t` is the live current task and this is its own exit path.
+    unsafe { crate::task::clear_child_tid_on_exit(t) };
+
     // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; this runs with it free.
     unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
 
@@ -409,13 +451,19 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32, option
                     let child_pid  = t_pid;
                     // SAFETY: `t_proc` is live.
                     let child_exit = unsafe { (*t_proc).exit_code };
+                    // SAFETY: `t_proc` is live, so its `shared` is either null or a live group
+                    // state; unreffing under the held `SCHEDULER_LOCK` decides who frees it.
+                    let child_shared = unsafe { (*t_proc).shared };
                     // SAFETY: `t` is live and the lock is held.
                     unsafe { task_list_remove(t) };
+                    // SAFETY: `child_shared` is null or the live group state of `t`; the lock is
+                    // held, serializing this against other reaps.
+                    let last = unsafe { proc_shared_unref_locked(child_shared) };
                     let to_free = t;
                     // SAFETY: the lock was acquired above.
                     unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
 
-                    reap_task_free(to_free);
+                    reap_task_free(to_free, last);
 
                     if !status.is_null() {
                         // POSIX layout: exit code in bits 8-15, low byte clear.
@@ -466,7 +514,11 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32, option
     }
 }
 
-fn reap_task_free(t: *mut TaskStruct) {
+/// Free a task and the resources it owns.  `last` is true when this task held the
+/// last reference to its thread group, i.e. the shared address space, fd table,
+/// mmap table and group state must be released here; otherwise only the
+/// per-thread kernel stack and metadata are freed and the group lives on.
+fn reap_task_free(t: *mut TaskStruct, last: bool) {
     if t.is_null() {
         return;
     }
@@ -479,44 +531,58 @@ fn reap_task_free(t: *mut TaskStruct) {
     }
     // SAFETY: `proc_ptr` is that task's live `ProcMeta`, exclusively owned by this teardown.
     let p = unsafe { &mut *proc_ptr };
+    let shared = p.shared;
 
-    if !p.fds.is_null() {
-        for j in 0..MAX_FD {
-            // SAFETY: `p.fds` is the live fd table and `j < MAX_FD`.
-            let ft = unsafe { (*p.fds).fd_table[j] };
-            if !ft.is_null() {
-                // SAFETY: `ft` is a live file object (a non-null slot of the table).
-                unsafe { ffi::file_unref(ft as *mut c_void) };
+    if last {
+        if !p.fds.is_null() {
+            for j in 0..MAX_FD {
+                // SAFETY: `p.fds` is the live fd table and `j < MAX_FD`.
+                let ft = unsafe { (*p.fds).fd_table[j] };
+                if !ft.is_null() {
+                    // SAFETY: `ft` is a live file object (a non-null slot of the table).
+                    unsafe { ffi::file_unref(ft as *mut c_void) };
+                }
             }
+            // SAFETY: `p.fds` is a live allocation owned by this dying thread group.
+            unsafe { cact_mm::kfree((p.fds as *mut c_void) as *mut u8) };
+            p.fds = ptr::null_mut();
         }
-        // SAFETY: `p.fds` is a live allocation owned by this dying task.
-        unsafe { cact_mm::kfree((p.fds as *mut c_void) as *mut u8) };
-        p.fds = ptr::null_mut();
-    }
 
-    if !p.mmap_table.is_null() {
-        let mt = p.mmap_table;
+        if !p.mmap_table.is_null() {
+            let mt = p.mmap_table;
+            // SAFETY: `t` is live.
+            let pd = unsafe { (*t).page_directory };
+            if !pd.is_null() {
+                // SAFETY: `mt` is the task's live mmap table and `pd` its live page directory.
+                unsafe { cact_mm::mmap_table_free(mt, pd) };
+            }
+            // SAFETY: `mt` is a live allocation owned by this dying thread group.
+            unsafe { cact_mm::kfree((mt as *mut c_void) as *mut u8) };
+            p.mmap_table = ptr::null_mut();
+        }
+
         // SAFETY: `t` is live.
-        let pd = unsafe { (*t).page_directory };
-        if !pd.is_null() {
-            // SAFETY: `mt` is the task's live mmap table and `pd` its live page directory.
-            unsafe { cact_mm::mmap_table_free(mt, pd) };
+        let pid = unsafe { (*t).pid };
+        // SAFETY: `t` is live.
+        let page_directory = unsafe { (*t).page_directory };
+        cact_mm::shm_detach_all(pid, page_directory);
+        if !shared.is_null() {
+            // SAFETY: `shared` is this group's live state and this task released its last
+            // reference, so freeing it here is the sole owner's job.
+            unsafe { crate::task::proc_shared_free(shared) };
+        } else {
+            // SAFETY: the tracker is part of this dying task's `ProcMeta`, exclusively owned
+            // here (kernel tasks have no shared group state).
+            unsafe { cact_mm::proc_free_pages(core::ptr::addr_of_mut!(p.mm)) };
         }
-        // SAFETY: `mt` is a live allocation owned by this dying task.
-        unsafe { cact_mm::kfree((mt as *mut c_void) as *mut u8) };
-        p.mmap_table = ptr::null_mut();
+
+        // SAFETY: `t` is live.
+        unsafe { (*t).page_directory = ptr::null_mut() };
     }
 
-    // SAFETY: `t` is live.
-    let pid = unsafe { (*t).pid };
-    // SAFETY: `t` is live.
-    let page_directory = unsafe { (*t).page_directory };
-    cact_mm::shm_detach_all(pid, page_directory);
-    // SAFETY: the tracker is part of this dying task's `ProcMeta`, exclusively owned here.
-    unsafe { cact_mm::proc_free_pages(core::ptr::addr_of_mut!(p.mm)) };
-
-    // SAFETY: `t` is live.
-    unsafe { (*t).page_directory = ptr::null_mut() };
+    // Per-thread cleanup always runs: the user stack of a non-last thread is
+    // part of the shared address space and is freed with it, and a nonexistent
+    // ustack is simply null.
     p.ustack_phys    = ptr::null_mut();
     p.ustack_phys_extra = [ptr::null_mut(); 3];
 
@@ -537,6 +603,7 @@ fn reap_task_free(t: *mut TaskStruct) {
 #[no_mangle]
 pub unsafe extern "C" fn task_reap() {
     let mut to_reap: [*mut TaskStruct; 64] = [ptr::null_mut(); 64];
+    let mut last_flags: [bool; 64] = [false; 64];
     let mut count = 0usize;
 
     // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; this runs with it free.
@@ -558,6 +625,12 @@ pub unsafe extern "C" fn task_reap() {
             if reapable {
                 // SAFETY: `cur` is live and the lock is held.
                 unsafe { task_list_remove(cur) };
+                // SAFETY: `cur_proc` is live, so its `shared` is null or the live group state;
+                // unreffing under the held `SCHEDULER_LOCK` decides who frees it.
+                let cur_shared = unsafe { (*cur_proc).shared };
+                // SAFETY: `cur_shared` is null or the live group state of `cur`; the lock is
+                // held, serializing this against other reaps.
+                last_flags[count] = unsafe { proc_shared_unref_locked(cur_shared) };
                 to_reap[count] = cur;
                 count += 1;
             }
@@ -567,7 +640,7 @@ pub unsafe extern "C" fn task_reap() {
     // SAFETY: the lock was acquired above.
     unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
 
-    for t in &to_reap[..count] {
-        reap_task_free(*t);
+    for i in 0..count {
+        reap_task_free(to_reap[i], last_flags[i]);
     }
 }

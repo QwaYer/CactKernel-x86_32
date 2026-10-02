@@ -102,10 +102,12 @@ pub unsafe extern "C" fn task_signal_locked(pid: u32, signal: u32) {
     // SAFETY: `p` is the live `ProcMeta` of `t`.
     let in_sigsuspend = unsafe { (*p).in_sigsuspend };
     // SAFETY: `p` is live.
+    let intr_wait = unsafe { (*p).intr_wait };
+    // SAFETY: `p` is live.
     let signal_mask = unsafe { (*p).signal_mask };
     // SAFETY: `t` is live.
     let t_state = unsafe { (*t).state };
-    if in_sigsuspend != 0
+    if (in_sigsuspend != 0 || intr_wait != 0)
         && matches!(t_state, TaskState::Sleeping)
         && (signal & !signal_mask) != 0
     {
@@ -121,6 +123,53 @@ pub unsafe extern "C" fn task_signal_locked(pid: u32, signal: u32) {
             unsafe { mlfq::mlfq_enqueue_locked(t, pri) };
         }
     }
+}
+
+/// Send `signal` to every task of the calling task's thread group except
+/// `except_pid` (normally the caller).  Used by `exit()` to take the whole
+/// process down when one thread exits.
+///
+/// # Safety
+///
+/// Must be called from a task context with `SCHEDULER_LOCK` free.
+#[no_mangle]
+pub unsafe extern "C" fn task_signal_group(except_pid: u32, signal: u32) {
+    let cur = crate::task::current_task();
+    if cur.is_null() {
+        return;
+    }
+    // SAFETY: `cur` is the live current task (non-null checked above), so its `proc` field is in
+    // bounds.
+    let cur_proc = unsafe { (*cur).proc };
+    if cur_proc.is_null() {
+        return;
+    }
+    // SAFETY: `cur_proc` is that task's live `ProcMeta`.
+    let tgid = unsafe { (*cur_proc).tgid };
+
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the caller must not hold it.
+    unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
+    // SAFETY: `task_list_head` is a scheduler-owned global, read under `SCHEDULER_LOCK`.
+    let mut t = unsafe { task_list_head };
+    while !t.is_null() {
+        // SAFETY: `t` is a live task on the list.
+        let next = unsafe { (*t).next };
+        // SAFETY: `t` is live, so its `proc` field is in bounds.
+        let tp = unsafe { (*t).proc };
+        if !tp.is_null() {
+            // SAFETY: `tp` is that task's live `ProcMeta`.
+            let t_tgid = unsafe { (*tp).tgid };
+            // SAFETY: `t` is live.
+            let t_pid = unsafe { (*t).pid };
+            if t_pid != except_pid && t_tgid == tgid {
+                // SAFETY: `t` is live and the lock is held.
+                unsafe { task_signal_locked(t_pid, signal) };
+            }
+        }
+        t = next;
+    }
+    // SAFETY: the lock was acquired above.
+    unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
 }
 
 /// # Safety
@@ -152,6 +201,10 @@ pub unsafe extern "C" fn task_handle_signals(t: *mut TaskStruct) {
     if p.pending_signals & SIGKILL != 0 {
         p.pending_signals = 0;
         let parent_pid = p.parent_pid;
+        // Publish a thread's death to its joiner (clear_child_tid) before it
+        // stops running; a no-op for a process leader.  `p`'s borrow ends above.
+        // SAFETY: `t` is the live task being delivered to; this is its context.
+        unsafe { crate::task::clear_child_tid_on_exit(t) };
         // SAFETY: signalling the parent requires `SCHEDULER_LOCK`, held by the caller.
         unsafe { task_signal_locked(parent_pid, SIGCHLD) };
         // SAFETY: `t` is live.
@@ -287,8 +340,19 @@ fn handle_signal_bit(
 
     if term_by_default {
         let parent_pid = p.parent_pid;
+        // Publish a thread's death to any joiner even on an abnormal exit
+        // (SIGSEGV/SIGINT/...), or pthread_join() would sleep forever.
+        // SAFETY: `t` is the live task being delivered to; this is its context.
+        unsafe { crate::task::clear_child_tid_on_exit(t) };
         // SAFETY: signalling the parent requires `SCHEDULER_LOCK`, held by the caller.
         unsafe { task_signal_locked(parent_pid, SIGCHLD) };
+        // A terminating signal ends the whole process, not just this thread:
+        // kill the rest of the group so blocked joiners/workers do not survive.
+        // SAFETY: `t` is live.
+        let t_pid = unsafe { (*t).pid };
+        // SAFETY: `t_pid` is this live task's pid; `task_signal_group` takes the
+        // scheduler lock itself (the caller holds none).
+        unsafe { task_signal_group(t_pid, SIGKILL) };
         // SAFETY: `t` is live.
         unsafe { (*t).state = TaskState::Zombie };
     }

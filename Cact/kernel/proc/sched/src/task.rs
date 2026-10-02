@@ -10,7 +10,7 @@ use crate::sync::irq_spinlock_t;
 use crate::timer_wheel;
 
 pub const MAX_FD: usize = 256;
-pub use cact_sync::task_abi::{NSIG, TASK_SHM_MAX, ProcMeta};
+pub use cact_sync::task_abi::{NSIG, TASK_SHM_MAX, ProcMeta, ProcShared};
 
 pub const USER_CODE_SEL: u32 = 0x1B;
 pub const USER_DATA_SEL: u32 = 0x23;
@@ -357,6 +357,85 @@ pub(crate) fn task_zero_init(t: *mut TaskStruct, p: *mut ProcMeta) -> bool {
     true
 }
 
+/// Allocate a thread group's shared state, holding one reference.
+///
+/// The address space, fd table and mmap table are shared by pointer; the
+/// value-typed `mm` tracker and the `brk` bounds live here so every thread of
+/// the group accounts allocations in one place.  Released by
+/// [`proc_shared_free`] when the last member is reaped.
+///
+/// # Safety
+///
+/// `page_dir` must be null or a live address space owned by the new thread group.
+#[no_mangle]
+pub unsafe extern "C" fn proc_shared_alloc(page_dir: *mut u32) -> *mut ProcShared {
+    let s = cact_mm::kmalloc(core::mem::size_of::<ProcShared>() as u32) as *mut ProcShared;
+    if s.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: `s` is a fresh allocation of exactly `ProcShared`'s size, so zeroing it is in
+    // bounds.
+    unsafe { ffi::memory_set(s as *mut c_void, 0, core::mem::size_of::<ProcShared>()) };
+    // SAFETY: `s` is a fresh, exclusively owned `ProcShared`, now zeroed.
+    let sr = unsafe { &mut *s };
+    sr.refcount = 1;
+    sr.mm.page_dir = page_dir;
+    s
+}
+
+/// Take one more reference on a thread group's shared state.
+///
+/// # Safety
+///
+/// `s` must be null or a live `ProcShared`; the caller must hold `SCHEDULER_LOCK`
+/// (or be single-threaded), so the increment cannot race another one.
+#[no_mangle]
+pub unsafe extern "C" fn proc_shared_ref(s: *mut ProcShared) {
+    if s.is_null() {
+        return;
+    }
+    // SAFETY: `s` is non-null and, per the contract, a live `ProcShared`; `refcount` is in
+    // bounds and the caller's `SCHEDULER_LOCK` serializes the read/write pair.
+    let r = unsafe { (*s).refcount };
+    // SAFETY: as above.
+    unsafe { (*s).refcount = r.wrapping_add(1) };
+}
+
+/// Release one reference; returns `true` when the caller released the last one.
+///
+/// # Safety
+///
+/// `s` must be null or a live `ProcShared`; the caller must hold `SCHEDULER_LOCK`,
+/// which serializes this against every other unref (all reaping happens under it).
+pub unsafe fn proc_shared_unref_locked(s: *mut ProcShared) -> bool {
+    if s.is_null() {
+        return true;
+    }
+    // SAFETY: `s` is non-null and live; `refcount` is in bounds and the caller's `SCHEDULER_LOCK`
+    // serializes it.
+    let r = unsafe { (*s).refcount };
+    let r = r.saturating_sub(1);
+    // SAFETY: as above.
+    unsafe { (*s).refcount = r };
+    r == 0
+}
+
+/// Release a thread group's shared state (tracker array and address space).
+///
+/// # Safety
+///
+/// `s` must be null or an exclusively owned `ProcShared` whose refcount reached zero.
+pub unsafe fn proc_shared_free(s: *mut ProcShared) {
+    if s.is_null() {
+        return;
+    }
+    // SAFETY: `s` is live and owned here; freeing its tracker releases the process page array and
+    // the address space it names.
+    unsafe { cact_mm::proc_free_pages(core::ptr::addr_of_mut!((*s).mm)) };
+    // SAFETY: `s` is the live allocation owned here.
+    unsafe { cact_mm::kfree((s as *mut c_void) as *mut u8) };
+}
+
 /// # Safety
 ///
 /// Must be called exactly once during single-threaded boot, before any other code touches the
@@ -531,3 +610,6 @@ pub use task_signal::*;
 #[path = "task_sigreturn.rs"]
 mod task_sigreturn;
 pub use task_sigreturn::*;
+#[path = "task_thread.rs"]
+mod task_thread;
+pub use task_thread::*;

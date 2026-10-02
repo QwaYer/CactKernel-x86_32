@@ -9,7 +9,7 @@ use crate::mlfq;
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 use crate::task::{
     kstack_alloc, kstack_free, calc_highest_mapped_va, current_task, free_user_stack_pages, map_user_stack_in_pd,
-    next_pid, push_empty_args, task_list_add, task_setup_sigreturn, task_zero_init,
+    next_pid, proc_shared_alloc, push_empty_args, task_list_add, task_setup_sigreturn, task_zero_init,
     ustack_write_u32, ProcMeta, TaskStruct, SCHEDULER_LOCK, KERNEL_BASE, KERNEL_STACK_SIZE,
     USER_CODE_SEL, USER_DATA_SEL, USER_STACK_BYTES, USER_STACK_PAGES,
 };
@@ -245,10 +245,26 @@ pub unsafe extern "C" fn create_task_with_entry(
     // SAFETY: `t_ref.proc` was set by creation and points at a live `ProcMeta`.
     let p = unsafe { &mut *t_ref.proc };
 
-    // SAFETY: `p` is the live `ProcMeta` and `tracker` the caller's live tracker (see # Safety).
+    // SAFETY: `pd` is the caller's live address space (see # Safety).
+    let shared = unsafe { proc_shared_alloc(pd) };
+    if shared.is_null() {
+        // SAFETY: `p.stack_base` is this task's live kernel stack.
+        unsafe { kstack_free(p.stack_base) };
+        free_user_stack_pages(p);
+        // SAFETY: `p` is a live allocation owned here.
+        unsafe { cact_mm::kfree((p as *mut ProcMeta as *mut c_void) as *mut u8) };
+        // SAFETY: `t` is a live allocation owned here.
+        unsafe { cact_mm::kfree((t as *mut c_void) as *mut u8) };
+        return ptr::null_mut();
+    }
+    p.shared = shared;
+    p.tgid   = t_ref.pid;
+
+    // SAFETY: `shared.mm` is the live thread-group tracker and `tracker` the caller's live
+    // tracker (see # Safety); the copy stays inside both.
     unsafe {
         ffi::memory_copy(
-            core::ptr::addr_of_mut!(p.mm) as *mut c_void,
+            core::ptr::addr_of_mut!((*shared).mm) as *mut c_void,
             tracker as *const c_void,
             core::mem::size_of::<ProcPageTracker>(),
         )
@@ -265,8 +281,10 @@ pub unsafe extern "C" fn create_task_with_entry(
     map_user_stack_in_pd(pd, p);
 
     let highest = calc_highest_mapped_va(pd);
-    p.brk_start   = highest;
-    p.brk_current = highest;
+    // SAFETY: `shared` is the live thread-group state installed above.
+    unsafe { (*shared).brk_start = highest };
+    // SAFETY: `shared` is live.
+    unsafe { (*shared).brk_current = highest };
 
     let ustack_top = p.ustack_virt + USER_STACK_BYTES;
     let mut sp = ustack_top - 4;
@@ -313,8 +331,25 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
     let t_ref = unsafe { &mut *t };
     // SAFETY: `t_ref.proc` was set by creation and points at a live `ProcMeta`.
     let p = unsafe { &mut *t_ref.proc };
-    // SAFETY: the pointer is derived from `p`, so the tracker reset is in bounds.
-    unsafe { ffi::proc_tracker_init(core::ptr::addr_of_mut!(p.mm)) };
+
+    // The thread group's shared state: refcount 1, the address space owns the
+    // page tracker.  The ELF loader files every image page into `shared.mm`.
+    // SAFETY: `pd` is the address space created above and owned here.
+    let shared = unsafe { proc_shared_alloc(pd) };
+    if shared.is_null() {
+        // SAFETY: `p.stack_base` is this task's live kernel stack.
+        unsafe { kstack_free(p.stack_base) };
+        free_user_stack_pages(p);
+        // SAFETY: `p` is a live allocation owned here.
+        unsafe { cact_mm::kfree((p as *mut ProcMeta as *mut c_void) as *mut u8) };
+        // SAFETY: `t` is a live allocation owned here.
+        unsafe { cact_mm::kfree((t as *mut c_void) as *mut u8) };
+        // SAFETY: `pd` is a live address space owned here.
+        unsafe { cact_mm::vmm_free_address_space(pd) };
+        return ptr::null_mut();
+    }
+    p.shared = shared;
+    p.tgid   = t_ref.pid;
 
     // PT_INTERP handoff (userspace ld.so) — same protocol as task_exec.
     // Binaries without PT_INTERP are mapped by the plain loader (static ELF).
@@ -332,24 +367,27 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
 
     let entry = if has_interp {
         // SAFETY: all pointers are live: `path`/`interp_path` are strings, `pd` the address
-        // space just created, `p.mm` the task's tracker and `interp_info` a live local.
+        // space just created, `shared.mm` the task's tracker and `interp_info` a live local.
         unsafe {
             ffi::load_elf_interp(
                 path,
                 interp_path.as_ptr(),
                 pd,
-                core::ptr::addr_of_mut!(p.mm),
+                core::ptr::addr_of_mut!((*shared).mm),
                 core::ptr::addr_of_mut!(interp_info),
             )
         }
     } else {
         // SAFETY: as above, without the interpreter.
-        unsafe { ffi::load_elf(path, pd, core::ptr::addr_of_mut!(p.mm)) }
+        unsafe { ffi::load_elf(path, pd, core::ptr::addr_of_mut!((*shared).mm)) }
     };
     if entry.is_null() {
         // SAFETY: `p.stack_base` is this task's live kernel stack.
         unsafe { kstack_free(p.stack_base) };
         free_user_stack_pages(p);
+        // The loader already released the tracker array and address space.
+        // SAFETY: `shared` is a live allocation owned here.
+        unsafe { cact_mm::kfree((shared as *mut c_void) as *mut u8) };
         // SAFETY: `p` is a live allocation owned here.
         unsafe { cact_mm::kfree((p as *mut ProcMeta as *mut c_void) as *mut u8) };
         // SAFETY: `t` is a live allocation owned here.
@@ -393,11 +431,15 @@ pub unsafe extern "C" fn create_elf_task(path: *const u8) -> *mut TaskStruct {
         } else {
             highest
         };
-        p.brk_start   = brk;
-        p.brk_current = brk;
+        // SAFETY: `shared` is the live thread-group state installed above.
+        unsafe { (*shared).brk_start = brk };
+        // SAFETY: `shared` is live.
+        unsafe { (*shared).brk_current = brk };
     } else {
-        p.brk_start   = highest;
-        p.brk_current = highest;
+        // SAFETY: `shared` is the live thread-group state installed above.
+        unsafe { (*shared).brk_start = highest };
+        // SAFETY: `shared` is live.
+        unsafe { (*shared).brk_current = highest };
     }
 
     let ustack_top = p.ustack_virt + USER_STACK_BYTES;

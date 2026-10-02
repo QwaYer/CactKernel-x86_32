@@ -1,24 +1,36 @@
 #include "mm.h"
 #include "validate.h"
+#include "task.h"
+
+// The calling task's thread-group state.  brk bounds and the page tracker are
+// process-wide (all threads of a group allocate into one heap), so every brk /
+// mprotect path goes through here instead of the per-task ProcMeta copies.
+static proc_shared_t *cur_shared(void) {
+    if (!current_task || !current_task->proc) return 0;
+    return current_task->proc->shared;
+}
 
 // brk() — change the program break (heap end)
 int sys_brk(struct syscall_frame* regs) {
     uint32_t new_brk = regs->ebx;
     if (!current_task) return -1;
 
+    proc_shared_t *ps = cur_shared();
+    if (!ps) return -1;
+
     // brk(0) returns the current break without changing it
     if (new_brk == 0)
-        return (int)current_task->proc->brk_current;
+        return (int)ps->brk_current;
 
     // Must not go below the initial break
-    if (new_brk < current_task->proc->brk_start)
+    if (new_brk < ps->brk_start)
         return -1;
 
     // Safety limit: 16 MiB maximum heap
-    if (new_brk - current_task->proc->brk_start > 16 * 1024 * 1024)
+    if (new_brk - ps->brk_start > 16 * 1024 * 1024)
         return -1;
 
-    uint32_t old_end = (current_task->proc->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    uint32_t old_end = (ps->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     uint32_t new_end = (new_brk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
     // Grow heap: allocate and zero new pages
@@ -30,11 +42,11 @@ int sys_brk(struct syscall_frame* regs) {
             for (int i = 0; i < (int)PAGE_SIZE; i++) p[i] = 0;
             vmm_map(current_task->page_directory, va, (uint32_t)phys,
                     PAGE_USER | PAGE_RW | PAGE_PRESENT);
-            proc_tracker_add(&current_task->proc->mm, phys);   // track for cleanup on exit
+            proc_tracker_add(&ps->mm, phys);   // track for cleanup on exit
         }
     }
 
-    current_task->proc->brk_current = new_brk;
+    ps->brk_current = new_brk;
     return (int)new_brk;
 }
 
@@ -78,11 +90,13 @@ int sys_mprotect(struct syscall_frame* regs) {
     uint32_t length = regs->ecx;
     int      prot   = (int)regs->edx;
     if (!current_task) return -1;
-    uint32_t brk_end = (current_task->proc->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    proc_shared_t *ps = cur_shared();
+    if (!ps) return -1;
+    uint32_t brk_end = (ps->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     return do_mprotect(
         current_task->page_directory,
         current_task->proc->mmap_table,
         addr, length, prot,
-        current_task->proc->brk_start, brk_end
+        ps->brk_start, brk_end
     );
 }

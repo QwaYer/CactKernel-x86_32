@@ -45,6 +45,23 @@ pub struct TaskStruct {
     pub proc:           *mut ProcMeta,    // 44
 }
 
+/// Refcounted state shared by every task of one thread group (a process).
+///
+/// A process is a thread group: its leader plus every thread created with
+/// `CACT_PROCCTL_THREAD_CREATE` share one `ProcShared`.  The address space, the
+/// open-file table and the mmap table are shared by pointer through each
+/// `ProcMeta`; the objects here are the ones that cannot be shared that way
+/// because they are value types, and they are released only when `refcount`
+/// drops to zero in `reap_task_free`.
+#[repr(C)]
+pub struct ProcShared {
+    pub refcount:    u32,
+    pub brk_start:   u32,
+    pub brk_current: u32,
+    pub tgid:        u32,
+    pub mm:          ProcPageTracker,
+}
+
 /// Heap-allocated process metadata, matches C `proc_metadata_t`.
 #[repr(C)]
 pub struct ProcMeta {
@@ -87,6 +104,21 @@ pub struct ProcMeta {
     pub exec_symtab:        *mut u8,
     pub exec_strtab:        *mut u8,
     pub exec_symtab_count:  i32,
+    // --- threads (appended after 592; existing offsets above are unchanged) ---
+    /// Thread-group id: the leader's pid.  Equals `pid` for a process leader.
+    pub tgid:               u32,
+    /// 1 for a thread created by `CACT_PROCCTL_THREAD_CREATE`, 0 for a leader.
+    pub is_thread:          u8,
+    pub _pad2:              [u8; 3],
+    /// Shared, refcounted thread-group state (null for a kernel task).
+    pub shared:             *mut ProcShared,
+    /// Userspace word the kernel clears (and futex-wakes) when this thread
+    /// exits — the join futex.  Zero for a process leader.
+    pub clr_tid:            u32,
+    /// 1 while the task is in a signal-interruptible block (a userspace futex
+    /// wait): a deliverable signal wakes it so it can return -EINTR.
+    pub intr_wait:          u8,
+    pub _pad3:              [u8; 3],
 }
 
 // SAFETY: `TaskStruct` is a plain `#[repr(C)]` record of integers and raw

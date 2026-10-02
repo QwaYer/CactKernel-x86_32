@@ -31,9 +31,16 @@ fn oom_score(t: *mut TaskStruct) -> u32 {
     if t.proc.is_null() {
         return 0;
     }
+    // The page count lives in the thread group's shared state now.
     // SAFETY: `t.proc` is non-null (checked above) and points at the task's live
     // `ProcMeta`, which the task list owns, so this field read is in bounds.
-    unsafe { (*t.proc).mm.count }
+    let shared = unsafe { (*t.proc).shared };
+    if shared.is_null() {
+        return 0;
+    }
+    // SAFETY: `shared` is the task group's live state (non-null checked above), so
+    // the tracker count is in bounds.
+    unsafe { (*shared).mm.count }
 }
 
 #[unsafe(no_mangle)]
@@ -84,7 +91,13 @@ pub extern "C" fn oom_kill() -> i32 {
     let victim_proc = unsafe { (*victim).proc };
     // SAFETY: `victim_proc` is that task's live `ProcMeta`, so this field read is
     // in bounds.
-    let victim_pages = unsafe { (*victim_proc).mm.count };
+    let victim_shared = unsafe { (*victim_proc).shared };
+    let victim_pages = if victim_shared.is_null() {
+        0
+    } else {
+        // SAFETY: `victim_shared` is the victim group's live state (non-null here).
+        unsafe { (*victim_shared).mm.count }
+    };
 
     unsafe extern "C" {
         fn task_signal_locked(pid: u32, signal: u32);

@@ -99,6 +99,11 @@ int sys_exit(struct syscall_frame* regs) {
     // Drop the process's controlling-terminal assignment
     tty_clear_ctty(current_task->pid);
 
+    // exit() ends the whole process, not just the calling thread: ask every
+    // other thread of the group to die too.  pthread_exit() uses the separate
+    // CACT_PROCCTL_THREAD_EXIT path, which ends only the caller.
+    task_signal_group(current_task->pid, SIGKILL);
+
     sched_task_exit((int)regs->ebx);   // sets zombie state, reschedules
 
     // Safety net: if schedule() returns, spin forever in HLT

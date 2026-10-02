@@ -14,7 +14,6 @@
 #include "usb.h"
 #include "firmware.h"
 #include "ktime.h"
-#include "fb.h"
 
 /* 64-bit signed division (compiler runtime).  An i386 module doing int64_t
  * arithmetic — e.g. the i915 WRPLL calculator — resolves these here; the
@@ -166,15 +165,6 @@ static const ksym_entry_t ksym_table[] = {
     { "drm_gem_handle_close",        (uint32_t)drm_gem_handle_close },
     { "drm_gem_prime_handle_to_fd",  (uint32_t)drm_gem_prime_handle_to_fd },
     { "drm_gem_prime_fd_to_handle",  (uint32_t)drm_gem_prime_fd_to_handle },
-
-    /* Boot framebuffer geometry (drivers/video/fb).  A display driver scans the
-     * console framebuffer out directly, before any DRM client exists. */
-    { "fb_get_buffer",               (uint32_t)fb_get_buffer },
-    { "fb_get_width",                (uint32_t)fb_get_width },
-    { "fb_get_height",               (uint32_t)fb_get_height },
-    { "fb_get_pitch",                (uint32_t)fb_get_pitch },
-    { "fb_get_bpp",                  (uint32_t)fb_get_bpp },
-    { "fb_get_red_pos",              (uint32_t)fb_get_red_pos },
 
     /* Compiler runtime for 64-bit arithmetic in modules. */
     { "__divdi3",                    (uint32_t)__divdi3 },
