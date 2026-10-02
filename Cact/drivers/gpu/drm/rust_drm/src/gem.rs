@@ -33,6 +33,10 @@ extern "C" {
 
     /* kernel/core/syscall/helper.h */
     fn alloc_fd(node: *mut c_void) -> c_int;
+
+    /* kernel/memory/rust_mm — page-table walk.  A null directory selects the
+     * kernel's, which is the one the memfd frames are mapped in. */
+    fn vmm_get_phys(pd: *mut u32, va: u32) -> u32;
 }
 
 /// Address of the device's bookkeeping lock.
@@ -253,6 +257,39 @@ pub extern "C" fn drm_gem_vaddr(obj: *mut GemObject, off: u32) -> *mut c_void {
     }
     // SAFETY: `page` is a live 4 KiB frame and `off & 4095` indexes within it.
     unsafe { page.add((off & 4095) as usize) as *mut c_void }
+}
+
+/// Number of 4 KiB frames backing the object.
+#[no_mangle]
+pub extern "C" fn drm_gem_page_count(obj: *mut GemObject) -> u32 {
+    if obj.is_null() {
+        return 0;
+    }
+    // SAFETY: `obj` is the caller's live object (checked non-null above).
+    (unsafe { (*obj).size }) / 4096
+}
+
+/// Physical address of frame `index` of the object, or 0 when the index is out
+/// of range or the frame is not mapped.
+///
+/// A device that reads the object itself (scanout, a GPU translation table)
+/// needs physical addresses: memfd frames are allocated individually, so a
+/// caller walks indices `0..drm_gem_page_count(obj)` to collect them.
+#[no_mangle]
+pub extern "C" fn drm_gem_page_phys(obj: *mut GemObject, index: u32) -> u32 {
+    if obj.is_null() || index >= drm_gem_page_count(obj) {
+        return 0;
+    }
+    // SAFETY: `drm_gem_vaddr`'s contract: `obj` is the caller's live object and
+    // `index * 4096` is inside its size (checked above), so the page base is
+    // returned (the low 12 bits of the offset are zero).
+    let page = drm_gem_vaddr(obj, index * 4096) as u32;
+    if page == 0 {
+        return 0;
+    }
+    // SAFETY: `vmm_get_phys` translates `page` in the kernel page directory
+    // (a null directory selects it); 0 is returned when unmapped.
+    unsafe { vmm_get_phys(core::ptr::null_mut(), page) }
 }
 
 /* ── mmap offsets ───────────────────────────────────────────────────────── */

@@ -293,3 +293,6 @@ uint8_t fb_get_bpp(void) {
 uint32_t* fb_get_buffer(void) {
     return fb_buffer;
 }
+uint32_t fb_get_red_pos(void) {
+    return fb_red_pos;
+}
