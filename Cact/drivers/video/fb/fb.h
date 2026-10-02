@@ -42,6 +42,11 @@ uint32_t  fb_get_pitch(void);
 uint8_t   fb_get_bpp(void);
 uint32_t* fb_get_buffer(void);
 
+/* Red channel bit position of the boot framebuffer's pixel format.  Exported
+ * so a display driver can tell XRGB from XBGR when it scans the framebuffer
+ * out directly. */
+uint32_t  fb_get_red_pos(void);
+
 /* Post-paging verification / diagnostics (calls printk/klog). */
 void init_framebuffer(void);
 

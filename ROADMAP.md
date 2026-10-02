@@ -16,82 +16,15 @@ actually has, not a promise. What already works is described in
 - **Listening sockets** hold a single pending inbound connection: smoltcp has no
   SYN backlog yet, so a second concurrent connect is refused.
 
-## TLS
-
-Userspace HTTPS now runs through the **libc** TLS 1.3 client (`CactLibc`), not
-the kernel. Today it supports X25519, `TLS_AES_128_GCM_SHA256` and RSA/ECDSA
-server certificates. Still missing: **client certificates, PSK, session
-resumption and TLS 1.2**. The in-kernel rustls path remains only for the kernel
-HTTP client.
-
 ## Interrupts & drivers
 
 - MSI-X is the preferred device interrupt, with a single **MSI** message as the
   fallback (`msidev_register()`); both paths need coverage across the driver set.
 - **GPU / KMS**: the DRM uapi and a virtio-gpu driver exist as a sibling repo;
-  the VT/PTY layer has a self-test (`devtest` in CactUserBins). No Intel code
-  exists anywhere in the tree — see [GPU / Intel (i915)](#gpu--intel-i915) for
-  what a port still needs from the kernel.
-
-## CPU topology: SMP, SMT (Hyper-Threading) & core power
-
-Assessed 2026-09-30. SMP works and the energy governor already parks, offlines
-and re-wakes individual CPUs (`smp_cpu_offline` / `smp_cpu_online_sipi` in
-`kernel/proc/sched/src/smp.rs`, gated by `energy_core_offline_enable()`), but the
-CPU map is **flat**: one entry per MADT LAPIC id (`energy.rs`,
-`MAX_CORES = MAX_CPUS = 64`) and nothing records that two of those entries are
-the two **threads of one physical core**. SMT siblings already come up — MADT
-enumeration counts every enabled LAPIC entry — they are simply indistinguishable
-from real cores, so a 4-core / 8-thread CPU is reported and scheduled as 8
-independent cores.
-
-What is missing to make the machine's own topology real (4 cores → 8 CPUs, each
-logical processor tied to its core and switchable):
-
-- **No topology decode.** `cpu_has_htt()` reads CPUID.01H:EDX[28]
-  (`kernel/cpudev/cpudev.c`) but **nothing consumes it**, and neither leaf `4`
-  (cores/package) nor leaf `0xB`/`0x1F` (package/core/SMT bit widths) is
-  decoded — so there is no `core_id`, `package_id` or sibling mask anywhere.
-- **Core vs thread is absent from the model.** `EnergyCore` carries only
-  `lapic_id`/`role`/`cstate`/`online`; there is no parent core or sibling set to
-  reason about, and the "core" wording is really a logical CPU.
-- **Power is per CPU only.** `energy_core_set_cstate` lets a thread enter C3/C6
-  while its sibling runs, and there is no "all threads of a core idle → the
-  core may go deep" rule; the offline path also acts on one CPU, not on a core
-  as a unit. Powering a core off means parking **both** threads, not one.
-- **Placement is sibling-blind.** `balance.rs` / `decision.rs` scan
-  `1..MAX_CORES` and treat every entry as an independent core, so two runnable
-  tasks can land on the two threads of one core while another physical core
-  idles.
-- **S3 loses the workers.** `smp_init()` runs only from boot
-  (`kernel/core/kernel.c`); after an S3 resume no AP (let alone a sibling set)
-  is re-woken — the existing gap, and the topology work has to close it.
-- **Reporting.** `/proc/cpuinfo` (`fs/vfs/procfs/procfs_std.c`) prints
-  `processor`/`apicid`/`role`/`cstate`/`online`/`idle` but no `core id`,
-  `physical id`, `siblings` or `cpu cores`, so userspace cannot see the
-  topology; `sysinfo` has no "N cores / M threads" line.
-
-### Phases
-
-1. **Topology.** Decode CPUID leaf `0xB`/`0x1F` into `package_id` / `core_id` /
-   `smt_sibling_mask`, falling back to leaf `4` + leaf `1` HTT and then to MADT
-   ordering; expose it through `energy.h` and add `core id`, `physical id`,
-   `siblings` and `cpu cores` to `/proc/cpuinfo`.
-2. **Core-level power.** Deep C-states only when *every* sibling is idle; a
-   core-offline that parks and INITs all threads of the core as one unit
-   (reuse the park protocol already in `smp_cpu_offline`).
-3. **Sibling-aware placement.** In `balance.rs` / `decision.rs`, prefer a
-   physical core with no busy thread over an SMT sibling of a busy one.
-4. **S3.** Re-wake all logical CPUs on resume (closes the gap above).
-5. **Self-test** in `CactUserBins`: with `-smp 4,threads=2`, print present
-   cores/threads, check the sibling masks, offline one thread and confirm its
-   sibling keeps running.
-
-**Acceptance:** with `-smp 4,threads=2` the boot `smp` line reports 7 worker(s)
-online (8 logical CPUs) and `/proc/cpuinfo` groups them under 4 `physical id`s
-with correct `siblings`; two CPU-bound threads are placed on different physical
-cores before any core is shared; offlining one thread leaves its sibling running
-and offlining both powers the core down; after S3 all 8 are online again.
+  the VT/PTY layer has a self-test (`devtest` in CactUserBins). The Intel
+  display half now exists as the out-of-tree module
+  `Intel-GPU-for-Cact-x86_32` (stage 1: bind + EDID → `/dev/dri`); see
+  [GPU / Intel (i915)](#gpu--intel-i915) for what a full port still needs.
 
 ## GPU / Intel (i915)
 
@@ -158,80 +91,121 @@ The order that unblocks the most:
 5. Then the driver itself, **in-tree**, because it needs the
    property/framebuffer/ACPI/PAT surface the module ABI does not export.
 
-## Threads & POSIX pthreads
+### Update 2026-10-01 — display half started as an out-of-tree `.cctk`
 
-Assessed 2026-09-30. **No threads exist.** `pthread_create()` in
-`CactLibc/src/pthread.c` is a stub returning `ENOSYS`; there is no `clone`, no
-`futex`, and no `tid`. A `task_struct` owns its own `proc_metadata_t` and page
-directory, and `task_reap` tears all of it down at process exit — so "several
-threads, one address space" is a new model, not a flag.
+The **display** half turned out to be reachable out-of-tree after all: `ksym.c`
+already exports the whole generic DRM/KMS API (`drm_dev_create`, KMS object
+init, GEM, connector/EDID helpers) and the loader matches PCI by
+vendor + device-list, which is what a display driver needs.  Only the *full*
+i915 (property/blob creation, render engine) still needs the in-tree surface.
 
-**ABI decision:** the 15-trap syscall set stays final. Thread creation and
-futex join as ioctl ranges — thread ops on `/proc/self/ctl` (`CACT_PROCCTL_*`),
-wait/wake on a new `/dev/futex` node — exactly how the rest of the kernel
-exposes non-trap facilities.
+Started `Intel-GPU-for-Cact-x86_32/` (`i915.cctk`, ported from Linux i915
+7.3-rc4; CFL is DISPLAY_VER **9**, not 10): stage 1 = bind + power wells + EDID
+over GMBUS/DDC or DP AUX → `/dev/dri` with real connector modes.  `set_config`
+answers `EOPNOTSUPP` — nothing is scanned out yet.
 
-### Kernel prerequisites
+Kernel side: **gap 1 is half closed** — `drm_gem_page_phys()` /
+`drm_gem_page_count()` now export the physical backing of a GEM object (via
+`vmm_get_phys`), which is what GGTT scanout needs.  Still absent for a real
+modeset: the CDCLK/DPLL/pipe/plane programming (stage 3) and, for tiling and
+plane/GTT-mapped scanout, the WC mapping API (gap 2).
 
-- **Thread identity.** Add `tid` (unique) and `tgid` (thread-group leader) to
-  `task_struct`; `pid` stays the process id and a `find_task_by_tid` joins the
-  pid lookup. `/proc` lists only group leaders under `<pid>/`.
-- **Shared address space.** `proc_metadata_t` gains a shared-mm refcount and a
-  live-thread count; threads share `proc` and `page_directory`. `task_reap` and
-  `SYS_EXIT` free `mm`/fds/cwd/`proc_metadata_t` **only when the last thread
-  exits**; a non-last thread frees just its kernel stack and `task_struct`.
-  COW / `vmm_free_address_space` must not run twice.
-- **Thread create.** `CACT_PROCCTL_THREAD_CREATE {entry, stack_top, arg,
-  tls_base, detached}` allocates a task + kernel stack, shares the mm, and arms
-  a trap frame so the first schedule `iretd`s to `entry` in ring 3 with
-  `esp = stack_top` and `eax = arg`. Returns the new `tid`.
-- **TLS.** Per-thread `%gs` base (a GDT entry per thread, or one selector with a
-  per-task base field loaded by `switch_to`) — needed for `errno` and
-  `pthread_*` keys.
-- **Futex.** `CACT_FUTEX_WAIT {uaddr, expected, timeout}` /
-  `CACT_FUTEX_WAKE {uaddr, n}`, keyed by (shared mm, uaddr), parked on the
-  scheduler `sleep_queue`; `FUTEX_WAIT` re-checks the word under the mm lock to
-  close the lost-wakeup race.
-- **Signals.** Handlers and pending signals are process-wide (already in
-  `proc_metadata_t`); per-thread masks (`pthread_sigmask`) need a mask on
-  `task_struct`. `SIGSEGV`/`SIGFPE`/`SIGILL` terminate the whole group.
-- **Entry alignment.** A thread's first ring-3 entry must satisfy the i386 SSE
-  contract (`esp ≡ 12 mod 16`), the same invariant the fixed `start.S` now
-  establishes; the trampoline lands via `iretd`, so set `stack_top` accordingly.
+### Update 2026-10-02 — stage 3 scanout + console handoff
 
-### libc (`CactLibc`) — full POSIX set
+The driver now **drives the display**: on load it finds the transcoder already
+serving the connected DDI, maps the kernel's boot framebuffer into the GGTT and
+programs pipe/plane, transcoder timings, `TRANS_DDI_FUNC_CTL`, watermarks and
+the DDI encoder, so the console keeps working through the driver's own modeset.
+`set_config()` programs a client framebuffer the same way.  CDCLK/WRPLL are
+still inherited from firmware — programming them is the remaining stage-3 work.
 
-- **Threads:** `pthread_create`/`_join`/`_exit`/`_detach`/`_self`/`_equal`,
-  `pthread_attr_*` (stack size, detach state, guard size), `pthread_kill`,
-  `pthread_sigmask`.
-- **Synchronisation:** mutex (normal, error-check, recursive; `_timedlock`),
-  condition variables (`_wait`/`_timedwait`/`_signal`/`_broadcast`), read/write
-  locks (`rdlock`/`wrlock`/`trylock`/`timed*`/`unlock`), spinlocks, barriers,
-  `pthread_once`.
-- **TLS & lifecycle:** `pthread_key_create`/`_delete`/`setspecific`/`getspecific`
-  backed by real `%gs` TLS (today's globals are per-process only),
-  `pthread_cleanup_push`/`_pop` (needs an unwind-aware trampoline), and deferred
-  **cancellation** (`pthread_cancel`/`_testcancel`/`_setcancelstate`/`_setcanceltype`).
-- **Semaphores:** POSIX `sem_*` on the same futex.
-- Everything futex-backed; the stubs in `src/pthread.c` are replaced, not wrapped.
+Kernel side: `ksym.c` exports the boot framebuffer geometry
+(`fb_get_buffer/width/height/pitch/bpp` + `fb_get_red_pos`) so a display driver
+can scan the console out before any DRM client exists.  Two driver-side fixes
+came out of this: the module is registered in `CactBridge build.py`'s `DRIVERS`
+(a missing entry meant it was silently never rebuilt), and `intel_probe_ports()`
+now keeps the DDI index instead of compacting the port array (it mislabelled
+every sink as DDI-A, which would have programmed the wrong port).
+
+### Update 2026-10-02 — stage 3 clocks + stage 4 (vblank / flip / cursor)
+
+Stage 3 is complete: the driver programs **CDCLK** (kept or changed via the
+Wa #1183 DIVMUX sequence + PCODE) and the **HDMI WRPLL** from scratch
+(`skl_ddi_calculate_wrpll` ported, `DPLL1` lock), routes the DPLL to the port
+and transcoder, and takes over pipe/encoder/plane.  Because the boot
+framebuffer's address is an *aperture* address (GMADR + 0), not physical
+memory, the console handoff keeps the firmware's plane buffer/mapping rather
+than re-mapping pages.
+
+Stage 4 is implemented: a real **vblank interrupt** (GPU MSI handler →
+`GEN8_DE_PIPE_IIR` ack → `drm_crtc_handle_vblank`), an MMIO **page flip**
+(`drm_gem_page_phys` → GGTT → `PLANE_SURF`), and the **SKL hardware cursor**
+(`CUR_CTL/POS/BASE` + `CUR_WM`/`CUR_BUF_CFG`).  Kernel side gained
+`__divdi3`/`__moddi3`/`__udivdi3` in `ksym` (the WRPLL calculator does 64-bit
+division).
+
+## CPU topology: SMP, SMT (Hyper-Threading) & core power
+
+Assessed 2026-09-30. SMP works and the energy governor already parks, offlines
+and re-wakes individual CPUs (`smp_cpu_offline` / `smp_cpu_online_sipi` in
+`kernel/proc/sched/src/smp.rs`, gated by `energy_core_offline_enable()`), but the
+CPU map is **flat**: one entry per MADT LAPIC id (`energy.rs`,
+`MAX_CORES = MAX_CPUS = 64`) and nothing records that two of those entries are
+the two **threads of one physical core**. SMT siblings already come up — MADT
+enumeration counts every enabled LAPIC entry — they are simply indistinguishable
+from real cores, so a 4-core / 8-thread CPU is reported and scheduled as 8
+independent cores.
+
+What is missing to make the machine's own topology real (4 cores → 8 CPUs, each
+logical processor tied to its core and switchable):
+
+- **No topology decode.** `cpu_has_htt()` reads CPUID.01H:EDX[28]
+  (`kernel/cpudev/cpudev.c`) but **nothing consumes it**, and neither leaf `4`
+  (cores/package) nor leaf `0xB`/`0x1F` (package/core/SMT bit widths) is
+  decoded — so there is no `core_id`, `package_id` or sibling mask anywhere.
+- **Core vs thread is absent from the model.** `EnergyCore` carries only
+  `lapic_id`/`role`/`cstate`/`online`; there is no parent core or sibling set to
+  reason about, and the "core" wording is really a logical CPU.
+- **Power is per CPU only.** `energy_core_set_cstate` lets a thread enter C3/C6
+  while its sibling runs, and there is no "all threads of a core idle → the
+  core may go deep" rule; the offline path also acts on one CPU, not on a core
+  as a unit. Powering a core off means parking **both** threads, not one.
+- **Placement is sibling-blind.** `balance.rs` / `decision.rs` scan
+  `1..MAX_CORES` and treat every entry as an independent core, so two runnable
+  tasks can land on the two threads of one core while another physical core
+  idles.
+- **S3 loses the workers.** `smp_init()` runs only from boot
+  (`kernel/core/kernel.c`); after an S3 resume no AP (let alone a sibling set)
+  is re-woken — the existing gap, and the topology work has to close it.
+- **Reporting.** `/proc/cpuinfo` (`fs/vfs/procfs/procfs_std.c`) prints
+  `processor`/`apicid`/`role`/`cstate`/`online`/`idle` but no `core id`,
+  `physical id`, `siblings` or `cpu cores`, so userspace cannot see the
+  topology; `sysinfo` has no "N cores / M threads" line.
 
 ### Phases
 
-1. Kernel identity + shared mm/refcount + per-thread `SYS_EXIT` semantics.
-2. `THREAD_CREATE` + TLS base + entry alignment; a ring-3 smoke test where two
-   threads share a global and exit.
-3. `/dev/futex` wait/wake; mutex/cond in libc.
-4. Full libc surface (rwlock, barriers, once, cleanup, cancel, per-thread signal
-   masks) and a multithreaded self-test in `CactUserBins`.
+1. **Topology.** Decode CPUID leaf `0xB`/`0x1F` into `package_id` / `core_id` /
+   `smt_sibling_mask`, falling back to leaf `4` + leaf `1` HTT and then to MADT
+   ordering; expose it through `energy.h` and add `core id`, `physical id`,
+   `siblings` and `cpu cores` to `/proc/cpuinfo`.
+2. **Core-level power.** Deep C-states only when *every* sibling is idle; a
+   core-offline that parks and INITs all threads of the core as one unit
+   (reuse the park protocol already in `smp_cpu_offline`).
+3. **Sibling-aware placement.** In `balance.rs` / `decision.rs`, prefer a
+   physical core with no busy thread over an SMT sibling of a busy one.
+4. **S3.** Re-wake all logical CPUs on resume (closes the gap above).
+5. **Self-test** in `CactUserBins`: with `-smp 4,threads=2`, print present
+   cores/threads, check the sibling masks, offline one thread and confirm its
+   sibling keeps running.
 
-**Acceptance:** `pthread_create` runs two threads on different CPUs, a mutex
-serialises a counter to the expected total, `join` returns the thread's value,
-and a thread `SIGSEGV`/`exit` tears down the group without leaking the address
-space.
+**Acceptance:** with `-smp 4,threads=2` the boot `smp` line reports 7 worker(s)
+online (8 logical CPUs) and `/proc/cpuinfo` groups them under 4 `physical id`s
+with correct `siblings`; two CPU-bound threads are placed on different physical
+cores before any core is shared; offlining one thread leaves its sibling running
+and offlining both powers the core down; after S3 all 8 are online again.
 
 ## Storage & filesystems
 
-- **ext4** is read/write in-tree; FAT32 ships as an out-of-tree `.cctk` module.
 - The page cache and optional **swap** are in place; a swap partition that
   cannot be used today only logs a warning.
 
