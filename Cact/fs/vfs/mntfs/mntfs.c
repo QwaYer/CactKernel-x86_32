@@ -26,10 +26,10 @@ static int _ensure_dir(vfs_node_t *root, const char *name) {
     return root->ops->mkdir(root, name);
 }
 
-// Register one layout mount: host/<name> -> target.
+// Register one layout mount: host/<name> -> target, tagged with its fs type.
 static void _mount(vfs_node_t *host, const char *name, vfs_node_t *target,
                    const char *src) {
-    if (vfs_mount(host, name, target) == 0) {
+    if (vfs_mount_ex(host, name, target, src) == 0) {
         pr_info("  %-11s : /%-6s <- %s\n", "mntfs", name, src);
     } else {
         pr_warn("  %-11s : mount of /%s (%s) failed\n", "mntfs", name, src);
@@ -85,6 +85,13 @@ void mntfs_init(void) {
     libfs_init(ext4);
     varfs_init(ext4);
     usrfs_init(ext4);
+
+    // Dynamic synthetic filesystems: procfs creates /proc/<pid> as processes
+    // come and go, and devfs gains nodes on runtime register_chrdev().  Their
+    // subtrees must never be cached, or the dcache would hand back stale
+    // bindings (and, for reused pids, wrong ones).
+    vfs_set_nocache(devfs_get_root());
+    vfs_set_nocache(procfs_get_root());
 
     // 3. Create the mountpoint directories (and /home, /mnt) on the root fs,
     //    so the tree looks like a real Linux root.  /bin, /sbin and /lib are

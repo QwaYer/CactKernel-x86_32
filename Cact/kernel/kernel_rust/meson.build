@@ -13,6 +13,7 @@ _rust_scan_dirs = [
   meson.project_source_root() / 'Cact/drivers/gpu/drm/rust_drm',
   meson.project_source_root() / 'Cact/drivers/gpu/kms',
   meson.project_source_root() / 'Cact/net/rust_net',
+  meson.project_source_root() / 'Cact/fs/rust_vfs',
   meson.project_source_root() / 'Cact/crypto',
 ]
 

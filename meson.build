@@ -64,12 +64,6 @@ if git.found()
   endif
 endif
 
-cact_build_time = 'unknown'
-_date = run_command('date', '+%Y-%m-%d %H:%M:%S', check: false)
-if _date.returncode() == 0
-  cact_build_time = _date.stdout().strip()
-endif
-
 cact_compiler = cc.get_id() + ' ' + cc.version()
 
 cact_builder = 'unknown'
@@ -183,9 +177,6 @@ kernel_c_args = [
   '-DCACT_ACPI_FREESTANDING',
   '-DCACT_VERSION=' + cact_version,
   '-DCACT_COMMIT_HASH=' + cact_commit,
-  # version.c stringifies this with STR(), and the Makefile let the shell strip
-  # the quotes, so the macro body must stay bare tokens to match its banner.
-  '-DCACT_BUILD_TIME=' + cact_build_time,
   '-DCACT_COMPILER=' + cact_compiler,
   '-DCACT_BUILDER=' + cact_builder,
 ]
@@ -286,6 +277,7 @@ subdir('Cact/kernel/proc/sched')
 subdir('Cact/kernel/memory/rust_mm')
 subdir('Cact/net/rust_net')
 subdir('Cact/drivers/gpu/drm/rust_drm')
+subdir('Cact/fs/rust_vfs')
 # The one Rust staticlib (all other kernel Rust crates are rlibs).
 subdir('Cact/kernel/kernel_rust')
 subdir('Cact/crypto/hmac_ffi')

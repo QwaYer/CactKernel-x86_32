@@ -138,7 +138,20 @@ void          vfs_init     (void);
 
 // Mount/unmount a filesystem on a host directory
 int           vfs_mount    (vfs_node_t *host, const char *name, vfs_node_t *target);
+// As vfs_mount, but records the filesystem type name for /proc/mounts.
+int           vfs_mount_ex (vfs_node_t *host, const char *name, vfs_node_t *target,
+                            const char *fstype);
 int           vfs_umount   (vfs_node_t *host, const char *name);
+
+// Render the mount tree as /proc/mounts lines ("<src> <path> <fstype> rw 0 0").
+// Returns the number of bytes written (excluding the trailing NUL).
+int           vfs_render_mounts(char *buf, int cap);
+
+// Mark a node's subtree as non-cacheable.  Required for dynamic synthetic
+// filesystems whose names appear/disappear at runtime (procfs per-pid dirs,
+// devfs runtime register_chrdev), so the dentry cache never caches a stale
+// binding.  Idempotent.
+void          vfs_set_nocache(vfs_node_t *node);
 
 // Walk a path WITHOUT following symlinks
 vfs_node_t   *vfs_walk_path       (vfs_node_t *start, const char *path);
@@ -197,6 +210,12 @@ int           delete_vfs   (vfs_node_t *dir, char *name);
 int           mkdir_vfs    (vfs_node_t *dir, char *name);
 int           rmdir_vfs    (vfs_node_t *dir, char *name);
 int           rename_vfs   (vfs_node_t *dir, const char *oldname, const char *newname);
+// Cross-directory rename (statfs-style move): same-dir delegates to the
+// filesystem's rename; across directories a regular file is moved via
+// link+unlink (atomic on this kernel).  Directories and existing targets are
+// refused.
+int           vfs_rename_at(vfs_node_t *olddir, const char *oldname,
+                            vfs_node_t *newdir, const char *newname);
 
 // Symlink and hard-link VFS operations
 vfs_node_t   *vfs_symlink_alloc  (const char *target, uint32_t target_len);
@@ -218,6 +237,42 @@ int           chmod_vfs    (vfs_node_t *node, uint32_t mode);
 int           chown_vfs    (vfs_node_t *node, uint32_t uid, uint32_t gid);
 int           mknod_vfs    (vfs_node_t *dir, const char *name, uint32_t mode, uint32_t dev);
 int           stat_vfs     (vfs_node_t *node, uint32_t *buf);
+// Rich stat: fills a `cact_statx_t` (see ioctl_abi.h); `buf` is void* here so
+// this header stays independent of the syscall ABI header.
+void          vfs_fill_statx(vfs_node_t *node, void *buf);
+// Register a filesystem type's statfs numbers (called by FS at init).
+void          vfs_sb_register(const char *fstype, uint32_t bsize, uint32_t blocks,
+                              uint32_t bfree, uint32_t bavail, uint32_t files,
+                              uint32_t ffree);
+// Fill a `cact_statfs_t` (see ioctl_abi.h) for the filesystem containing `node`.
+void          vfs_fill_statfs(vfs_node_t *node, void *buf);
+
+// ── Generic inode address space (page cache) ────────────────────────────
+// Keyed by (owner, ino): the filesystem instance (node->priv) plus the inode
+// number.  Filesystems call these for regular files; the object is a memfd so a
+// MAP_SHARED mmap of the file shares the frames read()/write() use.
+// `rfn`/`wfn` are raw backing read/write callbacks
+//   int (*)(void *owner, uint32_t ino, uint32_t off, uint32_t size, char *buf)
+// (NULL for a RAM filesystem whose page array *is* the storage).
+void vfs_as_set_backing(void *owner, uint32_t ino, void *rfn, void *wfn);
+void vfs_as_setsize    (void *owner, uint32_t ino, uint32_t size);
+int  vfs_as_size       (void *owner, uint32_t ino);
+int  vfs_as_read    (void *owner, uint32_t ino, uint32_t off, uint32_t size, char *buf);
+int  vfs_as_write   (void *owner, uint32_t ino, uint32_t off, uint32_t size, char *buf);
+int  vfs_as_truncate(void *owner, uint32_t ino, uint32_t length);
+void vfs_as_flush   (void *owner, uint32_t ino, uint32_t off, uint32_t size);
+int  vfs_as_backing (void *owner, uint32_t ino, uint32_t off, uint32_t len,
+                     int *backing, uint32_t *obj_off);
+void vfs_as_release (void *owner, uint32_t ino);
+// Flush a file-backed mapping's range on munmap (resolve fd -> node -> AS).
+void vfs_as_flush_fd(int fd, uint32_t off, uint32_t size);
+// Flush every dirty page of every address space (call at unmount/shutdown).
+void vfs_as_flush_all(void);
+// Report [live objects, page populates, page flushes, capacity] into `out`.
+void vfs_as_stats(uint32_t *out);
+// Resolve a single dirfd-relative name, optionally following a final symlink.
+// Handles "." and "..".  Returns the target node or NULL.
+vfs_node_t   *vfs_lookup_child(vfs_node_t *dir, const char *name, int follow);
 int           poll_vfs     (vfs_node_t *node, uint32_t events);
 int           lseek_vfs    (vfs_node_t *node, int offset, int whence, uint32_t *result);
 

@@ -265,6 +265,11 @@ static int _fdctl_handle(file_t *f, int fd, uint32_t cmd, void *arg) {
         if (!arg || !validate_user_ptr(arg, 16)) return -EFAULT;
         return stat_vfs(f->node, (uint32_t *)arg);
 
+    case CACT_FDCTL_FSTATX:
+        if (!arg || !validate_user_ptr(arg, sizeof(cact_statx_t))) return -EFAULT;
+        vfs_fill_statx(f->node, arg);
+        return 0;
+
     case CACT_FDCTL_FTRUNCATE: {
         uint32_t len;
         if (!arg) return -EINVAL;
@@ -437,6 +442,48 @@ static int _dirctl_handle(vfs_node_t *dir, uint32_t cmd, void *arg) {
         return ret;
     }
 
+    case CACT_DIRCTL_RENAMEAT: {
+        cact_renameat_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        char *kold, *knew, *kdir;
+        if (_copy_name_arg(a.oldname, &kold) != 0) return -EFAULT;
+        if (_copy_name_arg(a.newname, &knew) != 0) { kfree(kold); return -EFAULT; }
+        if (!a.newdir) { kfree(kold); kfree(knew); return -EINVAL; }
+        kdir = copy_path_from_user(a.newdir);
+        if (!kdir) { kfree(kold); kfree(knew); return -EFAULT; }
+        if (!_name_is_single(kold) || !_name_is_single(knew)) {
+            kfree(kold); kfree(knew); kfree(kdir); return -EINVAL;
+        }
+        vfs_node_t *newd = _resolve_path(kdir);
+        kfree(kdir);
+        if (!newd) { kfree(kold); kfree(knew); return -ENOENT; }
+        int p = _dir_wx(dir);
+        if (!p) p = _dir_wx(newd);
+        int ret = p ? p : vfs_rename_at(dir, kold, newd, knew);
+        kfree(kold);
+        kfree(knew);
+        return ret;
+    }
+
+    case CACT_DIRCTL_STATFS: {
+        cact_statfs_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        if (!a.buf || !validate_user_ptr(a.buf, sizeof(cact_statfs_t))) return -EFAULT;
+        vfs_node_t *node = dir;
+        if (a.name) {
+            char *kname;
+            if (_copy_name_arg(a.name, &kname) != 0) return -EFAULT;
+            if (!_name_is_single(kname)) { kfree(kname); return -EINVAL; }
+            node = finddir_vfs(dir, kname);
+            kfree(kname);
+            if (!node) return -ENOENT;
+        }
+        vfs_fill_statfs(node, a.buf);
+        return 0;
+    }
+
     case CACT_DIRCTL_LINK: {
         cact_link_arg_t a;
         if (!arg) return -EINVAL;
@@ -501,6 +548,23 @@ static int _dirctl_handle(vfs_node_t *dir, uint32_t cmd, void *arg) {
         kfree(kname);
         if (!node) return -ENOENT;
         return stat_vfs(node, (uint32_t *)a.buf);
+    }
+
+    case CACT_DIRCTL_STATX: {
+        cact_statx_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        if (!a.buf || !validate_user_ptr(a.buf, sizeof(cact_statx_t))) return -EFAULT;
+        char *kname;
+        if (_copy_name_arg(a.name, &kname) != 0) return -EFAULT;
+        if (!_name_is_single(kname)) { kfree(kname); return -EINVAL; }
+        // stat(2) follows a final symlink; AT_SYMLINK_NOFOLLOW gives lstat.
+        int follow = (a.flags & CACT_AT_SYMLINK_NOFOLLOW) ? 0 : 1;
+        vfs_node_t *node = vfs_lookup_child(dir, kname, follow);
+        kfree(kname);
+        if (!node) return -ENOENT;
+        vfs_fill_statx(node, a.buf);
+        return 0;
     }
 
     case CACT_DIRCTL_ACCESS: {
@@ -670,6 +734,10 @@ int sys_fcntl(int fd, int cmd, int arg) {
             else
                 (void)ksock_set_nonblock(f->node, (int)(new_flags & O_NONBLOCK));
         }
+        // Pipes live in the Rust VFS core and only see the node, so push
+        // O_NONBLOCK into the pipe state the same way.
+        if (f->node && f->node->type == VFS_PIPE)
+            vfs_pipe_set_nonblock(f->node, (int)(new_flags & O_NONBLOCK));
         return 0;
     }
     default:

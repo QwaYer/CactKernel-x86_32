@@ -1,8 +1,5 @@
 kernel_libs += static_library('cact_vfs',
   files(
-    'vfs.c',
-    'vfs_ops.c',
-    'vfs_file.c',
     'fs_mod.c',
     'cctkfs_tree.c',
   ),

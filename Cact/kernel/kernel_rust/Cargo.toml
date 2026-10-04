@@ -16,6 +16,7 @@ cact_mm  = { path = "../memory/rust_mm" }
 sched    = { path = "../proc/sched" }
 cact_drm = { path = "../../drivers/gpu/drm/rust_drm" }
 cact_net = { path = "../../net/rust_net" }
+cact_vfs = { path = "../../fs/rust_vfs" }
 cact_hmac_ffi = { path = "../../crypto/hmac_ffi" }
 
 [profile.release]

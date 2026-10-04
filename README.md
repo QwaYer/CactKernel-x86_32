@@ -123,8 +123,11 @@ ninja -C build-meson iso-full   # signs cctkfs.img via tools/cact_sign_cctkfs.py
 ```meson
 '-DCACT_VERSION=' + cact_version,
 '-DCACT_COMMIT_HASH=' + cact_commit,
-'-DCACT_BUILD_TIME=' + cact_build_time,   # version.c stringifies it with STR()
 ```
+
+`kernel_build_time` is not a configure-time macro: `Cact/kernel/core/kern_ver/meson.build`
+generates `cact_build_time.c` on every build (`custom_target`, `build_always_stale`),
+so the banner reports the actual build time instead of the last `meson setup`.
 
 **Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3) + **`libcact_hmac_ffi.a`** (HMAC-SHA256 module signing). Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
 
