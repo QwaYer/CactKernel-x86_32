@@ -17,10 +17,9 @@ int sys_pipe(struct syscall_frame *regs) {
     file_t *rf = file_alloc(pipefd[0]);
     file_t *wf = file_alloc(pipefd[1]);
     if (!rf || !wf) {
-        if (rf) file_unref(rf);
-        if (wf) file_unref(wf);
-        close_vfs(pipefd[0]);
-        close_vfs(pipefd[1]);
+        // Close each end exactly once (see devfs_services.c _pipe_ioctl).
+        if (rf) file_unref(rf); else close_vfs(pipefd[0]);
+        if (wf) file_unref(wf); else close_vfs(pipefd[1]);
         return -1;
     }
 

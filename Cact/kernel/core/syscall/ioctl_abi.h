@@ -56,6 +56,35 @@ typedef struct cact_stat {
     uint32_t type;   // VFS node type (file/dir/chardev/...)
 } cact_stat_t;
 
+// Rich stat: the POSIX metadata the 4-word buffer cannot carry.  Timestamps are
+// zero for now (the VFS does not track them yet).
+typedef struct cact_statx {
+    uint32_t ino;
+    uint32_t mode;     // full st_mode (type bits | rwxrwxrwx)
+    uint32_t nlink;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t size;
+    uint32_t blksize;
+    uint32_t blocks;   // 512-byte blocks
+    uint32_t atime;
+    uint32_t mtime;
+    uint32_t ctime;
+    uint32_t type;     // VFS node type
+} cact_statx_t;
+
+// Filesystem statistics (POSIX struct statfs).
+typedef struct cact_statfs {
+    uint32_t f_type;     // filesystem type (hash of the fstype name)
+    uint32_t f_bsize;    // optimal transfer block size
+    uint32_t f_blocks;   // total data blocks
+    uint32_t f_bfree;    // free blocks
+    uint32_t f_bavail;   // free blocks available to unprivileged users
+    uint32_t f_files;    // total inodes
+    uint32_t f_ffree;    // free inodes
+    uint32_t f_namelen;  // maximum filename length
+} cact_statfs_t;
+
 // ===========================================================================
 // FD-level commands (ioctl on any open fd).  RANGE 0x3000.
 // ===========================================================================
@@ -67,6 +96,7 @@ typedef struct cact_stat {
 #define CACT_FDCTL_FTRUNCATE  0x3006  // arg=uint32_t* length
 #define CACT_FDCTL_GETDENTS   0x3007  // arg=cact_getdents_arg_t*; returns bytes
 #define CACT_FDCTL_FSYNC      0x3008  // arg=NULL (no-op)
+#define CACT_FDCTL_FSTATX     0x3009  // arg=cact_statx_t*   (out)
 
 typedef struct cact_fd_arg { uint32_t newfd; } cact_fd_arg_t;
 
@@ -103,6 +133,9 @@ typedef struct cact_getdents_arg { void *buf; uint32_t count; } cact_getdents_ar
 #define CACT_DIRCTL_TRUNCATE  0x310D  // arg=cact_truncate_arg_t*
 #define CACT_DIRCTL_MKNOD     0x310E  // arg=cact_mknod_arg_t*
 #define CACT_DIRCTL_CREATE    0x310F  // arg=cact_openat_arg_t* (O_CREAT only)
+#define CACT_DIRCTL_STATX     0x3110  // arg=cact_statx_arg_t*
+#define CACT_DIRCTL_RENAMEAT  0x3111  // arg=cact_renameat_arg_t*
+#define CACT_DIRCTL_STATFS    0x3112  // arg=cact_statfs_arg_t*
 
 // open flags (Linux/i386-compatible; must mirror the kernel OPEN_* values)
 #define CACT_O_RDONLY 0
@@ -114,10 +147,17 @@ typedef struct cact_getdents_arg { void *buf; uint32_t count; } cact_getdents_ar
 
 typedef struct cact_openat_arg { char *name; uint32_t flags; } cact_openat_arg_t;
 typedef struct cact_statat_arg { char *name; cact_stat_t *buf; } cact_statat_arg_t;
+typedef struct cact_statx_arg  { char *name; cact_statx_t *buf; uint32_t flags; } cact_statx_arg_t;
+// CACT_AT_SYMLINK_NOFOLLOW: statx does not follow a final symlink.
+#define CACT_AT_SYMLINK_NOFOLLOW 0x100
 typedef struct cact_link_arg    { char *target; char *newname; } cact_link_arg_t;
 typedef struct cact_symlink_arg { char *target; char *linkname; } cact_symlink_arg_t;
 typedef struct cact_readlink_arg{ char *name; char *buf; uint32_t len; } cact_readlink_arg_t;
 typedef struct cact_rename_arg  { char *oldname; char *newname; } cact_rename_arg_t;
+// Cross-directory rename: invoked on the source directory fd; `newdir` is the
+// destination directory path (relative to cwd or absolute).
+typedef struct cact_renameat_arg { char *oldname; char *newdir; char *newname; } cact_renameat_arg_t;
+typedef struct cact_statfs_arg  { char *name; cact_statfs_t *buf; } cact_statfs_arg_t;
 typedef struct cact_access_arg  { char *name; uint32_t mode; } cact_access_arg_t;  // mode: 4=r 2=w 1=x
 typedef struct cact_chmod_arg   { char *name; uint32_t mode; } cact_chmod_arg_t;
 typedef struct cact_chown_arg   { char *name; uint32_t uid; uint32_t gid; } cact_chown_arg_t;

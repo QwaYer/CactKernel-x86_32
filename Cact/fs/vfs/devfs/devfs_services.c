@@ -429,10 +429,11 @@ static int _pipe_ioctl(void *p, uint32_t cmd, void *arg) {
     file_t *rf = file_alloc(pipefd[0]);
     file_t *wf = file_alloc(pipefd[1]);
     if (!rf || !wf) {
-        if (rf) file_unref(rf);
-        if (wf) file_unref(wf);
-        close_vfs(pipefd[0]);
-        close_vfs(pipefd[1]);
+        // Close each end exactly once: an opened end via file_unref, an end
+        // whose file_alloc failed via a direct close_vfs.  (Calling both, as
+        // the original did, double-decremented and leaked the pipe.)
+        if (rf) file_unref(rf); else close_vfs(pipefd[0]);
+        if (wf) file_unref(wf); else close_vfs(pipefd[1]);
         return -ENOMEM;
     }
 

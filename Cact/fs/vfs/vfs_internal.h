@@ -23,10 +23,9 @@ typedef struct {
     char        name[128];  // mount name in parent
 } vfs_mount_t;
 
-extern vfs_symlink_entry_t symlink_pool[VFS_SYMLINK_POOL_SIZE];
-extern mutex_t             symlink_mutex;
-extern vfs_mount_t         mount_table[VFS_MOUNT_MAX];
-extern int                 mount_count;
-extern mutex_t             vfs_mutex;
+// The mount table, symlink pool and their mutexes moved to the Rust VFS core
+// (`Cact/fs/rust_vfs`, symbols vfs_mount/vfs_umount/vfs_symlink/...).  Only the
+// sizes above and the two struct shapes remain part of the C ABI, mirrored in
+// `rust_vfs/src/abi.rs`.
 
 #endif

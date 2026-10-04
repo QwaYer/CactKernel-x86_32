@@ -15,7 +15,7 @@ use crate::ffi::*;
 use crate::pmm::{kalloc, free_page};
 use crate::safe::{KStatic, lock_acquire, lock_release, zero_page, kprint_str};
 
-pub const MEMFD_MAX: usize = 32;
+pub const MEMFD_MAX: usize = 128;
 pub const MEMFD_MAX_PAGES: u32 = 1024;
 pub const MEMFD_NAME_MAX: usize = 128;
 

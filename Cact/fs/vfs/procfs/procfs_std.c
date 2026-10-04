@@ -481,14 +481,18 @@ int _version_read(uint32_t off, uint32_t size, char *buf) {
     return (int)size;
 }
 
-// /proc/mounts generator — the block-device mounts tracked by vfsdev, in the
-// Linux mount-table form "/dev/<dev> <target> <fstype> rw 0 0".  Filesystems
-// mounted by the kernel layout itself (mntfs: proc, dev, etc) are not listed,
-// matching what the mount manager owns.
+// /proc/mounts generator — the kernel layout mounts (from the VFS mount tree)
+// followed by the block-device mounts tracked by vfsdev, all in the Linux
+// mount-table form "<src> <path> <fstype> rw 0 0".
 int _mounts_read(uint32_t off, uint32_t size, char *buf) {
     static char tmp[4096];
-    int total = vfsdev_mounts_text(tmp, (int)sizeof(tmp));
-    uint32_t len = (uint32_t)total;
+    int p = vfs_render_mounts(tmp, (int)sizeof(tmp) - 1);
+    if (p < 0) p = 0;
+    if (p < (int)sizeof(tmp) - 1) {
+        int q = vfsdev_mounts_text(tmp + p, (int)sizeof(tmp) - p);
+        if (q > 0) p += q;
+    }
+    uint32_t len = (uint32_t)p;
     if (off >= len) return 0;
     if (size > len - off) size = len - off;
     memcpy(buf, tmp + off, size);

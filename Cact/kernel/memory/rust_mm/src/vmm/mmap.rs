@@ -5,6 +5,11 @@ use crate::pmm::{kalloc, free_page, page_ref_inc};
 use crate::vmm::paging::{vmm_map, PD_KERNEL_ENTRIES};
 use crate::fault::page_fault::vmm_map_zero;
 use crate::process::memfd::{memfd_get_page, memfd_grow_to, memfd_map_dec, memfd_map_inc};
+
+unsafe extern "C" {
+    /// Flush a file-backed mapping's page-cache range back to its filesystem.
+    fn vfs_as_flush_fd(fd: i32, off: u32, size: u32);
+}
 use crate::safe::{zero_page, flush_tlb, kprint_str};
 
 fn fd_to_node(fd: i32) -> *mut VfsNode {
@@ -507,6 +512,22 @@ pub unsafe extern "C" fn do_munmap(
     // not used again after this update, so this borrow is exclusive;
     // `memfd_map_dec` does not touch the region.
     let region = unsafe { &mut *region };
+    // Write a file-backed mapping's dirty page-cache range back to disk before
+    // the mapping goes away (mmap writes bypass write()).
+    if region.fd >= 0 && region.shobj > 0 {
+        let (foff, flen) = if addr == region.base && length >= region.length {
+            (region.file_off, region.length)
+        } else if addr == region.base {
+            (region.file_off, length)
+        } else {
+            let skip = addr - region.base;
+            (region.file_off + skip, region.length - skip)
+        };
+        // SAFETY: the fd is the one that backs this mapping; the VFS resolves
+        // it to its inode's address space and flushes (a no-op when there is
+        // none).
+        unsafe { vfs_as_flush_fd(region.fd, foff, flen) };
+    }
     if addr == region.base && length >= region.length {
         let obj = region.shobj;
         region.is_used = 0;
