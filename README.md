@@ -12,7 +12,7 @@
 
 <p align="center">
   A <strong>hybrid monolithic kernel</strong> for <strong>i686</strong> (32-bit x86 protected mode).<br>
-  Low-level code in <strong>C</strong> and <strong>NASM</strong>; the <strong>physical/virtual memory manager</strong>, <strong>MLFQ scheduler</strong>, <strong>synchronization primitives</strong>, <strong>TLS 1.3 (Rustls)</strong>, <strong>ECDSA P-256 module signing</strong>, and the <strong>TCP/UDP/DNS stack (smoltcp)</strong> live in <strong>Rust</strong> crates <code>cact_mm</code>, <code>sched</code>, <code>sync</code>, <code>rustls</code>, <code>cact_crypto</code>, and <code>cact_net</code>.
+  Low-level code in <strong>C</strong> and <strong>NASM</strong>; the <strong>physical/virtual memory manager</strong>, <strong>MLFQ scheduler</strong>, <strong>synchronization primitives</strong>, <strong>TLS 1.3 (Rustls)</strong>, <strong>ECDSA P-256 module signing</strong>, and the <strong>TCP/UDP/DNS stack (smoltcp)</strong> live in <strong>Rust</strong> crates <code>cact_mm</code>, <code>sched</code>, <code>cact_sync</code>, <code>rustls</code>, <code>cact_crypto</code>, and <code>cact_net</code>.
 </p>
 
 ---
@@ -40,11 +40,11 @@ CactKernel is one piece of a larger workspace. Typical pieces:
 
 | Component | Role |
 |-----------|------|
-| **[CactLib-x86_32](https://github.com/QwaYer/CactLibc-x86_32)** | Userspace **`libc.a`** / **`libc.so`**. Every `SYS_*` number must match the kernel’s [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) and `ioctl_abi.h`. After any syscall change: rebuild libc and **re-link all ELFs** (init, shell, demos). |
+| **[CactLib-x86_32](https://github.com/QwaYer/CactLibc-x86_32)** | Userspace **`clibc.so`** (plus the **`ld.so`** dynamic linker). Every `SYS_*` number must match the kernel’s [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) and `ioctl_abi.h`. After any syscall change: rebuild libc and **re-link all ELFs** (init, shell, demos). |
 | **[LocalRepoCactOS](../LocalRepoCactOS-x86_32)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
 | **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`ninja -C build-meson`** in this tree → **`build-meson/cact.iso`**. |
 
-**Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs / usrfs** overlay files from that archive on top of ext4 (e.g. **`/usr/bin/init`**, **`/usr/lib/libc.so`**, optional **`/usr/lib/modules/*.cctk`** drivers), and the bare **`/bin`, `/sbin`, `/lib`** are symlinks into **`/usr`**. PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with an **ECDSA P-256** signature against the kernel's embedded public key (plus a ksym-ABI `vermagic`) before loading.
+**Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs / usrfs** overlay files from that archive on top of ext4 (e.g. **`/usr/bin/init`**, **`/usr/lib/clibc.so`**, optional **`/usr/lib/modules/*.cctk`** drivers), and the bare **`/bin`, `/sbin`, `/lib`** are symlinks into **`/usr`**. PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with an **ECDSA P-256** signature against the kernel's embedded public key (plus a ksym-ABI `vermagic`) before loading.
 
 From the workspace root (QEMU-oriented full rebuild):
 
@@ -129,7 +129,7 @@ ninja -C build-meson iso-full   # signs cctkfs.img via tools/cact_sign_cctkfs.py
 generates `cact_build_time.c` on every build (`custom_target`, `build_always_stale`),
 so the banner reports the actual build time instead of the last `meson setup`.
 
-**Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3) + **`libcact_hmac_ffi.a`** (HMAC/HKDF behind `/dev/crypto`). Loadable-module ECDSA verification lives in C (`Cact/kernel/elf/mod_tag.c`) and calls the `cact_crypto` verifier. Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
+**Final link** (simplified): all C objects + the kernel's single Rust archive **`libcact_kernel.a`** (built by `Cact/kernel/kernel_rust`) — every kernel Rust crate is an rlib pulled into it: **`cact_mm`** (PMM/VMM/brk/mmap), **`sched`** (MLFQ), **`cact_net`** (smoltcp, virtio PHY shim, ICMP, DNS resolver, TCP/UDP socket glue), the vendored **`rustls`** (TLS 1.3), and **`cact_hmac_ffi`** (HMAC/HKDF behind `/dev/crypto`). Loadable-module ECDSA verification lives in C (`Cact/kernel/elf/mod_tag.c`) and calls the `cact_crypto` verifier. Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
 
 Optional: `meson configure build-meson -Dkern_debug=true` for richer symbols; QEMU GDB: see [`run_qemu.sh`](run_qemu.sh).
 
@@ -159,9 +159,10 @@ CactKernel-x86_32/
 │   │   └── video/       framebuffer console, PSF2 font parser, PAT WC + shadow blit
 │   ├── crypto/          Rustls core + cact_crypto (verify-only ECDSA/RSA), cact_shim
 │   ├── fs/
-│   │   ├── vfs/         core VFS, struct file, devfs, procfs, mntfs, etcfs, tmpfs,
-│   │   │                binfs, sbinfs, libfs, usrfs, varfs, cctkfs_tree
-│   │   └── pipe/        kernel pipe implementation
+│   │   ├── rust_vfs/    Rust VFS core, struct file, dcache, generic page cache, pipe
+│   │   ├── vfs/         C filesystem implementations — devfs, procfs, mntfs, etcfs,
+│   │   │                tmpfs, binfs, sbinfs, libfs, usrfs, varfs, cctkfs_tree, fs_mod
+│   │   └── pipe/        /dev/pipe registration (the pipe itself lives in rust_vfs)
 │   └── net/             rust_net/ — pure-Rust stack (smoltcp: Ethernet/ARP/IP/ICMP/TCP/UDP/DNS) + rustls TLS + HTTP(S) client, C FFI header
 ├── meson.build
 ├── VERSION
@@ -417,7 +418,7 @@ The kernel only traps for 15 syscalls; everything else is a **VFS-node service**
 
 Authoritative ABI headers: [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) (15 trap numbers) and [`ioctl_abi.h`](Cact/kernel/core/syscall/ioctl_abi.h) (every relay command/protocol struct) — both must stay byte-for-byte in sync with **[CactLib `syscall.h`](https://github.com/QwaYer/CactLibc-x86_32/blob/main/include/syscall.h)**.
 
-Syscall dispatch uses the **`sysenter`** CPU instruction (legacy `int 0x80` gate preserved as ring-3 fallback for `sigreturn` and CPUs without SEP — see [`idt.c`](Cact/kernel/idt/idt.c):102-104, [`cpudev.c`](Cact/kernel/cpudev/cpudev.c):208-210). Many syscalls take a **`struct syscall_frame*`** (full register snapshot) in the dispatcher — see [`mod.c`](Cact/kernel/core/syscall/mod.c) `_needs_frame()`.
+Syscall dispatch uses the **`sysenter`/`sysexit`** instruction pair, with an AMD **`syscall`/`sysret`** fast path on CPUs that support it (see [`syscall_entries.asm`](Cact/kernel/core/syscall_entries.asm), `cpu_syscall_mech_*` in [`cpudev.c`](Cact/kernel/cpudev/cpudev.c)); the legacy **`int 0x80`** path has been removed, so SEP (or AMD SYSCALL) is required. Many syscalls take a **`struct syscall_frame*`** (full register snapshot) in the dispatcher — see [`mod.c`](Cact/kernel/core/syscall/mod.c) `_needs_frame()`.
 
 | ABI surface | Service |
 |-------|-------|
