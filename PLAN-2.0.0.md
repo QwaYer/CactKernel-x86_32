@@ -17,7 +17,7 @@ Ground rules (from `CONTRIBUTING.md`):
 - Verification is a QEMU boot; every P0/P1 change adds a check to P2.
 
 Evidence note: line numbers below were verified against the tree at the time of
-writing (HEAD `84cadb3`, "Vfs переработана"). Re-check before editing.
+writing (HEAD `84cadb3`). Re-check before editing.
 
 ---
 
@@ -134,16 +134,19 @@ work-stealing), real IPI halt/wake handlers, and load-driven scaling in both
 directions (busy master wakes help; busy worker asks for help).
 Keep all global per-tick state on cpu0.
 
-### P1.2 — CPU topology (SMT / Hyper-Threading)
-Whole ROADMAP section "CPU topology: SMP, SMT & core power" is open.
+### P1.2 — CPU topology (SMT / Hyper-Threading) — DONE IN 2.0.0
+The ROADMAP section "CPU topology: SMP, SMT & core power" is now closed in
+2.0.0; the work below landed and is covered by the host unit tests.
 - Decode CPUID leaf `0xB`/`0x1F` into `package_id`/`core_id`/`smt_sibling_mask`
   (fallback: leaf `4` + leaf `1` HTT, then MADT order). `cpu_has_htt()` exists
-  (`Cact/kernel/cpudev/cpudev.c`) but nothing consumes it.
+  (`Cact/kernel/cpudev/cpudev.c`) and the decoder lives in
+  `Cact/kernel/proc/sched/src/topology.rs` / `cpu_topo.rs`.
 - Add `core id`, `physical id`, `siblings`, `cpu cores` to `/proc/cpuinfo`
   (`Cact/fs/vfs/procfs/procfs_std.c`).
-- Sibling-aware placement in `balance.rs`/`decision.rs`.
-- Core-level power: deep C-state only when all siblings idle; offline a core as
-  one unit (park all threads).
+- Sibling-aware placement in `balance.rs`/`decision.rs` (`placement.rs`).
+- Core-level power: deep C-state only when all siblings idle
+  (`cap_idle_depth`); offline a core as one unit (`can_offline_core`/
+  `core_mask`).
 
 **Acceptance (from ROADMAP):** with `-smp 4,threads=2` the boot `smp` line
 reports 8 logical CPUs under 4 `physical id`s with correct `siblings`; two
@@ -170,22 +173,26 @@ the `suspend` tool / ioctl / `RB_SUSPEND` were all deleted. `poweroff`, `reboot`
 and `halt` are unaffected. The WIP S3 work is preserved on the `s3-wip` branch
 (off `v2.0.0`) for a later re-introduction. See P4.
 
-### P1.5 — VFS / POSIX corners
-- Cross-directory move of **directories** is refused
-  (`Cact/fs/rust_vfs/src/vfs.rs:751`, `-EINVAL`); files are atomic. Either
-  implement directory rename or document it as out of scope.
-- Timestamps are always 0 (`ioctl_abi.h:60`).
-- `CACT_FDCTL_FSYNC` is a literal `return 0;` (`syscall/io/fd.c:314`).
-- AF_UNIX is `SOCK_STREAM` only, no `setsockopt/getsockopt`, no abstract
-  namespace (`syscall/sock/unix_sock.c:645,1037`).
-
-Decide per item: implement, or mark "not in 2.0.0" explicitly in ROADMAP.
+### P1.5 — VFS / POSIX corners — DONE IN 2.0.0
+All four corners were resolved (see the ROADMAP "Storage & filesystems" section):
+- **Cross-directory move of directories** works: `vfs_rename_at` uses the
+  `vfs_ops_t.rename2` op, implemented by **tmpfs, ext4 and fat32**
+  (`Cact/fs/rust_vfs/src/vfs.rs`); `-EINVAL` remains only for a filesystem that
+  provides no `rename2`.
+- **Timestamps** are filled from the wall clock (`rtc_epoch_sec()`,
+  `rust_vfs/src/file.rs`), not left at 0.
+- **`CACT_FDCTL_FSYNC`** flushes the file's inode page cache to its backing
+  store (`vfs_as_flush`, `syscall/io/fd.c`).
+- **AF_UNIX** answers `setsockopt`/`getsockopt` and accepts the **abstract
+  namespace** (`syscall/sock/unix_sock.c`).
 
 ### P1.6 — Pipes end-to-end
-`Cact/fs/pipe/pipe.c` was replaced by `Cact/fs/rust_vfs/src/pipe.rs`, but there
-is **no way to exercise it**: the guest shell `Cgoct-x86_32` has no `|` and no
-`popen()`. Add `|` to the shell parser (or ship a small userspace pipe test) and
-verify read/write/EOF/EPIPE.
+`Cact/fs/pipe/pipe.c` was replaced by `Cact/fs/rust_vfs/src/pipe.rs` (blocking
+ring buffer, `-EAGAIN` when non-blocking, SIGPIPE to the writer). The
+interactive shell is `Cactsole-x86_32` (not `Cgoct-x86_32`) and it parses `|`
+(`exec_pipeline()` in `src/shell.c`), so pipelines are reachable from the guest;
+there is still no `popen()` and no dedicated userspace pipe test. Verify
+read/write/EOF/EPIPE end-to-end.
 
 ---
 
@@ -268,9 +275,11 @@ OpRegion/VBT, GMBUS/DDC/EDID) stay in P4 / 3.0.0.
   documents the host unit tests and the headless `check` gate.
 
 ### P3.5 — Tag — DONE 2026-10-05
-`VERSION` is `2.0.0`; the annotated tag `v2.0.0` was created on `9a1d9d3`
-("2.0.0: integrity, SMT topology, ECDSA module signing, SemVer+abi versioning").
-Later S3 WIP work on `main` (`af8c84e`) is **not** part of 2.0.0 (P1.4).
+`VERSION` is `2.0.0`; the annotated tag `v2.0.0` now points at `3bf2107`
+("2.0.0: scheduler — always allow physical core offlining"), moved off its
+original `9a1d9d3` target by the S3-removal (`852ba37`) and core-offline
+commits. Later S3 WIP work (`af8c84e`, on branch `s3-wip`) is **not** part of
+2.0.0 (P1.4).
 
 ---
 
