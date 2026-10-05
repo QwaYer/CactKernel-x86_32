@@ -35,16 +35,27 @@ then `build-meson/cact.iso`; override with `CACT_ISO`.
    not touch the PIC.
 4. **Ring-0 modules are built without SSE/MMX** (`-mno-sse -mno-sse2 -mno-mmx`)
    so the compiler cannot clobber a user process's FPU state.
-5. **Modules are signed.** A `.cctk` carries an HMAC-SHA256 tag appended by
-   `tools/cact_sign.py` (key generated with `tools/gen_hmac_key.py`); the loader
-   verifies it before running the code.
+5. **Modules are signed.** A `.cctk` carries an **ECDSA P-256** signature plus a
+   ksym-ABI `vermagic` in its trailer, appended by `tools/modsign.py` via
+   `tools/cact_sign.py`; the private key is generated on demand with
+   `tools/gen_module_keys.py` (and never committed — only the derived public
+   key is compiled into the kernel). The loader verifies the signature and
+   rejects a vermagic that does not match the running kernel.
 
 ## Testing
 
-There is no unit-test suite in this tree — verification is a boot in QEMU.
-Reboot after any userspace change: `/bin` and `/sbin` come from the cctkfs
-image, not the working tree. Kernel output goes to COM1, which `run_qemu.sh`
-wires to `-serial stdio`.
+Host-side unit tests for pure logic (PMM math, MLFQ policy, energy model, CPUID
+topology, VFS helpers) live in **`../Kernel-Unit-Tests-for-Cact`** — run
+`cargo test` there; each module is `#[path]`-included from the real kernel source
+so the tests cannot drift.
+
+End to end, the gate is a headless boot: **`ninja -C build-meson check`** boots
+`CactBridge-x86/build/cact-non-gui.iso` under QEMU with no display, checks the
+kernel self-tests (csprng, module-signing `sigmagic`, energy, timer, placement)
+and the ksym vermagic against the signer, greps COM1, and exits non-zero on any
+failure. Reboot after any userspace change: `/bin` and `/sbin` come from the
+cctkfs image, not the working tree. Kernel output goes to COM1, which
+`run_qemu.sh` wires to `-serial stdio`.
 
 ## Style
 

@@ -82,7 +82,6 @@ typedef struct {
 } mod_mem_t;
 
 // pci_loader.c — file/section readers shared with the manifest pass.
-int  hmac_verify_module(uint8_t *elf_data, uint32_t *file_size);
 int  read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t *file_size);
 Elf32_Shdr *get_shdr(Elf32_Ehdr *eh, uint16_t idx);
 const char *get_str(Elf32_Ehdr *eh, uint16_t strtab_idx, uint32_t off);

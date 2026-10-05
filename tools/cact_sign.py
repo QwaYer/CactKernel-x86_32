@@ -1,43 +1,20 @@
 #!/usr/bin/env python3
-"""cact_sign.py — Sign .cctk ELF module with HMAC-SHA256.
+"""cact_sign.py — Sign a .cctk module with an ECDSA P-256 signature.
 
-Appends a 32-byte HMAC-SHA256 tag to the module file.
-The tag is computed as HMAC-SHA256(key, ELF data).
+Appends the module trailer (see tools/modsign.py):
 
-Key is read from Cact/crypto/hmac_ffi/hmac_key.bin
-(relative to the project root, resolved from this script's location).
-Generate with: python3 tools/gen_hmac_key.py
+    [ ELF ][ magic:4 = "CMOD" ][ vermagic:4 LE ][ signature:64 ]
+
+The private key lives at Cact/crypto/modsign/module_sign_priv.pem; the kernel
+embeds only the public key and verifies the signature plus the vermagic ABI
+fingerprint.  Idempotent: an already-signed module is left unchanged.
 """
 
 import os
 import sys
-import hmac
-import hashlib
 
-
-def _key_path() -> str:
-    """Resolve hmac_key.bin relative to the project root."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(script_dir, "..", "Cact", "crypto", "hmac_ffi", "hmac_key.bin")
-
-
-def _load_key() -> bytes:
-    path = _key_path()
-    try:
-        with open(path, "rb") as f:
-            key = f.read()
-    except FileNotFoundError:
-        print(f"HMAC key not found at {path}", file=sys.stderr)
-        print("Generate one with: python3 tools/gen_hmac_key.py", file=sys.stderr)
-        sys.exit(1)
-    if len(key) != 32:
-        print(f"HMAC key must be exactly 32 bytes, got {len(key)}", file=sys.stderr)
-        sys.exit(1)
-    return key
-
-
-def sign(data: bytes) -> bytes:
-    return hmac.new(_load_key(), data, hashlib.sha256).digest()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import modsign  # noqa: E402
 
 
 def main():
@@ -47,14 +24,20 @@ def main():
 
     path = sys.argv[1]
     with open(path, "rb") as f:
-        elf_data = f.read()
+        data = f.read()
 
-    tag = sign(elf_data)
+    if modsign.already_signed(data):
+        print(f"cact_sign: {path} — already signed")
+        sys.exit(0)
 
-    with open(path, "ab") as f:
-        f.write(tag)
+    if not os.path.isfile(modsign.PRIV_PEM):
+        modsign.generate_keys()
 
-    print(f"signed: {path}  tag={tag.hex()}")
+    signed = modsign.sign_module(modsign.PRIV_PEM, data)
+    with open(path, "wb") as f:
+        f.write(signed)
+
+    print(f"signed: {path}  ECDSA P-256, vermagic=0x{modsign.vermagic():08x}")
     sys.exit(0)
 
 

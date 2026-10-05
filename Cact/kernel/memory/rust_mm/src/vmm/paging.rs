@@ -4,7 +4,7 @@ use crate::ffi::*;
 use crate::safe::kprint_str;
 use crate::pmm::{kalloc, free_page};
 
-pub(crate) const PD_KERNEL_ENTRIES: usize = (PCI_HOLE_START / (PAGE_SIZE * 1024)) as usize;
+pub(crate) const PD_KERNEL_ENTRIES: usize = (USER_STACK_TOP / (PAGE_SIZE * 1024)) as usize;
 
 const PD_TOTAL: usize = 1024;
 
@@ -72,12 +72,14 @@ pub extern "C" fn init_paging() {
     // borrow is valid and does not overlap `tables`.
     let pd = unsafe { &mut *pd_ptr };
 
+    let ram_end = crate::pmm::ram_end();
     for (pt_idx, pt) in tables.iter_mut().enumerate() {
         for (page, slot) in pt.iter_mut().enumerate() {
             let phys: u32 = ((pt_idx * 1024 + page) as u32).wrapping_mul(PAGE_SIZE);
 
-            // Choose cache policy based on physical address.
-            let cache_flags: u32 = if phys >= PCI_HOLE_START {
+            // Cache policy is chosen against the RAM/MMIO boundary discovered
+            // at boot (defaults to PCI_HOLE_START before pmm init).
+            let cache_flags: u32 = if phys >= ram_end {
                 // MMIO / PCI hole: uncacheable, write-through.
                 PAGE_PCD | PAGE_PWT
             } else {
@@ -141,7 +143,7 @@ pub unsafe extern "C" fn vmm_map(pd: *mut u32,
     let pti = pt_index(virtual_addr) as usize;
     let mut flags = flags as u32;
     let caller_uncached = (flags & (PAGE_PCD | PAGE_PWT)) != 0;
-    if physical_addr >= PCI_HOLE_START {
+    if physical_addr >= crate::pmm::ram_end() {
         flags |= PAGE_PCD | PAGE_PWT;
     }
     // User stack lives in [USER_STACK_LIMIT, USER_STACK_TOP). A present+user page
@@ -150,6 +152,16 @@ pub unsafe extern "C" fn vmm_map(pd: *mut u32,
         && flags & PAGE_USER != 0
     {
         flags |= PAGE_RW;
+    }
+
+    // A user mapping must never target the kernel half. The `is_kernel_mmio`
+    // branch below writes straight into the shared kernel page table, so a
+    // PAGE_USER request above USER_STACK_TOP (an ELF whose PT_LOAD p_vaddr is
+    // >= 0xC0000000, say) would install a user page there for every process and
+    // clobber the kernel's own identity/MMIO mapping. Refuse it outright.
+    if flags & PAGE_USER != 0 && virtual_addr >= USER_STACK_TOP {
+        kprint_str(c"[ERR] vmm_map: refusing user mapping in kernel half\n".as_ptr() as *const u8);
+        return;
     }
 
     // Upper half (PCI hole / MMIO) uses the same page tables as the kernel
@@ -164,7 +176,7 @@ pub unsafe extern "C" fn vmm_map(pd: *mut u32,
     // be global too, otherwise it ends up in a per-process page table, and an
     // interrupt handler running under a user CR3 faults on the next register
     // access.
-    let is_kernel_mmio = virtual_addr >= PCI_HOLE_START || caller_uncached;
+    let is_kernel_mmio = virtual_addr >= USER_STACK_TOP || caller_uncached;
 
     // SAFETY: `pd` is a valid page directory (checked non-null); `pd_index`/
     // `pt_index` mask to 10 bits and the slice spans `PD_TOTAL` entries, so every
@@ -255,7 +267,7 @@ pub unsafe extern "C" fn vmm_map(pd: *mut u32,
     // If a new kernel/MMIO mapping is added to the kernel template, mirror it
     // into the currently active PD as well so already-running user tasks do
     // not fault inside IRQ context before the next scheduler switch.
-    if pd == get_kernel_pd() && virtual_addr >= PCI_HOLE_START {
+    if pd == get_kernel_pd() && virtual_addr >= USER_STACK_TOP {
         let active = crate::safe::current_page_dir();
         if !active.is_null() && active != pd {
             // SAFETY: `active` is the page directory currently loaded in CR3,
@@ -313,7 +325,7 @@ pub extern "C" fn vmm_create_address_space() -> *mut u32 {
     // entries); the shared slice does not overlap `dst`.
     let src = unsafe { core::slice::from_raw_parts(src_ptr, PD_TOTAL) };
     // Copy the entire kernel PD as a template.
-    // All kernel identity mappings (0 → PCI_HOLE_START) and MMIO entries are
+    // All kernel identity mappings (0 → RAM end) and MMIO entries are
     // inherited as *shared* page tables (no PDE_PRIVATE).  The kernel can
     // therefore always see its own heap and stacks regardless of which process PD
     // is loaded in CR3.

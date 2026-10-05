@@ -8,6 +8,9 @@
  * Rust; this header only declares the stable entry points. */
 
 int smp_init(void);
+/* Re-wake every present worker after an S3 resume (sched/src/smp.rs). Returns
+ * the number of workers brought back online. */
+int smp_resume_rewake(void);
 int smp_self_cpu(void);
 int smp_cpu_online(uint32_t cpu);
 

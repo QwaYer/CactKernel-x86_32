@@ -2,9 +2,10 @@
 #define CACT_ACPI_H
 
 #include <stdint.h>
-#include "memory.h"   /* KERNEL_MMIO_WINDOW_BASE/SIZE */
+#include "memory.h"   /* cact_mmio_window_base(), KERNEL_MMIO_WINDOW_SIZE */
 
-#define ACPI_TEMP_MAP_BASE   KERNEL_MMIO_WINDOW_BASE
+/* The ACPI temp-map window base is chosen at boot by the PMM (memory.h); use
+ * cact_mmio_window_base() instead of a compile-time constant. */
 #define ACPI_TEMP_MAP_PAGES  (KERNEL_MMIO_WINDOW_SIZE / 4096u)
 #define ACPI_TEMP_MAP_SIZE   (ACPI_TEMP_MAP_PAGES * 4096u)
 

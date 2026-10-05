@@ -12,7 +12,7 @@
 
 <p align="center">
   A <strong>hybrid monolithic kernel</strong> for <strong>i686</strong> (32-bit x86 protected mode).<br>
-  Low-level code in <strong>C</strong> and <strong>NASM</strong>; the <strong>physical/virtual memory manager</strong>, <strong>MLFQ scheduler</strong>, <strong>synchronization primitives</strong>, <strong>TLS 1.3 (Rustls)</strong>, <strong>HMAC-SHA256 module signing</strong>, and the <strong>TCP/UDP/DNS stack (smoltcp)</strong> live in <strong>Rust</strong> crates <code>cact_mm</code>, <code>sched</code>, <code>sync</code>, <code>rustls</code>, <code>cact_crypto</code>, and <code>cact_net</code>.
+  Low-level code in <strong>C</strong> and <strong>NASM</strong>; the <strong>physical/virtual memory manager</strong>, <strong>MLFQ scheduler</strong>, <strong>synchronization primitives</strong>, <strong>TLS 1.3 (Rustls)</strong>, <strong>ECDSA P-256 module signing</strong>, and the <strong>TCP/UDP/DNS stack (smoltcp)</strong> live in <strong>Rust</strong> crates <code>cact_mm</code>, <code>sched</code>, <code>sync</code>, <code>rustls</code>, <code>cact_crypto</code>, and <code>cact_net</code>.
 </p>
 
 ---
@@ -23,12 +23,12 @@
 |---|---|
 | **Syscalls** | 15 core traps — authoritative enum in [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) (`SYSCALL_COUNT`); everything else via VFS-node ioctls ([`ioctl_abi.h`](Cact/kernel/core/syscall/ioctl_abi.h)) |
 | **CPU ISRs** | 32 (IDT) + IRQ stubs via I/O APIC |
-| **PMM range** | Physical frames **0 … `0xC000_0000`** (3 GiB; PCI hole lowered from 0xE0000000) |
+| **PMM range** | All usable frames below 4 GiB, up to the **runtime** PCI-hole ceiling `pmm::ram_end()` from the Multiboot2 map (default `0xC000_0000`); arrays sized for the 4 GiB worst case |
 | **MAX_FD** | 256 file descriptors per task (`rust_mm` FFI) |
 | **Kernel sockets** | `KSOCK_MAX` 16 VFS socket nodes; `TCP_MAX_SOCKETS` 8; `UDP_SOCK_MAX` 8 (see `rust_net` / `tcp.h`); blocking TCP `connect`/`read`/`write`, `getsockname`/`getpeername`, `O_NONBLOCK`, `-EINTR` on a pending signal |
 | **xHCI** | ~32 KiB host stack (USB 3.x) |
 | **Scheduler** | 4-level MLFQ (Rust) |
-| **ext4 (in-tree)** | ~40 KiB — read/write, inode operations |
+| **ext4** | Out-of-tree **`.cctk`** module (`EXT4-for-Cact-x86_32`) — read/write, inode operations |
 | **TLS 1.3** | Rustls-based, in-kernel |
 | **Task struct** | 48 bytes (optimised from 600 bytes) |
 
@@ -44,7 +44,7 @@ CactKernel is one piece of a larger workspace. Typical pieces:
 | **[LocalRepoCactOS](../LocalRepoCactOS-x86_32)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
 | **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`ninja -C build-meson`** in this tree → **`build-meson/cact.iso`**. |
 
-**Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs / usrfs** overlay files from that archive on top of ext4 (e.g. **`/usr/bin/init`**, **`/usr/lib/libc.so`**, optional **`/usr/lib/modules/*.cctk`** drivers), and the bare **`/bin`, `/sbin`, `/lib`** are symlinks into **`/usr`**. PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with **HMAC-SHA256** against the kernel's embedded static key before loading.
+**Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs / usrfs** overlay files from that archive on top of ext4 (e.g. **`/usr/bin/init`**, **`/usr/lib/libc.so`**, optional **`/usr/lib/modules/*.cctk`** drivers), and the bare **`/bin`, `/sbin`, `/lib`** are symlinks into **`/usr`**. PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with an **ECDSA P-256** signature against the kernel's embedded public key (plus a ksym-ABI `vermagic`) before loading.
 
 From the workspace root (QEMU-oriented full rebuild):
 
@@ -110,7 +110,7 @@ ninja -C build-meson iso-full   # signs cctkfs.img via tools/cact_sign_cctkfs.py
 **Successful build footer** (version from [`VERSION`](VERSION), commit from `git`) — printed by `meson setup`:
 
 ```
-  Cact kernel 2.0.0 (<short>)
+  Cact kernel 2.0.0+abi.0x9217b2c9.i686 (<short>)
   compiler: clang 22.1.8
   linker  : /usr/bin/ld
 
@@ -129,7 +129,7 @@ ninja -C build-meson iso-full   # signs cctkfs.img via tools/cact_sign_cctkfs.py
 generates `cact_build_time.c` on every build (`custom_target`, `build_always_stale`),
 so the banner reports the actual build time instead of the last `meson setup`.
 
-**Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3) + **`libcact_hmac_ffi.a`** (HMAC-SHA256 module signing). Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
+**Final link** (simplified): all C objects + **`libcact_mm.a`** (PMM/VMM/brk/mmap) + **`libsched.a`** (MLFQ) + **`libcact_net.a`** (smoltcp, virtio PHY shim, ICMP, DNS resolver, TCP/UDP socket glue) + **`librustls.a`** (TLS 1.3) + **`libcact_hmac_ffi.a`** (HMAC/HKDF behind `/dev/crypto`). Loadable-module ECDSA verification lives in C (`Cact/kernel/elf/mod_tag.c`) and calls the `cact_crypto` verifier. Link script: [`linker.ld`](linker.ld) with **`-z noexecstack`**.
 
 Optional: `meson configure build-meson -Dkern_debug=true` for richer symbols; QEMU GDB: see [`run_qemu.sh`](run_qemu.sh).
 
@@ -145,19 +145,19 @@ CactKernel-x86_32/
 │   │   ├── memory/      rust_mm/ — PMM, VMM, page faults, mmap, swap, slab, SHM
 │   │   ├── proc/        task_struct, context switch, sched/ (Rust MLFQ), lazy FPU, stack canary
 │   │   ├── sync/        locks, semaphores (Rust + C FFI)
-│   │   ├── elf/         static ELF loader, ksym/sym, dynlink/ for relocatable objects
+│   │   ├── elf/         static ELF loader, ksym/sym, module tag verify (ECDSA + vermagic)
 │   │   ├── gdt/ idt/
 │   ├── drivers/
 │   │   ├── acpi/        ACPICA engine — AML interpreter, MADT/APIC/FADT tables
 │   │   ├── block/       blkdev, page cache (increased constant limits)
 │   │   ├── input/       USB HID only (PS/2 removed in 2.0)
 │   │   ├── timer/       ktime (TSC primary, ACPI PM timer fallback), LAPIC scheduler tick, tick counter
-│   │   ├── initfs/      cctkfs staging + module blob reader, HMAC signature verify
+│   │   ├── initfs/      cctkfs staging + module blob reader
 │   │   ├── pci/         enumerator, PCIe, ELF module loader,
-│   │   │                HMAC-SHA256 module signature verification
+│   │   │                module signature + vermagic check (mod_tag)
 │   │   ├── usb/         xhci + HID + hub
 │   │   └── video/       framebuffer console, PSF2 font parser, PAT WC + shadow blit
-│   ├── crypto/          Rustls — in-kernel TLS 1.3, HMAC-SHA256 signer, cact_shim
+│   ├── crypto/          Rustls core + cact_crypto (verify-only ECDSA/RSA), cact_shim
 │   ├── fs/
 │   │   ├── vfs/         core VFS, struct file, devfs, procfs, mntfs, etcfs, tmpfs,
 │   │   │                binfs, sbinfs, libfs, usrfs, varfs, cctkfs_tree
@@ -170,7 +170,7 @@ CactKernel-x86_32/
 ├── grub.cfg.kernelonly   # kernel-only multiboot (the cact.iso default, -Diso_grub_cfg)
 ├── grub.cfg.ramroot      # RAM-first userland variant
 ├── build_disk.sh         # raw ext4 image for QEMU AHCI/NVMe
-├── tools/                # utility scripts (gen_hmac_key.py, cact_sign_cctkfs.py, …)
+├── tools/                # utility scripts (modsign.py, gen_module_keys.py, cact_sign*.py, cact_check.sh, …)
 └── run_qemu.sh           # launches QEMU; runs build_disk.sh if nvme.img missing
 ```
 
@@ -214,14 +214,14 @@ Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register).
 
 | # | Action |
 |---|--------|
-| 1 | **`pci_driver_probe_deferred_all()`** — attach PCI drivers that were not safe at pure boot time (all modules verified via HMAC-SHA256) |
+| 1 | **`pci_driver_probe_deferred_all()`** — attach PCI drivers that were not safe at pure boot time (all modules verified via ECDSA P-256 + vermagic) |
 | 2 | **`mntfs_init`** — parse mount table, **mount ext4** on NVMe/AHCI (may **`sema_down`** waiting for IRQ completions — **illegal** from the raw boot stack, hence this thread) |
 | 3 | **`create_elf_task("usr/bin/init")`** — first userspace process; binary resolved through **binfs** (ext4 `/usr/bin` + **cctkfs** overlay) |
 
 **Typical serial / FB banner:**
 
 ```
-Cact Kernel 2.0.0
+Cact Kernel 2.0.0+abi.0x9217b2c9.i686
 --------------------------
 [VER] commit=…  built=…
 Kernel is ready. Launching init…
@@ -234,15 +234,14 @@ Kernel is ready. Launching init…
 
 ## 🧠 Memory map (`rust_mm`)
 
-The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as frame-indexable. Frames inside the **low 32 MiB** reservation (BIOS, kernel image, static page tables) are permanently marked used. Usable RAM above that comes from the **Multiboot2 memory map**; the static upper bound for bitmap sizing is **`PCI_HOLE_START` (`0xC000_0000`)** — about **3 GiB** of addressable frames (reduced from 3.5 GiB in 1.x).
+The PMM installs every **available** frame below 4 GiB that the **Multiboot2 memory map** reports, up to a **runtime** ceiling `pmm::ram_end()` — the page-aligned top of usable RAM below the PCI hole (default `PCI_HOLE_START`, `0xC000_0000`, but e.g. `0xE000_0000` on a board whose hole is at 3.5 GiB). The static arrays are sized for the worst case (**`TOTAL_PAGES = 1 048 576`**, 4 GiB) and the user/kernel **VA** split (`USER_STACK_TOP`) is independent of the RAM ceiling. Frames inside the **low 32 MiB** reservation (BIOS, kernel image, static page tables) are permanently marked used.
 
 | Symbol | Value | Meaning |
 |--------|-------|---------|
 | `MEM_START` | `0x00100000` | Conventional kernel load floor |
-| `PCI_HOLE_START` | `0xC0000000` | First address **not** handed out by the PMM (MMIO / PCI) |
-| `MEM_SIZE` | `PCI_HOLE_START` | Span covered by the frame bitmap |
-| `TOTAL_PAGES` | `MEM_SIZE / 4096` | e.g. 786 432 pages |
-| `BITMAP_SIZE` | `TOTAL_PAGES / 8` | Bitmap byte count (~96 KiB worst case) |
+| `PCI_HOLE_START` | `0xC0000000` | Default RAM ceiling / VA split; the effective ceiling is `pmm::ram_end()` at boot |
+| `TOTAL_PAGES` | `1024 * 1024` | Frame arrays sized for 4 GiB (worst case) |
+| `BITMAP_SIZE` | `TOTAL_PAGES / 8` | Bitmap byte count (128 KiB worst case) |
 | `RESERVED_END` | `0x02000000` (32 MiB) | Low memory never given to `kalloc`/user |
 | `HEAP_START` / `HEAP_SIZE` | `0x02000000` / 16 MiB | Kernel heap window |
 | `HEAP_MAGIC` | `0xDEADBEEF` | Heap block canary |
@@ -306,7 +305,7 @@ The PMM treats **all 3 GiB of physical address space** below the **PCI hole** as
 | **USB** | xHCI, HID, hub | ~32 KiB host code path — PS/2 removed in 2.0 |
 | **Input** | USB HID keyboard & mouse | |
 | **Video** | Linear FB 32 bpp, PSF2 console font from cctkfs (`/usr/share/consolefont.psf`, ×2 scale), PAT WC + shadow | |
-| **PCI** | Config scan, driver table, **modblob** loader, HMAC-SHA256 signature verification | Loads ET_REL modules from **cctkfs** or path (user-driven via kmod syscalls) |
+| **PCI** | Config scan, driver table, **modblob** loader, ECDSA P-256 signature + vermagic verification | Loads ET_REL modules from **cctkfs** or path (user-driven via kmod syscalls) |
 | **Network** | **virtio-net** | Default NIC under QEMU; other NICs often packaged as **`.cctk`** (e.g. Marvell **Yukon** in sibling repos) |
 | **ACPI** | ACPICA — RSDP, MADT, FADT, APIC table parsing | New in 2.0 |
 
@@ -318,7 +317,7 @@ All out-of-tree PCI drivers now register their interrupt through the kernel's **
 
 | FS | Status | Notes |
 |----|--------|-------|
-| **ext4** | Active | Small in-kernel subset — read/write, inodes |
+| **ext4** | Active (**`.cctk`**) | Out-of-tree module ([`EXT4-for-Cact-x86_32`](https://github.com/QwaYer/EXT4-for-Cact-x86_32)) — read/write, inodes; loaded from **cctkfs** |
 | **VFS** | Active | Up to **`VFS_MOUNT_MAX` (32)** simultaneous mount points, symlink pool with **ELOOP** detection, `rwx` permission bits, `struct file` with fd table |
 | **devfs** | Active | Device nodes as VFS files |
 | **procfs** | Active | e.g. `/proc/cmd`, `meminfo`, module listings |
@@ -331,7 +330,6 @@ All out-of-tree PCI drivers now register their interrupt through the kernel's **
 | **usrfs** | Active | **`/usr`** + synthesized cctkfs tree (**`include/`**, **`share/`** and anything nested); **`bin`/`sbin`/`lib`** belong to their own mounts |
 | **varfs** | Active | **`/var`** layout |
 | **pipes** | Active | `pipe()` integrated with the fd table |
-| **btrfs / exFAT / ramfs** | Stub | Placeholder headers only |
 
 ---
 

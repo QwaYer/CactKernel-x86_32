@@ -48,8 +48,8 @@ const _: () = assert!(core::mem::size_of::<VfsDirent>() == 132);
 const _: () = assert!(core::mem::offset_of!(VfsDirent, inode) == 128);
 
 /// Rich stat (`cact_statx_t`): POSIX-style metadata the 4-word `cact_stat_t`
-/// cannot carry (uid/gid/nlink/size in bytes/blocks).  All-zero timestamps —
-/// the VFS does not track times yet.
+/// cannot carry (uid/gid/nlink/size in bytes/blocks).  Times are reported from
+/// the wall clock (the VFS does not track per-inode times yet).
 #[repr(C)]
 pub struct CactStatx {
     pub ino:     u32,
@@ -111,11 +111,15 @@ pub struct VfsOps {
     pub stat:           Option<unsafe extern "C" fn(*mut VfsNode, *mut u32) -> i32>, // 22
     pub poll:           Option<unsafe extern "C" fn(*mut VfsNode, u32) -> i32>, // 23
     pub lseek:          Option<unsafe extern "C" fn(*mut VfsNode, i32, i32, *mut u32) -> i32>, // 24
+    /// Cross-directory rename for directories (appended last; NULL = the FS
+    /// cannot move a directory across directories, so the VFS returns -EINVAL).
+    pub rename2:        Option<unsafe extern "C" fn(*mut VfsNode, *const c_char, *mut VfsNode, *const c_char) -> i32>, // 25
 }
 
-const _: () = assert!(core::mem::size_of::<VfsOps>() == 100);
+const _: () = assert!(core::mem::size_of::<VfsOps>() == 104);
 const _: () = assert!(core::mem::offset_of!(VfsOps, mmap_backing) == 68);
 const _: () = assert!(core::mem::offset_of!(VfsOps, poll) == 92);
+const _: () = assert!(core::mem::offset_of!(VfsOps, rename2) == 100);
 
 /// Generic VFS node (`vfs_node_t`, 168 bytes).
 #[repr(C)]

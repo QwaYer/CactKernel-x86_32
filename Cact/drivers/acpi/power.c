@@ -34,6 +34,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "apic.h"
+#include "smp.h"
 #include "cpudev.h"
 #include "pat.h"
 #include "mtrr.h"
@@ -157,6 +158,10 @@ void acpi_resume_entry(void)
      * re-initialisation (PCI/USB/storage) still happens later, in task
      * context — this only has to restore interrupt delivery and the tick. */
     (void)apic_init();
+
+    /* The platform reset also stopped every AP.  Bring all logical CPUs back
+     * before returning to the suspended task (PLAN-2.0.0 P1.4). */
+    (void)smp_resume_rewake();
 
     /* Hand control back to the suspended task. */
     acpi_ctx_restore();

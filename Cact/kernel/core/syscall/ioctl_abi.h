@@ -95,7 +95,7 @@ typedef struct cact_statfs {
 #define CACT_FDCTL_FSTAT      0x3005  // arg=cact_stat_t*    (out)
 #define CACT_FDCTL_FTRUNCATE  0x3006  // arg=uint32_t* length
 #define CACT_FDCTL_GETDENTS   0x3007  // arg=cact_getdents_arg_t*; returns bytes
-#define CACT_FDCTL_FSYNC      0x3008  // arg=NULL (no-op)
+#define CACT_FDCTL_FSYNC      0x3008  // arg=NULL (flush the file's page cache)
 #define CACT_FDCTL_FSTATX     0x3009  // arg=cact_statx_t*   (out)
 
 typedef struct cact_fd_arg { uint32_t newfd; } cact_fd_arg_t;

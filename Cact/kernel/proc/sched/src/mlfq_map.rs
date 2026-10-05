@@ -19,6 +19,7 @@
 use crate::energy;
 use crate::mlfq;
 use crate::cstate;
+use crate::placement;
 
 use cstate::{CSTATE_C0, CSTATE_C1, CSTATE_C3, CSTATE_C6};
 
@@ -68,11 +69,14 @@ pub extern "C" fn energy_mlfq_idle_target(cpu: u32) -> u32 {
     let target = if role_max < cap { role_max } else { cap };
     // An idle core must always halt with at least C1 semantics; C0 means the
     // core should not be in the idle path at all.
-    if target < CSTATE_C1 {
+    let target = if target < CSTATE_C1 {
         CSTATE_C1
     } else {
         target
-    }
+    };
+    // Sibling-aware core-level power: never idle deeper than C1 while a sibling
+    // on the same physical core is busy (C3/C6 are whole-core states).
+    placement::cap_idle_depth(target, &crate::cpu_topo::views(), cpu)
 }
 
 /// Called whenever a task lands in `level`.

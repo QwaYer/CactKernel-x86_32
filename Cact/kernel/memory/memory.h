@@ -11,28 +11,30 @@
 #define MEM_START 0x00100000u
 
 /*
- * PMM manages physical addresses 0 … PCI_HOLE_START.
- * PCI_HOLE_START = 0xC0000000 (3072 MB) — start of MMIO/PCI window.
- * Q35 with 4 GB RAM places the hole at 0xC0000000; adjust for your board.
+ * PCI_HOLE_START is the user/kernel VA split (3 GiB / 1 GiB) and the default
+ * physical MMIO base.  The real RAM/MMIO boundary is discovered at boot from
+ * the Multiboot2 map (rust_mm pmm::ram_end): a board may have usable RAM above
+ * this address, up to its PCI hole (e.g. 0xE0000000 = 3.5 GiB).
  */
 #define PCI_HOLE_START  0xC0000000u
-#define MEM_SIZE        PCI_HOLE_START          /* 3072 MB */
-#define TOTAL_PAGES     (MEM_SIZE / PAGE_SIZE)  /* 786 432 pages */
-#define BITMAP_SIZE     (TOTAL_PAGES / 8)       /* ~96 KB */
+
+/* Worst-case frame counts for the full 4 GiB space; the static PMM arrays in
+ * rust_mm are sized from these. */
+#define TOTAL_PAGES     (1024u * 1024u)
+#define BITMAP_SIZE     (TOTAL_PAGES / 8)       /* 128 KB */
 
 /*
- * Fixed kernel windows carved out of the PCI-hole VA space (>= PCI_HOLE_START).
+ * Fixed kernel windows (ACPI temp map + PCIe ECAM) live in the shared kernel
+ * half (VA >= PCI_HOLE_START), so any mapping there is valid under any CR3.
+ * Because of that sharing, two subsystems that pick the same VA silently alias
+ * each other's physical pages, so the windows are laid out from one base.
  *
- * The first 4 GiB are identity-mapped and every mapping at or above
- * PCI_HOLE_START is written into the *shared* kernel page tables, so a window
- * placed here is valid under any CR3.  Because of that sharing, two subsystems
- * that pick the same VA silently alias each other's physical pages — so the
- * fixed windows live in one place and drivers must allocate above
- * KERNEL_MMIO_WINDOW_END.
+ * The base is chosen at boot by the PMM: max(RAM top, PCI_HOLE_START), 2 MiB
+ * aligned.  Keeping it at or above the RAM top means the identity map (VA ==
+ * PA) of the windows never shadows a managed frame.
  */
-#define KERNEL_MMIO_WINDOW_BASE 0xC0000000u              /* ACPI temp maps */
-#define KERNEL_MMIO_WINDOW_SIZE (256u * PAGE_SIZE)       /* 1 MB            */
-#define KERNEL_MMIO_WINDOW_END  (KERNEL_MMIO_WINDOW_BASE + KERNEL_MMIO_WINDOW_SIZE)
+uint32_t cact_mmio_window_base(void);               /* rust_mm: pmm.rs */
+#define KERNEL_MMIO_WINDOW_SIZE (256u * PAGE_SIZE)  /* 1 MB */
 
 /*
  * Heap window.  The heap allocator starts right after the hard-reserved

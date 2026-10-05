@@ -107,6 +107,12 @@ typedef struct vfs_ops {
     int (*stat)    (struct vfs_node *node, uint32_t *buf);   // 4-word stat buffer
     int (*poll)    (struct vfs_node *node, uint32_t events);  // returns ready events
     int (*lseek)   (struct vfs_node *node, int offset, int whence, uint32_t *result);
+    // Cross-directory rename for directories (a subtree move cannot go through
+    // link+unlink).  NULL = the filesystem cannot move a directory across
+    // directories, so the VFS returns -EINVAL.  Appended last so existing
+    // (designated) ops tables keep their layout.
+    int (*rename2) (struct vfs_node *olddir, const char *oldname,
+                    struct vfs_node *newdir, const char *newname);
 } vfs_ops_t;
 
 // Generic VFS node — embedded by each filesystem

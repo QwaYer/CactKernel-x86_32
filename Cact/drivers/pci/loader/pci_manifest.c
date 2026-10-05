@@ -9,6 +9,7 @@
 #include "kernel.h"
 #include "klib.h"
 #include "ksym.h"
+#include "mod_tag.h"
 
 static int sym_is_data_global(const Elf32_Sym *sym) {
     if (ELF32_ST_BIND(sym->st_info) != STB_GLOBAL)
@@ -102,8 +103,8 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
         pr_err("[LDR] manifest: not a valid ELF32 relocatable\n");
         return -2;
     }
-    if (hmac_verify_module(elf_data, &file_size) != 0) {
-        pr_err("[LDR] manifest: HMAC verification failed\n");
+    if (mod_tag_verify(elf_data, &file_size) != 0) {
+        pr_err("[LDR] manifest: signature/ABI check failed\n");
         kfree(elf_data);
         return -5;
     }

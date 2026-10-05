@@ -14,7 +14,11 @@ Cact/drivers/acpi/acpica/
 *.swp
 *~
 *.log
+__pycache__/
 
-# HMAC signing key — generate with: ninja -C build-meson (configure does it)
-# or directly: python3 tools/gen_hmac_key.py
-Cact/crypto/hmac_ffi/hmac_key.bin
+# Module-signing key pair (ECDSA P-256) — generate with:
+#   python3 tools/gen_module_keys.py   (configure also does it on demand)
+# The private key must never be committed; the public header is derived from it,
+# so the pair is always regenerated together.
+Cact/crypto/modsign/
+Cact/kernel/elf/mod_pubkey.h

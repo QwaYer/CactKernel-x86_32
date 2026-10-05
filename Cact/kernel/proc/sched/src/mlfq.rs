@@ -10,102 +10,30 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use crate::task::{TaskStruct, TaskState, SCHEDULER_LOCK};
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 use crate::ffi;
+use crate::intrusive_queue::{IntrusiveQueue, Link};
 
-pub const MLFQ_LEVELS: usize = 4;
+// The MLFQ policy constants (levels, quanta, boost target) live in the pure
+// `mlfq_policy` module; re-export them so the existing `crate::mlfq::MLFQ_*`
+// call sites keep working.
+pub use crate::mlfq_policy::{
+    MLFQ_LEVELS, MLFQ_LEVEL_BACKGROUND, MLFQ_LEVEL_INTERACTIVE, MLFQ_LEVEL_NORMAL,
+    MLFQ_LEVEL_RT, MLFQ_QUANTUM, BOOST_TARGET,
+};
 
-pub const MLFQ_LEVEL_RT:          u32 = 0;
-pub const MLFQ_LEVEL_INTERACTIVE: u32 = 1;
-pub const MLFQ_LEVEL_NORMAL:      u32 = 2;
-pub const MLFQ_LEVEL_BACKGROUND:  u32 = 3;
-
-pub const MLFQ_QUANTUM: [u32; MLFQ_LEVELS] = [5, 1, 2, 4];
-
-const BOOST_INTERVAL: u32 = 50;
-const BOOST_TARGET: u32 = MLFQ_LEVEL_INTERACTIVE;
-
-#[derive(Copy, Clone)]
-struct MlfqQueue {
-    head:  *mut TaskStruct,
-    tail:  *mut TaskStruct,
-    count: u32,
-}
-
-impl MlfqQueue {
-    const fn empty() -> Self {
-        Self { head: ptr::null_mut(), tail: ptr::null_mut(), count: 0 }
+// The ready/sleep queues are intrusive FIFOs of `TaskStruct` whose link is
+// `queue_next`; the mechanics come from the pure `intrusive_queue` module.
+impl Link for TaskStruct {
+    #[inline]
+    fn next(&self) -> *mut Self {
+        self.queue_next
     }
-
-    fn push(&mut self, task: &mut TaskStruct) {
-        let tp: *mut TaskStruct = task;
-        task.queue_next = ptr::null_mut();
-        if self.tail.is_null() {
-            self.head = tp;
-            self.tail = tp;
-        } else {
-            // SAFETY: `self.tail` is non-null and, per this queue's invariant, points at the last
-            // element of the intrusive list, a live task; the store only rewrites its
-            // `queue_next` link.
-            unsafe {
-                (*self.tail).queue_next = tp;
-            }
-            self.tail = tp;
-        }
-        self.count += 1;
-    }
-
-    fn pop(&mut self) -> *mut TaskStruct {
-        if self.head.is_null() {
-            return ptr::null_mut();
-        }
-        let t = self.head;
-        // SAFETY: `t` is non-null (this queue's head) and is a live task still owned by this
-        // queue, so reading its `queue_next` is in bounds.
-        let next = unsafe { (*t).queue_next };
-        self.head = next;
-        if self.head.is_null() {
-            self.tail = ptr::null_mut();
-        }
-        // SAFETY: `t` is that live task, so clearing its link is in bounds.
-        unsafe { (*t).queue_next = ptr::null_mut() };
-        self.count -= 1;
-        t
-    }
-
-    /// Unlink `task` from this queue.  Returns `true` if it was present.
-    fn remove(&mut self, task: *mut TaskStruct) -> bool {
-        if task.is_null() {
-            return false;
-        }
-        let mut prev: *mut TaskStruct = ptr::null_mut();
-        let mut cur = self.head;
-        while !cur.is_null() {
-            if cur == task {
-                // SAFETY: `task` is non-null and owned by this queue, so reading its link is in
-                // bounds.
-                let task_next = unsafe { (*task).queue_next };
-                if prev.is_null() {
-                    self.head = task_next;
-                } else {
-                    // SAFETY: `prev` was reached by walking this queue's chain, so it is a live
-                    // task still owned by the queue; the store only rewrites its link.
-                    unsafe { (*prev).queue_next = task_next };
-                }
-                if self.tail == task {
-                    self.tail = prev;
-                }
-                self.count -= 1;
-                // SAFETY: `task` is live and owned by this queue, so clearing its link is in
-                // bounds.
-                unsafe { (*task).queue_next = ptr::null_mut() };
-                return true;
-            }
-            prev = cur;
-            // SAFETY: `cur` was reached by walking this queue's chain, so it is a live task.
-            cur = unsafe { (*cur).queue_next };
-        }
-        false
+    #[inline]
+    fn set_next(&mut self, next: *mut Self) {
+        self.queue_next = next;
     }
 }
+
+type MlfqQueue = IntrusiveQueue<TaskStruct>;
 
 struct MlfqState {
     queues:        [MlfqQueue; MLFQ_LEVELS],
@@ -124,12 +52,12 @@ impl MlfqState {
     const fn new() -> Self {
         Self {
             queues: [
-                MlfqQueue::empty(),
-                MlfqQueue::empty(),
-                MlfqQueue::empty(),
-                MlfqQueue::empty(),
+                IntrusiveQueue::new(),
+                IntrusiveQueue::new(),
+                IntrusiveQueue::new(),
+                IntrusiveQueue::new(),
             ],
-            sleep_queue:   MlfqQueue::empty(),
+            sleep_queue:   IntrusiveQueue::new(),
             boost_counter: 0,
         }
     }
@@ -149,13 +77,7 @@ pub fn mlfq_init() {
     // or any other CPU exists, so `MLFQ_STATE` is exclusively reachable here.
     unsafe {
         let s = &mut *mlfq_state_mut();
-        for q in &mut s.queues {
-            q.head  = ptr::null_mut();
-            q.tail  = ptr::null_mut();
-            q.count = 0;
-        }
-        s.sleep_queue = MlfqQueue::empty();
-        s.boost_counter = 0;
+        *s = MlfqState::new();
     }
 }
 
@@ -168,7 +90,7 @@ pub(crate) fn mlfq_runnable_count() -> u32 {
     // reads them.
     unsafe {
         let s = &*mlfq_state_mut();
-        s.queues.iter().map(|q| q.count).sum()
+        s.queues.iter().map(|q| q.count()).sum()
     }
 }
 
@@ -180,7 +102,7 @@ pub(crate) fn mlfq_highest_runnable_level() -> Option<u32> {
     unsafe {
         let s = &*mlfq_state_mut();
         (0..MLFQ_LEVELS)
-            .find(|&l| s.queues[l].count > 0)
+            .find(|&l| !s.queues[l].is_empty())
             .map(|l| l as u32)
     }
 }
@@ -568,31 +490,34 @@ fn wake_expired_sleepers() {
     // `SCHEDULER_LOCK` held.
     let s = unsafe { &mut *mlfq_state_mut() };
     let sq = &mut s.sleep_queue;
-    let mut prev: *mut TaskStruct = ptr::null_mut();
-    let mut cur = sq.head;
 
-    while !cur.is_null() {
-        // SAFETY: `cur` was reached by walking the sleep queue's own chain, so it is a live
-        // sleeping task.
-        let next = unsafe { (*cur).queue_next };
-        // SAFETY: `cur` is that live task, so its `proc` field is in bounds.
+    // Drain and re-queue: expired sleepers go onto their MLFQ level, the rest are
+    // appended back (order preserved).  The pass must process exactly the nodes
+    // queued when it started -- pushing a not-yet-expired node back and popping
+    // it again would spin forever -- so take a count snapshot first.  The ready
+    // queues are reached through the same static; each access re-borrows from the
+    // raw pointer, sound because the caller holds `SCHEDULER_LOCK`.
+    let mut remaining = sq.count();
+    while remaining > 0 {
+        remaining -= 1;
+        let cur = sq.pop();
+        if cur.is_null() {
+            break;
+        }
+        // SAFETY: `cur` is a live task just popped from this queue, so its
+        // `proc` field is in bounds.
         let cur_proc = unsafe { (*cur).proc };
-        // SAFETY: `cur_proc` is the task's live `ProcMeta`.
-        let sleep_until = unsafe { (*cur_proc).sleep_until };
+        let sleep_until = if cur_proc.is_null() {
+            0
+        } else {
+            // SAFETY: `cur_proc` is the task's live `ProcMeta`.
+            unsafe { (*cur_proc).sleep_until }
+        };
         if sleep_until != 0 && now >= sleep_until {
-            if prev.is_null() {
-                sq.head = next;
-            } else {
-                // SAFETY: `prev` was reached by walking this chain, so it is a live task.
-                unsafe { (*prev).queue_next = next };
+            if !cur_proc.is_null() {
+                // SAFETY: `cur_proc` is live.
+                unsafe { (*cur_proc).sleep_until = 0 };
             }
-            if sq.tail == cur {
-                sq.tail = prev;
-            }
-            sq.count -= 1;
-
-            // SAFETY: `cur_proc` is live.
-            unsafe { (*cur_proc).sleep_until = 0 };
             // SAFETY: `cur` is live.
             unsafe { (*cur).state = TaskState::Ready };
             // SAFETY: `cur` is live.
@@ -600,9 +525,9 @@ fn wake_expired_sleepers() {
             // SAFETY: `cur` is live and the lock is held.
             unsafe { mlfq_enqueue_locked(cur, priority) };
         } else {
-            prev = cur;
+            // SAFETY: `cur` is a live task still owned by the sleep queue.
+            sq.push(unsafe { &mut *cur });
         }
-        cur = next;
     }
 }
 
@@ -640,14 +565,12 @@ pub unsafe extern "C" fn on_timer_tick() {
     }
 
     cur_t.ticks_used += 1;
-    let quantum = MLFQ_QUANTUM[cur_t.priority.min(MLFQ_LEVELS as u32 - 1) as usize];
+    let quantum = crate::mlfq_policy::quantum_for(cur_t.priority);
 
     let need_preempt = cur_t.ticks_used >= quantum;
 
     if need_preempt {
-        if cur_t.priority != MLFQ_LEVEL_RT && cur_t.priority < MLFQ_LEVEL_BACKGROUND {
-            cur_t.priority += 1;
-        }
+        cur_t.priority = crate::mlfq_policy::demote_on_quantum(cur_t.priority);
         cur_t.ticks_used = 0;
     }
 
@@ -656,7 +579,7 @@ pub unsafe extern "C" fn on_timer_tick() {
         // `SCHEDULER_LOCK`.
         let s = unsafe { &mut *mlfq_state_mut() };
         s.boost_counter = s.boost_counter.saturating_add(1);
-        if s.boost_counter >= BOOST_INTERVAL {
+        if crate::mlfq_policy::boost_due(s.boost_counter) {
             s.boost_counter = 0;
             do_priority_boost();
         }
@@ -788,7 +711,7 @@ pub unsafe fn task_voluntary_block(task: *mut TaskStruct, new_state: TaskState) 
     // SAFETY: `task` is non-null and live (see # Safety); the caller holds `SCHEDULER_LOCK`, so
     // the exclusive reborrow for the priority/state updates is sound.
     let t = unsafe { &mut *task };
-    let quantum = MLFQ_QUANTUM[t.priority.min(MLFQ_LEVELS as u32 - 1) as usize];
+    let quantum = crate::mlfq_policy::quantum_for(t.priority);
     if t.ticks_used < quantum / 2 + 1 && t.priority > MLFQ_LEVEL_INTERACTIVE {
         t.priority -= 1;
     }

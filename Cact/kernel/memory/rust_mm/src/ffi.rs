@@ -34,33 +34,40 @@ pub const MEM_START: u32 = 0x0010_0000;
 /// 4 GB address-space layout
 /// ---------------------------------------------------------------------------
 ///
-/// We manage the full 32-bit physical address space (4 GB), minus the
-/// PCI/MMIO hole that occupies the top ~512 MB (0xE000_0000 – 0xFFFF_FFFF).
-/// The actual upper bound is capped to the last 32-bit address supported by
-/// the hardware, which is conveyed by the Multiboot2 MMAP.  For sizing
-/// static data structures we use the worst-case maximum.
+/// We manage physical RAM in 0x0000_0000 – 0xBFFF_FFFF (3 GiB); everything at
+/// or above PCI_HOLE_START (0xC000_0000) is reserved for PCI/MMIO and is never
+/// handed out by the PMM.  RAM the firmware places inside or above the hole is
+/// not managed.  The bound is a compile-time constant (see PCI_HOLE_START),
+/// not derived from the Multiboot2 MMAP.
 ///
 ///   0x0000_0000 – 0x000F_FFFF :  1 MB  BIOS / IVT / ROM (reserved)
 ///   0x0010_0000 – 0x01FF_FFFF : 31 MB  kernel text + BSS + static page tables
 ///   0x0200_0000 – 0x02FF_FFFF : 16 MB  heap window
-///   0x0200_0000 – 0xBFFF_FFFF : ~3 GB  general-purpose physical RAM
-///   0xC000_0000 – 0xFFFF_FFFF : PCI/MMIO hole — never touched by PMM
+///   0x0200_0000 – 0xBFFF_FFFF : ~3 GB  managed physical RAM
+///   0xC000_0000 – 0xFFFF_FFFF :        PCI/MMIO hole — never touched by PMM
 ///
-/// TOTAL_PAGES covers every 4K frame from address 0 up to PCI_HOLE_START.
+/// TOTAL_PAGES sizes the static frame arrays for the full 4 GiB; the actual
+/// managed ceiling is discovered at boot (see `PCI_HOLE_START`).
 /// ---------------------------------------------------------------------------
-/// Upper boundary of the region managed by PMM (= start of PCI/MMIO hole).
-/// 0xC000_0000 = 3072 MB (Q35 with 4 GB).  Change this if your board has
-/// a different PCI hole location.
+/// The user/kernel virtual-address split (3 GiB user / 1 GiB kernel), and the
+/// *default* physical MMIO base when the Multiboot2 map yields none.
+///
+/// The real RAM/MMIO boundary is discovered at boot (`pmm::ram_end()`): a
+/// 32-bit board can have usable RAM above this address, up to its PCI hole
+/// (e.g. 0xE000_0000 = 3.5 GiB).  Everything at or above `ram_end()` is device
+/// MMIO.
 pub const PCI_HOLE_START: u32 = 0xC000_0000;
 
-/// Manageable physical memory: 0 … PCI_HOLE_START.
-pub const MEM_SIZE: u32 = PCI_HOLE_START; /* 3072 MB */
-
-/// Total number of 4K pages in the managed range.
-pub const TOTAL_PAGES: u32 = MEM_SIZE / PAGE_SIZE; /* 786 432 pages */
+/// Worst-case number of 4 KiB frames the PMM can index: the whole 4 GiB
+/// address space.  The static bitmap/refcount arrays are sized for this, so a
+/// board whose PCI hole sits above 3 GiB still fits.
+pub const TOTAL_PAGES: u32 = 1024 * 1024;
 
 /// Bitmap byte count (1 bit per page).
-pub const BITMAP_SIZE: u32 = TOTAL_PAGES / 8; /* 98 304 bytes ≈ 96 KB */
+pub const BITMAP_SIZE: u32 = TOTAL_PAGES / 8; /* 131 072 bytes = 128 KB */
+
+/// Exclusive upper bound of the 4 GiB physical address space, as u64.
+pub const PMM_MAX_ADDR: u64 = (TOTAL_PAGES as u64) * (PAGE_SIZE as u64);
 
 /// Heap starts right after the hard-reserved 32 MB low-memory region.
 pub const HEAP_START: u32 = 32 * 1024 * 1024; /* 0x0200_0000 */
@@ -110,6 +117,9 @@ pub const PAGE_ZERO:    u32 = 0x800;
 
 pub const USER_STACK_TOP: u32 = 0xC0000000;
 pub const USER_STACK_LIMIT: u32 = 0xBF000000;
+/// Lowest user virtual address: below this is the low identity-mapped kernel
+/// area.  Mirrors `USER_SPACE_START` in `core/syscall/validate.h`.
+pub const USER_SPACE_START: u32 = 0x08000000;
 pub const USER_HEAP_START: u32 = 0x40000000;
 pub const USER_HEAP_LIMIT: u32 = 0x80000000;
 

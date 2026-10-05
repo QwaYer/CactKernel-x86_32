@@ -9,14 +9,7 @@
 #include "kernel.h"
 #include "klib.h"
 #include "ksym.h"
-
-// HMAC-SHA256 module signing — implemented in cact_crypto (Rust, no_std)
-extern int  cact_hmac_verify(const uint8_t *data, uint32_t data_len,
-                             const uint8_t *tag, uint32_t tag_len);
-
-#define CACT_HMAC_TAG_SIZE 32
-
-CACT_STATIC_ASSERT(CACT_HMAC_TAG_SIZE == 32);
+#include "mod_tag.h"
 
 static void module_proc_name(const char *path, char *out, int out_sz) {
     const char *base = path;
@@ -29,27 +22,6 @@ static void module_proc_name(const char *path, char *out, int out_sz) {
         i++;
     }
     out[i] = '\0';
-}
-
-int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
-    if (*file_size <= CACT_HMAC_TAG_SIZE) {
-        pr_err("[LDR] HMAC: unsigned module (no signature) — rejected\n");
-        return -1;
-    }
-    uint32_t  data_len = *file_size - CACT_HMAC_TAG_SIZE;
-    uint8_t  *tag      = elf_data + data_len;
-    int       rc       = cact_hmac_verify(elf_data, data_len, tag, CACT_HMAC_TAG_SIZE);
-    if (rc != 0) {
-        pr_err("[LDR] HMAC: signature mismatch — rejected\n");
-        return -1;
-    }
-    *file_size = data_len;
-    // Zero the tag area so stray section-header reads past data_len
-    // (e.g. the last .shstrtab entry that lands on the HMAC tag) do
-    // not pick up garbage flags/alignment/sizes.
-    for (uint32_t i = 0; i < CACT_HMAC_TAG_SIZE; i++)
-        elf_data[data_len + i] = 0;
-    return 0;
 }
 
 // Return pointer to section header 'idx'
@@ -150,8 +122,8 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         pr_err("[LDR] Invalid ELF32 relocatable\n");
         return -2;
     }
-    if (hmac_verify_module(elf_data, &file_size) != 0) {
-        pr_err("[LDR] HMAC verification failed\n");
+    if (mod_tag_verify(elf_data, &file_size) != 0) {
+        pr_err("[LDR] signature/ABI check failed\n");
         kfree(elf_data);
         return -8;
     }

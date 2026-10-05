@@ -312,6 +312,11 @@ static int _fdctl_handle(file_t *f, int fd, uint32_t cmd, void *arg) {
     }
 
     case CACT_FDCTL_FSYNC:
+        /* Write the file's page cache back to its backing store now.  A node
+         * with no backing write function (devfs, procfs, ...) flushes to
+         * nothing, so this stays a cheap no-op there. */
+        if (!f || !f->node) return -EINVAL;
+        vfs_as_flush(f->node->priv, f->node->inode, 0, f->node->size);
         return 0;
 
     default:

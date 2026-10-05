@@ -25,6 +25,12 @@
 #![deny(clippy::multiple_unsafe_ops_per_block)]
 
 pub mod ffi;
+pub mod energy_model;
+pub mod topology;
+pub mod cpu_topo;
+pub mod placement;
+pub mod intrusive_queue;
+pub mod mlfq_policy;
 pub mod task;
 pub mod mlfq;
 pub mod mlfq_map;

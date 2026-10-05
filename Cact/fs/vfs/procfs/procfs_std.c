@@ -74,6 +74,10 @@ int _cpuinfo_read(uint32_t off, uint32_t size, char *buf) {
 
         _APP("processor       : "); _APPN(cpu); _APP("\n");
         _APP("apicid          : "); _APPN(apic_id); _APP("\n");
+        _APP("physical id     : "); _APPN(cpu_topo_package(cpu)); _APP("\n");
+        _APP("siblings        : "); _APPN(cpu_topo_siblings(cpu)); _APP("\n");
+        _APP("core id         : "); _APPN(cpu_topo_core(cpu)); _APP("\n");
+        _APP("cpu cores       : "); _APPN(cpu_topo_cpu_cores(cpu)); _APP("\n");
         _APP("vendor_id       : "); _APP(cpu_vendor_str(cpu_vendor())); _APP("\n");
         _APP("model name      : "); _APP(cpu_brand_str()); _APP("\n");
         _APP("cpu MHz         : "); _APPN(mhz); _APP("\n");
@@ -465,7 +469,7 @@ int _version_read(uint32_t off, uint32_t size, char *buf) {
 
     #define _V(s) { const char *_s=(s); while(*_s) tmp[p++]=*_s++; }
 
-    _V("Cact Kernel ");  _V(kernel_version);    _V("\n");
+    _V("Cact Kernel ");  _V(kernel_version_meta);    _V("\n");
     _V("Arch: x86 (i686)\n");
     _V("Compiler: ");    _V(kernel_compiler);   _V("\n");
     _V("Built by: ");    _V(kernel_builder);    _V("\n");

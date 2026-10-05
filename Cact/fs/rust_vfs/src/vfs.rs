@@ -723,9 +723,10 @@ pub unsafe extern "C" fn vfs_link(
 
 /// Cross-directory rename.  Same directory delegates to the filesystem's
 /// `rename`; across directories a regular file is moved by linking it under the
-/// new name and unlinking the old one.  On this (non-preemptive) kernel there
-/// is no scheduling point between the two steps, so the move is atomic;
-/// directories are refused (no subtree move), as are existing targets.
+/// new name and unlinking the old one (atomic: this kernel has no scheduling
+/// point between the two steps), and a directory is moved through the
+/// filesystem's `rename2` op when it provides one (else -EINVAL).  Existing
+/// targets are refused with -EEXIST.
 #[no_mangle]
 pub unsafe extern "C" fn vfs_rename_at(
     olddir: *mut VfsNode,
@@ -747,11 +748,25 @@ pub unsafe extern "C" fn vfs_rename_at(
     if node.is_null() {
         return -2; // ENOENT
     }
-    if unsafe { (*node).type_ } == VFS_DIRECTORY {
-        return -EINVAL; // directory move across directories is not supported
-    }
     if !unsafe { finddir_vfs(newdir, newname) }.is_null() {
         return -EEXIST;
+    }
+    // Prefer the filesystem's two-directory rename for any type: it is the
+    // only way to move a directory (no link+unlink for dirs), and filesystems
+    // like ext4 have no link/unlink op at all.
+    let ops = unsafe { (*olddir).ops };
+    if !ops.is_null() {
+        if let Some(f) = unsafe { (*ops).rename2 } {
+            let ret = unsafe { f(olddir, oldname, newdir, newname) };
+            if ret == 0 {
+                unsafe { crate::dcache::invalidate(olddir, oldname) };
+                unsafe { crate::dcache::invalidate(newdir, newname) };
+            }
+            return ret;
+        }
+    }
+    if unsafe { (*node).type_ } == VFS_DIRECTORY {
+        return -EINVAL; // no subtree move without a rename2 op
     }
 
     let lret = unsafe { vfs_link(newdir, newname, node) };

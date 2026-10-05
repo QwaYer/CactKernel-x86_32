@@ -1,7 +1,12 @@
 //! Physical memory manager: bitmap of free frames, per-page refcounts, and `kalloc`/`free_page`.
 
 use crate::ffi::*;
+use crate::pmm_math::{self, addr_to_page, page_to_addr};
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, klog_msg};
+
+// The pure math module and the FFI ABI must agree on the page size; if they
+// ever drift, this fails the build instead of corrupting the bitmap.
+const _: () = assert!(PAGE_SIZE == pmm_math::PAGE_SIZE);
 
 static MEMORY_BITMAP: KStatic<[u8; BITMAP_SIZE as usize]> =
     KStatic::new([0u8; BITMAP_SIZE as usize]);
@@ -10,6 +15,37 @@ static PAGE_REFCOUNTS: KStatic<[u16; TOTAL_PAGES as usize]> =
     KStatic::new([0u16; TOTAL_PAGES as usize]);
 
 static FIRST_AVAILABLE_PAGE: KStatic<u32> = KStatic::new(0);
+
+/// Runtime physical RAM/MMIO boundary: the page-aligned top of available RAM
+/// below 4 GiB, discovered from the Multiboot2 map in `init_memory_manager`.
+/// Defaults to `PCI_HOLE_START` until then and on machines with no usable map.
+/// Physical addresses at or above it are device MMIO (mapped uncached).
+static RAM_END: KStatic<u32> = KStatic::new(PCI_HOLE_START);
+
+/// Base VA of the kernel's fixed MMIO windows (ACPI temp map, PCIe ECAM).
+/// Placed at or above `RAM_END` so the windows can never alias managed RAM
+/// (the identity map makes VA == PA, so a window below `RAM_END` would shadow
+/// a real frame).  Computed in `init_memory_manager`.
+static MMIO_WINDOW_BASE: KStatic<u32> = KStatic::new(PCI_HOLE_START);
+
+/// Physical address at which device MMIO begins (device BARs live here).
+pub(crate) fn ram_end() -> u32 {
+    // SAFETY: `RAM_END` is written once during single-threaded boot and only
+    // read afterwards, so this plain read cannot race a writer.
+    unsafe { *KStatic::get_mut(RAM_END.as_ptr()) }
+}
+
+/// Lowest VA of the fixed kernel MMIO windows.
+pub(crate) fn mmio_window_base() -> u32 {
+    // SAFETY: as `ram_end` — written once at boot, read-only afterwards.
+    unsafe { *KStatic::get_mut(MMIO_WINDOW_BASE.as_ptr()) }
+}
+
+/// C entry point: ACPI/PCIe need the window base VA after PMM init.
+#[unsafe(no_mangle)]
+pub extern "C" fn cact_mmio_window_base() -> u32 {
+    mmio_window_base()
+}
 
 /// Number of frames the PMM was ever handed by the boot map (MMAP type=available
 /// below the PCI hole).  Fixed after `init_memory_manager`; reported as the
@@ -30,7 +66,7 @@ fn bitmap_set(idx: u32) {
     // during single-threaded boot (`init_memory_manager`) or with `PAGE_LOCK` held
     // (`kalloc`/`free_page`), so this access is exclusive.
     let bm = unsafe { KStatic::get_mut(MEMORY_BITMAP.as_ptr()) };
-    bm[(idx / 8) as usize] |= 1 << (idx % 8);
+    bm[pmm_math::bitmap_byte(idx)] |= pmm_math::bitmap_mask(idx);
 }
 
 #[inline(always)]
@@ -38,7 +74,7 @@ fn bitmap_clear(idx: u32) {
     // SAFETY: `MEMORY_BITMAP` write; callers are `init_memory_manager` (boot,
     // single-threaded) or `free_page` (holds `PAGE_LOCK`).
     let bm = unsafe { KStatic::get_mut(MEMORY_BITMAP.as_ptr()) };
-    bm[(idx / 8) as usize] &= !(1 << (idx % 8));
+    bm[pmm_math::bitmap_byte(idx)] &= !pmm_math::bitmap_mask(idx);
 }
 
 #[inline(always)]
@@ -46,18 +82,7 @@ fn bitmap_test(idx: u32) -> bool {
     // SAFETY: `MEMORY_BITMAP` read; only `kalloc` calls this, and it holds
     // `PAGE_LOCK` across the whole first-fit scan.
     let bm = unsafe { KStatic::get_mut(MEMORY_BITMAP.as_ptr()) };
-    bm[(idx / 8) as usize] & (1 << (idx % 8)) != 0
-}
-
-#[inline(always)]
-fn addr_to_page(addr: u32) -> u32 {
-    addr / PAGE_SIZE
-}
-
-/// Page index → physical address.
-#[inline(always)]
-fn page_to_addr(idx: u32) -> u32 {
-    idx * PAGE_SIZE
+    bm[pmm_math::bitmap_byte(idx)] & pmm_math::bitmap_mask(idx) != 0
 }
 
 
@@ -82,13 +107,11 @@ pub unsafe extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
     dst.count = count as u32;
     for i in 0..count {
         let mut e = src.entries[i];
-        if e.len != 0 {
-            let end = e.base.saturating_add(e.len);
-            if e.base >= PCI_HOLE_START as u64 {
-                e.len = 0;
-            } else if end > PCI_HOLE_START as u64 {
-                e.len = (PCI_HOLE_START as u64) - e.base;
-            }
+        if let Some((base, end)) = pmm_math::clip_to_limit(e.base, e.len, PMM_MAX_ADDR) {
+            e.base = base;
+            e.len = end - base;
+        } else {
+            e.len = 0;
         }
         dst.entries[i] = e;
     }
@@ -116,6 +139,7 @@ pub extern "C" fn init_memory_manager() {
     // Frames the boot map offers to the PMM (later the low reservation and the
     // heap window are re-marked used, but they still count as installed RAM).
     let mut usable_frames: u32 = 0;
+    let mut ram_end_candidate: u64 = 0;
 
     if have_mmap {
         for &e in &mmap.entries[..mmap.count as usize] {
@@ -123,11 +147,13 @@ pub extern "C" fn init_memory_manager() {
             if e.len == 0 { continue; }
 
             let region_end = e.base.saturating_add(e.len);
-            let clip_end   = region_end.min(PCI_HOLE_START as u64);
+            let clip_end   = region_end.min(PMM_MAX_ADDR);
             if e.base >= clip_end { continue; }
 
-            let first_page = addr_to_page(((e.base + PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1)) as u32);
-            let last_page  = addr_to_page((clip_end & !(PAGE_SIZE as u64 - 1)) as u32);
+            // The top of available RAM is where device MMIO begins.
+            if clip_end > ram_end_candidate { ram_end_candidate = clip_end; }
+
+            let (first_page, last_page) = pmm_math::aligned_page_range(e.base, clip_end);
             if first_page >= last_page { continue; }
 
             for pg in first_page..last_page {
@@ -140,11 +166,25 @@ pub extern "C" fn init_memory_manager() {
     } else {
         klog_msg(LOG_WARN, c"pmm has no mmap; assuming RAM above reserved area".as_ptr() as *const u8);
         let first_free = addr_to_page(RESERVED_END);
-        for pg in first_free..TOTAL_PAGES {
+        let fallback_end = addr_to_page(PCI_HOLE_START);
+        for pg in first_free..fallback_end {
             bitmap_clear(pg);
             usable_frames += 1;
         }
     }
+
+    // Publish the RAM/MMIO boundary and the fixed-window VA base.  Keep the
+    // conservative default when the map yielded no RAM above the reservation.
+    let ram_end = pmm_math::ram_end_from_candidate(ram_end_candidate, RESERVED_END, PMM_MAX_ADDR)
+        .unwrap_or(PCI_HOLE_START);
+    // The ACPI/PCIe windows must sit at or above the RAM top, otherwise their
+    // remapping would shadow a managed frame under the identity map.  Align to
+    // 2 MiB so each window stays clear of the identity neighbours.
+    let window_base = pmm_math::mmio_window_base(ram_end, PCI_HOLE_START);
+    // SAFETY: both are written once during single-threaded boot, before paging
+    // is enabled and before any ACPI/PCIe user of the window runs.
+    *unsafe { KStatic::get_mut(RAM_END.as_ptr()) } = ram_end;
+    *unsafe { KStatic::get_mut(MMIO_WINDOW_BASE.as_ptr()) } = window_base;
 
     // SAFETY: `TOTAL_USABLE_FRAMES` written once during single-threaded boot, before
     // any `kalloc`/`free_page` caller can run.
@@ -183,13 +223,14 @@ pub extern "C" fn kalloc() -> *mut u8 {
     const MAX_RECLAIM_ROUNDS: u32 = 4;
 
     let mut round: u32 = 0;
+    let limit = addr_to_page(ram_end());
     loop {
         lock_acquire(PAGE_LOCK.as_ptr());
         // SAFETY: `FIRST_AVAILABLE_PAGE` is read while holding `PAGE_LOCK`, which
         // serialises it against `free_page` and the other `kalloc` CPU.
         let hint = *unsafe { KStatic::get_mut(FIRST_AVAILABLE_PAGE.as_ptr()) };
         let mut i = hint;
-        while i < TOTAL_PAGES {
+        while i < limit {
             if !bitmap_test(i) {
                 bitmap_set(i);
                 // SAFETY: `PAGE_REFCOUNTS[idx]` initialised under `PAGE_LOCK`, held here for

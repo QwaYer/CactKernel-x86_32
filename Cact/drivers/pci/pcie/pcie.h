@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "memory.h"   /* KERNEL_MMIO_WINDOW_END */
+#include "memory.h"   /* cact_mmio_window_base(), KERNEL_MMIO_WINDOW_SIZE */
 
 #define PCIE_CAP_ID             0x10
 
@@ -20,9 +20,10 @@
 
 #define PCIE_CONFIG_SPACE_SIZE  4096
 
-/* ECAM virtual window: starts above the fixed kernel MMIO windows (see
- * memory.h) so it can never alias the ACPI temporary-map window. */
-#define PCIE_ECAM_VADDR         KERNEL_MMIO_WINDOW_END
+/* ECAM virtual window starts right above the ACPI temp-map window; both are
+ * laid out from cact_mmio_window_base() (see memory.h), so ECAM can never alias
+ * the ACPI window.  The base is runtime: compute the VA as
+ * cact_mmio_window_base() + KERNEL_MMIO_WINDOW_SIZE. */
 #define PCIE_ECAM_SEG_SHIFT     0x10000000u   /* 256 MB of VA per segment */
 #define PCIE_MAX_SEGMENTS       4
 

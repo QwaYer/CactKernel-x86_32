@@ -40,8 +40,9 @@ Ordered by how hard each gap blocks a port:
 
 - **No order-N / contiguous physical allocator.** `kalloc()` returns a single
   4 KiB frame and the heap is a 16 MiB fragmented free list (`HEAP_SIZE` in
-  `kernel/memory/memory.h`); `kalloc` is not even in the ksym table. Scanout and
-  a GTT both assume contiguous, aligned backing.
+  `kernel/memory/memory.h`); `kalloc` is exported to modules (ksym, 2.0.0) but
+  still has no multi-frame/contiguous variant. Scanout and a GTT both assume
+  contiguous, aligned backing.
 - **GEM storage is scattered and capped.** A GEM is a memfd: individually
   allocated frames with `MEMFD_MAX_PAGES = 1024` (`rust_mm/src/process/memfd.rs`)
   — a 4 MiB object ceiling — and nothing exported to walk an object's frames to
@@ -50,13 +51,13 @@ Ordered by how hard each gap blocks a port:
   refused in `kms/src/framebuffer.rs`, so tiled scanout cannot be described even
   though the constants are vendored in `drm/uapi/drm_fourcc.h`.
 - **No general write-combining mapping.** `vmm_map()` forces `PCD|PWT` for any
-  physical address ≥ `PCI_HOLE_START` (`rust_mm/src/vmm/paging.rs`), so PAT
-  entry 4 (WC, programmed in `memory/pat.c`) is unreachable for a BAR; the only
-  WC helper is `pat_enable_wc_for_framebuffer()`. MTRR is save/restore across S3
-  only — there is no range allocator.
-- **No firmware loader.** No `request_firmware` equivalent exists;
-  `initfs_modblob_get()` is a build-time blob table. GuC/HuC/DMC have no path
-  into kernel memory at all.
+  physical address ≥ the runtime `pmm::ram_end()` (`rust_mm/src/vmm/paging.rs`),
+  so PAT entry 4 (WC, programmed in `memory/pat.c`) is unreachable for a BAR;
+  the only WC helper is `pat_enable_wc_for_framebuffer()`. MTRR is save/restore
+  across S3 only — there is no range allocator.
+- **No runtime firmware loader.** `request_firmware` (ksym) can stage a blob
+  that ships in the build-time cctkfs table, but there is no on-demand loader or
+  workqueue, so GuC/HuC/DMC blobs have no practical path into kernel memory.
 - **No ACPI OpRegion, `_DSM` or VBT reader.** The AML interpreter is linked, but
   there is no address-space handler, no video-BIOS-table parsing, and no ACPI
   entry point exported to modules.
@@ -73,11 +74,13 @@ Ordered by how hard each gap blocks a port:
 - **No BAR (re)assignment or resource tree.** Enumeration sizes BARs correctly
   (64-bit included) but trusts whatever firmware programmed; there is no
   allocator to move one.
-- **The module ABI is narrower than the DRM core.** `kernel/elf/ksym.c` exports
-  no property/blob creation, no framebuffer creation and no ACPI/PAT/MTRR
-  helper, so i915 has to be **in-tree**, not an out-of-tree `.cctk`.
-- **Only ~3 GiB of RAM is managed.** The PMM stops at `PCI_HOLE_START`
-  (`0xC0000000`); memory above the firmware hole is ignored.
+- **The module ABI is narrower than the full DRM core.** `kernel/elf/ksym.c`
+  exports the generic KMS/GEM/connector API (enough for the out-of-tree display
+  half below) but no property/blob or framebuffer creation, so the
+  property/framebuffer surface a full render driver needs is still missing.
+- **RAM above 4 GiB is unreachable.** The PMM only manages frames below 4 GiB
+  (`TOTAL_PAGES = 1024*1024`) and stops at the runtime PCI hole (`pmm::ram_end()`,
+  default `0xC0000000`); a 32-bit non-PAE kernel cannot map the rest.
 
 The order that unblocks the most:
 
@@ -145,68 +148,29 @@ division).
 
 ## CPU topology: SMP, SMT (Hyper-Threading) & core power
 
-Assessed 2026-09-30. SMP works and the energy governor already parks, offlines
-and re-wakes individual CPUs (`smp_cpu_offline` / `smp_cpu_online_sipi` in
-`kernel/proc/sched/src/smp.rs`, gated by `energy_core_offline_enable()`), but the
-CPU map is **flat**: one entry per MADT LAPIC id (`energy.rs`,
-`MAX_CORES = MAX_CPUS = 64`) and nothing records that two of those entries are
-the two **threads of one physical core**. SMT siblings already come up — MADT
-enumeration counts every enabled LAPIC entry — they are simply indistinguishable
-from real cores, so a 4-core / 8-thread CPU is reported and scheduled as 8
-independent cores.
-
-What is missing to make the machine's own topology real (4 cores → 8 CPUs, each
-logical processor tied to its core and switchable):
-
-- **No topology decode.** `cpu_has_htt()` reads CPUID.01H:EDX[28]
-  (`kernel/cpudev/cpudev.c`) but **nothing consumes it**, and neither leaf `4`
-  (cores/package) nor leaf `0xB`/`0x1F` (package/core/SMT bit widths) is
-  decoded — so there is no `core_id`, `package_id` or sibling mask anywhere.
-- **Core vs thread is absent from the model.** `EnergyCore` carries only
-  `lapic_id`/`role`/`cstate`/`online`; there is no parent core or sibling set to
-  reason about, and the "core" wording is really a logical CPU.
-- **Power is per CPU only.** `energy_core_set_cstate` lets a thread enter C3/C6
-  while its sibling runs, and there is no "all threads of a core idle → the
-  core may go deep" rule; the offline path also acts on one CPU, not on a core
-  as a unit. Powering a core off means parking **both** threads, not one.
-- **Placement is sibling-blind.** `balance.rs` / `decision.rs` scan
-  `1..MAX_CORES` and treat every entry as an independent core, so two runnable
-  tasks can land on the two threads of one core while another physical core
-  idles.
-- **S3 loses the workers.** `smp_init()` runs only from boot
-  (`kernel/core/kernel.c`); after an S3 resume no AP (let alone a sibling set)
-  is re-woken — the existing gap, and the topology work has to close it.
-- **Reporting.** `/proc/cpuinfo` (`fs/vfs/procfs/procfs_std.c`) prints
-  `processor`/`apicid`/`role`/`cstate`/`online`/`idle` but no `core id`,
-  `physical id`, `siblings` or `cpu cores`, so userspace cannot see the
-  topology; `sysinfo` has no "N cores / M threads" line.
-
-### Phases
-
-1. **Topology.** Decode CPUID leaf `0xB`/`0x1F` into `package_id` / `core_id` /
-   `smt_sibling_mask`, falling back to leaf `4` + leaf `1` HTT and then to MADT
-   ordering; expose it through `energy.h` and add `core id`, `physical id`,
-   `siblings` and `cpu cores` to `/proc/cpuinfo`.
-2. **Core-level power.** Deep C-states only when *every* sibling is idle; a
-   core-offline that parks and INITs all threads of the core as one unit
-   (reuse the park protocol already in `smp_cpu_offline`).
-3. **Sibling-aware placement.** In `balance.rs` / `decision.rs`, prefer a
-   physical core with no busy thread over an SMT sibling of a busy one.
-4. **S3.** Re-wake all logical CPUs on resume (closes the gap above).
-5. **Self-test** in `CactUserBins`: with `-smp 4,threads=2`, print present
-   cores/threads, check the sibling masks, offline one thread and confirm its
-   sibling keeps running.
-
-**Acceptance:** with `-smp 4,threads=2` the boot `smp` line reports 7 worker(s)
-online (8 logical CPUs) and `/proc/cpuinfo` groups them under 4 `physical id`s
-with correct `siblings`; two CPU-bound threads are placed on different physical
-cores before any core is shared; offlining one thread leaves its sibling running
-and offlining both powers the core down; after S3 all 8 are online again.
+**Closed in 2.0.0 (P1.2/P1.4).** The kernel decodes CPUID leaf `0xB`/`0x1F`
+(falling back to leaf `4` + leaf `1` HTT, then MADT order) into
+`package_id`/`core_id`/`smt_sibling_mask`; `/proc/cpuinfo` reports `core id`,
+`physical id`, `siblings` and `cpu cores`; placement prefers a fresh physical
+core over a sibling of a busy one (`balance.rs`/`decision.rs`); deep C-states
+(C3/C6) are gated on *all* siblings idle (`cap_idle_depth`); a whole physical
+core is parked / offlined as one unit (`core_mask`); and `smp_resume_rewake()`
+re-wakes every logical CPU from the ACPI S3 resume path.  The userspace
+`topotest` exercises this in the headless `check` image, and C6 is confirmed on
+hardware that advertises `_CST`.
 
 ## Storage & filesystems
 
 - The page cache and optional **swap** are in place; a swap partition that
   cannot be used today only logs a warning.
+- Cross-directory rename works for files everywhere and for **directories** on
+  every filesystem that implements the `vfs_ops_t.rename2` op — **tmpfs, ext4
+  and fat32** do.  The fat32 path is host-tested (`FAT32-for-Cact-x86_32/
+  test/`); the ext4 path is build-verified only because the check image carries
+  no ext4 volume.  `fsync` (`CACT_FDCTL_FSYNC`) flushes the file's inode page
+  cache to its backing store.  `statx` timestamps come from the wall clock (the
+  VFS does not track per-inode times yet).  AF_UNIX `setsockopt`/`getsockopt`
+  and the abstract namespace are supported.
 
 ## ABI & userspace
 
@@ -215,3 +179,24 @@ and offlining both powers the core down; after S3 all 8 are online again.
   pty), never as new traps.
 - All repos build with **Meson + Ninja**; the toolchain is `clang -m32` against
   the workspace's own libc.
+
+## Versioning & releases
+
+CactOS uses **SemVer**, but a release is a self-describing triple
+`(version, arch, module-ABI)`:
+
+- **`MAJOR` = architecture generation.** `2.x` is the final **i686** line;
+  `3.x` is the **x86_64** line. The major number only moves on an arch
+  generation / ABI-epoch break, never for features, so `2.0.0` is terminal and
+  the next release is `3.0.0` (there is no `2.1`).
+- **`MINOR`/`PATCH`** are the usual feature / fix levels; pre-releases are
+  `-rc.N` (`v2.0.0-rc.1`).
+- **Build metadata carries the machine identity**: `<version>+abi.<vermagic>.i686`
+  (e.g. `2.0.0+abi.0x9217b2c9.i686`). `<vermagic>` is the module ABI fingerprint
+  the kernel enforces (see `module-signing`), so the kernel banner, `/proc/version`
+  and every `.cctk` agree on one value — no more "2.0.0, but which ksym set?".
+  Metadata never appears in a git tag.
+- **Tags** are the plain version: `v2.0.0` (and `v2.0.0-rc.N` before it).
+
+The `meson.build` footer, the boot banner and `/proc/version` print the full
+metadata form; `uname -r` reports the plain `MAJOR.MINOR.PATCH`.

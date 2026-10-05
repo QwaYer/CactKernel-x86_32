@@ -112,6 +112,10 @@ typedef struct unix_ep {
     struct unix_ep *pend_next;
     uint32_t pend_count;
 
+    /* SOL_SOCKET options (setsockopt/getsockopt).  0 = use the default. */
+    uint32_t sndbuf;
+    uint32_t rcvbuf;
+
     vfs_node_t *node;
 } unix_ep_t;
 
@@ -284,8 +288,15 @@ void unix_sock_init(void) {
 static int unix_path_canon(const char *path, char *out, int out_max) {
     if (!path) return -EINVAL;
     if (path[0] == '\0') {
-        if (path[1] != '\0') return -EOPNOTSUPP;  /* abstract namespace */
-        return -EINVAL;                            /* empty path */
+        if (path[1] == '\0') return -EINVAL;       /* empty path */
+        /* Abstract namespace (Linux): the name is the bytes after the leading
+         * NUL and has no filesystem representation.  Key it with a marker byte
+         * a canonical absolute path (always '/'-prefixed) never uses. */
+        out[0] = '\x01';
+        int i = 1;
+        while (path[i] && i < out_max - 1) { out[i] = path[i]; i++; }
+        out[i] = '\0';
+        return 0;
     }
     if (current_task) {
         vfs_make_abs(path, out, out_max);
@@ -706,7 +717,7 @@ static int unix_bind_ioctl(unix_ep_t *ep, void *arg) {
     char canon[512];
     int r = unix_path_canon(ua.path, canon, sizeof(canon));
     if (r < 0) return r;
-    if (canon[0] != '/') return -EINVAL;
+    if (canon[0] != '/' && canon[0] != '\x01') return -EINVAL; /* path or abstract */
 
     r = unix_bound_insert(canon, ep);
     if (r < 0) return r;
@@ -1013,6 +1024,61 @@ static int unix_recvmsg_ioctl(unix_ep_t *ep, void *arg) {
     return got;
 }
 
+/* SOL_SOCKET setsockopt/getsockopt for AF_UNIX.  AF_UNIX is a connection
+ * endpoint, so the address/keepalive classes are accepted as no-ops and only
+ * the buffer sizes carry state; SO_TYPE/SO_ERROR are query-only. */
+#define UNIX_SOL_SOCKET        1u
+#define UNIX_SO_REUSEADDR      2u
+#define UNIX_SO_TYPE           3u
+#define UNIX_SO_ERROR          4u
+#define UNIX_SO_SNDBUF         7u
+#define UNIX_SO_RCVBUF         8u
+#define UNIX_SO_KEEPALIVE      9u
+#define UNIX_SO_REUSEPORT     15u
+#define UNIX_SO_SNDBUF_DEFAULT 212992u
+#define UNIX_SO_RCVBUF_DEFAULT 212992u
+
+#ifndef ENOPROTOOPT
+#define ENOPROTOOPT 92
+#endif
+
+static int unix_sockopt_ioctl(unix_ep_t *ep, void *arg, int is_get) {
+    cact_sockopt_arg_t a;
+    if (!arg) return -EFAULT;
+    if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+    if (a.level != UNIX_SOL_SOCKET) return -ENOPROTOOPT;
+
+    switch (a.optname) {
+    case UNIX_SO_TYPE:
+        if (!is_get) return -ENOPROTOOPT;
+        a.val_out = 1u; /* SOCK_STREAM */
+        break;
+    case UNIX_SO_ERROR:
+        if (!is_get) return -ENOPROTOOPT;
+        a.val_out = 0u; /* no asynchronous socket error is tracked */
+        break;
+    case UNIX_SO_REUSEADDR:
+    case UNIX_SO_REUSEPORT:
+    case UNIX_SO_KEEPALIVE:
+        /* Accepted for compatibility; no wire-level equivalent on AF_UNIX. */
+        if (is_get) a.val_out = 0u;
+        break;
+    case UNIX_SO_SNDBUF:
+        if (is_get) a.val_out = ep->sndbuf ? ep->sndbuf : UNIX_SO_SNDBUF_DEFAULT;
+        else ep->sndbuf = a.val;
+        break;
+    case UNIX_SO_RCVBUF:
+        if (is_get) a.val_out = ep->rcvbuf ? ep->rcvbuf : UNIX_SO_RCVBUF_DEFAULT;
+        else ep->rcvbuf = a.val;
+        break;
+    default:
+        return -ENOPROTOOPT;
+    }
+
+    if (is_get && copy_to_user(arg, &a, sizeof(a)) != 0) return -EFAULT;
+    return 0;
+}
+
 int unix_sock_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
     unix_ep_t *ep = ep_from_node(node);
     if (!ep) return -ENOTSOCK;
@@ -1033,8 +1099,9 @@ int unix_sock_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
     case CACT_SOCKCTL_RECVMSG:
         return unix_recvmsg_ioctl(ep, arg);
     case CACT_SOCKCTL_SETSOCKOPT:
+        return unix_sockopt_ioctl(ep, arg, 0);
     case CACT_SOCKCTL_GETSOCKOPT:
-        return -EOPNOTSUPP;
+        return unix_sockopt_ioctl(ep, arg, 1);
     default:
         return -EINVAL;
     }

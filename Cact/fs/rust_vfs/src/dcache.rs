@@ -28,6 +28,10 @@ const DCACHE_MAX: usize = 512;
 const NOCACHE_MAX: usize = 256;
 const PARENT_MAX: usize = 256;
 
+// The pure helper module owns these sizes; keep the storage arrays in step.
+const _: () = assert!(DCACHE_BUCKETS == crate::vfs_pure::DCACHE_BUCKETS);
+const _: () = assert!(PARENT_MAX == crate::vfs_pure::PARENT_MAX);
+
 #[repr(C)]
 struct Entry {
     used:   bool,
@@ -52,8 +56,9 @@ static mut NOCACHE_COUNT: usize = 0;
 // child directory -> physical parent directory, recorded as lookups happen.
 // Lets `finddir_vfs(dir, "..")` (the final component of a dirfd-relative
 // operation) find the parent, which names-on-nodes give us no other way to know.
-static mut PARENTS: [(*mut VfsNode, *mut VfsNode); PARENT_MAX] =
-    [(ptr::null_mut(), ptr::null_mut()); PARENT_MAX];
+// Stored as raw addresses (usize) so the pure `vfs_pure` map owns the algorithm;
+// a `VfsNode` pointer and a `usize` are both pointer-sized on this port.
+static mut PARENTS: [(usize, usize); PARENT_MAX] = [(0, 0); PARENT_MAX];
 static mut PARENT_COUNT: usize = 0;
 static mut LOCK: MaybeUninit<irq_spinlock_t> = MaybeUninit::uninit();
 
@@ -80,7 +85,7 @@ fn name_hash(name: *const c_char) -> u32 {
 
 #[inline]
 fn bucket_of(parent: *mut VfsNode, name: *const c_char) -> usize {
-    ((parent as usize as u32) ^ name_hash(name)) as usize & (DCACHE_BUCKETS - 1)
+    crate::vfs_pure::bucket_index(parent as usize as u32, name_hash(name))
 }
 
 #[inline]
@@ -163,32 +168,33 @@ unsafe fn is_nocache_locked(node: *mut VfsNode) -> bool {
 }
 
 unsafe fn set_parent_locked(child: *mut VfsNode, parent: *mut VfsNode) {
-    // SAFETY: caller holds the dcache lock; fixed static array.
-    unsafe {
-        for i in 0..PARENT_COUNT {
-            if (*ptr::addr_of!(PARENTS[i])).0 == child {
-                (*ptr::addr_of_mut!(PARENTS[i])).1 = parent;
-                return;
-            }
-        }
-        if PARENT_COUNT < PARENT_MAX {
-            *ptr::addr_of_mut!(PARENTS[PARENT_COUNT]) = (child, parent);
-            PARENT_COUNT += 1;
-        }
-    }
+    let mut count = PARENT_COUNT;
+    // SAFETY: caller holds the dcache lock, so this view of the fixed static
+    // array is exclusive for the duration of the call.
+    let pairs = unsafe {
+        core::slice::from_raw_parts_mut(
+            ptr::addr_of_mut!(PARENTS) as *mut (usize, usize),
+            PARENT_MAX,
+        )
+    };
+    crate::vfs_pure::parent_insert(pairs, &mut count, child as usize, parent as usize);
+    PARENT_COUNT = count;
 }
 
 unsafe fn get_parent_locked(node: *mut VfsNode) -> *mut VfsNode {
-    // SAFETY: caller holds the dcache lock; fixed static array.
-    unsafe {
-        for i in 0..PARENT_COUNT {
-            let e = *ptr::addr_of!(PARENTS[i]);
-            if e.0 == node {
-                return e.1;
-            }
-        }
+    let count = PARENT_COUNT;
+    // SAFETY: caller holds the dcache lock; this is a read-only view of the
+    // fixed static array.
+    let pairs = unsafe {
+        core::slice::from_raw_parts(
+            ptr::addr_of!(PARENTS) as *const (usize, usize),
+            PARENT_MAX,
+        )
+    };
+    match crate::vfs_pure::parent_lookup(pairs, count, node as usize) {
+        Some(p) => p as *mut VfsNode,
+        None => ptr::null_mut(),
     }
-    ptr::null_mut()
 }
 
 /// Record that `child` (a directory) was reached from `parent`.  Used so the

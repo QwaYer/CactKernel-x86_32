@@ -349,12 +349,25 @@ pub unsafe extern "C" fn vfs_fill_stat(node: *mut VfsNode, buf: *mut u32) {
     }
 }
 
+/// Wall-clock seconds since the Unix epoch, 0 when the RTC gave no date.
+fn now_epoch_secs() -> u32 {
+    // SAFETY: `rtc_epoch_sec` is a value-only C accessor of the RTC-derived
+    // wall clock; it reads no caller memory.
+    let s = unsafe { rtc_epoch_sec() };
+    if s == 0 { 0 } else { s as u32 }
+}
+
+unsafe extern "C" {
+    fn rtc_epoch_sec() -> u64;
+}
+
 /// Fill the rich `cact_statx_t` from a node.
 #[no_mangle]
 pub unsafe extern "C" fn vfs_fill_statx(node: *mut VfsNode, buf: *mut CactStatx) {
     if node.is_null() || buf.is_null() {
         return;
     }
+    let now = now_epoch_secs();
     // SAFETY: `node` and `buf` are live; every field is a plain u32.
     unsafe {
         (*buf).ino = (*node).inode;
@@ -365,9 +378,11 @@ pub unsafe extern "C" fn vfs_fill_statx(node: *mut VfsNode, buf: *mut CactStatx)
         (*buf).size = (*node).size;
         (*buf).blksize = 4096;
         (*buf).blocks = ((*node).size + 511) / 512;
-        (*buf).atime = 0;
-        (*buf).mtime = 0;
-        (*buf).ctime = 0;
+        // The VFS does not yet track per-inode times, so report the wall clock;
+        // nonzero so `ls -l` / `stat` show a real time instead of 1970.
+        (*buf).atime = now;
+        (*buf).mtime = now;
+        (*buf).ctime = now;
         (*buf).type_ = (*node).type_;
     }
 }

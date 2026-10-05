@@ -59,6 +59,19 @@ fn ecdsa_p256(pubkey: &[u8], prehash: &[u8], sig: &[u8]) -> bool {
     vk.verify_prehash(prehash, &sig).is_ok()
 }
 
+/// ECDSA P-256 over a fixed-size (r || s, 64-byte) signature.  Module signing
+/// uses this instead of the DER form so the signed-module trailer has a
+/// constant size the kernel can parse without a length prefix.
+fn ecdsa_p256_raw(pubkey: &[u8], prehash: &[u8], sig: &[u8]) -> bool {
+    let Ok(vk) = p256::ecdsa::VerifyingKey::from_sec1_bytes(pubkey) else {
+        return false;
+    };
+    let Ok(sig) = p256::ecdsa::Signature::from_slice(sig) else {
+        return false;
+    };
+    vk.verify_prehash(prehash, &sig).is_ok()
+}
+
 fn ecdsa_p384(pubkey: &[u8], prehash: &[u8], sig: &[u8]) -> bool {
     let Ok(vk) = p384::ecdsa::VerifyingKey::from_sec1_bytes(pubkey) else {
         return false;
@@ -149,6 +162,46 @@ pub unsafe extern "C" fn cact_sig_verify(
         return -22;
     }
     if verify(scheme, pk, m, s) {
+        0
+    } else {
+        -1
+    }
+}
+
+/// C ABI for loadable-module signing: ECDSA P-256 over SHA-256(msg), with the
+/// signature in fixed 64-byte (r || s) form.  The kernel embeds only the public
+/// key; the private key never leaves the build host.
+///
+/// Returns 0 when the signature is valid, -1 when it is not, -22 for malformed
+/// arguments.
+///
+/// # Safety
+///
+/// `pubkey`, `msg` and `sig` must each be null or point to at least
+/// `pubkey_len`, `msg_len` and `sig_len` readable bytes respectively, valid for
+/// the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn cact_sig_verify_p256_raw(
+    pubkey: *const u8,
+    pubkey_len: u32,
+    msg: *const u8,
+    msg_len: u32,
+    sig: *const u8,
+    sig_len: u32,
+) -> i32 {
+    // SAFETY: `pubkey` is null or points to `pubkey_len` readable bytes (caller contract).
+    let pk = unsafe { cslice(pubkey, pubkey_len) };
+    // SAFETY: `msg` is null or points to `msg_len` readable bytes (caller contract).
+    let m = unsafe { cslice(msg, msg_len) };
+    // SAFETY: `sig` is null or points to `sig_len` readable bytes (caller contract).
+    let s = unsafe { cslice(sig, sig_len) };
+    let (Some(pk), Some(m), Some(s)) = (pk, m, s) else {
+        return -22;
+    };
+    if pk.is_empty() || s.is_empty() {
+        return -22;
+    }
+    if ecdsa_p256_raw(pk, &Sha256::digest(m), s) {
         0
     } else {
         -1

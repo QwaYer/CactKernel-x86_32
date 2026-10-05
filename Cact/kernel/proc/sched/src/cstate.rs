@@ -22,11 +22,13 @@ use core::sync::atomic::AtomicBool;
 use crate::ffi;
 use crate::energy::{self, MAX_CORES};
 
-// Numeric C-state ids must match Cact/kernel/energy/energy.h.
-pub const CSTATE_C0: u32 = 0;
-pub const CSTATE_C1: u32 = 1;
-pub const CSTATE_C3: u32 = 2;
-pub const CSTATE_C6: u32 = 3;
+// Numeric C-state ids must match Cact/kernel/energy/energy.h; the pure model
+// (`crate::energy_model`) owns the values so the kernel and the host tests can
+// never disagree.
+pub const CSTATE_C0: u32 = crate::energy_model::CSTATE_C0;
+pub const CSTATE_C1: u32 = crate::energy_model::CSTATE_C1;
+pub const CSTATE_C3: u32 = crate::energy_model::CSTATE_C3;
+pub const CSTATE_C6: u32 = crate::energy_model::CSTATE_C6;
 const CSTATE_COUNT: usize = 4;
 
 // LAPIC IPI vectors. 0xF8/0xF9 were stray-guard gates in the IDT; the C-state
@@ -67,14 +69,22 @@ const fn cstate_info_default(
 }
 
 // Published per-state characteristics for a VM (relative energy units). Real
-// values would come from ACPI _CST latency + RAPL/MSR calibration; the values
-// below keep the benefit/cost model monotonic until a calibration driver
-// exists.
+// values would come from ACPI _CST latency + RAPL/MSR calibration; the wakeup
+// and cache-harm costs come from the pure `energy_model` so the benefit/cost
+// decision (also in `energy_model`) and this table are one source of truth.
 static CSTATES: SyncUnsafeCell<[CStateInfo; CSTATE_COUNT]> = SyncUnsafeCell::new([
-    cstate_info_default(true, 0, 0, 0, 0, -1),            // C0
-    cstate_info_default(true, 2, 40, 5, 1, 0x00),         // C1  (MWAIT hint 0x00)
-    cstate_info_default(false, 60, 300, 40, 30, -1),      // C3  (hint from _CST)
-    cstate_info_default(false, 200, 2000, 160, 100, -1),  // C6  (hint from _CST)
+    cstate_info_default(true, 0, 0,
+        crate::energy_model::wakeup_energy(CSTATE_C0),
+        crate::energy_model::cache_harm_energy(CSTATE_C0), -1),            // C0
+    cstate_info_default(true, 2, 40,
+        crate::energy_model::wakeup_energy(CSTATE_C1),
+        crate::energy_model::cache_harm_energy(CSTATE_C1), 0x00),          // C1 (MWAIT hint 0x00)
+    cstate_info_default(false, 60, 300,
+        crate::energy_model::wakeup_energy(CSTATE_C3),
+        crate::energy_model::cache_harm_energy(CSTATE_C3), -1),            // C3 (hint from _CST)
+    cstate_info_default(false, 200, 2000,
+        crate::energy_model::wakeup_energy(CSTATE_C6),
+        crate::energy_model::cache_harm_energy(CSTATE_C6), -1),            // C6 (hint from _CST)
 ]);
 
 static CSTATE_INIT_DONE: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);

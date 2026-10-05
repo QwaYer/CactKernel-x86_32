@@ -710,6 +710,44 @@ pub fn smp_cpu_online_sipi(cpu: u32) -> i32 {
     }
 }
 
+/// Re-wake every present worker after an S3 resume (PLAN-2.0.0 P1.4).
+///
+/// An S3 wake resets the machine: only the BSP is alive, and the low-memory AP
+/// trampoline may have been clobbered by the firmware resume.  Unlike
+/// `smp_init` (which returns early once `SMP_READY` is set), this re-stages the
+/// trampoline, forgets every worker's runtime state, and re-onlines each one
+/// through the INIT-SIPI-SIPI sequence.  Runs on the BSP from the resume path.
+#[no_mangle]
+pub extern "C" fn smp_resume_rewake() -> i32 {
+    let present = (energy::energy_core_count_present() as usize).min(MAX_CPUS);
+    if present <= 1 {
+        return 0;
+    }
+    // The APs were reset: mark them offline and clear their cached online flag
+    // so `smp_cpu_online_sipi` accepts a fresh wake for each core.
+    for cpu in 1..present {
+        energy::energy_core_offline(cpu as u32);
+        let p = cpu_ptr(cpu);
+        // SAFETY: `cpu` < present <= MAX_CPUS, so `p` addresses a live
+        // `CPU_TABLE` entry and the online store is in bounds.
+        unsafe { write_volatile(&raw mut (*p).online, 0) };
+    }
+    // The blob may have been overwritten by the firmware resume; re-stage it
+    // (this also clears the info-block ACK).
+    if stage_trampoline() != 0 {
+        return -1;
+    }
+    write_volatile((TRAMP_ADDR as usize + INFO_ACK) as *mut u32, 0);
+
+    let mut woke = 0;
+    for cpu in 1..present {
+        if smp_cpu_online_sipi(cpu as u32) == 0 {
+            woke += 1;
+        }
+    }
+    woke
+}
+
 /// Point `cpu`'s TSS ring-0 stack pointer at `esp0`.  The BSP's TSS is the C
 /// `tss_entry` (owned by the scheduler); each AP's TSS lives in `CPU_TABLE`.
 /// Called by the scheduler per context switch so ring3→ring0 transitions
