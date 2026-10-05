@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch QEMU for CactKernel.
 # On the first run without a disk: ./build_disk.sh is called automatically (empty ext4).
-# Full cycle (drivers + cctkfs + ISO + disk): ../build-cact-qemu.sh
+# Full cycle (drivers + cctkfs + ISO): ../CactBridge-x86/build.py --non-gui-iso
 # Fixed: the monitor is moved to a virtual console (Ctrl+Alt+2 in the QEMU window),
 # so that it does not conflict with the serial port stdio.
 #
