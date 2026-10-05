@@ -28,14 +28,8 @@
  *   6      1:1:0         UC-     0x07
  *   7      1:1:1         UC      0x00
  *
- * A variable-range MTRR still overrides PAT for the uncacheable case, so the
- * MTRR block firmware programmed is snapshotted and restored across S3 as
- * well (see mtrr.h): otherwise a device range the reset left uncacheable
- * could not be made write-combining by any PTE bit.
- *
  * Usage:
- *   1. Call pat_init() early during boot, and again on resume, to program
- *      the MSR.
+ *   1. Call pat_init() early during boot to program the MSR.
  *   2. Call pat_enable_wc_for_framebuffer() to set PAT|~PCD|~PWT on FB PTEs.
  */
 

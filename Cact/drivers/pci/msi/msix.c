@@ -14,15 +14,6 @@
  * cause of a "capability not found" is known. */
 #define MSIX_DIAG_HALT      1
 
-/* One record per enabled MSI-X entry, so a resume can re-write the tables the
- * platform reset cleared (see msix_restore()). */
-struct msix_enabled_entry {
-    volatile struct msix_table_entry *table;
-    unsigned int entry_idx;
-    int          vector;
-};
-static struct msix_enabled_entry msix_enabled[MSIDEV_VECTOR_COUNT];
-
 /* MMIO (BAR/MSI-X) mappings must live in the global kernel page directory,
  * never in whatever process PD happens to be active when the deferred driver
  * probe runs — otherwise the IRQ handler faults under a user CR3. */
@@ -291,15 +282,6 @@ int pci_msix_enable(pci_device_t *dev, int vector,
     table[entry_idx].vector_ctrl = 0;
     __asm__ volatile("sfence" ::: "memory");
 
-    {
-        unsigned int idx = (unsigned int)(vector - MSIDEV_VECTOR_BASE);
-        if (idx < MSIDEV_VECTOR_COUNT) {
-            msix_enabled[idx].table     = table;
-            msix_enabled[idx].entry_idx = entry_idx;
-            msix_enabled[idx].vector    = vector;
-        }
-    }
-
     pr_info("  %-11s : vec 0x%x enabled, entry %u (%02x:%02x.%u, table 0x%x)\n",
             "msi-x", (unsigned)vector, (unsigned)entry_idx,
             (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn,
@@ -307,33 +289,3 @@ int pci_msix_enable(pci_device_t *dev, int vector,
     return 0;
 }
 
-/* Write one MSI-X table entry: LAPIC address + vector, delivered as a fixed
- * (non-masked) interrupt.  MASK in vector_ctrl is bit 0. */
-static void msix_program_entry(volatile struct msix_table_entry *e, int vector)
-{
-    e->vector_ctrl = MSIX_VECTOR_CTRL_MASK;
-    __asm__ volatile("sfence" ::: "memory");
-    e->msg_addr_lo = apic_msi_address();
-    e->msg_addr_hi = 0;
-    e->msg_data    = (uint32_t)vector;
-    __asm__ volatile("sfence" ::: "memory");
-    e->vector_ctrl = 0;
-    __asm__ volatile("sfence" ::: "memory");
-}
-
-void msix_restore(void)
-{
-    uint32_t n = 0;
-
-    for (unsigned int i = 0; i < MSIDEV_VECTOR_COUNT; i++) {
-        if (!msix_enabled[i].table)
-            continue;
-        msix_program_entry(msix_enabled[i].table + msix_enabled[i].entry_idx,
-                           msix_enabled[i].vector);
-        n++;
-    }
-
-    if (n)
-        pr_info("  %-11s : %u table entry(ies) reprogrammed\n",
-                "msi-x", (unsigned)n);
-}

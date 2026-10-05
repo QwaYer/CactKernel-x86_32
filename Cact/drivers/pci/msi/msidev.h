@@ -40,9 +40,6 @@ int  msidev_register(pci_device_t *dev, void (*handler)(void));
  */
 void msidev_unregister(int vector);
 
-/* Re-arm the device-side state a resume cleared. */
-void msidev_restore(void);
-
 /*
  * Shared with msi.c/msix.c: walk the capability list for @cap_id (0 when it is
  * not there), and wake a function whose command register decodes nothing

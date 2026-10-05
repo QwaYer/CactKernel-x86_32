@@ -22,7 +22,6 @@
 #include "serial.h"
 #include "lapic_timer.h"
 #include "pat.h"
-#include "mtrr.h"
 #include "cact_acpi.h"
 #include "ktime.h"
 #include "rtc.h"
@@ -177,7 +176,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // registers remain strictly UC).  PAT lets us override individual FB PTEs to WC by
     // setting the PAT bit and clearing PCD|PWT — no MTRR ranges needed.
     pat_init();
-    mtrr_save();
     if (fb_get_width() != 0) {
         int fbwc = pat_enable_wc_for_framebuffer(
             (uint32_t)(uintptr_t)fb_get_buffer(),
@@ -418,43 +416,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     usb_hid_repeat_init();
 
     pr_info("  %-11s : hardware setup complete — scheduler live\n", "boot");
-}
-
-/* ---------------------------------------------------------------------------
- * Device state across an S3 suspend
- * ------------------------------------------------------------------------- */
-
-/* Snapshot the device state that an S3 wake does not preserve.  Runs from the
- * suspend path while the system is still fully alive, so drivers can still be
- * talked to through their normal (ECAM) configuration access. */
-void kernel_suspend_hardware(void) {
-    pcidev_save_state();
-}
-
-/* Bring the devices back after an S3 wake.  Ready to be called once the
- * resume path has restored the CPU, the interrupt controller and the memory
- * type state (see acpi_resume_entry); runs in task context, so drivers may
- * sleep and take locks. */
-void kernel_resume_hardware(void) {
-    /* Configuration space first: the wake reset the chipset's PCIEXBAR, which
-     * disabled the ECAM window every later configuration access goes through,
-     * and cleared every device's BARs. */
-    pcidev_restore_state();
-
-    /* Device-side state that lives in MMIO: the MSI-X tables were cleared
-     * with the rest of the controller registers. */
-    msidev_restore();
-
-    /* Controller-level re-initialisation for the devices whose drivers keep
-     * runtime state: a reset host controller has to be brought up and
-     * re-enumerated before its devices exist again. */
-    usb_resume();
-
-    /* The display's memory was cleared too (and its BAR only just started
-     * decoding again), so rebuild the screen from the shadow. */
-    fb_repaint();
-
-    pr_info("  %-11s : devices back up\n", "resume");
 }
 
 // Kernel entry point (called from boot.S)
