@@ -15,6 +15,7 @@
 #![allow(non_snake_case)]
 
 pub mod abi;
+pub mod vfs_pure;
 
 mod addr;
 mod dcache;

@@ -175,7 +175,8 @@ bool pcie_init(void)
         uint32_t pages       = (region_size + 0xFFF) >> 12;
 
         uint32_t seg_shift = pcie_ecam_count * PCIE_ECAM_SEG_SHIFT;
-        uint32_t vaddr     = PCIE_ECAM_VADDR + seg_shift;
+        uint32_t vaddr     = cact_mmio_window_base() + KERNEL_MMIO_WINDOW_SIZE
+                                                       + seg_shift;
 
         /* A segment that would run past the top of the 32-bit VA space must be
          * refused: the window address would wrap into the identity-mapped low

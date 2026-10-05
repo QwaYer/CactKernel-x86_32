@@ -14,6 +14,7 @@
 #include "usb.h"
 #include "firmware.h"
 #include "ktime.h"
+#include "proc.h"
 
 /* 64-bit signed division (compiler runtime).  An i386 module doing int64_t
  * arithmetic — e.g. the i915 WRPLL calculator — resolves these here; the
@@ -42,6 +43,7 @@ static const ksym_entry_t ksym_table[] = {
     { "irq_spinlock_acquire", (uint32_t)irq_spinlock_acquire },
     { "irq_spinlock_release", (uint32_t)irq_spinlock_release },
     { "free_page",      (uint32_t)free_page },
+    { "kalloc",         (uint32_t)kalloc },
     { "kfree",          (uint32_t)kfree },
     { "kmalloc",        (uint32_t)kmalloc },
 
@@ -184,8 +186,11 @@ static const ksym_entry_t ksym_table[] = {
     { "request_firmware", (uint32_t)request_firmware },
     { "release_firmware", (uint32_t)release_firmware },
 
-    /* Timing — modules busy-wait for firmware boot and device settle. */
+    /* Timing — modules busy-wait for firmware boot and device settle, read the
+     * monotonic clock, or block their thread for a number of scheduler ticks. */
     { "ktime_busy_wait_us", (uint32_t)ktime_busy_wait_us },
+    { "ktime_get_usec",     (uint32_t)ktime_get_usec },
+    { "sched_sleep_ticks",  (uint32_t)sched_sleep_ticks },
 };
 
 uint32_t ksym_resolve(const char* name) {
@@ -195,4 +200,42 @@ uint32_t ksym_resolve(const char* name) {
             return ksym_table[i].addr;
     }
     return 0;
+}
+
+/*
+ * Module ABI fingerprint.  FNV-1a 32-bit over "CACT-MODVER-1\0" followed by
+ * every exported symbol name (sorted) and a NUL separator.  The entry order in
+ * ksym_table must not matter, hence the sort; adding, removing or renaming an
+ * export changes the value automatically.
+ *
+ * tools/mod_vermagic.py implements the same algorithm over the same names, and
+ * cact_check.sh asserts the two agree at boot.  Change one, change the other.
+ */
+#define KSYM_FNV_OFFSET 2166136261u
+#define KSYM_FNV_PRIME  16777619u
+
+static uint32_t ksym_fnv1a(uint32_t h, const char* s) {
+    while (*s) { h ^= (uint8_t)*s++; h *= KSYM_FNV_PRIME; }
+    h ^= 0u; h *= KSYM_FNV_PRIME;   /* NUL separator, matches the Python tool */
+    return h;
+}
+
+uint32_t ksym_vermagic(void) {
+    const unsigned n = sizeof(ksym_table) / sizeof(ksym_table[0]);
+    const char* names[sizeof(ksym_table) / sizeof(ksym_table[0])];
+    for (unsigned i = 0; i < n; i++) names[i] = ksym_table[i].name;
+    for (unsigned i = 1; i < n; i++) {          /* insertion sort by name */
+        const char* key = names[i];
+        unsigned    j   = i;
+        while (j > 0 && strcmp((char*)names[j - 1], (char*)key) > 0) {
+            names[j] = names[j - 1];
+            j--;
+        }
+        names[j] = key;
+    }
+
+    uint32_t h = KSYM_FNV_OFFSET;
+    h = ksym_fnv1a(h, "CACT-MODVER-1");
+    for (unsigned i = 0; i < n; i++) h = ksym_fnv1a(h, names[i]);
+    return h;
 }

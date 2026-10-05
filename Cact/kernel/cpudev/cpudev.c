@@ -47,6 +47,15 @@ static inline void cpuid_raw_subleaf(uint32_t leaf, uint32_t subleaf,
         : "a"(leaf), "c"(subleaf));
 }
 
+/* Raw CPUID, exported for the Rust topology decode (sched/src/cpu_topo.rs):
+ * leaf+subleaf in, the four registers out.  The Rust side reads leaves 0xB/0x1F
+ * (and the leaf 1/4 HTT fallback) and turns the register values into
+ * package/core ids with the pure `topology` module. */
+void cact_cpuid(uint32_t leaf, uint32_t subleaf, uint32_t *eax, uint32_t *ebx,
+                uint32_t *ecx, uint32_t *edx) {
+    cpuid_raw_subleaf(leaf, subleaf, eax, ebx, ecx, edx);
+}
+
 static inline uint64_t rdmsr(uint32_t msr) {
     uint32_t lo, hi;
     __asm__ __volatile__("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));

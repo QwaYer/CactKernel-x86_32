@@ -1,9 +1,6 @@
-# src/lib.rs embeds the module-signing key with include_bytes!, so the key has
-# to exist before cargo runs (the Makefile generated it as a prerequisite of
-# the archive).
-if not fs.exists(meson.current_source_dir() / 'hmac_key.bin')
-  run_command(python3, src_root / 'tools/gen_hmac_key.py', check: true)
-endif
+# The loadable-module signature is an ECDSA key pair now (see
+# Cact/kernel/elf/mod_tag.c and tools/modsign.py), so this crate no longer
+# embeds any signing secret; it only serves the /dev/crypto HMAC/HKDF requests.
 
 _rust_inputs = []
 _found = run_command('sh', '-c',

@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "proc_mm.h"
 #include "klib.h"
+#include "page_fault.h"
 
 /* PT_INTERP (userspace ld.so) handoff data. main_phdr points at a mapped copy
  * of the program header table (allocated by _map_image when the phdrs are not
@@ -15,6 +16,19 @@ typedef struct {
     uint32_t main_phnum;
     uint32_t interp_base;
 } elf_interp_info_t;
+
+/* A PT_LOAD must stay strictly below the kernel half: a segment at or above
+ * USER_STACK_TOP would reach vmm_map()'s kernel-MMIO branch and be written
+ * into the shared kernel page table, visible to every process.  Low addresses
+ * are allowed as before -- vmm_map() COWs the shared identity table into a
+ * private one for the process -- so the only extra refusals are the NULL page
+ * and a segment wrapped past 4 GiB. */
+static int _elf_seg_ok(uint32_t seg_start, uint32_t seg_end) {
+    if (seg_end < seg_start)      return 0; /* wrapped past 4 GiB */
+    if (seg_end > USER_STACK_TOP) return 0; /* kernel half */
+    if (seg_start < PAGE_SIZE)    return 0; /* would map the NULL page */
+    return 1;
+}
 
 /* Loads only the PT_LOAD segments (no relocation/dynlink pass) for a file.
  * out_phdr is the user-space address of a mapped program-header table
@@ -48,10 +62,13 @@ static int _map_image(struct vfs_node* file, uint32_t* pd,
         if (read_vfs(file, hdr.e_phoff + (uint64_t)i * hdr.e_phentsize,
                      sizeof(Elf32_Phdr), (char*)&ph) <= 0) return -1;
         if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
+        if (ph.p_vaddr + ph.p_memsz < ph.p_vaddr) return -1;
         uint32_t page_start = ph.p_vaddr & ~0xFFFu;
+        uint32_t page_end   = (ph.p_vaddr + ph.p_memsz + 0xFFFu) & ~0xFFFu;
+        if (!_elf_seg_ok(page_start, page_end)) return -1;
         if (page_start < min_vaddr) min_vaddr = page_start;
     }
-    if (min_vaddr == 0xFFFFFFFFu) return -1;
+    if (min_vaddr == 0xFFFFFFFFu || min_vaddr < PAGE_SIZE) return -1;
 
     uint32_t phdr_bytes = (uint32_t)(ph_end_check - (uint64_t)hdr.e_phoff);
     int phdr_covered = 0;
@@ -69,6 +86,7 @@ static int _map_image(struct vfs_node* file, uint32_t* pd,
             uint32_t seg_start = ph.p_vaddr & ~0xFFFu;
             uint32_t seg_end   = (ph.p_vaddr + ph.p_memsz + 0xFFF) & ~0xFFFu;
             uint32_t file_end  = ph.p_vaddr + ph.p_filesz;
+            if (!_elf_seg_ok(seg_start, seg_end)) return -1;
 
             for (uint32_t va = seg_start; va < seg_end; va += PAGE_SIZE) {
                 void* phys = kalloc();
@@ -122,6 +140,7 @@ static int _map_image(struct vfs_node* file, uint32_t* pd,
         if (copy_sz > 0)
             read_vfs(file, hdr.e_phoff, copy_sz, (char*)phys + page_off);
 
+        if (min_vaddr < PAGE_SIZE) return -1;
         uint32_t page_va = min_vaddr - 0x1000u;
         vmm_map(pd, page_va, (uint32_t)phys, PAGE_USER | PAGE_RW | PAGE_PRESENT);
         phdr_vaddr = page_va + page_off;
@@ -206,6 +225,11 @@ void* load_elf(char* path, uint32_t* pd, proc_page_tracker_t* tracker)
         uint32_t seg_start = ph.p_vaddr & ~0xFFFu;
         uint32_t seg_end   = (ph.p_vaddr + ph.p_memsz + 0xFFF) & ~0xFFFu;
         uint32_t file_end  = ph.p_vaddr + ph.p_filesz;
+        if (!_elf_seg_ok(seg_start, seg_end)) {
+            pr_err("[ELF] ERR: PT_LOAD outside user address space\n");
+            proc_free_pages(tracker);
+            return 0;
+        }
 
         for (uint32_t va = seg_start; va < seg_end; va += PAGE_SIZE) {
             if (va < file_end) {
@@ -363,6 +387,8 @@ uint32_t elf_get_brk_start(struct vfs_node* file) {
         if (ph.p_type != PT_LOAD) continue;
         if (ph.p_vaddr + ph.p_memsz < ph.p_vaddr) continue;
         uint32_t end = ph.p_vaddr + ph.p_memsz;
+        if (!_elf_seg_ok(ph.p_vaddr & ~0xFFFu, (end + 0xFFFu) & ~0xFFFu))
+            continue;
         if (end > highest) highest = end;
     }
  

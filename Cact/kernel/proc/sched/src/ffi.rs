@@ -133,6 +133,10 @@ unsafe extern "C" {
     pub fn cpu_syscall_commit() -> i32;
     /// Non-zero when the CPU advertises MONITOR/MWAIT (CPUID.01H:ECX bit 3).
     pub fn cpu_has_monitor() -> i32;
+    /// Raw CPUID: leaf/subleaf in, eax/ebx/ecx/edx out.  Used by the topology
+    /// decode (`crate::cpu_topo`).
+    pub fn cact_cpuid(leaf: u32, subleaf: u32, eax: *mut u32, ebx: *mut u32,
+                      ecx: *mut u32, edx: *mut u32);
     /// Read the processor `_CST` package and publish C-states (ACPI cstates.c).
     pub fn acpi_cstates_probe() -> i32;
 }

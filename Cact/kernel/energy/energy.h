@@ -39,6 +39,22 @@ int      energy_core_is_online(uint32_t cpu);
 int      energy_core_is_master(uint32_t cpu);
 int      energy_core_is_worker(uint32_t cpu);
 
+/* CPU topology (P1.2): decoded once at boot by sched/src/cpu_topo.rs from CPUID
+ * leaf 0xB/0x1F (HTT fallback: leaf 1 + leaf 4).  Per-logical-CPU package/core
+ * ids plus the per-package counts that /proc/cpuinfo prints. */
+void     cpu_topo_init(void);
+int      cpu_topo_valid(void);
+uint32_t cpu_topo_package(uint32_t cpu);
+uint32_t cpu_topo_core(uint32_t cpu);
+uint32_t cpu_topo_siblings(uint32_t cpu);
+uint32_t cpu_topo_cpu_cores(uint32_t cpu);
+uint32_t cpu_topo_threads_per_core(void);
+uint32_t cpu_topo_packages(void);
+
+/* Sibling-aware placement self-test (P1.2): 0 when the policy lands the second
+ * thread on a physical core other than the master's when SMT is present. */
+int      placement_selftest(void);
+
 int  energy_core_set_cstate(uint32_t cpu, uint32_t state);
 void energy_core_mark_idle(uint32_t cpu);
 void energy_core_mark_busy(uint32_t cpu);

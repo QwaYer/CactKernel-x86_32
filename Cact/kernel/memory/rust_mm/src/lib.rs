@@ -41,6 +41,7 @@ pub use crate::vmm::paging::{
 };
 mod safe;
 pub mod pmm;
+pub mod pmm_math;
 pub mod alloc;
 pub mod vmm;
 pub mod fault;

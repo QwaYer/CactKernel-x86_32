@@ -32,7 +32,7 @@ struct acpi_mapping {
 
 static struct acpi_mapping acpi_mappings[ACPI_OSL_MAX_MAPPINGS];
 static spinlock_t          acpi_mappings_lock;
-static UINT32              acpi_mapping_next_va = ACPI_TEMP_MAP_BASE;
+static UINT32              acpi_mapping_next_va = 0;  /* set in AcpiOsInitialize() */
 
 void* acpi_temp_map(UINT32 phys, UINT32 size)
 {
@@ -136,7 +136,7 @@ void osl_udelay(UINT32 us)
 ACPI_STATUS AcpiOsInitialize(void)
 {
     spin_lock_init(&acpi_mappings_lock);
-    acpi_mapping_next_va = ACPI_TEMP_MAP_BASE;
+    acpi_mapping_next_va = cact_mmio_window_base();
     for (int i = 0; i < ACPI_OSL_MAX_MAPPINGS; i++) {
         acpi_mappings[i].virt  = NULL;
         acpi_mappings[i].phys  = 0;
@@ -144,7 +144,7 @@ ACPI_STATUS AcpiOsInitialize(void)
         acpi_mappings[i].refs  = 0;
     }
     pr_info("  %-11s : temporary-map window @ 0x%x ready (%d slots)\n",
-            "acpi-osl", (unsigned)ACPI_TEMP_MAP_BASE, ACPI_OSL_MAX_MAPPINGS);
+            "acpi-osl", (unsigned)acpi_mapping_next_va, ACPI_OSL_MAX_MAPPINGS);
     return AE_OK;
 }
 

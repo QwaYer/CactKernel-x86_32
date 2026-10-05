@@ -3,15 +3,11 @@
 #include "kernel.h"
 #include "cctkfs.h"
 
-/* HMAC tag size — must match CACT_HMAC_TAG_SIZE in pci_loader.c */
-#define MODBLOB_HMAC_TAG_SIZE  32
-
-CACT_STATIC_ASSERT(MODBLOB_HMAC_TAG_SIZE == 32);
-CACT_STATIC_ASSERT(sizeof(uint32_t)       == 4);
+CACT_STATIC_ASSERT(sizeof(uint32_t) == 4);
 
 /* ------------------------------------------------------------------ */
 /* CRC-32 (IEEE 802.3) — container-level integrity for the cctkfs     */
-/* archive.  Each module is still individually HMAC-SHA256-signed;     */
+/* archive.  Each module is still individually signed (ECDSA P-256);  */
 /* this CRC32 only guards against accidental corruption of the index.  */
 /* ------------------------------------------------------------------ */
 static const uint32_t crc32_tab[256] = {

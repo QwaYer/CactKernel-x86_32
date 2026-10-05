@@ -214,7 +214,8 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
             return 0;
         }
         uint32_t lba = block_no * spb;
-        if (lba + spb > bd->max_lba) {
+        // Compare overflow-safely: `lba + spb` can wrap near UINT32_MAX.
+        if (lba > bd->max_lba || spb > bd->max_lba - lba) {
             pr_warn("[pc] pc_get_page: LBA out of device range\n");
             return 0;
         }

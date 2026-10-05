@@ -115,8 +115,8 @@ fn find_free_va(tbl: *mut MmapTable, length: u32) -> u32 {
             if r.is_used == 0 {
                 continue;
             }
-            let r_end = r.base + r.length;
-            let c_end = candidate + length;
+            let r_end = r.base.saturating_add(r.length);
+            let c_end = candidate.saturating_add(length);
             if candidate < r_end && c_end > r.base {
                 candidate = r_end;
                 candidate = (candidate + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
@@ -264,7 +264,13 @@ pub unsafe extern "C" fn do_mmap(
         if !hint.is_multiple_of(PAGE_SIZE) {
             return MAP_FAILED as *mut u8;
         }
-        if hint >= USER_STACK_TOP || hint.saturating_add(length) > USER_STACK_TOP {
+        // A fixed mapping must stay in the user half.  The upper bound alone
+        // let a caller pin a mapping at 0x1000 (inside the low identity-mapped
+        // kernel area); require the same floor the ELF loader enforces.
+        if hint < USER_SPACE_START
+            || hint >= USER_STACK_TOP
+            || hint.saturating_add(length) > USER_STACK_TOP
+        {
             return MAP_FAILED as *mut u8;
         }
         va = hint;

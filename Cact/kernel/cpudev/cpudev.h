@@ -176,6 +176,10 @@ uint32_t cpu_features_leaf7_ebx(void);
 uint32_t cpu_features_leaf7_ecx(void);
 uint32_t cpu_features_leaf7_edx(void);
 
+/* Raw CPUID (leaf/subleaf -> eax/ebx/ecx/edx) for the Rust topology decode. */
+void cact_cpuid(uint32_t leaf, uint32_t subleaf, uint32_t *eax, uint32_t *ebx,
+                uint32_t *ecx, uint32_t *edx);
+
 int cpu_has_sep(void);
 int cpu_has_syscall(void);
 int cpu_has_pat(void);

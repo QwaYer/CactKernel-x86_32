@@ -9,8 +9,8 @@
 //! Here the accounting is clean: `open()`/`close()` own the open-end counters,
 //! `p.ref_count` counts live node wrappers (freed with the pipe when it hits
 //! zero), and a node's `refcount` is its open count.  Behaviour otherwise
-//! matches the original (ring buffer, blocking via `schedule()`, `-EAGAIN` when
-//! non-blocking, SIGPIPE to the writer).
+//! matches the original (ring buffer, blocking via `sched_sleep_ticks`,
+//! `-EAGAIN` when non-blocking, SIGPIPE to the writer).
 //!
 //! Registration stays in C: devfs registers `/dev/pipe` and its ioctl calls
 //! [`pipe_create`]; `fd_mux.c`'s (dead) `sys_pipe` does too.
@@ -31,7 +31,7 @@ const EPIPE: i32 = 32;
 const SIGPIPE: u32 = 16; // 1 << 4, matches task.h
 
 unsafe extern "C" {
-    fn schedule();
+    fn sched_sleep_ticks(ticks: u32);
     fn task_signal(pid: u32, sig: u32);
     fn validate_user_ptr(p: *const c_void, size: u32) -> i32;
     fn cact_current_task_get() -> *mut TaskStruct;
@@ -207,6 +207,7 @@ static PIPE_OPS: VfsOps = VfsOps {
     stat: None,
     poll: Some(pipe_node_poll),
     lseek: None,
+    rename2: None,
 };
 
 // ── Core read/write ─────────────────────────────────────────────────────
@@ -233,7 +234,7 @@ unsafe fn pipe_read(p: *mut Pipe, size: u32, buffer: *mut c_char) -> i32 {
                     return if copied > 0 { copied as i32 } else { -EAGAIN };
                 }
                 cact_sync::mutex_unlock(&mut (*p).lock);
-                schedule();
+                sched_sleep_ticks(1);
                 if validate_user_ptr(buffer.add(copied as usize) as *const c_void, 1) == 0 {
                     return if copied > 0 { copied as i32 } else { -1 };
                 }
@@ -315,7 +316,7 @@ unsafe fn pipe_write(p: *mut Pipe, size: u32, buffer: *mut c_char) -> i32 {
                     return if written > 0 { written as i32 } else { -EAGAIN };
                 }
                 cact_sync::mutex_unlock(&mut (*p).lock);
-                schedule();
+                sched_sleep_ticks(1);
                 if validate_user_ptr(buffer.add(written as usize) as *const c_void, 1) == 0 {
                     return if written > 0 { written as i32 } else { -1 };
                 }

@@ -40,7 +40,7 @@ static void kernel_bootstrap_main(void) {
 
     printk("\n");
     printk_color("Cact Kernel ", COLOR_LIGHT_BROWN);
-    printk_color((char*)kernel_version, COLOR_LIGHT_BROWN);
+    printk_color((char*)kernel_version_meta, COLOR_LIGHT_BROWN);
     printk_color("\n", COLOR_LIGHT_BROWN);
     printk_color("--------------------------\n", COLOR_DARK_GREY);
     printk("[VER] commit="); printk((char*)kernel_commit_hash);

@@ -56,6 +56,14 @@ find_program('grub-mkrescue')
 
 cact_version = fs.exists('VERSION') ? fs.read('VERSION').strip() : 'unknown'
 
+# Module ABI fingerprint (vermagic), computed by the same tool the signer uses.
+# Surfaced as SemVer build metadata so a release is uniquely identified by
+# (version, arch, ABI): e.g. 2.0.0+abi.0x9217b2c9.i686.  See ROADMAP.md.
+_vmagic = run_command(python3, src_root / 'tools' / 'modsign.py', 'vermagic',
+                      check: false)
+cact_vermagic     = _vmagic.returncode() == 0 ? _vmagic.stdout().strip() : 'unknown'
+cact_version_meta = cact_version + '+abi.' + cact_vermagic + '.i686'
+
 cact_commit = 'no-git'
 if git.found()
   _rev = run_command(git, 'rev-parse', '--short', 'HEAD', check: false)
@@ -176,6 +184,7 @@ kernel_c_args = [
   '-mno-sse2',
   '-DCACT_ACPI_FREESTANDING',
   '-DCACT_VERSION=' + cact_version,
+  '-DCACT_VERSION_META=' + cact_version_meta,
   '-DCACT_COMMIT_HASH=' + cact_commit,
   '-DCACT_COMPILER=' + cact_compiler,
   '-DCACT_BUILDER=' + cact_builder,
@@ -341,6 +350,13 @@ run_target('iso-full',
   command: [bash, iso_script, kernel_bin, src_root / 'grub.cfg',
             build_root / 'isodir-full', build_root / 'cact-full.iso', cctkfs_img])
 
+# P2.3: one command that boots an image headless, greps the kernel self-test
+# markers off COM1 and exits non-zero on any failure.  The script resolves the
+# ISO itself (CactBridge build first, then this build tree), so it does not
+# depend on a target here; build/stage the image before running it.
+run_target('check',
+  command: [bash, src_root / 'tools/cact_check.sh'])
+
 # ------------------------------------------------------------------------------
 # Housekeeping targets (make clean / acpica-clean / acpica-update)
 # ------------------------------------------------------------------------------
@@ -365,7 +381,7 @@ if git.found()
 endif
 
 message('')
-message('  Cact kernel ' + cact_version + ' (' + cact_commit + ')')
+message('  Cact kernel ' + cact_version_meta + ' (' + cact_commit + ')')
 message('  compiler: ' + cc.get_id() + ' ' + cc.version())
 message('  linker  : ' + ld.full_path())
 message('')

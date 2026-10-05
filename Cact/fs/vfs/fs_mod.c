@@ -3,8 +3,8 @@
  *
  * Mirrors pci_load_module() but for non-PCI filesystems: it loads an ET_REL
  * module (typically `ext4.cctk`) from the staged cctkfs image, verifies its
- * HMAC-SHA256 tag, relocates it, and resolves the generic `fs_mount` /
- * `fs_unmount` entry symbols.  Up to FS_MOD_MAX modules can be resident at
+ * ECDSA P-256 signature + vermagic tag, relocates it, and resolves the generic
+ * `fs_mount` / `fs_unmount` entry symbols.  Up to FS_MOD_MAX modules can be resident at
  * once; mntfs and the /dev/sys mount ioctl select a module by instance name
  * or probe them in registration order.
  *
@@ -18,6 +18,7 @@
 #include "klib.h"
 #include "memory.h"
 #include "kernel.h"
+#include "mod_tag.h"
 
 // Linux i386 errno values, returned negated to the /dev/sys module ioctl so
 // that modload/modunload can report a real reason (see kmod.c).  The userspace
@@ -49,12 +50,6 @@
 #ifndef ENOSPC
 #define ENOSPC 28
 #endif
-
-// HMAC-SHA256 module signing — implemented in cact_crypto (Rust, no_std)
-extern int cact_hmac_verify(const uint8_t *data, uint32_t data_len,
-                            const uint8_t *tag, uint32_t tag_len);
-
-#define CACT_HMAC_TAG_SIZE 32
 
 // ELF 32-bit types (i386)
 typedef uint32_t Elf32_Addr;
@@ -167,24 +162,6 @@ static void instance_name(const char *path, char *out, int out_sz) {
     out[i] = '\0';
 }
 
-static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
-    if (*file_size <= CACT_HMAC_TAG_SIZE) {
-        pr_err("[FSMOD] HMAC: unsigned module (no signature) — rejected\n");
-        return -1;
-    }
-    uint32_t  data_len = *file_size - CACT_HMAC_TAG_SIZE;
-    uint8_t  *tag      = elf_data + data_len;
-    int       rc       = cact_hmac_verify(elf_data, data_len, tag, CACT_HMAC_TAG_SIZE);
-    if (rc != 0) {
-        pr_err("[FSMOD] HMAC: signature mismatch — rejected\n");
-        return -1;
-    }
-    *file_size = data_len;
-    for (uint32_t i = 0; i < CACT_HMAC_TAG_SIZE; i++)
-        elf_data[data_len + i] = 0;
-    return 0;
-}
-
 // Shared relocation/entry-point lookup. Returns a freshly kmalloc'd image
 // (must be freed by caller on error) or NULL.
 static int load_module_image(const char *path, uint8_t **image_out,
@@ -202,7 +179,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
     memcpy(elf_data, blob_data, blob_size);
     uint32_t file_size = blob_size;
 
-    if (hmac_verify_module(elf_data, &file_size) != 0) {
+    if (mod_tag_verify(elf_data, &file_size) != 0) {
         kfree(elf_data);
         return -EACCES;
     }

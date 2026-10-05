@@ -33,6 +33,8 @@
 #include "msi.h"
 #include "initfs_modblob.h"
 #include "usb.h"
+#include "mod_tag.h"
+#include "ksym.h"
 
 
 // Kernel page directory (defined in paging.c)
@@ -140,9 +142,10 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         pr_warn("  %-11s : x87 only — no SSE operations\n", "fpu/sse");
 
     pmm_init_from_mmap(mmap);       // Physical Memory Manager
-    pr_info("  %-11s : %u MiB usable RAM, frame allocator ready\n",
-            "pmm", mem_total_kb / 1024u);
     init_memory_manager();          // Virtual memory manager
+    pr_info("  %-11s : %u MiB installed (MB2 map), %u MiB usable below the PCI hole\n",
+            "pmm", mem_total_kb / 1024u,
+            (unsigned)(pmm_total_frames() * (PAGE_SIZE / 1024u) / 1024u));
     pr_info("  %-11s : virtual address-space manager ready\n", "vmm");
     init_heap();                    // Kernel heap (kmalloc)
     pr_info("  %-11s : kmalloc arena ready (%u KiB free)\n",
@@ -170,8 +173,8 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     // Probe PAT support and, if available, mark the framebuffer as Write-
     // Combining via the PAT bit in each PTE. The boot identity map sets
-    // PCD|PWT on every page above PCI_HOLE_START (so MMIO registers remain
-    // strictly UC).  PAT lets us override individual FB PTEs to WC by
+    // PCD|PWT on every page above the RAM/MMIO boundary (pmm::ram_end, so MMIO
+    // registers remain strictly UC).  PAT lets us override individual FB PTEs to WC by
     // setting the PAT bit and clearing PCD|PWT — no MTRR ranges needed.
     pat_init();
     mtrr_save();
@@ -235,6 +238,21 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     if (cact_csprng_selftest() != 0)
         pr_err("  %-11s : SELF-TEST FAILED — the DRBG returns zeros/duplicates\n",
                "csprng");
+    else
+        pr_info("  %-11s : selftest passed\n", "csprng");
+
+    /* Module-signing self-test: verify the embedded known-answer signature with
+     * the compiled-in public key.  This proves the kernel image and the signing
+     * key match, so a broken key pair fails here instead of silently rejecting
+     * every module at load.  The printed vermagic is the ABI fingerprint a
+     * module must carry; cact_check.sh cross-checks it against the signer. */
+    if (mod_sign_selftest() != 0)
+        pr_err("  %-11s : SELF-TEST FAILED — public key rejected its own "
+               "signature\n", "sigmagic");
+    else
+        pr_info("  %-11s : selftest passed (ECDSA P-256)\n", "sigmagic");
+    pr_info("  %-11s : ksym vermagic 0x%08x\n", "sigmagic",
+            (unsigned)ksym_vermagic());
 
     if (apic_init() == 0) {
         pr_info("  %-11s : LAPIC + IOAPIC operational\n", "apic");
@@ -266,6 +284,26 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
                     (unsigned)energy_core_lapic_id(i));
         }
     }
+
+    // CPU topology (P1.2): decode CPUID leaf 0xB/0x1F into package/core ids so
+    // /proc/cpuinfo can report core id / physical id / siblings / cpu cores.
+    // Runs after energy_init, which recorded every present core's LAPIC id.
+    cpu_topo_init();
+    pr_info("  %-11s : %u package(s), %u core(s)/pkg, %u thread(s)/core%s\n",
+            "cpu-topo", (unsigned)cpu_topo_packages(),
+            (unsigned)cpu_topo_cpu_cores(0), (unsigned)cpu_topo_threads_per_core(),
+            cpu_topo_valid() ? "" : " (no CPUID topology)");
+    for (uint32_t i = 0; i < energy_core_count_present(); i++) {
+        pr_info("  %-11s : cpu%u lapic=0x%02x pkg=%u core=%u siblings=%u\n",
+                "cpu-topo", (unsigned)i, (unsigned)energy_core_lapic_id(i),
+                (unsigned)cpu_topo_package(i), (unsigned)cpu_topo_core(i),
+                (unsigned)cpu_topo_siblings(i));
+    }
+    if (placement_selftest() != 0)
+        pr_err("  %-11s : SELF-TEST FAILED — placement shares the master core\n",
+               "placement");
+    else
+        pr_info("  %-11s : selftest passed\n", "placement");
 
     // C-state controller + master->worker IPI protocol (Step 2 of the energy
     // governor). Re-arms IDT vectors 0xF8/0xF9 for IPI_HALT/IPI_WAKEUP.

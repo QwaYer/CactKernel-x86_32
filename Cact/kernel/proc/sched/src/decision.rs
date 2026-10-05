@@ -24,61 +24,43 @@ use crate::ffi;
 use crate::energy::{self, MAX_CORES};
 use crate::monitor;
 use crate::cstate;
+use crate::energy_model as model;
+use crate::placement;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-pub const CSTATE_C0: u32 = cstate::CSTATE_C0;
-pub const CSTATE_C1: u32 = cstate::CSTATE_C1;
-pub const CSTATE_C3: u32 = cstate::CSTATE_C3;
-pub const CSTATE_C6: u32 = cstate::CSTATE_C6;
+pub const CSTATE_C0: u32 = model::CSTATE_C0;
+pub const CSTATE_C1: u32 = model::CSTATE_C1;
+pub const CSTATE_C3: u32 = model::CSTATE_C3;
+pub const CSTATE_C6: u32 = model::CSTATE_C6;
 
-// Nominal CPU frequency used by the benefit model (Hz).
-const NOMINAL_FREQ_HZ: u64 = 3_000_000_000;
-// Average estimated cycles of one runnable task burst.
-const AVG_TASK_CYCLES: u64 = 1_000_000;
-// Energy per cycle divisor so benefit lands in the same units as the
-// wakeup/cache-harm costs reported by the C-state descriptors.  With
-// AVG_TASK_CYCLES = 1e6 and FREQ = 3e9 this makes benefit ~= queue_len*IPL.
-const POWER_PER_CYCLE: u64 = 3_000_000_000_000_000;
-
-// benefit > cost * 1.5  <=>  benefit * 2 > cost * 3
-const COST_MARGIN_NUM: u64 = 3;
-const COST_MARGIN_DEN: u64 = 2;
-
-const LOAD_SLEEP_PERMILLE: u32 = 400; // < 40%
-const LOAD_WAKE_PERMILLE: u32 = 700;  // > 70%
-const IDLE_SLEEP_MS: u32 = 100;
+// The benefit/cost model and its constants live in `crate::energy_model` (pure,
+// host-tested).  The thresholds below stay here because they are policy, not
+// model, and are only used by the tick.
 const IDLE_WAKE_MS: u32 = 10;
 
 const TICK_MS: u32 = 10;
 
 // ---------------------------------------------------------------------------
-// Benefit / cost model
+// Benefit / cost model (pure implementation: `crate::energy_model`)
 // ---------------------------------------------------------------------------
 
 /// Estimated cycles of the work queued for a core.
 #[no_mangle]
 pub extern "C" fn energy_decision_work_cycles(queue_len: u32, ipl: u32) -> u64 {
-    let ipl = if ipl == 0 { 1 } else { ipl };
-    (queue_len as u64).saturating_mul(AVG_TASK_CYCLES).saturating_mul(ipl as u64)
+    model::work_cycles(queue_len, ipl)
 }
 
 /// Benefit of waking a core to drain `queue_len` tasks (plan formula, scaled).
 #[no_mangle]
 pub extern "C" fn energy_decision_benefit(queue_len: u32, ipl: u32) -> u64 {
-    let cycles = energy_decision_work_cycles(queue_len, ipl);
-    let benefit = (cycles as u128)
-        .saturating_mul(NOMINAL_FREQ_HZ as u128)
-        .checked_div(POWER_PER_CYCLE as u128)
-        .unwrap_or(0);
-    benefit.min(u64::MAX as u128) as u64
+    model::benefit(queue_len, ipl)
 }
 
 /// Energy cost of a transition into `state`: wakeup + cache-harm.
 #[no_mangle]
 pub extern "C" fn energy_decision_cost(state: u32) -> u64 {
-    (cstate::energy_cstate_wakeup_energy(state) as u64)
-        .saturating_add(cstate::energy_cstate_cache_harm_energy(state) as u64)
+    model::cost(state)
 }
 
 /// Should a core currently in `state` be woken?  Applies the plan's
@@ -91,37 +73,13 @@ pub extern "C" fn energy_decision_should_wake(
     load_permille: u32,
     trend: i32,
 ) -> i32 {
-    if state == CSTATE_C0 {
-        return 0;
-    }
-    // Formula: pending work is worth waking for.
-    if queue_len > 0 {
-        let benefit = energy_decision_benefit(queue_len, ipl);
-        let cost = energy_decision_cost(state);
-        if benefit.saturating_mul(COST_MARGIN_DEN)
-            > cost.saturating_mul(COST_MARGIN_NUM)
-        {
-            return 1;
-        }
-    }
-    // Overload and proactive (rising load) rules.
-    if load_permille > LOAD_WAKE_PERMILLE && trend == monitor::TREND_UP {
-        return 1;
-    }
-    if load_permille > LOAD_WAKE_PERMILLE {
-        return 1;
-    }
-    0
+    model::should_wake(state, queue_len, ipl, load_permille, trend)
 }
 
 /// Should an idle core be pushed into a deeper C-state?
 #[no_mangle]
 pub extern "C" fn energy_decision_should_sleep(load_permille: u32, idle_ms: u32) -> i32 {
-    if load_permille < LOAD_SLEEP_PERMILLE && idle_ms >= IDLE_SLEEP_MS {
-        1
-    } else {
-        0
-    }
+    model::should_sleep(load_permille, idle_ms)
 }
 
 fn idle_ms_of(cpu: u32) -> u32 {
@@ -139,6 +97,43 @@ fn idle_ms_of(cpu: u32) -> u32 {
 // Periodic evaluation on the master core
 // ---------------------------------------------------------------------------
 
+/// Wake a sleeping worker and charge the transition cost.  Re-reads the state,
+/// so callers need no snapshot.
+fn wake_worker(cpu: u32) {
+    let state = energy::energy_core_cstate(cpu);
+    if state == CSTATE_C0 {
+        return;
+    }
+    if cstate::energy_ipi_wake_worker(cpu) == 0 {
+        let _ = energy::energy_core_set_cstate(cpu, CSTATE_C0);
+        monitor::energy_monitor_charge_energy(cpu, energy_decision_cost(state) as u32);
+    }
+}
+
+/// Wake the workers the tick marked in `want`.  Sibling-aware when SMT is
+/// present: at most one logical CPU per physical core and fresh cores first, so
+/// the second runnable thread does not join the master's SMT sibling while
+/// other physical cores are idle.  without SMT the old per-worker wake is kept.
+fn wake_selected(want: &[bool; MAX_CORES]) {
+    if crate::cpu_topo::threads_per_core() > 1 {
+        let mut views = crate::cpu_topo::views();
+        for i in 0..MAX_CORES {
+            if !want[i] {
+                views[i].eligible = false;
+            }
+        }
+        if let Some(cpu) = placement::pick_wake(&views) {
+            wake_worker(cpu);
+        }
+    } else {
+        for i in 1..MAX_CORES {
+            if want[i] {
+                wake_worker(i as u32);
+            }
+        }
+    }
+}
+
 /// One evaluation pass. Called from the scheduler tick on the master core.
 /// Scans online worker cores and issues IPI_HALT / IPI_WAKEUP.
 #[no_mangle]
@@ -147,6 +142,8 @@ pub extern "C" fn energy_decision_tick() {
     if energy::energy_core_count_online() <= 1 {
         return;
     }
+
+    let mut want = [false; MAX_CORES];
 
     for cpu in 1..MAX_CORES {
         let cpu = cpu as u32;
@@ -174,13 +171,12 @@ pub extern "C" fn energy_decision_tick() {
             continue;
         }
 
-        // Core is halted/asleep: decide whether to wake it.
+        // Core is halted/asleep: decide whether to wake it.  The actual IPI is
+        // deferred to `wake_selected`, which is sibling-aware.
         let wake = energy_decision_should_wake(state, queue_len, 1, load, trend);
         if wake != 0 {
-            if idle_ms >= IDLE_WAKE_MS && cstate::energy_ipi_wake_worker(cpu) == 0 {
-                let _ = energy::energy_core_set_cstate(cpu, CSTATE_C0);
-                let cost = energy_decision_cost(state) as u32;
-                monitor::energy_monitor_charge_energy(cpu, cost);
+            if idle_ms >= IDLE_WAKE_MS {
+                want[cpu as usize] = true;
             }
             continue;
         }
@@ -198,9 +194,13 @@ pub extern "C" fn energy_decision_tick() {
         }
     }
 
+    // Wake the chosen cores now that every candidate is known.
+    wake_selected(&want);
+
     // Worker-initiated help: a saturated worker that still saw queued work asked
     // for a peer.  Consume the requests and wake one sleeping worker so the
-    // queue drains on two cores (subject to the same idle/benefit rules).
+    // queue drains on two cores (subject to the same idle/benefit rules and the
+    // same sibling-aware preference).
     let mut help = false;
     for cpu in 1..MAX_CORES {
         if monitor::energy_monitor_take_help(cpu as u32) != 0 {
@@ -208,23 +208,15 @@ pub extern "C" fn energy_decision_tick() {
         }
     }
     if help && monitor::energy_monitor_queue_length(0) > 0 {
-        for cpu in 1..MAX_CORES {
-            let cpu = cpu as u32;
-            if energy::energy_core_is_present(cpu) == 0
-                || energy::energy_core_is_online(cpu) == 0
-                || energy::energy_core_role(cpu) != 2
-            {
-                continue;
-            }
-            let state = energy::energy_core_cstate(cpu);
-            if state == CSTATE_C0 || idle_ms_of(cpu) < IDLE_WAKE_MS {
-                continue;
-            }
-            if cstate::energy_ipi_wake_worker(cpu) == 0 {
-                let _ = energy::energy_core_set_cstate(cpu, CSTATE_C0);
-                monitor::energy_monitor_charge_energy(cpu, energy_decision_cost(state) as u32);
-            }
-            break; // one helper per tick
+        let mut views = crate::cpu_topo::views();
+        for i in 0..MAX_CORES {
+            let cpu = i as u32;
+            views[i].eligible = views[i].eligible
+                && energy::energy_core_cstate(cpu) != CSTATE_C0
+                && idle_ms_of(cpu) >= IDLE_WAKE_MS;
+        }
+        if let Some(cpu) = placement::pick_wake(&views) {
+            wake_worker(cpu);
         }
     }
 }
@@ -322,6 +314,9 @@ pub extern "C" fn energy_core_manage() {
     {
         return;
     }
+    // Offline a physical core only while the whole core is idle: never park a
+    // logical CPU whose sibling is running work (the sibling must keep running).
+    let views = crate::cpu_topo::views();
     for cpu in 1..MAX_CORES {
         let cpu = cpu as u32;
         if energy::energy_core_is_present(cpu) == 0
@@ -334,7 +329,21 @@ pub extern "C" fn energy_core_manage() {
         if idle_ms_of(cpu) < OFFLINE_IDLE_MS {
             continue;
         }
-        let _ = crate::smp::smp_cpu_offline(cpu);
+        if !placement::can_offline_core(&views, cpu) {
+            continue;
+        }
+        // Park the whole physical core as one unit: every online worker thread
+        // on this core is idle (the guard above), so take them all offline.
+        let mask = placement::core_mask(&views, cpu);
+        for s in 1..MAX_CORES {
+            if mask & (1u64 << s) == 0 {
+                continue;
+            }
+            let s = s as u32;
+            if energy::energy_core_is_online(s) != 0 && energy::energy_core_role(s) == 2 {
+                let _ = crate::smp::smp_cpu_offline(s);
+            }
+        }
         return;
     }
 }

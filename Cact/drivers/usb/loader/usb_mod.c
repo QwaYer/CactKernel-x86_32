@@ -4,9 +4,9 @@
  * Mirrors fs_mod.c — the other non-PCI module class.  A USB driver module is
  * an ET_REL image (e.g. rt2800usb.cctk) that exports usb_driver_init(), which
  * typically calls the ksym-exported usb_driver_register() with a static
- * usb_driver_t.  The loader verifies the module's HMAC-SHA256 tag, relocates
- * it into a private image, resolves undefined symbols through ksym_resolve(),
- * and calls the entry point.
+ * usb_driver_t.  The loader verifies the module's ECDSA P-256 signature +
+ * vermagic tag, relocates it into a private image, resolves undefined symbols
+ * through ksym_resolve(), and calls the entry point.
  */
 
 #include "usb_mod.h"
@@ -15,6 +15,7 @@
 #include "klib.h"
 #include "memory.h"
 #include "kernel.h"
+#include "mod_tag.h"
 
 // Linux i386 errno values, returned negated so the /dev/sys module ioctl can
 // report a real reason (see kmod.c).
@@ -39,12 +40,6 @@
 #ifndef ENOSPC
 #define ENOSPC 28
 #endif
-
-// HMAC-SHA256 module signing — implemented in cact_crypto (Rust, no_std)
-extern int cact_hmac_verify(const uint8_t *data, uint32_t data_len,
-                            const uint8_t *tag, uint32_t tag_len);
-
-#define CACT_HMAC_TAG_SIZE 32
 
 // ELF 32-bit types (i386)
 typedef uint32_t Elf32_Addr;
@@ -151,23 +146,6 @@ static void instance_name(const char *path, char *out, int out_sz) {
     out[i] = '\0';
 }
 
-static int hmac_verify_module(uint8_t *elf_data, uint32_t *file_size) {
-    if (*file_size <= CACT_HMAC_TAG_SIZE) {
-        pr_err("[USBMOD] HMAC: unsigned module (no signature) — rejected\n");
-        return -1;
-    }
-    uint32_t data_len = *file_size - CACT_HMAC_TAG_SIZE;
-    uint8_t *tag      = elf_data + data_len;
-    if (cact_hmac_verify(elf_data, data_len, tag, CACT_HMAC_TAG_SIZE) != 0) {
-        pr_err("[USBMOD] HMAC: signature mismatch — rejected\n");
-        return -1;
-    }
-    *file_size = data_len;
-    for (uint32_t i = 0; i < CACT_HMAC_TAG_SIZE; i++)
-        elf_data[data_len + i] = 0;
-    return 0;
-}
-
 // Locate an exported global function symbol by name.  Returns 0 if absent.
 static uint32_t find_func_sym(Elf32_Ehdr *eh, Elf32_Sym *syms, uint32_t sym_cnt,
                               uint16_t strtab_idx, uint8_t *image,
@@ -201,7 +179,7 @@ static int load_module_image(const char *path, uint8_t **image_out,
     memcpy(elf_data, blob_data, blob_size);
     uint32_t file_size = blob_size;
 
-    if (hmac_verify_module(elf_data, &file_size) != 0) {
+    if (mod_tag_verify(elf_data, &file_size) != 0) {
         kfree(elf_data);
         return -EACCES;
     }

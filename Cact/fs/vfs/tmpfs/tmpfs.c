@@ -45,6 +45,7 @@ static int _tmp_delete (vfs_node_t*, const char*);
 static int _tmp_mkdir  (vfs_node_t*, const char*);
 static int _tmp_rmdir  (vfs_node_t*, const char*);
 static int _tmp_rename (vfs_node_t*, const char*, const char*);
+static int _tmp_rename2(vfs_node_t*, const char*, vfs_node_t*, const char*);
 static int _tmp_link   (vfs_node_t*, const char*, vfs_node_t*);
 static int _tmp_truncate(vfs_node_t*, uint32_t);
 static int _tmp_mmap_backing(vfs_node_t*, uint32_t, uint32_t, int*, uint32_t*);
@@ -62,6 +63,7 @@ static vfs_ops_t tmpfs_ops = {
     .mkdir        = _tmp_mkdir,
     .rmdir        = _tmp_rmdir,
     .rename       = _tmp_rename,
+    .rename2      = _tmp_rename2,
     .link         = _tmp_link,
     .mmap_backing = _tmp_mmap_backing,
     .truncate     = _tmp_truncate,
@@ -259,6 +261,46 @@ static int _tmp_rename(vfs_node_t *dir, const char *oldname, const char *newname
     strlcpy(e->name, newname, TMPFS_NAME_LEN);
     if (e->inode->nlink <= 1)
         strlcpy(e->inode->vnode.name, newname, 128);
+    return 0;
+}
+
+/* Move a name (possibly a directory) from one directory to another.  The inode
+ * and its page-cache object are untouched: only the dirent moves. */
+static int _tmp_rename2(vfs_node_t *olddir, const char *oldname,
+                        vfs_node_t *newdir, const char *newname) {
+    if (!olddir || !newdir) return -1;
+    tmpfs_node_t *od = (tmpfs_node_t*)olddir->priv;
+    tmpfs_node_t *nd = (tmpfs_node_t*)newdir->priv;
+    if (!od || od->type != VFS_DIRECTORY) return -1;
+    if (!nd || nd->type != VFS_DIRECTORY) return -1;
+
+    tmpfs_dirent_t *e = _find_dirent(od, oldname);
+    if (!e) return -1;
+    if (_find_dirent(nd, newname)) return -1;
+
+    tmpfs_node_t *ino = e->inode;
+
+    /* Allocate the new dirent first, so a failure leaves the tree unchanged. */
+    tmpfs_dirent_t *ne = (tmpfs_dirent_t*)kmalloc(sizeof(tmpfs_dirent_t));
+    if (!ne) return -1;
+    memset(ne, 0, sizeof(tmpfs_dirent_t));
+    strlcpy(ne->name, newname, TMPFS_NAME_LEN);
+    ne->inode = ino;
+
+    /* Detach from the old directory. */
+    tmpfs_dirent_t **pp = &od->children;
+    while (*pp && *pp != e) pp = &(*pp)->next;
+    if (!*pp) { kfree(ne); return -1; }
+    *pp = e->next;
+    kfree(e);
+    if (ino->nlink) ino->nlink--;
+
+    /* Attach under the new directory; the inode's reference hold moves with the
+     * entry, so bump nlink but not refcount. */
+    ne->next = nd->children;
+    nd->children = ne;
+    ino->nlink++;
+    strlcpy(ino->vnode.name, newname, 128);
     return 0;
 }
 

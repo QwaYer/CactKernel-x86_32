@@ -2,6 +2,13 @@
 #include "validate.h"
 #include "task.h"
 
+// Heap growth cap.  brk() grows eagerly -- every page is kalloc'd and zeroed
+// here, there is no demand paging -- and the window between the ELF image and
+// MMAP_BASE is shared with mmap, so the break is deliberately bounded well
+// below USER_HEAP_LIMIT.  Do not raise this without first making brk
+// demand-faulted.
+#define USER_BRK_MAX_GROWTH (16u * 1024u * 1024u)
+
 // The calling task's thread-group state.  brk bounds and the page tracker are
 // process-wide (all threads of a group allocate into one heap), so every brk /
 // mprotect path goes through here instead of the per-task ProcMeta copies.
@@ -26,8 +33,8 @@ int sys_brk(struct syscall_frame* regs) {
     if (new_brk < ps->brk_start)
         return -1;
 
-    // Safety limit: 16 MiB maximum heap
-    if (new_brk - ps->brk_start > 16 * 1024 * 1024)
+    // Safety limit: see USER_BRK_MAX_GROWTH.
+    if (new_brk - ps->brk_start > USER_BRK_MAX_GROWTH)
         return -1;
 
     uint32_t old_end = (ps->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);

@@ -1,52 +1,24 @@
 #!/usr/bin/env python3
 """cact_sign_cctkfs.py — Sign all .cctk modules inside a cctkfs archive.
 
-Reads cctkfs.img, signs each module data blob with HMAC-SHA256,
-rebuilds the archive with properly aligned signed blobs,
-and writes a CRC-32 container checksum into the header.
+Reads cctkfs.img, signs each module data blob with an ECDSA P-256 signature
+(see tools/modsign.py), rebuilds the archive with properly aligned signed
+blobs, and writes a CRC-32 container checksum into the header.
 
-Key is read from Cact/crypto/hmac_ffi/hmac_key.bin
-(relative to the project root, resolved from this script's location).
-Generate with: python3 tools/gen_hmac_key.py
+The private key is Cact/crypto/modsign/module_sign_priv.pem; the kernel embeds
+only the public key.  Idempotent: already-signed blobs are left unchanged.
 """
 
 import os
 import sys
 import struct
-import hmac
-import hashlib
 import zlib
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import modsign  # noqa: E402
 
 CCTKFS_MAGIC  = 0x53464B43
 CCTKFS_CKSUM_OFF = 28
-TAG_SIZE      = 32
-
-
-def _key_path() -> str:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(script_dir, "..", "Cact", "crypto", "hmac_ffi", "hmac_key.bin")
-
-
-def _load_key() -> bytes:
-    path = _key_path()
-    try:
-        with open(path, "rb") as f:
-            key = f.read()
-    except FileNotFoundError:
-        print(f"HMAC key not found at {path}", file=sys.stderr)
-        print("Generate one with: python3 tools/gen_hmac_key.py", file=sys.stderr)
-        sys.exit(1)
-    if len(key) != 32:
-        print(f"HMAC key must be exactly 32 bytes, got {len(key)}", file=sys.stderr)
-        sys.exit(1)
-    return key
-
-
-CACT_HMAC_KEY = _load_key()
-
-
-def hmac_sign(data: bytes) -> bytes:
-    return hmac.new(CACT_HMAC_KEY, data, hashlib.sha256).digest()
 
 
 def align_up(val: int, align: int) -> int:
@@ -116,20 +88,20 @@ def main():
     new_data_off = new_names_off + new_names_size
     new_data_off = align_up(new_data_off, DATA_ALIGN)
 
+    if not os.path.isfile(modsign.PRIV_PEM):
+        modsign.generate_keys()
+
     new_data_blobs = []
     for ent in entries:
         blob = ent["data"]
-        if len(blob) >= TAG_SIZE:
-            elf_data = blob[:-TAG_SIZE]
-            stored_tag = blob[-TAG_SIZE:]
-            if hmac_sign(elf_data) == stored_tag:
-                print(f"  [{ent['name']}]: already signed, OK")
-                new_data_blobs.append(blob)
-                continue
+        if modsign.already_signed(blob):
+            print(f"  [{ent['name']}]: already signed, OK")
+            new_data_blobs.append(blob)
+            continue
 
-        signed = blob + hmac_sign(blob)
+        signed = modsign.sign_module(modsign.PRIV_PEM, blob)
         new_data_blobs.append(signed)
-        print(f"  [{ent['name']}]: signed tag={hmac_sign(blob).hex()}")
+        print(f"  [{ent['name']}]: signed (ECDSA P-256)")
 
     out = bytearray()
     out.extend(struct.pack("<IIIIIIII",

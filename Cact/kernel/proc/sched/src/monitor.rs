@@ -23,10 +23,9 @@ use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 // Metric scale: 1000 = 100%.
 pub const PERMILLE: u32 = 1000;
 
-// Trend classifier values must match Cact/kernel/energy/energy.h.
-pub const TREND_DOWN: i32 = -1;
-pub const TREND_STABLE: i32 = 0;
-pub const TREND_UP: i32 = 1;
+// Trend classifier values must match Cact/kernel/energy/energy.h.  The pure
+// model owns them; re-export so monitor and the host-tested model agree.
+pub use crate::energy_model::{TREND_DOWN, TREND_STABLE, TREND_UP};
 
 // 100 Hz tick => 100 samples per second.
 const SAMPLES_PER_SEC: u32 = 100;
