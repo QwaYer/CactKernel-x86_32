@@ -74,13 +74,11 @@ int energy_cstate_idle(uint32_t cpu);
  * context (the master's idle loop): the online sequence (INIT-SIPI-SIPI +
  * waits) must not block the timer ISR.
  *
- * On by default.  The re-online path re-runs `smp_ap_entry` through the boot
- * trampoline, so it depends on per-CPU state a first bring-up does not need
- * (the TSS descriptor's busy bit) — see the notes in sched/src/smp.rs and
- * sched/src/decision.rs for what that cost the last time it broke.  Kill
- * switch: energy_core_offline_enable(0). */
+ * The re-online path re-runs `smp_ap_entry` through the boot trampoline, so it
+ * depends on per-CPU state a first bring-up does not need (the TSS descriptor's
+ * busy bit) — see the notes in sched/src/smp.rs and sched/src/decision.rs for
+ * what that cost the last time it broke. */
 void energy_core_manage(void);
-void energy_core_offline_enable(int on);
 
 int energy_ipi_init(void);
 int energy_ipi_halt_worker(uint32_t cpu);

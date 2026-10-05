@@ -27,8 +27,6 @@ use crate::cstate;
 use crate::energy_model as model;
 use crate::placement;
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
 pub const CSTATE_C0: u32 = model::CSTATE_C0;
 pub const CSTATE_C1: u32 = model::CSTATE_C1;
 pub const CSTATE_C3: u32 = model::CSTATE_C3;
@@ -249,20 +247,11 @@ pub extern "C" fn energy_decision_init() -> i32 {
 /// Both are fixed (`smp.rs`), and the IPI helpers now refuse a destination that
 /// is the BSP's own id or the invalid sentinel, so a bad core-map entry cannot
 /// take the machine down either.
-///
-/// Kill switch: `energy_core_offline_enable(0)`.
-static ALLOW_CORE_OFFLINE: AtomicBool = AtomicBool::new(true);
 
 /// Park a worker after it has been idle at least this long.
 const OFFLINE_IDLE_MS: u32 = 3000;
 /// Never offline below this many online cores (master + one worker).
 const MIN_ONLINE_CORES: u32 = 2;
-
-/// Enable/disable physical offlining (on by default; 0 is the kill switch).
-#[no_mangle]
-pub extern "C" fn energy_core_offline_enable(on: i32) {
-    ALLOW_CORE_OFFLINE.store(on != 0, Ordering::Relaxed);
-}
 
 /// Run from the master's idle loop (task context — the online sequence must not
 /// block the timer ISR).  Brings an offlined worker back when queued work has
@@ -270,10 +259,6 @@ pub extern "C" fn energy_core_offline_enable(on: i32) {
 /// excess.  At most one transition per pass.
 #[no_mangle]
 pub extern "C" fn energy_core_manage() {
-    if !ALLOW_CORE_OFFLINE.load(Ordering::Relaxed) {
-        return;
-    }
-
     // Bring one offlined worker back when there is work and every online worker
     // is busy (C0); a parked core is otherwise invisible to the tick's scan.
     if monitor::energy_monitor_queue_length(0) != 0 {
