@@ -21,9 +21,7 @@
  * interrupt is just a LAPIC message carrying the vector, so delivery reuses
  * the shared pool from msidev.h.
  *
- * Unlike the MSI-X table, the MSI message registers live in configuration
- * space below 0x100, so the suspend/resume configuration snapshot already
- * restores them — there is no MSI counterpart to msix_restore().
+ * The MSI message registers live in configuration space below 0x100.
  */
 int pci_msi_support(pci_device_t *dev);
 int pci_msi_enable(pci_device_t *dev, int vector);

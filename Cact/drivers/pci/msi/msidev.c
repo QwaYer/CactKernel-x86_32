@@ -171,10 +171,3 @@ void msidev_unregister(int vector)
     msidev_free_vector(vector);
 }
 
-void msidev_restore(void)
-{
-    /* Only MSI-X needs device-side rebuilding: its table lives in MMIO and is
-     * cleared by the platform reset, while the MSI message registers sit below
-     * 0x100 and travel with the configuration snapshot. */
-    msix_restore();
-}

@@ -1,6 +1,7 @@
 # CactKernel 2.0.0 — Release Plan (final 32-bit release)
 
 Status: draft, agreed scope = **P0..P3**. P4 is explicitly deferred to 3.0.0.
+P1.4 (S3 suspend/resume) was removed from 2.0.0 on 2026-10-05 (see P1.4 and P4).
 
 2.0.0 is the last x86_32 release and it is not about new features. It is about
 squeezing the remaining correctness bugs, unfinished surface and verification
@@ -147,7 +148,8 @@ Whole ROADMAP section "CPU topology: SMP, SMT & core power" is open.
 **Acceptance (from ROADMAP):** with `-smp 4,threads=2` the boot `smp` line
 reports 8 logical CPUs under 4 `physical id`s with correct `siblings`; two
 CPU-bound threads land on different physical cores before sharing one; offlining
-one thread leaves its sibling running; after S3 all 8 are online.
+one thread leaves its sibling running. (The former "after S3 all 8 are online"
+item was removed from 2.0.0 with P1.4.)
 
 ### P1.3 — Enable C3/C6 (ACPI `_CST` + MWAIT)
 `.../cstate.rs:208-215` hardcodes C3/C6 `available=false`, `mwait_hint=-1`.
@@ -157,10 +159,16 @@ C-state write path is missing.
 **Goal:** finish/verify `_CST` + MWAIT so deep idle is actually enterable on
 platforms that advertise it; stay C1-only (safely) elsewhere.
 
-### P1.4 — S3 re-wake
-`smp_init()` runs only from boot; after an S3 resume no AP is re-woken.
-**Goal:** re-wake all logical CPUs on resume (this is also an acceptance item of
-P1.2).
+### P1.4 — S3 suspend/resume — REMOVED IN 2.0.0
+**Decision (2026-10-05): S3 suspend/resume was removed from 2.0.0.** Resume was
+not reliable on the target (the display driver's re-modeset hung, and there was
+an intermittent post-resume userspace `#PF`), so suspend is not shipped: the
+`acpi_suspend`/resume path, the wake trampoline (`wake_entry.asm`,
+`wake_trampoline.asm`), the S3 device save/restore helpers (PCI config snapshot,
+MSI-X re-program, xHCI re-enumerate, MTRR snapshot), `smp_resume_rewake()` and
+the `suspend` tool / ioctl / `RB_SUSPEND` were all deleted. `poweroff`, `reboot`
+and `halt` are unaffected. The WIP S3 work is preserved on the `s3-wip` branch
+(off `v2.0.0`) for a later re-introduction. See P4.
 
 ### P1.5 — VFS / POSIX corners
 - Cross-directory move of **directories** is refused
@@ -181,36 +189,31 @@ verify read/write/EOF/EPIPE.
 
 ---
 
-## P2 — Verification (the biggest missing piece)
+## P2 — Verification
 
-There is currently **no kernel unit-test suite**: `Kernel-Unit-Tests-for-Cact/`
-is an empty directory, every first-party Rust crate has zero `#[test]`, and the
-only automated checks are three boot self-tests (`energy_selftest`,
-`cact_csprng_selftest`, `lapic_timer_selftest`). `CactUserBins/tests/` is empty
-and `devtest` is not in the build.
+Status 2026-10-05: P2.1 and P2.3 are DONE; P2.2 is kernel-only (the userspace
+self-test apps were removed — see below).
 
-### P2.1 — Host-side unit tests for pure logic
-Populate `Kernel-Unit-Tests-for-Cact/` with a `cargo test`-runnable suite for
-logic that does not need hardware: PMM bitmap math, MLFQ queue invariants,
-energy benefit/cost model, VFS dcache/parent table, CPUID topology decoding.
-These crates are `no_std`, so add a small host harness (feature-gated `std` or a
-mirror crate) rather than tying them to QEMU.
+### P2.1 — Host-side unit tests for pure logic — DONE 2026-10-05
+`Kernel-Unit-Tests-for-Cact/` is a host `cargo test` crate that `#[path]`-includes
+real kernel modules (PMM bitmap math, MLFQ policy, energy model, VFS helpers,
+CPUID topology, placement) so the tests cannot drift from a copy. **58 tests
+pass.** A module may only be included if it is `no_std` with no `crate::` refs,
+globals or FFI; anything touching a device is covered by the boot self-tests +
+`check` instead. See `CONTRIBUTING.md`.
 
-### P2.2 — Kernel self-tests and userspace self-tests
-- Re-add `devtest` (VT/PTY) to the `apps` list in
-  `CactUserBins-x86_32/meson.build` — the source exists but is not built.
-- Recreate `threadtest` (pthread/futex; was deleted by request — recreate it as
-  a permanent check).
-- Add in-kernel self-tests for PMM/VMM/mmap (allocation, COW, demand, brk
-  ceiling), futex slot-reuse, and VFS/pipe.
-- Add a regression for P0.1: a crafted ELF with a kernel-half `PT_LOAD` must be
-  refused; assert the kernel PT is untouched.
+### P2.2 — Kernel self-tests and userspace self-tests — PARTIAL
+Kernel self-tests (csprng, energy, timer, placement, module-signing magic) are
+required markers in the headless `check`. The userspace self-test apps
+(`devtest`, `threadtest`, `elftest`, `topotest`, `sockopttest`, `stattest`,
+`pipetest`, `cactcheck`) were **removed from `CactUserBins-x86_32`**, so the
+check image is kernel-only and the P0.1 ELF regression (formerly `elftest`) no
+longer runs in an image. Userspace coverage is deferred with those apps.
 
-### P2.3 — One headless "check" target
-Add a single reproducible command (Meson `run_target` + a script) that boots the
-image headless, runs the self-tests, greps PASS/FAIL from COM1, and exits
-non-zero on any failure. This turns 2.0.0 from "boot and eyeball" into a
-checkable release.
+### P2.3 — One headless "check" target — DONE 2026-10-05
+`ninja -C CactKernel-x86_32/build-meson check` runs `tools/cact_check.sh`: boots
+an ISO headless (`-display none`), greps COM1 for the required kernel markers
+and the module vermagic, and exits non-zero on any failure marker.
 
 ---
 
@@ -264,14 +267,18 @@ OpRegion/VBT, GMBUS/DDC/EDID) stay in P4 / 3.0.0.
 - `ROADMAP.md`'s CPU-topology section is marked closed for 2.0.0; `CONTRIBUTING.md`
   documents the host unit tests and the headless `check` gate.
 
-### P3.5 — Tag
-`VERSION` is already `2.0.0`; after DoD is green, tag the release.
+### P3.5 — Tag — DONE 2026-10-05
+`VERSION` is `2.0.0`; the annotated tag `v2.0.0` was created on `9a1d9d3`
+("2.0.0: integrity, SMT topology, ECDSA module signing, SemVer+abi versioning").
+Later S3 WIP work on `main` (`af8c84e`) is **not** part of 2.0.0 (P1.4).
 
 ---
 
 ## P4 — Explicitly deferred to 3.0.0 (do NOT do in 2.0.0)
 
-Order-N/contiguous physical allocator; `vmm_map_wc`/`set_memory_wc`; firmware
+S3 suspend/resume (removed from 2.0.0 — see P1.4; re-introduce with a working
+display re-modeset and no post-resume `#PF` race); Order-N/contiguous physical
+allocator; `vmm_map_wc`/`set_memory_wc`; firmware
 loader (`request_firmware` exists but no real loader/workqueue); workqueue /
 tasklet / threaded IRQ; DMA-buf / dma-fence; full DRM property/blob/framebuffer
 surface; ACPI OpRegion + VBT; GMBUS/DDC + EDID parser; Intel i915 render engine;
@@ -282,16 +289,21 @@ memfd/address-space ceiling; IPv6; PAE/highmem (obsoleted by 64-bit).
 
 ## Definition of Done for 2.0.0
 
-1. No ring-3 path can install or alter a kernel-half mapping (P0.1/P0.2 done,
-   with a regression test).
+1. No ring-3 path can install or alter a kernel-half mapping (P0.1/P0.2 done).
+   The `elftest` regression was removed with the userspace test apps (P2.2).
 2. P0.3-P0.6 fixed.
-3. `check` target boots headless, runs the self-tests, and exits 0 (P2.3).
-4. `devtest`, `threadtest` and the new self-tests all pass.
+3. `check` target boots headless, runs the kernel self-tests, and exits 0 (P2.3).
+4. Kernel self-tests pass in `check`; the `devtest`/`threadtest` userspace apps
+   were removed and are no longer part of 2.0.0 (P2.2).
 5. With `-smp 4,threads=2`: 8 logical CPUs under 4 physical ids, correct
-   `siblings` in `/proc/cpuinfo`, cross-core placement, S3 re-wakes all (P1).
+   `siblings` in `/proc/cpuinfo`, and cross-core placement (P1.2). S3
+   suspend/resume was removed from 2.0.0 (P1.4).
 6. `DRIVERS` matches reality and is not duplicated; `Virtio-gpu` resolved (P3.1).
 7. Module vermagic rejects a mismatched `.cctk` (P3.2).
 8. `README.md`/`ROADMAP.md` contain no stale claims (P3.4); `v2.0.0` tagged.
+
+**Removed:** S3 suspend/resume was deleted from 2.0.0 (see P1.4); `poweroff`,
+`reboot` and `halt` remain.
 
 ## How to verify (workspace)
 

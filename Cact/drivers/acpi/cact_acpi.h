@@ -54,14 +54,11 @@ void acpi_osc_pcie_init(void);
  * energy model (cstates.c).  0 when a processor was configured, -1 otherwise. */
 int  acpi_cstates_probe(void);
 
-/* System power transitions (power.c).  The transition helpers never return;
- * acpi_suspend() returns 0 after a successful resume and -state if the
- * platform refused to enter the requested sleep state. */
+/* System power transitions (power.c).  The transition helpers never return. */
 int  acpi_pm_init(void);
 void acpi_power_off(void);           /* ACPI S5 soft-off / QEMU ports / halt */
 void acpi_reboot(void);              /* ACPI reset register / KBC / triple fault */
 void acpi_halt(void);                /* stop the CPU with interrupts off */
-int  acpi_suspend(uint32_t state);   /* S1/S3 suspend-to-RAM; 0 after resume */
 int  acpi_sleep_states(uint32_t *mask);  /* bit Sx set when \_Sx is present */
 
 

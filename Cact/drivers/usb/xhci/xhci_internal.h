@@ -121,7 +121,4 @@ int  xhci_init_one(uint32_t phys_base, uint32_t quirks);
 /* Process whatever the controller has already posted (xhci_ring.c). */
 void xhci_poll_events(xhci_priv_t *priv);
 
-/* Post-resume bring-up of a controller that is already registered. */
-int  xhci_resume(usb_hc_t *hc);
-
 #endif

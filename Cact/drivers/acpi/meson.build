@@ -95,32 +95,3 @@ kernel_libs += static_library('cact_acpi',
   include_directories: cact_includes,
   implicit_include_directories: false,
   c_args: kernel_c_args)
-
-# S3-resume trampoline: a flat real-mode binary staged in conventional memory
-# and advertised as the FACS waking vector.  Embedded exactly like the SMP AP
-# trampoline, with the path-derived objcopy symbols renamed to stable names.
-wake_bin = custom_target('acpi-wake-bin',
-  input: 'wake_trampoline.asm',
-  output: 'wake_trampoline.bin',
-  command: [nasm, '-f', 'bin', '@INPUT@', '-o', '@OUTPUT@'])
-
-wake_blob = custom_target('acpi-wake-blob',
-  input: wake_bin,
-  output: 'wake_trampoline_blob.o',
-  command: [objcopy, '-I', 'binary', '-O', 'elf32-i386', '-B', 'i386',
-            '@INPUT@', '@OUTPUT@'])
-
-kernel_objects += custom_target('acpi-wake-obj',
-  input: wake_blob,
-  output: 'wake_trampoline.o',
-  command: [objcopy,
-            '--redefine-sym', '_binary_Cact_drivers_acpi_wake_trampoline_bin_start=_binary_cact_wake_bin_start',
-            '--redefine-sym', '_binary_Cact_drivers_acpi_wake_trampoline_bin_end=_binary_cact_wake_bin_end',
-            '--redefine-sym', '_binary_Cact_drivers_acpi_wake_trampoline_bin_size=_binary_cact_wake_bin_size',
-            '@INPUT@', '@OUTPUT@'])
-
-# The context save/enter-sleep/resume stub, linked as normal kernel code.
-kernel_objects += custom_target('asm-acpi-wake-entry',
-  input: 'wake_entry.asm',
-  output: 'wake_entry.o',
-  command: [nasm, '-f', 'elf32', '@INPUT@', '-o', '@OUTPUT@'])

@@ -227,23 +227,6 @@ static int _sys_ioctl(void *p, uint32_t cmd, void *arg) {
         int r = _root_only();
         if (r) return r;
 
-        /* Suspend is the only power command that returns to the caller: the
-         * ioctl blocks until the platform resumes.  S3 first, S1 as fallback.
-         * Only the S3 wake resets the platform, so the device save/restore
-         * pair brackets that path alone — S1 leaves the devices alone. */
-        if (c == CACT_REBOOT_SUSPEND) {
-            pr_notice("  %-11s : suspend requested by pid %d\n", "power",
-                      current_task ? current_task->pid : 0);
-            kernel_suspend_hardware();
-            if (acpi_suspend(3) != 0) {
-                if (acpi_suspend(1) != 0)
-                    return -EOPNOTSUPP;
-                return 0;
-            }
-            kernel_resume_hardware();
-            return 0;
-        }
-
         _do_reboot(c);
         return 0;   // never reached
     }

@@ -21,7 +21,7 @@ actually has, not a promise. What already works is described in
 - MSI-X is the preferred device interrupt, with a single **MSI** message as the
   fallback (`msidev_register()`); both paths need coverage across the driver set.
 - **GPU / KMS**: the DRM uapi and a virtio-gpu driver exist as a sibling repo;
-  the VT/PTY layer has a self-test (`devtest` in CactUserBins). The Intel
+  the VT/PTY layer has no automated self-test. The Intel
   display half now exists as the out-of-tree module
   `Intel-GPU-for-Cact-x86_32` (stage 1: bind + EDID → `/dev/dri`); see
   [GPU / Intel (i915)](#gpu--intel-i915) for what a full port still needs.
@@ -53,8 +53,8 @@ Ordered by how hard each gap blocks a port:
 - **No general write-combining mapping.** `vmm_map()` forces `PCD|PWT` for any
   physical address ≥ the runtime `pmm::ram_end()` (`rust_mm/src/vmm/paging.rs`),
   so PAT entry 4 (WC, programmed in `memory/pat.c`) is unreachable for a BAR;
-  the only WC helper is `pat_enable_wc_for_framebuffer()`. MTRR is save/restore
-  across S3 only — there is no range allocator.
+  the only WC helper is `pat_enable_wc_for_framebuffer()`. MTRR is not used for
+  this — there is no range allocator.
 - **No runtime firmware loader.** `request_firmware` (ksym) can stage a blob
   that ships in the build-time cctkfs table, but there is no on-demand loader or
   workqueue, so GuC/HuC/DMC blobs have no practical path into kernel memory.
@@ -70,7 +70,7 @@ Ordered by how hard each gap blocks a port:
 - **No dma-buf / dma-fence.** PRIME is memfd-based and syncobj is software-only,
   so there is no cross-device or imported-buffer synchronisation.
 - **No sysfs/kobject, runtime PM (D0/D3), forcewake/clock gating, PSR, or
-  IOMMU/DMAR.** Only system-wide ACPI S3/S5 exists.
+  IOMMU/DMAR.** Only system-wide ACPI S5 (poweroff) exists.
 - **No BAR (re)assignment or resource tree.** Enumeration sizes BARs correctly
   (64-bit included) but trusts whatever firmware programmed; there is no
   allocator to move one.
@@ -148,16 +148,16 @@ division).
 
 ## CPU topology: SMP, SMT (Hyper-Threading) & core power
 
-**Closed in 2.0.0 (P1.2/P1.4).** The kernel decodes CPUID leaf `0xB`/`0x1F`
+**Closed in 2.0.0 (P1.2).** The kernel decodes CPUID leaf `0xB`/`0x1F`
 (falling back to leaf `4` + leaf `1` HTT, then MADT order) into
 `package_id`/`core_id`/`smt_sibling_mask`; `/proc/cpuinfo` reports `core id`,
 `physical id`, `siblings` and `cpu cores`; placement prefers a fresh physical
 core over a sibling of a busy one (`balance.rs`/`decision.rs`); deep C-states
-(C3/C6) are gated on *all* siblings idle (`cap_idle_depth`); a whole physical
-core is parked / offlined as one unit (`core_mask`); and `smp_resume_rewake()`
-re-wakes every logical CPU from the ACPI S3 resume path.  The userspace
-`topotest` exercises this in the headless `check` image, and C6 is confirmed on
-hardware that advertises `_CST`.
+(C3/C6) are gated on *all* siblings idle (`cap_idle_depth`); and a whole
+physical core is parked / offlined as one unit (`core_mask`).  The host unit
+tests cover the topology decoder and the placement policy; C6 is confirmed on
+hardware that advertises `_CST`.  **S3 suspend/resume is removed in 2.0.0
+(poweroff and reboot remain).**
 
 ## Storage & filesystems
 
