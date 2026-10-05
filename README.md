@@ -42,14 +42,14 @@ CactKernel is one piece of a larger workspace. Typical pieces:
 |-----------|------|
 | **[CactLib-x86_32](https://github.com/QwaYer/CactLibc-x86_32)** | Userspace **`clibc.so`** (plus the **`ld.so`** dynamic linker). Every `SYS_*` number must match the kernel’s [`syscalls.h`](Cact/kernel/core/syscall/syscalls.h) and `ioctl_abi.h`. After any syscall change: rebuild libc and **re-link all ELFs** (init, shell, demos). |
 | **[LocalRepoCactOS](../LocalRepoCactOS-x86_32)** | Builds relocatable **`.cctk`** PCI modules, stages ELF binaries under **`lib/bin/`**, and packs a single GRUB module **`cctkfs.img`**. GRUB loads it as `module2 /boot/cctkfs.img cctkfs` (see [`grub.cfg`](grub.cfg)). |
-| **[`build-cact-qemu.sh`](../build-cact-qemu.sh)** | One-shot: driver repos → **`cctkfs.img`** → [`build_disk.sh`](build_disk.sh) (empty **ext4** **`build/nvme.img`**, default 512 MiB) → **`ninja -C build-meson`** in this tree → **`build-meson/cact.iso`**. |
+| **[`CactBridge-x86/build.py`](../CactBridge-x86/build.py)** | One-shot: rebuilds every sibling (drivers → **`cctkfs.img`** → kernel) and packs the bootable **`build/cact-non-gui.iso`** / **`cact-gui.iso`**; **`--run`** boots it in QEMU (the empty **ext4** disk is created by [`build_disk.sh`](build_disk.sh) on first run). |
 
 **Why `cctkfs` exists:** the kernel copies the Multiboot2 "cctkfs" module into a large **`.bss`** staging buffer **before paging** (`initfs_modblob_load`). At runtime, **binfs / sbinfs / libfs / usrfs** overlay files from that archive on top of ext4 (e.g. **`/usr/bin/init`**, **`/usr/lib/clibc.so`**, optional **`/usr/lib/modules/*.cctk`** drivers), and the bare **`/bin`, `/sbin`, `/lib`** are symlinks into **`/usr`**. PCI dynamic loading reads ET_REL blobs from the same archive. All modules are verified with an **ECDSA P-256** signature against the kernel's embedded public key (plus a ksym-ABI `vermagic`) before loading.
 
 From the workspace root (QEMU-oriented full rebuild):
 
 ```sh
-./build-cact-qemu.sh
+python3 CactBridge-x86/build.py --non-gui-iso      # full ISO (+ QEMU with --run)
 # Kernel only (expects ../LocalRepoCactOS-x86_32/cctkfs.img already packed):
 cd CactKernel-x86_32 && meson setup build-meson --cross-file cross/i686-cact-clang.ini && ninja -C build-meson
 ```
@@ -336,7 +336,7 @@ All out-of-tree PCI drivers now register their interrupt through the kernel's **
 
 ## 🌐 Network stack
 
-The **entire L3+ stack is pure Rust** (`cact_net`): Ethernet demux, ARP, IPv4, ICMP, TCP and UDP sockets, and the DNS resolver all run on **smoltcp**; TLS 1.3 runs on the vendored **rustls** with the in-kernel `cact_crypto` provider. The kernel itself has **no DHCP client**: IPv4 addressing is decided in userspace (`ip`, `networkd`/`dhcpd`) and pushed in via `/dev/net` `CACT_NETCTL_NETCFG`, which calls `rust_net_set_ipv4_config`. The C side is only a thin FFI layer (`rust_net_ffi.h` + syscall glue) — `net_shim.c` was removed in favour of Rust symbols (`net_receive_packet`, `net_driver_irq_wake`) that out-of-tree NIC modules resolve via the ksym table.
+The **entire L3+ stack is pure Rust** (`cact_net`): Ethernet demux, ARP, IPv4, ICMP, TCP and UDP sockets, and the DNS resolver all run on **smoltcp**; TLS 1.3 runs on the vendored **rustls** with the in-kernel `cact_crypto` provider. The kernel itself has **no DHCP client**: IPv4 addressing is decided in userspace (`ip`/`dhcpd`) and pushed in via `/dev/net` `CACT_NETCTL_NETCFG`, which calls `rust_net_set_ipv4_config`. The C side is only a thin FFI layer (`rust_net_ffi.h` + syscall glue) — `net_shim.c` was removed in favour of Rust symbols (`net_receive_packet`, `net_driver_irq_wake`) that out-of-tree NIC modules resolve via the ksym table.
 
 Logical TCP states (C metadata / VFS view; ingress TCP is handled by **smoltcp**):
 
