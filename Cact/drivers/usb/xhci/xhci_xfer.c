@@ -8,13 +8,25 @@
 #include "klib.h"
 #include "sync.h"
 
+/* Endpoint state field (Endpoint Context word 0, bits 2:0) of the output
+ * device context the controller maintains: 0 Disabled, 1 Running, 2 Halted,
+ * 3 Stopped, 4 Error. */
+static uint8_t xhci_ep_state(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
+    uint8_t *dev_ctx = xhci_get_dev_ctx(priv, slot);
+    if (!dev_ctx)
+        return 0;
+    xhci_ep_ctx_t *ep = (xhci_ep_ctx_t *)(dev_ctx + priv->context_size * dci);
+    return (uint8_t)(ep->ctx[0] & 0x7);
+}
+
 /* Recover an endpoint whose transfer timed out.
  *
  * A timed-out transfer leaves a TD the controller will never complete (the
  * device stopped answering).  That pending TD blocks the whole endpoint: every
  * later transfer to it times out too, so a single stalled control transfer
- * used to wedge EP0 for good.  Stop the endpoint, then move its dequeue past
- * the abandoned TRBs so it runs again from the next free slot. */
+ * used to wedge EP0 for good.  Stop the endpoint, reset it if the controller
+ * halted it (a STALL), then move its dequeue past the abandoned TRBs so it runs
+ * again from the next free slot. */
 static void xhci_recover_ep(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
     xhci_ring_t *ring = &priv->ep_rings[slot][dci - 1];
     if (!ring->ring)
@@ -28,6 +40,18 @@ static void xhci_recover_ep(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
                 | ((uint32_t)slot << 24)
                 | ((uint32_t)dci << 16);
     int rc_stop = xhci_send_cmd(priv, &trb);
+
+    /* A STALL leaves the endpoint Halted, and Set TR Dequeue alone does not
+     * bring a Halted endpoint back (the controller keeps ignoring its
+     * doorbell).  Reset Endpoint is what clears that state. */
+    int rc_reset = -1;
+    if (xhci_ep_state(priv, slot, dci) == 2 /* Halted */) {
+        memset(&trb, 0, sizeof(trb));
+        trb.control = (XHCI_TRB_RESET_EP << XHCI_TRB_TYPE_SHIFT)
+                    | ((uint32_t)slot << 24)
+                    | ((uint32_t)dci << 16);
+        rc_reset = xhci_send_cmd(priv, &trb);
+    }
 
     /* Set TR Dequeue Pointer: resume at the next free TRB (the abandoned
      * SETUP/DATA/STATUS are skipped).  The dequeue cycle state is bit 0. */
@@ -51,10 +75,11 @@ static void xhci_recover_ep(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
         rr->done       = 0;
         rr->err        = 0;
         rr->xfer_armed = 0;
+        rr->dequeue    = rr->enqueue;
     }
 
-    pr_warn("xHCI: EP slot %u dci %u recovery stop=%d setdeq=%d",
-            (unsigned)slot, (unsigned)dci, rc_stop, rc_deq);
+    pr_warn("xHCI: EP slot %u dci %u recovery stop=%d reset=%d setdeq=%d",
+            (unsigned)slot, (unsigned)dci, rc_stop, rc_reset, rc_deq);
 }
 
 int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
@@ -88,7 +113,7 @@ int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
     if (setup->bmRequestType & 0x80)
         trb.control |= (3u << 16);
 
-    xhci_ring_enqueue(ring, &trb);
+    if (xhci_ring_enqueue(ring, &trb) < 0) { xhci_recover_ep(priv, slot, 1); return -1; }
 
     if (len > 0 && data) {
         memset(&trb, 0, sizeof(trb));
@@ -98,7 +123,7 @@ int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
         trb.control  = (XHCI_TRB_DATA << XHCI_TRB_TYPE_SHIFT);
         if (setup->bmRequestType & 0x80)
             trb.control |= XHCI_TRB_DIR_IN;
-        xhci_ring_enqueue(ring, &trb);
+        if (xhci_ring_enqueue(ring, &trb) < 0) { xhci_recover_ep(priv, slot, 1); return -1; }
     }
 
     memset(&trb, 0, sizeof(trb));
@@ -107,10 +132,10 @@ int xhci_control_transfer(usb_hc_t *hc, usb_device_t *dev,
         trb.control |= XHCI_TRB_DIR_IN;
     else if (!len)
         trb.control |= XHCI_TRB_DIR_IN;
-    xhci_ring_enqueue(ring, &trb);
+    if (xhci_ring_enqueue(ring, &trb) < 0) { xhci_recover_ep(priv, slot, 1); return -1; }
 
-    priv->cmd_done  = 0;
-    priv->cmd_error = 0;
+    ring->done  = 0;
+    ring->err   = 0;
     xhci_db_write32(priv, slot, 1);
 
     int rc = xhci_wait_transfer(priv, ring, 500);
@@ -138,13 +163,19 @@ int xhci_interrupt_transfer(usb_hc_t *hc, usb_device_t *dev,
     trb.param_hi = 0;
     trb.status   = len;
     trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
-    xhci_ring_enqueue(ring, &trb);
+    if (xhci_ring_enqueue(ring, &trb) < 0)
+        return -1;
 
-    priv->cmd_done  = 0;
-    priv->cmd_error = 0;
+    ring->done = 0;
+    ring->err  = 0;
     xhci_db_write32(priv, slot, dci);
 
-    return xhci_wait_transfer(priv, ring, 500) == 0 ? 0 : -1;
+    int rc = xhci_wait_transfer(priv, ring, 500);
+    if (rc != 0)
+        return -1;
+    uint32_t res = ring->last_residual;
+    if (res > len) res = len;
+    return (int)(len - res);
 }
 
 int xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
@@ -188,11 +219,13 @@ int xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
         trb.param_hi = 0;
         trb.status   = len;
         trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
-        xhci_ring_enqueue(ring, &trb);
+        if (xhci_ring_enqueue(ring, &trb) < 0) {
+            xhci_recover_ep(priv, slot, dci);
+            return -1;
+        }
 
-        priv->cmd_done  = 0;
-        priv->cmd_error = 0;
         ring->done       = 0;
+        ring->err        = 0;
         ring->xfer_buf   = buf;
         ring->xfer_len   = len;
         ring->xfer_armed = 1;
@@ -204,7 +237,15 @@ int xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
         /* Completed (0), or completed with an error (1): the TRB is consumed
          * either way, so the endpoint is free again. */
         ring->xfer_armed = 0;
-        return rc == 0 ? len : -1;
+        if (rc != 0)
+            return -1;
+        /* Report the bytes actually transferred, not the requested length: a
+         * short bulk-IN carries its shortfall in the Transfer Residual field
+         * of the event.  Callers (the Wi-Fi RX path) size the record from the
+         * returned count. */
+        uint32_t res = ring->last_residual;
+        if (res > len) res = len;
+        return (int)(len - res);
     }
 
     /* Timed out.  For an IN the TRB stays armed — "no data yet", the chip NAKs

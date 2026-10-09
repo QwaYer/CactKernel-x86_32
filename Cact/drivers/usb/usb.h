@@ -8,6 +8,8 @@
 #define USB_SPEED_LOW   0
 #define USB_SPEED_FULL  1
 #define USB_SPEED_HIGH  2
+#define USB_SPEED_SUPER 3
+#define USB_SPEED_SUPER_PLUS 4
 
 
 #define USB_TRANSFER_CONTROL     0
@@ -207,6 +209,21 @@ typedef struct usb_hc {
     struct usb_hc *irq_next;
 
     struct usb_hc *next;
+
+    /* Optional: enumerate a device on a downstream port of a hub.  A controller
+     * that assigns USB addresses natively (xHCI, via Enable Slot + Address
+     * Device) must provide this; the generic path issues SET_ADDRESS over a
+     * control transfer, which needs an address the controller has not given the
+     * device yet.  NULL falls back to usb_device_enumerate(). */
+    struct usb_device *(*enumerate_hub_child)(struct usb_hc *hc,
+                                              struct usb_device *hub_dev,
+                                              uint8_t port, uint8_t speed);
+
+    /* Optional: tell the controller that a device is a hub (xHCI: set the Hub
+     * bit and Number of Ports in the slot context).  Called once the hub
+     * descriptor is known.  NULL if the controller does not need it. */
+    int (*update_hub)(struct usb_hc *hc, struct usb_device *hub_dev,
+                      uint8_t num_ports);
 } usb_hc_t;
 
 typedef struct usb_driver {

@@ -763,6 +763,17 @@ typedef struct cact_wlan_status {
     uint8_t  ssid[CACT_WLAN_SSID_MAX];
     int32_t  last_error;                   // -errno of the last failure (0 = none);
                                            // the only channel for bring-up errors
+    // Data-path counters for bring-up diagnosis (the driver never prints):
+    // read them after traffic has been attempted to see whether the netdev
+    // TX/RX moved anything and where it failed.
+    uint32_t tx_data;                      // data frames handed down by the stack
+    uint32_t tx_group;                     //   of those, broadcast/multicast (GTK)
+    uint32_t tx_fail;                      // data frames that did not reach the air
+    uint32_t rx_data;                      // data frames delivered up to the stack
+    uint32_t rx_group;                     //   of those, broadcast/multicast
+    uint32_t rx_bad;                       // our AP's protected frames dropped (MIC)
+    uint32_t rx_nokey;                     // protected, dropped: the key is not installed
+    uint32_t rx_other;                     // data frames from another BSS (dropped)
 } cact_wlan_status_t;
 
 #endif

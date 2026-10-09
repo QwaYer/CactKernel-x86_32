@@ -12,10 +12,13 @@
 void xhci_ring_init(xhci_ring_t *ring, xhci_trb_t *mem, uint32_t size) {
     ring->ring    = mem;
     ring->enqueue = 0;
+    ring->dequeue = 0;
     ring->cycle   = 1;
     ring->size    = size;
     ring->done        = 0;
     ring->err         = 0;
+    ring->last_cc     = 0;
+    ring->last_residual = 0;
     ring->xfer_buf   = 0;
     ring->xfer_len   = 0;
     ring->xfer_armed = 0;
@@ -27,8 +30,18 @@ void xhci_ring_init(xhci_ring_t *ring, xhci_trb_t *mem, uint32_t size) {
     link->control  = (XHCI_TRB_LINK << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_CYCLE | (1u << 1);
 }
 
-void xhci_ring_enqueue(xhci_ring_t *ring, xhci_trb_t *trb) {
+/* Queue one TRB.  The last slot is the Link TRB and is never used for data, so
+ * the ring holds size-1 entries; `(enqueue + 1) % (size - 1) == dequeue` is the
+ * full condition.  Returning -1 instead of overwriting a live TRB keeps a
+ * mis-sized ring from silently corrupting an in-flight TD. */
+int xhci_ring_enqueue(xhci_ring_t *ring, xhci_trb_t *trb) {
     uint32_t idx = ring->enqueue;
+    uint32_t next = idx + 1;
+    if (next >= ring->size - 1)
+        next = 0;
+    if (next == ring->dequeue)
+        return -1;                     /* ring full */
+
     xhci_trb_t *dst = &ring->ring[idx];
 
     dst->param_lo = trb->param_lo;
@@ -40,16 +53,18 @@ void xhci_ring_enqueue(xhci_ring_t *ring, xhci_trb_t *trb) {
         ctrl |= XHCI_TRB_CYCLE;
     dst->control = ctrl;
 
-    ring->enqueue++;
-    if (ring->enqueue >= ring->size - 1) {
+    if (next == 0) {
+        /* Wrap through the Link TRB: give it the cycle state the controller
+         * will be looking for and flip ours. */
         xhci_trb_t *link = &ring->ring[ring->size - 1];
         uint32_t lc = link->control & ~XHCI_TRB_CYCLE;
         if (ring->cycle)
             lc |= XHCI_TRB_CYCLE;
         link->control = lc;
-        ring->enqueue = 0;
         ring->cycle ^= 1;
     }
+    ring->enqueue = next;
+    return 0;
 }
 
 static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt);
@@ -152,10 +167,26 @@ int xhci_send_cmd(xhci_priv_t *priv, xhci_trb_t *trb) {
     priv->cmd_error  = 0;
     priv->cmd_result = 0;
     priv->cmd_done   = 0;
-    xhci_ring_enqueue(&priv->cmd_ring, trb);
+    if (xhci_ring_enqueue(&priv->cmd_ring, trb) < 0) {
+        pr_warn("xHCI: command ring full\n");
+        return -1;
+    }
     xhci_db_write32(priv, 0, 0);
-    return xhci_wait_flag(priv, &priv->cmd_done, &priv->cmd_error, 500,
-                          "command") == 0 ? 0 : -1;
+    int rc = xhci_wait_flag(priv, &priv->cmd_done, &priv->cmd_error, 500,
+                            "command");
+    if (rc < 0) {
+        /* Abort the command the controller never completed, then reap its
+         * Command Completion Event.  Without this the ring stays wedged and
+         * every later command times out too.  The CRCR value is written from
+         * the copy saved at init rather than read back: some controllers do
+         * not implement CRCR read-back and return 0, which would clobber the
+         * ring pointer. */
+        xhci_op_write32(priv, XHCI_OP_CRCR, priv->cmd_ring_phys | 0x1 | (1u << 2));
+        xhci_op_write32(priv, XHCI_OP_CRCR + 4, 0);
+        xhci_wait_flag(priv, &priv->cmd_done, &priv->cmd_error, 500, NULL);
+        return -1;
+    }
+    return rc == 0 ? 0 : -1;
 }
 
 static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
@@ -166,6 +197,7 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
     case XHCI_TRB_CMD_COMPLETE:
         priv->cmd_result = evt->control;
         priv->cmd_error  = (cc != XHCI_CC_SUCCESS) ? 1 : 0;
+        priv->cmd_cc     = cc;
         priv->cmd_done   = 1;
         break;
 
@@ -206,8 +238,11 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
             re_trb.param_lo = xhci_va_to_pa(s->buf);
             re_trb.status   = s->len;
             re_trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
-            xhci_ring_enqueue(&s->ring, &re_trb);
-            xhci_db_write32(priv, slot, dci);
+            if (s->ring) {
+                s->ring->dequeue = s->ring->enqueue;
+                if (xhci_ring_enqueue(s->ring, &re_trb) == 0)
+                    xhci_db_write32(priv, slot, dci);
+            }
             break;
         }
 
@@ -221,6 +256,10 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
                 xhci_ring_t *er = &priv->ep_rings[slot][dci - 1];
                 er->err  = (cc == XHCI_CC_SUCCESS ||
                             cc == XHCI_CC_SHORT_PACKET) ? 0 : 1;
+                er->last_cc       = cc;
+                er->last_residual = evt->status & 0x00FFFFFFu;
+                /* Everything up to enqueue was consumed by this TD. */
+                er->dequeue = er->enqueue;
                 er->done = 1;
             }
         }
@@ -228,11 +267,13 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
     }
 
     case XHCI_TRB_PORT_STATUS: {
+        /* Record the port and let the hotplug task reset/enumerate.  The change
+         * latches are deliberately left set: clearing them here would race the
+         * task's own read of PORTSC, and the xHC does not re-post the event
+         * until software clears them. */
         uint8_t port = (uint8_t)((evt->param_lo >> 24) & 0xFF) - 1;
-        uint32_t sc = xhci_portsc_read(priv, port);
-        uint32_t changes = sc & XHCI_PORTSC_RW1C_BITS;
-        if (changes)
-            xhci_portsc_clear_change(priv, port, changes);
+        if (port < priv->max_ports)
+            xhci_mark_port(priv, port);
         break;
     }
 
@@ -254,21 +295,31 @@ void xhci_handle_irq(usb_hc_t *hc) {
         if (priv->quirks & XHCI_QUIRK_SPURIOUS_REBOOT) {
             pr_warn("xHCI: spurious host error ignored (Intel quirk)");
         } else {
-            /* A real HSE puts the xHC into a fatal state: clearing the bit
-             * is not enough, further register access just hangs the bus.
-             * Run a bounded software reset to bring it back to a halted,
-             * re-initialisable state instead of touching a dead controller. */
+            /* A real HSE puts the xHC into a fatal state: clearing the bit is
+             * not enough, further register access just hangs the bus.  Reset
+             * it here and hand the re-programming/re-enumeration to the
+             * hotplug task — that path sleeps and issues commands, which an
+             * interrupt handler may not. */
             pr_err("[XHCI] Host System Error! resetting controller\n");
             xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
             for (int i = 0; i < 100; i++) {
                 if (!(xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)) break;
                 xhci_udelay(1000);
             }
-            for (int i = 0; i < 100; i++) {
-                if (!(xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_CNR)) break;
-                xhci_udelay(1000);
-            }
-            return;   /* controller halted; needs full re-init before use */
+            xhci_op_write32(priv, XHCI_OP_USBSTS, xhci_op_read32(priv, XHCI_OP_USBSTS));
+            priv->reset_pending = 1;
+            return;
+        }
+    }
+
+    /* A port change latches PCD regardless of whether the controller posted a
+     * Port Status Change Event; whatever the reason, each port that carries a
+     * change bit is handed to the hotplug task. */
+    if (sts & XHCI_STS_PCD) {
+        xhci_op_write32(priv, XHCI_OP_USBSTS, XHCI_STS_PCD);
+        for (uint8_t p = 0; p < priv->max_ports; p++) {
+            if (xhci_portsc_read(priv, p) & XHCI_PORTSC_RW1C_BITS)
+                xhci_mark_port(priv, p);
         }
     }
 
