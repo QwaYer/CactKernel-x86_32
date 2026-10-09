@@ -67,6 +67,15 @@ static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms) {
         return -EAGAIN;
     }
 
+    /* Terminated while running (a tick handled a terminating signal): do not
+     * park -- that would overwrite Zombie and resurrect us.  Switch away and
+     * leave the wait table untouched. */
+    if (current_task->state == TASK_ZOMBIE) {
+        irq_spinlock_release(&futex_lock);
+        schedule();
+        return -EINTR;   /* not reached: a Zombie task is not rescheduled */
+    }
+
     int slot = -1;
     for (int i = 0; i < FUTEX_MAX_WAITERS; i++) {
         if (!futex_waiters[i].task) { slot = i; break; }
@@ -81,7 +90,18 @@ static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms) {
 
     current_task->proc->sleep_until = deadline;
     current_task->proc->intr_wait   = 1;   /* a signal may wake us */
-    current_task->state = TASK_SLEEPING;
+    /* Park under `SCHEDULER_LOCK` (inside `task_park_state`): the Zombie check
+     * and the state write are atomic against the timer tick that marks a
+     * terminated task Zombie, so a terminating signal cannot slip between them
+     * and be clobbered by Sleeping (which would resurrect us). */
+    if (task_park_state(TASK_SLEEPING) != 0) {
+        futex_waiters[slot].task  = 0;
+        futex_waiters[slot].pd    = 0;
+        futex_waiters[slot].uaddr = 0;
+        irq_spinlock_release(&futex_lock);
+        schedule();
+        return -EINTR;   /* not reached: a Zombie task is not rescheduled */
+    }
     irq_spinlock_release(&futex_lock);
 
     /* sched_park_prev() puts us on the blocked queue (deadline 0) or the timer

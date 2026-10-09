@@ -341,6 +341,12 @@ fn resolve_once(name: &str, dns_host: u32, query_buf: &mut [u8]) -> Option<u32> 
     // counter; it takes no pointers and is callable from task context.
     while unsafe { ffi_kernel::timer_ticks_get() } < deadline {
         stack::stack_poll();
+        // A pending signal ends the lookup instead of waiting out the whole
+        // deadline: the resolver runs in the caller's task context, so Ctrl+C
+        // must be able to stop it.
+        if crate::socket::signal_pending() {
+            return None;
+        }
         // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
         // counter; it takes no pointers and is callable from task context.
         let now = unsafe { ffi_kernel::timer_ticks_get() };
@@ -406,14 +412,32 @@ pub unsafe extern "C" fn rust_net_dns_resolve_a(name: *const c_char, out_ip_host
     // are readable.
     let host = unsafe { core::slice::from_raw_parts(name.cast::<u8>(), len) };
     // The resolver owns one shared socket, so only one query may be in flight:
-    // a second task waits here instead of stealing the first one's reply.
-    // SAFETY: `DNS_SEMA` is a kernel-lifetime `Semaphore` initialised by
-    // `init_socket`; `down`/`up` are the matching kernel C services.
-    unsafe { ffi_kernel::down(core::ptr::addr_of_mut!(DNS_SEMA)) };
+    // a second task waits here instead of stealing the first one's reply.  The
+    // wait is a poll-and-sleep rather than `down()`, because `down()` parks the
+    // task in a way no signal wakes — a resolver would then be unkillable for
+    // the duration of the (up to 3 s) lookup held by the other task.
+    loop {
+        if crate::socket::signal_pending() {
+            return -4; // EINTR
+        }
+        // SAFETY: `DNS_SEMA` is a kernel-lifetime `Semaphore` initialised by
+        // `init_socket`; `sema_try_down` is its matching non-blocking kernel
+        // service and takes no other lock.
+        if unsafe { ffi_kernel::sema_try_down(core::ptr::addr_of_mut!(DNS_SEMA)) } == 0 {
+            break;
+        }
+        // SAFETY: `sched_sleep_ticks` is a kernel C service taking a plain tick
+        // count; it takes no pointers and is callable from task context.
+        unsafe { sched::timer_wheel::sched_sleep_ticks(1) };
+    }
     let resolved = resolve_a(host);
-    // SAFETY: as above — `DNS_SEMA` is a live kernel-lifetime semaphore and this is
-    // the matching release for the `down` taken just above.
+    // SAFETY: as above — `DNS_SEMA` is a live kernel-lifetime semaphore and this
+    // is the matching release for the token taken just above (whether or not the
+    // lookup was interrupted).
     unsafe { ffi_kernel::up(core::ptr::addr_of_mut!(DNS_SEMA)) };
+    if crate::socket::signal_pending() {
+        return -4; // EINTR
+    }
     match resolved {
         Some(ip) => {
             // SAFETY: the caller contract (see # Safety) makes `out_ip_host` a writable,

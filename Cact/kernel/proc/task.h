@@ -258,6 +258,11 @@ void task_reap();
 void schedule();
 int init_scheduler();
 void task_set_state(struct task_struct* t, task_state old_state, task_state new_state);
+/* Atomically park the *current* task in `blocked_state` (TASK_SLEEPING/
+   TASK_WAITING) unless a terminating signal already marked it Zombie, in which
+   case it must NOT park (that would resurrect it).  Returns 0 if parked, 1 if
+   Zombie. */
+int task_park_state(uint32_t blocked_state);
 
 /* --- threads (sched/src/task_thread.rs, syscall/process/thread.c) --- */
 

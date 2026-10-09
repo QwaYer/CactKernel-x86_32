@@ -39,7 +39,7 @@ unsafe extern "C" {
 pub use cact_mm::kmalloc;
 // The scheduler's semaphore/lock entry points are `cact_sync`'s own
 // functions (Rust), called here by crate path instead of by C ABI.
-pub use cact_sync::{down, irq_spinlock_acquire, irq_spinlock_release, sema_init, up};
+pub use cact_sync::{down, irq_spinlock_acquire, irq_spinlock_release, sema_init, sema_try_down, up};
 pub use cact_mm::kmalloc_aligned;
 pub use cact_mm::kfree;
 

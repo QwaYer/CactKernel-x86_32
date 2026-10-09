@@ -82,12 +82,23 @@ fn mutex_lock_impl(m: &mut mutex_t) {
 
         let cur = sched_link::current_task_ptr();
         if !cur.is_null() && (m.waiter_count as usize) < MUTEX_WAIT_QUEUE_MAX {
+            let sched = sched_link::scheduler_lock_mut();
+            sched.acquire();
+
+            // Checked under `SCHEDULER_LOCK`, the same lock the timer tick holds
+            // when it marks the running task Zombie: the check and the state
+            // write are atomic against it, so a terminating signal cannot slip
+            // between them and be clobbered by `Sleeping`.
+            if sched_link::task_is_zombie(cur) {
+                sched.release();
+                m.guard.release();
+                sched_link::schedule_yield();
+                continue;
+            }
+
             let idx = m.waiter_count as usize;
             m.waiters[idx] = cur;
             m.waiter_count += 1;
-
-            let sched = sched_link::scheduler_lock_mut();
-            sched.acquire();
             sched_link::task_state_set(cur, TaskState::Sleeping);
             sched.release();
 

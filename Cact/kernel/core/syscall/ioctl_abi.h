@@ -763,6 +763,7 @@ typedef struct cact_wlan_status {
     uint8_t  ssid[CACT_WLAN_SSID_MAX];
     int32_t  last_error;                   // -errno of the last failure (0 = none);
                                            // the only channel for bring-up errors
+    int32_t  ccmp_selftest;                // 1 = the CCMP known-answer test passed
     // Data-path counters for bring-up diagnosis (the driver never prints):
     // read them after traffic has been attempted to see whether the netdev
     // TX/RX moved anything and where it failed.

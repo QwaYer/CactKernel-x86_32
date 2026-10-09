@@ -505,8 +505,15 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32, option
             return 0;
         }
 
+        // A terminating signal handled on a tick marks the running task Zombie;
+        // do not overwrite that with Waiting (it would park us and resurrect us
+        // instead of letting the parent reap us).
         // SAFETY: `cur` is the live current task.
-        unsafe { (*cur).state = TaskState::Waiting };
+        let cur_state = unsafe { (*cur).state };
+        if !matches!(cur_state, TaskState::Zombie) {
+            // SAFETY: `cur` is the live current task.
+            unsafe { (*cur).state = TaskState::Waiting };
+        }
         // SAFETY: the lock was acquired above.
         unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
         // SAFETY: `schedule` is the scheduler's core switch routine, called with the lock free.

@@ -82,6 +82,15 @@ fn sema_down_impl(s: &mut semaphore_t) {
         }
 
         let cur = sched_link::current_task_ptr();
+        if sched_link::task_is_zombie(cur) {
+            // Terminated while running: parking here would clobber the Zombie
+            // state and resurrect us (and leave a stale waiter entry).  Switch
+            // away instead; the scheduler leaves a Zombie task unqueued.
+            s.guard.release();
+            sched.release();
+            sched_link::schedule_yield();
+            continue;
+        }
         if !cur.is_null() && (s.waiter_count as usize) < MUTEX_WAIT_QUEUE_MAX {
             let idx = s.waiter_count as usize;
             s.waiters[idx] = cur;
@@ -97,6 +106,39 @@ fn sema_down_impl(s: &mut semaphore_t) {
             s.guard.release();
             sched.release();
             hal::pause_cpu();
+        }
+    }
+}
+
+/// Non-blocking `down`: take one token if one is free, otherwise return
+/// immediately without parking.
+///
+/// It exists so a caller that must stay interruptible (the shared DNS socket)
+/// can poll for the token between signal checks instead of parking in `down`,
+/// which no signal wakes.
+///
+/// Returns 0 when the token was taken, -1 when the semaphore is empty.
+///
+/// # Safety
+///
+/// `s` must be non-null and properly aligned, must point to an initialised
+/// `semaphore_t` that stays live for the duration of the call, and must not be
+/// accessed concurrently except through this semaphore's own operations.
+#[no_mangle]
+pub unsafe extern "C" fn sema_try_down(s: *mut semaphore_t) -> i32 {
+    // SAFETY: the caller contract (see # Safety) makes `s` a valid, aligned,
+    // unaliased pointer for the duration of the call.
+    let s = unsafe { &mut *s };
+    loop {
+        let cur_val = s.count.load(Ordering::Acquire);
+        if cur_val <= 0 {
+            return -1;
+        }
+        if s.count
+            .compare_exchange(cur_val, cur_val - 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            return 0;
         }
     }
 }

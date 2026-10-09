@@ -266,6 +266,23 @@ pub unsafe extern "C" fn sched_sleep_ticks(ticks: u32) {
         return;
     }
 
+    // A terminating signal handled on a tick marks the running task Zombie while
+    // it is still on the CPU.  Parking it here would rewrite Zombie -> Sleeping,
+    // `sched_park_prev` would queue it as a sleeper, and the task would be
+    // rescheduled — which is exactly why Ctrl+C did not stop a process looping in
+    // a sleep/poll (dhcpd's `recvfrom <= 0 → sleep(1)`).  Do not park a Zombie:
+    // switch away and leave it unqueued for its parent to reap.
+    // SAFETY: `cur` is the live current task (non-null checked above).
+    let cur_state = unsafe { (*cur).state };
+    if matches!(cur_state, TaskState::Zombie) {
+        // SAFETY: the lock was acquired above.
+        unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+        // SAFETY: `schedule` is the core switch routine, called with the lock free;
+        // `sched_park_prev` leaves a Zombie task unqueued, so it does not come back.
+        unsafe { crate::mlfq::schedule() };
+        return;
+    }
+
     // SAFETY: `sleep_wheel_mut` is the statically allocated `SLEEP_WHEEL`, mutated here under
     // `SCHEDULER_LOCK`.
     let sw = unsafe { &mut *sleep_wheel_mut() };

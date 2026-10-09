@@ -54,7 +54,10 @@ fn now_ticks() -> u32 {
 /// only acted on once the task returns to userspace (or the scheduler), so a
 /// task parked in a socket read could not be killed with Ctrl+C at all.  The
 /// signal is then delivered on the syscall-return path, as POSIX requires.
-fn signal_pending() -> bool {
+///
+/// The raw pending word is tested (job-control notifications included), the
+/// same way the tty read path does it.
+pub(crate) fn signal_pending() -> bool {
     // SAFETY: `task_signal_pending_current` is a kernel C service that reads the
     // current task's pending-signal word; it takes no pointers and is callable
     // from the syscall path that calls this helper.
@@ -152,18 +155,31 @@ extern "C" fn socket_read_op(node: *mut VfsNode, _off: u32, size: u32, buf: *mut
                 // SAFETY: `idx` is a valid smoltcp UDP slot index for the
                 // operation and `data` points to at least `size` writable bytes;
                 // the two null pointers select the "no peer/address output"
-                // overload.
+                // overload.  `udp_recv_buf` reports "nothing queued" as a
+                // negative sentinel, so a zero-length datagram (a legal read of
+                // 0 bytes) is no longer confused with an empty queue.
                 let n = unsafe {
-                    udp::udp_sock_recv(idx, data, size as u16, core::ptr::null_mut(), core::ptr::null_mut())
+                    udp::udp_recv_buf(idx, data, size as u16, core::ptr::null_mut(), core::ptr::null_mut())
                 };
-                if n != 0 {
+                // Any non-negative value is a dequeued datagram (possibly 0
+                // bytes long); report it immediately.
+                if n >= 0 {
                     return n;
+                }
+                if n != udp::EAGAIN {
+                    return -1;
                 }
                 if nonblock {
                     return -EAGAIN;
                 }
                 if signal_pending() {
                     return -EINTR;
+                }
+                // SAFETY: `ks` is still this node's live `Ksock` (the VFS holds
+                // the fd open for the whole operation); re-read the flag after
+                // the blocking wait, like the TCP branch does.
+                if unsafe { (*ks).shutdown_rd } != 0 {
+                    return -1;
                 }
                 if now_ticks() >= deadline {
                     // 0 keeps the long-standing "nothing yet" contract for
@@ -475,6 +491,96 @@ pub unsafe extern "C" fn ksock_set_nonblock(node: *mut VfsNode, on: c_int) -> c_
     // for the duration of the store.
     unsafe { (*ks).nonblock = if on != 0 { 1 } else { 0 } };
     0
+}
+
+/// `bind()` for an AF_INET socket: record the requested local port/address on
+/// the socket's slot, refusing a port already held by another socket unless
+/// `SO_REUSEADDR` was set (`reuseaddr` is that flag, already read from the row).
+///
+/// It lives in Rust so the table write happens under the same lock the poll
+/// thread takes — `tcp_lock` for TCP, `STACK_LOCK` for UDP.  The C `bind` used
+/// to write `tcp_sockets[]`/`udp_socks[]` directly while `net_poll_task` was
+/// reading them under those locks (a data race).
+///
+/// Returns 0, `-EADDRINUSE`, or -1 on a non-socket / invalid slot.
+#[no_mangle]
+pub extern "C" fn ksock_bind(node: *mut VfsNode, port: u16, ip_host: u32, reuseaddr: c_int) -> c_int {
+    const EADDRINUSE: c_int = 98;
+    // SAFETY: `ksock_from_node` type-checks `node`, so `ks` is null (checked) or
+    // a live `Ksock`.
+    let ks = unsafe { ksock_from_node(node) };
+    if ks.is_null() {
+        return -1;
+    }
+    // SAFETY: `ks` is this node's live `Ksock`; the field copies consume the
+    // shared borrow and end it before any table access below.
+    let (kind, idx, reuse) = unsafe {
+        let k = &*ks;
+        (k.kind, k.proto_idx, k.so_reuseaddr != 0 || reuseaddr != 0)
+    };
+    if kind == KS_TCP {
+        if idx < 0 || idx as usize >= TCP_MAX_SOCKETS {
+            return -1;
+        }
+        let i = idx as usize;
+        // SAFETY: `tcp_lock` serializes the TCP slot table against the poll
+        // thread's `sync_tcp_pcbs_from_smoltcp`, and `i` is bounds-checked above.
+        unsafe {
+            tcp::tcp_lock();
+            if port != 0 && !reuse {
+                let mut taken = false;
+                for j in 0..TCP_MAX_SOCKETS {
+                    if j != i
+                        && tcp::tcp_sockets[j].used != 0
+                        && tcp::tcp_sockets[j].local_port == port
+                    {
+                        taken = true;
+                        break;
+                    }
+                }
+                if taken {
+                    tcp::tcp_unlock();
+                    return -EADDRINUSE;
+                }
+            }
+            let s = &mut tcp::tcp_sockets[i];
+            s.local_port = port;
+            s.local_ip = ip_host;
+            tcp::tcp_unlock();
+        }
+        return 0;
+    }
+    if kind == KS_UDP {
+        if idx < 0 || idx as usize >= UDP_SOCK_MAX {
+            return -1;
+        }
+        let i = idx as usize;
+        // `udp_socks` is guarded by `STACK_LOCK` (the poll thread's
+        // `sync_udp_pcbs_from_smoltcp` runs under it), so the scan and the store
+        // go through `with_iface_sockets` instead of touching the table directly.
+        let r = crate::stack::with_iface_sockets(|_iface, _socks| {
+            // SAFETY: `i` is bounds-checked above and `with_iface_sockets` holds
+            // `STACK_LOCK` for the whole closure, so the scan and the store are
+            // serialized against every other UDP path.
+            unsafe {
+                if port != 0 && !reuse {
+                    for j in 0..UDP_SOCK_MAX {
+                        if j != i
+                            && udp::udp_socks[j].used != 0
+                            && udp::udp_socks[j].local_port == port
+                        {
+                            return EADDRINUSE as i32;
+                        }
+                    }
+                }
+                udp::udp_socks[i].local_port = port;
+                udp::udp_socks[i].local_ip = ip_host;
+                0i32
+            }
+        });
+        return r.unwrap_or(-1);
+    }
+    -1
 }
 
 /// Local address of a socket (`getsockname`).  Returns 0, or -1 when it has
