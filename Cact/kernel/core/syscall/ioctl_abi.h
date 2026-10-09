@@ -362,6 +362,8 @@ typedef struct cact_recvfrom_arg {
 #define CACT_NETCTL_NETCFG_GET   0x3406  // arg=cact_netcfg_get_t* (out): read link config
 #define CACT_NETCTL_PING_WAIT    0x3407  // arg=cact_ping_wait_arg_t*; returns RTT us or <0
 #define CACT_NETCTL_IFNAME       0x3408  // arg=char[CACT_IFNAME_MAX] (out): NIC name, -ENODEV if none
+#define CACT_NETCTL_IFACE_COUNT  0x3409  // no arg; returns the number of interfaces (NIC + lo)
+#define CACT_NETCTL_IFACE_GET    0x340A  // arg=cact_iface_get_arg_t*; in index, out interface info
 
 // Interface name as the driver registered it ("eth0", "wlan0").  A separate
 // ioctl rather than a field in cact_netcfg_get_t so that binaries built against
@@ -404,6 +406,28 @@ typedef struct cact_netcfg_get {
     uint8_t  mac[6];       // NIC hardware address
     uint32_t link_up;      // 1 when a NIC is registered / the link is up
 } cact_netcfg_get_t;
+
+// Per-interface view (CACT_NETCTL_IFACE_GET).  Index 0 is the NIC, index 1 is
+// the loopback interface (`lo`); CACT_NETCTL_IFACE_COUNT reports how many are
+// present.  The old single-NIC ioctls above stay for binaries built against
+// them.  Byte-compatible with `CactIfaceInfo` in rust_net/src/iface.rs.
+#define CACT_IFACE_FLAG_LOOPBACK  0x1u
+
+typedef struct cact_iface_info {
+    char     name[CACT_IFNAME_MAX]; // NUL-terminated ("eth0", "wlan0", "lo")
+    uint32_t ip_host;               // 0 = unnumbered
+    uint32_t netmask_host;          // 0 = no address
+    uint32_t gateway_host;          // 0 = no default route
+    uint32_t dns_host;              // 0 = no resolver
+    uint8_t  mac[6];                // all-zero for a non-Ethernet interface (lo)
+    uint32_t link_up;               // 1 when the interface is up
+    uint32_t flags;                 // CACT_IFACE_FLAG_*
+} cact_iface_info_t;
+
+typedef struct cact_iface_get_arg {
+    uint32_t index;                 // in
+    cact_iface_info_t info;         // out
+} cact_iface_get_arg_t;
 
 // ===========================================================================
 // /dev/sys control (privileged, root only). RANGE 0x3500.

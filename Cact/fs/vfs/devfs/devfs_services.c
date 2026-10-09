@@ -390,6 +390,22 @@ static int _net_ioctl(void *p, uint32_t cmd, void *arg) {
         return copy_to_user(arg, name, sizeof(name));
     }
 
+    case CACT_NETCTL_IFACE_COUNT: {
+        return rust_net_iface_count();
+    }
+
+    case CACT_NETCTL_IFACE_GET: {
+        cact_iface_get_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        cact_iface_info_t info;
+        memset(&info, 0, sizeof(info));
+        if (rust_net_iface_get(a.index, &info) < 0) return -ENODEV;
+        a.info = info;
+        if (copy_to_user(arg, &a, sizeof(a)) != 0) return -EFAULT;
+        return 0;
+    }
+
     default:
         return -EINVAL;
     }

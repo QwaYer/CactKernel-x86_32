@@ -79,11 +79,11 @@ pub unsafe extern "C" fn register_netdev(drv: *mut NetDriver) {
     // SAFETY: `my_mac` is a kernel-lifetime static written only here and in
     // `unregister_netdev`, on the same single-threaded path.
     unsafe { my_mac = mac };
+    // The stack (and with it loopback) already exists from `net_init`;
+    // `stack_init` is a no-op then.  Attach this NIC's hardware address to it.
     stack::stack_init();
-    ffi_kernel::klog_static(
-        ffi_kernel::LOG_OK,
-        b"NIC driver registered; L3 stack initialized\0",
-    );
+    stack::stack_set_nic_mac(mac.b);
+    ffi_kernel::klog_static(ffi_kernel::LOG_OK, b"NIC driver registered\0");
 }
 
 /// Clear `active_nic` only if it still points at `drv` (symmetric to registration).
@@ -102,10 +102,12 @@ pub extern "C" fn unregister_netdev(drv: *mut NetDriver) {
         unsafe { active_nic = core::ptr::null_mut() };
         // SAFETY: as above, for the kernel-lifetime `my_mac` static.
         unsafe { my_mac = MacAddr { b: [0; 6] } };
-        // SAFETY: `stack_teardown` tears the L3 stack down; the caller contract
-        // (this runs on the single-threaded driver teardown path) makes that the
-        // exclusive accessor at this point.
+        // Loopback must survive a NIC unload, so rebuild the stack in its
+        // NIC-less (loopback-only) form instead of tearing it down and leaving it
+        // down.  Both calls run on the single-threaded driver teardown path.
+        // SAFETY: `stack_teardown`'s caller contract is exactly this path.
         unsafe { stack::stack_teardown() };
+        stack::stack_init();
     }
 }
 
@@ -198,14 +200,17 @@ pub unsafe extern "C" fn rust_net_get_ifname(out: *mut u8, cap: u32) -> i32 {
 #[no_mangle]
 pub extern "C" fn net_init() {
     // SAFETY: `net_sema` is a kernel-lifetime semaphore static; `sema_init`
-    // initialises it once, before any task can wait on it (this runs from the
-    // single-threaded driver-registration path).
+    // initialises it once, before any task can wait on it (this runs once from
+    // the single-threaded boot path, after the scheduler exists).
     unsafe { ffi_kernel::sema_init(core::ptr::addr_of_mut!(net_sema), 0) };
     // SAFETY: `create_task` spawns a kernel task from the given (valid, `'static`)
     // entry point; it is called here on the same single-threaded path.
     unsafe { let _ = sched::task::create_task(net_poll_task as *const core::ffi::c_void); }
     // SAFETY: as above, for the periodic timer task.
     unsafe { let _ = sched::task::create_task(net_timer_task as *const core::ffi::c_void); }
+    // Bring the L3 stack up now, so loopback exists without any NIC module; a
+    // later `register_netdev` only attaches the NIC's hardware address to it.
+    stack::stack_init();
     ffi_kernel::klog_static(
         ffi_kernel::LOG_OK,
         b"  net         : ready (net_poll_task, RX semaphore, timer kick)\0",

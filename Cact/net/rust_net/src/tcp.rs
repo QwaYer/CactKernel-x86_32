@@ -3,7 +3,7 @@
 use core::net::Ipv4Addr;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use smoltcp::iface::{Interface, SocketHandle, SocketSet};
+use smoltcp::iface::{SocketHandle, SocketSet};
 use smoltcp::socket::tcp;
 use smoltcp::wire::IpAddress;
 
@@ -202,7 +202,7 @@ pub(crate) unsafe fn reset_tcp_smoltcp_state() {
     }
 }
 
-pub fn sync_tcp_pcbs_from_smoltcp(iface: &mut Interface, socks: &mut SocketSet<'static>) {
+pub fn sync_tcp_pcbs_from_smoltcp(socks: &mut SocketSet<'static>) {
     // This is called from `stack_poll`/`stack_teardown` while `STACK_LOCK` is
     // held, which is the same lock every other path takes before touching
     // `tcp_sockets`/`TCP_HANDLE`; `tcp_lock` additionally keeps the same accesses
@@ -263,7 +263,6 @@ pub fn sync_tcp_pcbs_from_smoltcp(iface: &mut Interface, socks: &mut SocketSet<'
         } else {
             sock.set_keep_alive(None);
         }
-        let _ = iface;
     }
     tcp_unlock();
 }

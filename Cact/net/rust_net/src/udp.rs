@@ -421,7 +421,7 @@ pub unsafe extern "C" fn udp_sock_send(
         return -1;
     }
     let i = idx as usize;
-    let r = stack::with_iface_sockets(|iface, socks| {
+    let r = stack::with_iface_sockets(|_iface, socks| {
         // `with_iface_sockets` holds `STACK_LOCK` for the whole closure, so the
         // `udp_socks`/`UDP_HANDLE` accesses and `pick_ephemeral` are serialized
         // against every other UDP path, and `i` is bounds-checked above.
@@ -462,14 +462,19 @@ pub unsafe extern "C" fn udp_sock_send(
                 return -1;
             }
             let mut meta = udp::UdpMetadata::from((dst_a, dst_port));
-            // A DHCP client broadcasts its DISCOVER before it has an address.
-            // smoltcp picks the IPv4 source from the interface's address list
-            // and, on an unnumbered interface, finds none and silently drops the
-            // datagram — so `sendto` still reports success while nothing leaves
-            // the card ("no offer received").  Pin the source to 0.0.0.0 for a
-            // broadcast while the interface has no address of its own; once
-            // userspace configures one (net_apply), normal selection resumes.
-            if dst_ip == u32::MAX && iface.ipv4_addr().is_none() {
+            // Pin the IPv4 source explicitly where smoltcp's default (the first
+            // interface address) would be wrong:
+            //  * a 127/8 peer must be sourced from 127.0.0.1 (the interface also
+            //    carries the configured NIC address, which is what smoltcp would
+            //    otherwise pick);
+            //  * a DHCP client broadcasts its DISCOVER before it has an address,
+            //    and with no configured address smoltcp still picks the always
+            //    present 127.0.0.1 instead of 0.0.0.0 — which the network would
+            //    drop, silently, while `sendto` reports success ("no offer
+            //    received").
+            if crate::stack::is_loopback_ipv4_host(dst_ip) {
+                meta.local_address = Some(IpAddress::Ipv4(core::net::Ipv4Addr::new(127, 0, 0, 1)));
+            } else if dst_ip == u32::MAX && crate::config::ip_host() == 0 {
                 meta.local_address = Some(IpAddress::Ipv4(core::net::Ipv4Addr::UNSPECIFIED));
             }
             match s.send_slice(slice, meta) {
