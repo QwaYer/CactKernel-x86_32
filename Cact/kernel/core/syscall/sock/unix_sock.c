@@ -38,6 +38,13 @@
 #ifndef EMFILE
 #define EMFILE 24
 #endif
+#ifndef EINTR
+#define EINTR 4
+#endif
+
+/* The blocking AF_UNIX loops sleep on the timer wheel (like the tty and AF_INET
+   paths) instead of busy-yielding on the scheduler. */
+extern void sched_sleep_ticks(uint32_t ticks);
 #ifndef ENOENT
 #define ENOENT 2
 #endif
@@ -471,7 +478,7 @@ static int ep_write_payload(unix_ep_t *ep, const char *ubuf, uint32_t size) {
             mutex_unlock(&peer->lock);
             if (!validate_user_ptr(ubuf + written, 1))
                 return written ? (int)written : -1;
-            schedule();
+            sched_sleep_ticks(1);
             continue;
         }
         uint32_t chunk = size - written;
@@ -482,7 +489,7 @@ static int ep_write_payload(unix_ep_t *ep, const char *ubuf, uint32_t size) {
         if (written == size) break;
         if (!validate_user_ptr(ubuf + written, 1))
             return written ? (int)written : -1;
-        schedule();
+        sched_sleep_ticks(1);
     }
     return (int)written;
 }
@@ -533,7 +540,7 @@ static int unix_node_read(vfs_node_t *node, uint32_t off, uint32_t size,
         if (ep->nonblock) return -EAGAIN;
         if (task_signal_pending_current()) return -EINTR;
         if (!validate_user_ptr(buf, size)) return -1;
-        schedule();
+        sched_sleep_ticks(1);
     }
 }
 
@@ -568,7 +575,7 @@ static int unix_node_write(vfs_node_t *node, uint32_t off, uint32_t size,
                 return written ? (int)written : -EINTR;
             if (!validate_user_ptr(buf + written, 1))
                 return written ? (int)written : -1;
-            schedule();
+            sched_sleep_ticks(1);
             continue;
         }
         uint32_t chunk = size - written;
@@ -583,7 +590,7 @@ static int unix_node_write(vfs_node_t *node, uint32_t off, uint32_t size,
         if (task_signal_pending_current()) return (int)written;
         if (!validate_user_ptr(buf + written, 1))
             return written ? (int)written : -1;
-        schedule();
+        sched_sleep_ticks(1);
     }
     return (written > 0x7FFFFFFFu) ? 0x7FFFFFFF : (int)written;
 }
@@ -848,7 +855,10 @@ static int unix_accept_ioctl(unix_ep_t *ep, void *arg) {
             return fd;
         }
 
-        schedule();                /* no pending connection yet */
+        /* A blocking accept() must yield to a pending signal, like the read
+           path: returning lets the syscall-return path deliver it (Ctrl+C). */
+        if (task_signal_pending_current()) return -EINTR;
+        sched_sleep_ticks(1);                /* no pending connection yet */
     }
 }
 
@@ -960,7 +970,8 @@ static int unix_recvmsg_ioctl(unix_ep_t *ep, void *arg) {
                     (ep->fdq_len > 0 && a.fds_cap > 0);
         mutex_unlock(&ep->lock);
         if (ready) break;
-        schedule();
+        if (task_signal_pending_current()) return -EINTR;
+        sched_sleep_ticks(1);
     }
 
     /* payload */

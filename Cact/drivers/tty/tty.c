@@ -190,14 +190,13 @@ void tty_input(int idx, char c) {
     if (i < 1 || i > TTY_MAX) return;
 
     tty_termios_t *t = &tio[i];
-
-    if (!(t->c_lflag & TTY_ICANON)) {
-        in_push(i, c);                // raw: straight to the reader
-        return;
-    }
-
     unsigned char uc = (unsigned char)c;
 
+    /* ISIG works independently of ICANON (POSIX/Linux): a raw-mode reader that
+     * leaves ISIG set still gets ^C/^\ /^Z as signals.  Only a reader that
+     * explicitly clears ISIG (e.g. the shell's line editor) receives them as
+     * bytes. Recognising them here, before the raw-mode hand-off, is what makes
+     * Ctrl+C stop a foreground command whose terminal is non-canonical. */
     if (t->c_lflag & TTY_ISIG) {
         if (uc == t->c_cc[TTY_VINTR]) {
             if (terminal_fg_pid) {
@@ -229,6 +228,11 @@ void tty_input(int idx, char c) {
             }
             return;
         }
+    }
+
+    if (!(t->c_lflag & TTY_ICANON)) {
+        in_push(i, c);                // raw: straight to the reader
+        return;
     }
 
     if (uc == t->c_cc[TTY_VEOF]) {

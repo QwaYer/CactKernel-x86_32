@@ -303,7 +303,17 @@ pub extern "C" fn udp_sock_find_by_port(port: u16) -> *mut UdpSock {
     core::ptr::null_mut()
 }
 
-/// Receive one datagram.
+/// `recv()` reported no datagram queued (nothing to read right now).  Distinct
+/// from a queued zero-length datagram, which must be delivered as a read of 0
+/// bytes rather than reported as "nothing yet".  Negative so it can never be
+/// confused with a byte count (0 is a legal empty datagram).
+pub(crate) const EAGAIN: i32 = -11;
+
+/// Dequeue one datagram, distinguishing "nothing queued" from "a zero-length
+/// datagram was queued".
+///
+/// Returns `-1` on a hard error, `EAGAIN` when no datagram is waiting, or the
+/// number of bytes copied (which may be 0 for a legal zero-length datagram).
 ///
 /// # Safety
 ///
@@ -311,8 +321,7 @@ pub extern "C" fn udp_sock_find_by_port(port: u16) -> *mut UdpSock {
 /// to `max_len` writable bytes that stay live for the call.  `src_ip_out` and
 /// `src_port_out` may be null (that part of the result is dropped) but, if
 /// non-null, must point to a writable, aligned `u32`/`u16` respectively.
-#[no_mangle]
-pub unsafe extern "C" fn udp_sock_recv(
+pub(crate) unsafe fn udp_recv_buf(
     idx: i32,
     buf: *mut u8,
     max_len: u16,
@@ -336,7 +345,7 @@ pub unsafe extern "C" fn udp_sock_recv(
             };
             let s = socks.get_mut::<udp::Socket>(h);
             let Ok((data, meta)) = s.recv() else {
-                return 0;
+                return EAGAIN;
             };
             let to_copy = core::cmp::min(data.len(), max_len as usize);
             // SAFETY: the caller contract (see # Safety) makes `buf` a
@@ -369,6 +378,31 @@ pub unsafe extern "C" fn udp_sock_recv(
     r.unwrap_or(-1)
 }
 
+/// C-ABI `recv()` for datagram sockets.  Keeps the long-standing contract that
+/// "nothing queued" is reported as 0 (Cact-dhcpd's `recvfrom <= 0 → sleep(1)`
+/// loop depends on it); the crate-internal path uses [`udp_recv_buf`] to tell
+/// that apart from a zero-length datagram.
+///
+/// # Safety
+///
+/// As [`udp_recv_buf`].
+#[no_mangle]
+pub unsafe extern "C" fn udp_sock_recv(
+    idx: i32,
+    buf: *mut u8,
+    max_len: u16,
+    src_ip_out: *mut u32,
+    src_port_out: *mut u16,
+) -> i32 {
+    // SAFETY: the caller contract is forwarded verbatim to `udp_recv_buf`.
+    let r = unsafe { udp_recv_buf(idx, buf, max_len, src_ip_out, src_port_out) };
+    if r == EAGAIN {
+        0
+    } else {
+        r
+    }
+}
+
 /// Send one datagram.
 ///
 /// # Safety
@@ -387,7 +421,7 @@ pub unsafe extern "C" fn udp_sock_send(
         return -1;
     }
     let i = idx as usize;
-    let r = stack::with_iface_sockets(|_iface, socks| {
+    let r = stack::with_iface_sockets(|iface, socks| {
         // `with_iface_sockets` holds `STACK_LOCK` for the whole closure, so the
         // `udp_socks`/`UDP_HANDLE` accesses and `pick_ephemeral` are serialized
         // against every other UDP path, and `i` is bounds-checked above.
@@ -427,7 +461,18 @@ pub unsafe extern "C" fn udp_sock_send(
             if len as usize > s.payload_send_capacity() {
                 return -1;
             }
-            match s.send_slice(slice, (dst_a, dst_port)) {
+            let mut meta = udp::UdpMetadata::from((dst_a, dst_port));
+            // A DHCP client broadcasts its DISCOVER before it has an address.
+            // smoltcp picks the IPv4 source from the interface's address list
+            // and, on an unnumbered interface, finds none and silently drops the
+            // datagram — so `sendto` still reports success while nothing leaves
+            // the card ("no offer received").  Pin the source to 0.0.0.0 for a
+            // broadcast while the interface has no address of its own; once
+            // userspace configures one (net_apply), normal selection resumes.
+            if dst_ip == u32::MAX && iface.ipv4_addr().is_none() {
+                meta.local_address = Some(IpAddress::Ipv4(core::net::Ipv4Addr::UNSPECIFIED));
+            }
+            match s.send_slice(slice, meta) {
                 Ok(()) => len as i32,
                 // Transient: the TX buffer still holds other datagrams.  0 means
                 // "nothing queued, retry after POLLOUT" (same convention as

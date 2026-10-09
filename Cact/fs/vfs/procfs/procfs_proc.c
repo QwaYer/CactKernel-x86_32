@@ -347,7 +347,11 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         current_task->proc->saved_signal_mask = current_task->proc->signal_mask;
         current_task->proc->signal_mask = sigmask & ~_SIG_UNCATCHABLE;
         current_task->proc->in_sigsuspend = 1;
-        current_task->state = TASK_SLEEPING;
+        /* Park atomically: `task_park_state` does the Zombie check under
+         * SCHEDULER_LOCK, so the tick that marks a terminated task Zombie cannot
+         * slip in between the check and the state write and resurrect us.  If
+         * the task is already Zombie it is left as-is and switched away. */
+        (void)task_park_state(TASK_SLEEPING);
         schedule();   // woken by a delivered signal
         return -1;
     }

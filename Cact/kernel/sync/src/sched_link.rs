@@ -77,3 +77,19 @@ pub(crate) fn task_state_set(t: *mut TaskStruct, st: TaskState) {
         }
     }
 }
+
+/// True when `t` has been marked Zombie — a terminating signal was handled for
+/// it while it was running.  A park path must then NOT overwrite the state with
+/// `Sleeping`/`Waiting`: that resurrects the task (it gets queued as a sleeper
+/// and rescheduled) and it is never reaped, so a process looping on
+/// `recvfrom <= 0 → sleep(1)` would ignore Ctrl+C forever.
+#[inline]
+pub(crate) fn task_is_zombie(t: *mut TaskStruct) -> bool {
+    if t.is_null() {
+        return false;
+    }
+    // SAFETY: the null check above rules out the dangling case and callers pass
+    // a live task pointer; `state` is a plain enum field, so reading it is in
+    // bounds and properly aligned.
+    unsafe { matches!((*t).state, TaskState::Zombie) }
+}

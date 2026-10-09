@@ -123,6 +123,13 @@ int ksock_shutdown(vfs_node_t *node, int how);
    Returns 0, or -1 when the node is not a socket. */
 int ksock_set_nonblock(vfs_node_t *node, int on);
 
+/* bind() for an AF_INET socket: record the local port/address in the Rust
+   socket table under the lock the poll thread uses, refusing a port already
+   held by another socket unless SO_REUSEADDR was set.  Lives in Rust (not the
+   C syscall) so the write is serialized against net_poll_task, which used to
+   race the direct table store here.  Returns 0, -EADDRINUSE, or -1. */
+int ksock_bind(vfs_node_t *node, uint16_t port, uint32_t ip_host, int reuseaddr);
+
 /* getsockname()/getpeername(): fill `out` (kernel struct sockaddr_in, the same
    layout as cact_sockaddr_in_t plus family/zero fields).  Returns 0, or -1 when
    the socket has no such address yet (peer of an unconnected socket, a TCP

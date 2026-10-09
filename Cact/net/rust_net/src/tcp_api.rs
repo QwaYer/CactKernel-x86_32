@@ -90,6 +90,7 @@ const CONNECT_TIMEOUT_TICKS: u32 = 600;
 
 const ECONNREFUSED: i32 = 111;
 const ETIMEDOUT: i32 = 110;
+const EINTR: i32 = 4;
 
 /// `connect()` only queues the SYN and leaves the socket in SYN-SENT; the SYN
 /// is dispatched by the next stack poll and ESTABLISHED needs the peer's
@@ -107,6 +108,13 @@ fn wait_connected(sock: i32) -> i32 {
                 return -ECONNREFUSED;
             }
             _ => {}
+        }
+        // A pending signal ends the wait: otherwise Ctrl+C during a connect to
+        // an unreachable peer would be ignored for the whole 6 s timeout.  The
+        // SYN keeps retransmitting in the background, so a caller that retries
+        // connect() is not left in a bad state.
+        if crate::socket::signal_pending() {
+            return -EINTR;
         }
         // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
         // counter; it takes no pointers and is callable from task context.
@@ -154,21 +162,43 @@ pub extern "C" fn tcp_connect(sock: i32, dst_ip: u32, dst_port: u16) -> i32 {
             let p = if bound != 0 {
                 bound
             } else {
-                // SAFETY: `NEXT_EPHEMERAL` is read under `tcp_lock`, so the
-                // ephemeral counter cannot race another `connect`.
-                let p = unsafe { NEXT_EPHEMERAL };
-                let next = p.wrapping_add(1);
-                // SAFETY: the advanced counter is stored under the same lock.
-                unsafe { NEXT_EPHEMERAL = next };
-                if next < 49152 {
-                    // SAFETY: the wrap-around clamp is stored under the same lock.
-                    unsafe { NEXT_EPHEMERAL = 49152 };
+                // Pick an ephemeral port no other TCP slot already holds, the way
+                // UDP's `pick_ephemeral` does.  The old code just walked a
+                // counter, so a long-lived system could hand out a source port
+                // that an explicitly bound or already-connected socket was
+                // using.
+                let mut chosen = 0u16;
+                for _ in 0..(65535 - 49152 + 1) {
+                    // SAFETY: `NEXT_EPHEMERAL` is read/written under `tcp_lock`,
+                    // so the counter cannot race another `connect`.
+                    let cand = unsafe { NEXT_EPHEMERAL };
+                    let next = if cand == u16::MAX { 49152 } else { cand + 1 };
+                    // SAFETY: the advanced counter is stored under the same lock.
+                    unsafe { NEXT_EPHEMERAL = next };
+                    let mut taken = false;
+                    for k in 0..TCP_MAX_SOCKETS {
+                        // SAFETY: `k` is in range and `tcp_lock` is held, so the
+                        // slot read cannot race the poll thread.
+                        if unsafe { tcp_sockets[k].used != 0 && tcp_sockets[k].local_port == cand } {
+                            taken = true;
+                            break;
+                        }
+                    }
+                    if !taken {
+                        chosen = cand;
+                        break;
+                    }
                 }
-                p
+                chosen
             };
             tcp_unlock();
             p
         };
+        if local_port == 0 {
+            // Every ephemeral port is taken (or none could be picked); smoltcp
+            // cannot connect without a source port.
+            return -1;
+        }
         let cx = iface.context();
         let dst = IpAddress::Ipv4(Ipv4Addr::from_bits(dst_ip));
         if s

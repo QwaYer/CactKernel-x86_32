@@ -52,32 +52,15 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
         if (!arg) return -EINVAL;
         if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
         uint16_t port = ntohs(a.addr.port);
-        if (ks->kind == KS_TCP) {
-            tcp_socket_t *s;
-            if (ks->proto_idx >= 0 && ks->proto_idx < TCP_MAX_SOCKETS)
-                s = &tcp_sockets[ks->proto_idx];
-            else return -1;
-            /* Two listeners on one port would fight over inbound SYNs, so refuse
-             * the second one unless SO_REUSEADDR was asked for (the same rule
-             * the UDP branch below already applies). */
-            if (port != 0 && !ks->so_reuseaddr) {
-                for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
-                    if (i == ks->proto_idx) continue;
-                    if (tcp_sockets[i].used && tcp_sockets[i].local_port == port)
-                        return -EADDRINUSE;
-                }
-            }
-            s->local_port = port;
-            s->local_ip   = htonl(rust_net_get_ip_host());
-            return 0;
-        }
-        if (ks->kind == KS_UDP) {
-            udp_sock_t *s = udp_sock_find_by_port(port);
-            if (s && s != &udp_socks[ks->proto_idx] && !ks->so_reuseaddr) return -1;
-            udp_socks[ks->proto_idx].local_port = port;
-            udp_socks[ks->proto_idx].local_ip   = ntohl(a.addr.addr);
-            return 0;
-        }
+        /* The port/address live in the Rust socket table, which net_poll_task
+         * also reads/writes; record them there so the store happens under the
+         * same lock (tcp_lock for TCP, STACK_LOCK for UDP) instead of racing
+         * the poll thread from C.  ksock_bind() also does the EADDRINUSE check
+         * under that lock. */
+        if (ks->kind == KS_TCP)
+            return ksock_bind(node, port, rust_net_get_ip_host(), ks->so_reuseaddr);
+        if (ks->kind == KS_UDP)
+            return ksock_bind(node, port, ntohl(a.addr.addr), ks->so_reuseaddr);
         return -1;
     }
 
@@ -90,8 +73,9 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
             /* connect() is synchronous here, so the caller gets the error
              * directly; recording it in so_error lets getsockopt(SO_ERROR)
              * report the same result afterwards (it is cleared when read, as
-             * POSIX says).  Before this, SO_ERROR always answered 0. */
-            if (r < 0) ks->so_error = -r;
+             * POSIX says).  An interrupted connect (-EINTR) is not a socket
+             * error — the caller may simply retry — so it must not be latched. */
+            if (r < 0 && r != -EINTR) ks->so_error = -r;
             return r;
         }
         /* Datagram sockets accept connect() too: it only records the peer, so
@@ -260,11 +244,17 @@ int sock_ioctl_dispatch(vfs_node_t *node, uint32_t cmd, void *arg) {
         if (ks->kind == KS_TCP) {
             ret = tcp_recv(ks->proto_idx, (uint8_t *)a.buf, (uint16_t)a.len);
             if (ret > 0) {
-                tcp_socket_t *s = &tcp_sockets[ks->proto_idx];
-                /* remote_ip holds a host-order number, so htonl() like the UDP
-                 * branch below; without it the address came back byte-swapped. */
-                a.src.addr = htonl(s->remote_ip);
-                a.src.port = htons(s->remote_port);
+                /* Ask smoltcp for the peer rather than reading the cached C
+                 * mirror, which net_poll_task refreshes only once per poll: a
+                 * just-connected or just-accepted socket still reads 0 there.
+                 * ksock_getpeername fills network-order addr/port, which is
+                 * what a sockaddr_in wants. */
+                struct sockaddr_in nm;
+                memset(&nm, 0, sizeof(nm));
+                if (ksock_getpeername(node, &nm) == 0) {
+                    a.src.addr = nm.sin_addr;
+                    a.src.port = nm.sin_port;
+                }
             }
         } else if (ks->kind == KS_UDP) {
             uint32_t src_ip  = 0;

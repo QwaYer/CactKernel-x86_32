@@ -595,6 +595,52 @@ pub unsafe extern "C" fn task_set_state(
     }
 }
 
+/// Atomically park the current task in `blocked_state` (a `TASK_*` value)
+/// unless a terminating signal has already marked it Zombie.
+///
+/// The check and the state write happen under `SCHEDULER_LOCK` — the same lock
+/// the timer tick holds when it marks the running task Zombie — so the signal
+/// cannot slip between them and be overwritten by `Sleeping`/`Waiting`.  Such
+/// an overwrite resurrects the task (it gets queued as a sleeper and is
+/// rescheduled) and it is never reaped, so a process looping on a blocking call
+/// would ignore Ctrl+C forever.
+///
+/// Returns 0 when the task was parked, 1 when it is Zombie (the caller must
+/// then `schedule()` away without parking), -1 for no current task.
+///
+/// # Safety
+///
+/// Must be called from task context with `SCHEDULER_LOCK` free.
+#[no_mangle]
+pub unsafe extern "C" fn task_park_state(blocked_state: u32) -> i32 {
+    let ns = match blocked_state {
+        2 => TaskState::Sleeping,
+        4 => TaskState::Waiting,
+        _ => return -1,
+    };
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the caller must not hold it
+    // (see # Safety).
+    unsafe { crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
+    let cur = crate::task::current_task();
+    if cur.is_null() {
+        // SAFETY: the lock was acquired above.
+        unsafe { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+        return -1;
+    }
+    // SAFETY: `cur` is the live current task (non-null checked above).
+    let state = unsafe { (*cur).state };
+    if matches!(state, TaskState::Zombie) {
+        // SAFETY: the lock was acquired above.
+        unsafe { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+        return 1;
+    }
+    // SAFETY: `cur` is live and `SCHEDULER_LOCK` is held.
+    unsafe { (*cur).state = ns };
+    // SAFETY: the lock was acquired above.
+    unsafe { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+    0
+}
+
 #[path = "task_create.rs"]
 mod task_create;
 pub use task_create::*;

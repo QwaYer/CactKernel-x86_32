@@ -6,6 +6,15 @@
 
 extern void sched_sleep_ticks(uint32_t ticks);
 
+#ifndef EINTR
+#define EINTR 4
+#endif
+
+/* SIGCHLD (bit 6) | SIGWINCH (bit 9): job-control notifications are *reported*
+   to the application, not delivered, so they must not abort a poll/select wait
+   (the same rule the tty read path follows). */
+#define SC_JC_MASK (~((1u << 6) | (1u << 9)))
+
 int sys_pipe(struct syscall_frame *regs) {
     int *user_fds = (int *)regs->ebx;
     if (!validate_user_ptr(user_fds, sizeof(int) * 2)) return -1;
@@ -118,7 +127,12 @@ int sys_select(struct syscall_frame *regs) {
             return ready;
         }
 
-        schedule();
+        /* A waiting select() must be interruptible: a signal with a handler is
+         * only delivered on syscall return, so without this a task parked in
+         * select() could not be killed with Ctrl+C.  Sleep one tick instead of
+         * busy-yielding on the scheduler, which burned a whole core. */
+        if (task_signal_pending_current() & SC_JC_MASK) return -EINTR;
+        sched_sleep_ticks(1);
     }
 }
 
@@ -132,15 +146,20 @@ int sys_poll(struct syscall_frame *regs) {
     // poll(NULL, 0, timeout) — pure sleep (nfds == 0).
     if (nfds <= 0) {
         if (timeout_ms == 0) return 0;
-        if (timeout_ms < 0) { for (;;) schedule(); }
-        // Sleep on the timer wheel rather than busy-yielding on the tick.  A
-        // full-CPU busy-wait per sleeper turned the one global scheduler lock
-        // into a cross-CPU storm once workers ran tasks, and the storm starved
-        // the master core's timer (so wall time barely advanced and every
-        // timing feature — sleep, caret blink, key repeat — stalled).
-        uint32_t ticks = (uint32_t)((timeout_ms + (1000 / 100) - 1) / (1000 / 100));
-        sched_sleep_ticks(ticks);
-        return 0;
+        int      sleep_infinite = (timeout_ms < 0);
+        uint32_t ticks = sleep_infinite
+                             ? 0u
+                             : (uint32_t)((timeout_ms + (1000 / 100) - 1) / (1000 / 100));
+        uint32_t sleep_deadline = timer_ticks_get() + ticks;
+        // Sleep on the timer wheel in one-tick slices rather than busy-yielding
+        // on the tick, and stay interruptible: a bare sleep must still honour
+        // Ctrl+C.
+        for (;;) {
+            if (task_signal_pending_current() & SC_JC_MASK) return -EINTR;
+            if (!sleep_infinite &&
+                (int32_t)(timer_ticks_get() - sleep_deadline) >= 0) return 0;
+            sched_sleep_ticks(1);
+        }
     }
     if ((uint32_t)nfds > UINT32_MAX / sizeof(struct pollfd)) return -1;
     if (!validate_user_ptr(fds_user, (uint32_t)nfds * sizeof(struct pollfd))) return -1;
@@ -200,6 +219,13 @@ int sys_poll(struct syscall_frame *regs) {
             return ready;
         }
 
-        schedule();
+        /* Interruptible wait; see the select() note above.  A blocking poll()
+         * used to busy-yield on schedule(), burning a core and ignoring Ctrl+C
+         * (the pending signal never reached a syscall-return). */
+        if (task_signal_pending_current() & SC_JC_MASK) {
+            kfree(fds);
+            return -EINTR;
+        }
+        sched_sleep_ticks(1);
     }
 }

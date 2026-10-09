@@ -42,6 +42,15 @@
 #ifndef EFAULT
 #define EFAULT 14
 #endif
+#ifndef EINTR
+#define EINTR 4
+#endif
+
+/* SIGCHLD (bit 6) | SIGWINCH (bit 9): job-control notifications are reported
+   to the application, not delivered, so they must not abort epoll_wait(). */
+#define EP_JC_MASK (~((1u << 6) | (1u << 9)))
+
+extern void sched_sleep_ticks(uint32_t ticks);
 
 #define EPOLL_MAX_ENTRIES 128
 
@@ -271,11 +280,18 @@ static int _epoll_wait(vfs_node_t *node, void *arg) {
             if (rc != 0) return -EFAULT;
             return got;
         }
-        schedule();
+        /* A blocking epoll_wait() must be interruptible (a caught signal is
+         * only delivered on syscall return) and must not busy-yield on
+         * schedule(), which burned a core. */
+        if (task_signal_pending_current() & EP_JC_MASK) {
+            kfree(out);
+            return -EINTR;
+        }
         if (!_is_epoll(node)) {
             kfree(out);
             return -1;
         }
+        sched_sleep_ticks(1);
     }
 }
 

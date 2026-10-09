@@ -60,6 +60,11 @@ pub unsafe fn ping_wait_host(
             }
             return rtt.min(i32::MAX as u64) as c_int;
         }
+        // A pending signal ends the wait with EINTR instead of burning the whole
+        // timeout: Ctrl+C during `ping -W` should stop it, not be ignored.
+        if crate::socket::signal_pending() {
+            return -4; // EINTR
+        }
         // SAFETY: as for `t0` — the same monotonic-clock read.
         let elapsed = unsafe { crate::ffi_kernel::ktime_get_usec() }.saturating_sub(t0);
         if elapsed >= timeout_us {
