@@ -4,6 +4,13 @@
 #include "kernel.h"
 #include "memory.h"
 #include "klib.h"
+#include "task.h"
+
+extern void sched_sleep_ticks(uint32_t ticks);
+
+/* Every hub this driver has claimed; usb_hub_task() services their port
+ * changes.  Appended on probe. */
+static usb_hub_priv_t *hub_list;
 
 
 static int hub_set_port_feature(usb_device_t *dev, uint8_t port, uint16_t feat) {
@@ -91,32 +98,50 @@ static void hub_handle_port(usb_hub_priv_t *priv, uint8_t port) {
         }
 
         hub_get_port_status(priv->dev, port, &ps);
-        uint8_t speed = (ps.wPortStatus & HUB_PORT_STS_LOW_SPEED)
-                      ? USB_SPEED_LOW : USB_SPEED_FULL;
+        uint8_t speed;
+        if (ps.wPortStatus & HUB_PORT_STS_LOW_SPEED)
+            speed = USB_SPEED_LOW;
+        else if (ps.wPortStatus & HUB_PORT_STS_HIGH_SPEED)
+            speed = USB_SPEED_HIGH;
+        else if (priv->dev->speed == USB_SPEED_SUPER
+                 || priv->dev->speed == USB_SPEED_SUPER_PLUS)
+            /* A SuperSpeed hub's downstream port has no USB2 speed bits set and
+             * the device on its SS lane is SuperSpeed. */
+            speed = USB_SPEED_SUPER;
+        else
+            speed = USB_SPEED_FULL;
 
         printk("[HUB] Connect port="); printk_hex(port);
         printk(" speed="); printk_hex(speed); printk("\n");
 
-        hub_hc_wrapper_t *wrap = (hub_hc_wrapper_t *)
-            kmalloc(sizeof(hub_hc_wrapper_t));
-        if (!wrap) {
-            pr_err("[HUB] wrapper alloc failed for port %u\n", (unsigned)port);
-            return;
-        }
-        memset(wrap, 0, sizeof(hub_hc_wrapper_t));
-        wrap->hc_wrapper            = *priv->dev->hc;
-        wrap->hc_wrapper.port_reset = hub_port_reset_wrapper;
-        wrap->hub_dev               = priv->dev;
-        wrap->hub_port              = port;
+        usb_device_t *child;
+        if (priv->dev->hc->enumerate_hub_child) {
+            /* The controller assigns the address itself (xHCI: Enable Slot +
+             * Address Device with the hub topology in the route string), so
+             * the generic SET_ADDRESS path below cannot be used. */
+            child = priv->dev->hc->enumerate_hub_child(priv->dev->hc,
+                                                       priv->dev, port, speed);
+        } else {
+            hub_hc_wrapper_t *wrap = (hub_hc_wrapper_t *)
+                kmalloc(sizeof(hub_hc_wrapper_t));
+            if (!wrap) {
+                pr_err("[HUB] wrapper alloc failed for port %u\n", (unsigned)port);
+                return;
+            }
+            memset(wrap, 0, sizeof(hub_hc_wrapper_t));
+            wrap->hc_wrapper            = *priv->dev->hc;
+            wrap->hc_wrapper.port_reset = hub_port_reset_wrapper;
+            wrap->hub_dev               = priv->dev;
+            wrap->hub_port              = port;
 
-        usb_device_t *child = usb_device_enumerate(
-            &wrap->hc_wrapper, port, speed);
+            child = usb_device_enumerate(&wrap->hc_wrapper, port, speed);
 
-        if (child) {
-            child->hub = priv->dev;
-            child->hc  = priv->dev->hc;
+            if (child) {
+                child->hub = priv->dev;
+                child->hc  = priv->dev->hc;
+            }
+            kfree(wrap);
         }
-        kfree(wrap);
 
     } else {
         printk("[HUB] Disconnect port="); printk_hex(port); printk("\n");
@@ -132,17 +157,47 @@ static void hub_irq_notify(usb_device_t *dev, void *buf,
                             uint16_t len, void *priv_ptr)
 {
     usb_hub_priv_t *priv = (usb_hub_priv_t *)priv_ptr;
-    __sync_synchronize();
     if (priv->removed) return;
     uint8_t *mask = (uint8_t *)buf;
+    uint32_t ev = 0;
 
-    for (uint8_t p = 1; p <= priv->num_ports; p++) {
+    /* This runs in the controller's event-drain context with its event lock
+     * held, so it must not issue any transfer: just latch which ports the hub
+     * flagged and let usb_hub_task() do the reset/enumeration in task
+     * context.  Doing the work here would re-enter the event lock (the port
+     * reset and enumeration are control transfers/commands) and wedge. */
+    for (uint8_t p = 1; p <= priv->num_ports && p < 32; p++) {
         uint8_t byte = p / 8, bit = p % 8;
         if (byte >= len) break;
         if (mask[byte] & (1 << bit))
-            hub_handle_port(priv, p);
+            ev |= 1u << p;
     }
+    if (ev)
+        __sync_fetch_and_or(&priv->port_events, ev);
     (void)dev;
+}
+
+static void usb_hub_task(void) {
+    while (1) {
+        for (usb_hub_priv_t *h = hub_list; h; h = h->next) {
+            if (h->removed)
+                continue;
+            uint32_t ev = __sync_lock_test_and_set(&h->port_events, 0);
+            while (ev) {
+                uint8_t p = (uint8_t)__builtin_ctz(ev);
+                ev &= ~(1u << p);
+                hub_handle_port(h, p);
+            }
+        }
+        sched_sleep_ticks(1);
+    }
+}
+
+void usb_hub_hotplug_init(void) {
+    if (!create_task(usb_hub_task))
+        pr_warn("[HUB] hub hotplug task could not be created\n");
+    else
+        pr_info("  %-11s : hub port-change task up\n", "usb-hub");
 }
 
 static int hub_probe(usb_device_t *dev) {
@@ -163,6 +218,11 @@ static int hub_probe(usb_device_t *dev) {
     priv->num_ports = priv->desc.bNbrPorts;
     if (priv->num_ports > USB_MAX_PORTS)
         priv->num_ports = USB_MAX_PORTS;
+
+    /* Mark the device as a hub in the controller before touching its ports
+     * (xHCI needs the Hub bit / port count in the slot context). */
+    if (dev->hc->update_hub)
+        dev->hc->update_hub(dev->hc, dev, priv->num_ports);
 
     for (int i = 0; i < dev->ep_count; i++) {
         if (dev->ep[i].direction     == USB_DIR_IN &&
@@ -194,6 +254,9 @@ static int hub_probe(usb_device_t *dev) {
             pr_warn("[HUB] Failed to register interrupt EP\n");
     }
 
+    priv->next = hub_list;
+    hub_list   = priv;
+
     printk("[HUB] Ports="); printk_hex(priv->num_ports); printk("\n");
     return 0;
 }
@@ -201,9 +264,11 @@ static int hub_probe(usb_device_t *dev) {
 static void hub_remove(usb_device_t *dev) {
     if (dev && dev->driver_priv) {
         usb_hub_priv_t *priv = (usb_hub_priv_t *)dev->driver_priv;
+        /* Mark it dead and leave it linked: usb_hub_task() may be iterating the
+         * list right now, so freeing here would be a use-after-free.  An
+         * unplugged hub leaks this small struct rather than risk that. */
         priv->removed = 1;
         __sync_synchronize();
-        kfree(priv);
         dev->driver_priv = NULL;
     }
 }

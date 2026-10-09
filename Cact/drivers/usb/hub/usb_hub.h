@@ -30,6 +30,7 @@
 #define HUB_PORT_STS_RESET       0x0010
 #define HUB_PORT_STS_POWER       0x0100
 #define HUB_PORT_STS_LOW_SPEED   0x0200
+#define HUB_PORT_STS_HIGH_SPEED  0x0400
 
 #define HUB_PORT_CHG_CONNECTION  0x0001
 #define HUB_PORT_CHG_RESET       0x0010
@@ -40,16 +41,23 @@ typedef struct {
 } __attribute__((packed)) hub_port_status_t;
 
 
-typedef struct {
+typedef struct usb_hub_priv {
     usb_device_t  *dev;
     usb_hub_desc_t desc;
     uint8_t        num_ports;
     uint8_t        intr_ep;
     uint8_t        status_buf[8];
     volatile int   removed;
+    /* Ports whose change bitmap the hub reported from interrupt context.  The
+     * reset/enumeration they need happens in usb_hub_task(), not in the
+     * notify callback (which runs with the controller's event lock held). */
+    volatile uint32_t port_events;
+    struct usb_hub_priv *next;
 } usb_hub_priv_t;
 
 //Public api
 void usb_hub_init(void);
+/* Spawn the task that services hub port changes (needs the scheduler). */
+void usb_hub_hotplug_init(void);
 
 #endif

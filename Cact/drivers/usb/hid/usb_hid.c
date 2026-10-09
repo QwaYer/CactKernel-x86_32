@@ -13,11 +13,27 @@
 
 extern void sched_sleep_ticks(uint32_t ticks);
 
-/* HID usage IDs for Ctrl-combo keys */
-#define HID_KEY_C      0x06   /* 'c'  — Ctrl-C → SIGINT   */
-#define HID_KEY_Z      0x1D   /* 'z'  — Ctrl-Z → SIGSTOP  */
-#define HID_KEY_BSLASH 0x31   /* '\'  — Ctrl-\ → SIGQUIT  */
-
+/* Ctrl+<key> → the control byte Linux delivers on that combination (0 = no
+ * mapping).  The byte is handed to the tty line discipline; whether it turns
+ * into a signal (VINTR/VQUIT/VSUSP) or a raw byte for the reader is decided
+ * there, because only the terminal knows if the reader is in canonical mode. */
+static const char hid_ctrl_map[0x80] = {
+    [0x04] = 0x01, [0x05] = 0x02, [0x06] = 0x03, [0x07] = 0x04,   /* ^A..^D */
+    [0x08] = 0x05, [0x09] = 0x06, [0x0A] = 0x07, [0x0B] = 0x08,   /* ^E..^H */
+    [0x0C] = 0x09, [0x0D] = 0x0A, [0x0E] = 0x0B, [0x0F] = 0x0C,   /* ^I..^L */
+    [0x10] = 0x0D, [0x11] = 0x0E, [0x12] = 0x0F, [0x13] = 0x10,   /* ^M..^P */
+    [0x14] = 0x11, [0x15] = 0x12, [0x16] = 0x13, [0x17] = 0x14,   /* ^Q..^T */
+    [0x18] = 0x15, [0x19] = 0x16, [0x1A] = 0x17, [0x1B] = 0x18,   /* ^U..^X */
+    [0x1C] = 0x19, [0x1D] = 0x1A,                                 /* ^Y..^Z */
+    [0x1F] = 0x00,   /* ^2 / ^@ → NUL */
+    [0x23] = 0x1E,   /* ^6 / ^^ → RS  */
+    [0x2C] = 0x00,   /* ^Space  → NUL */
+    [0x2D] = 0x1F,   /* ^- / ^_ → US  */
+    [0x2F] = 0x1B,   /* ^[      → ESC */
+    [0x30] = 0x1D,   /* ^]      → GS  */
+    [0x31] = 0x1C,   /* ^\      → FS  */
+    [0x38] = 0x7F,   /* ^/ / ^? → DEL */
+};
 
 volatile char usb_last_char    = 0;
 volatile int  usb_key_event    = 0;
@@ -230,32 +246,18 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
             continue;
         }
 
-        /* Ctrl+letter → control characters 0x01-0x1A, plus SIGINT/SIGSTOP/SIGQUIT */
-        if (ctrl && kc >= 0x04 && kc <= 0x1D) {
-            uint32_t fg = terminal_fg_pid;
-            if (kc == HID_KEY_C && fg) {
-                task_signal(fg, SIGINT);
-                continue;
-            }
-            /* Ctrl-Z parks the foreground job; the shell's waitpid(WUNTRACED)
-             * reports the stop and gives the prompt back. */
-            if (kc == HID_KEY_Z && fg) {
-                task_signal(fg, SIGSTOP);
-                continue;
-            }
-            char ctrl_char = kc - 0x04 + 1;  /* HID 0x04='a' → 0x01 SOH */
-            keyboard_post_key(ctrl_char);
-            usb_last_char = ctrl_char;
+        /* Ctrl+<key> → the control byte Linux delivers (^A..^Z, ^[, ^\, ^], ^^,
+         * ^_, ^@, ^?).  Delivering the byte — rather than signalling here — is
+         * what lets the tty line discipline choose: in canonical mode it turns
+         * VINTR/VQUIT/VSUSP into signals, in raw mode the byte reaches the
+         * reader (cactsole's readline handles ^C itself). */
+        if (ctrl && hid_ctrl_map[kc]) {
+            char cb = hid_ctrl_map[kc];
+            keyboard_post_key(cb);
+            usb_last_char = cb;
             usb_key_event = 1;
-            last_char     = ctrl_char;
+            last_char     = cb;
             key_event_happened = 1;
-            continue;
-        }
-
-        /* Ctrl-\ → SIGQUIT (any keycode, not just letter) */
-        if (ctrl && kc == HID_KEY_BSLASH) {
-            uint32_t fg = terminal_fg_pid;
-            if (fg) task_signal(fg, SIGQUIT);
             continue;
         }
 

@@ -415,6 +415,18 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     extern void usb_hid_repeat_init(void);
     usb_hid_repeat_init();
 
+    // xHCI root-port hotplug.  Connect/disconnect events and post-error
+    // re-enumeration sleep and issue commands, so they run in a task rather
+    // than the interrupt handler; spawned here for the same reason as above.
+    extern void xhci_hotplug_init(void);
+    xhci_hotplug_init();
+
+    // USB hub port changes: the hub's status-change interrupt is serviced with
+    // the controller's event lock held, so the reset/enumeration it triggers
+    // runs in this task instead.
+    extern void usb_hub_hotplug_init(void);
+    usb_hub_hotplug_init();
+
     pr_info("  %-11s : hardware setup complete — scheduler live\n", "boot");
 }
 
