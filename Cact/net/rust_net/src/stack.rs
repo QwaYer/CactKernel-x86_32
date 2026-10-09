@@ -49,6 +49,40 @@ static mut ICMP_TX_PAYLOAD: [u8; 512] = [0; 512];
 pub(crate) static mut ICMP_HANDLE: Option<smoltcp::iface::SocketHandle> = None;
 static mut ICMP_IDENT_BOUND: u16 = 0xFFFF;
 
+/// Loopback (`lo`) support.
+///
+/// The NIC interface additionally carries `127.0.0.1/8`, so 127/8 is *on-link*
+/// (`in_same_network`), which makes smoltcp route such a packet to 127.0.0.1
+/// itself (never through the default route to the gateway) and accept inbound
+/// packets addressed to it.  Frames the stack emits to a 127/8 peer are then
+/// looped back by [`CactPhy`] instead of being handed to the NIC, and a `lo`
+/// entry is reported to userspace by [`crate::iface`].  A single interface and a
+/// single socket set is deliberate: smoltcp dispatches *every* socket through
+/// the interface it is polled with, so a second interface would need its own
+/// socket set, and a listener would have to be duplicated across both.
+const LOOPBACK_IP: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
+/// The loopback prefix length (`127.0.0.0/8`).
+const LOOPBACK_PREFIX: u8 = 8;
+
+/// The loopback address in host byte order (most significant octet first).
+pub(crate) const LOOPBACK_IP_HOST: u32 = 0x7F00_0001; // 127.0.0.1
+/// The loopback prefix mask in host byte order (`255.0.0.0`, a `/8`).
+pub(crate) const LOOPBACK_MASK_HOST: u32 = 0xFF00_0000;
+/// The interface name of the loopback interface.
+pub(crate) const LOOPBACK_IFNAME: &[u8] = b"lo";
+
+/// Placeholder MAC for an interface created before any NIC is registered (the
+/// L3 stack now comes up at boot so that loopback does not need a NIC module).
+/// Locally administered and unicast.  `register_netdev` replaces it with the
+/// real hardware address via [`stack_set_nic_mac`].
+const DEFAULT_NIC_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+/// True for an address in `127.0.0.0/8`.
+#[inline]
+pub(crate) fn is_loopback_ipv4_host(ip: u32) -> bool {
+    ip >> 24 == 127
+}
+
 /// Serializes IFACE / SOCKET_SET / PHY between the background poll task and
 /// syscall contexts.  With more than one CPU the poll task and a syscall can
 /// otherwise run `iface.poll()` at the same time: that corrupts smoltcp's rings
@@ -148,10 +182,16 @@ pub(crate) fn sync_iface_ipv4_from_config(iface: &mut Interface) {
     let gw = ipv4_from_host(config::gateway_host());
     iface.update_ip_addrs(|addrs| {
         addrs.clear();
+        // The NIC address first: `get_source_address_ipv4` returns the first
+        // entry, so this keeps the configured address as the default source for
+        // off-box traffic (the loopback path pins 127.0.0.1 explicitly).
         if config::ip_host() != 0 && config::netmask_host() != 0 {
             let prefix = mask_prefix_len(config::netmask_host());
             let _ = addrs.push(IpCidr::new(IpAddress::Ipv4(ip), prefix));
         }
+        // Always present: it makes 127/8 on-link (see the loopback note above)
+        // and lets the interface accept packets addressed to 127.0.0.1.
+        let _ = addrs.push(IpCidr::new(IpAddress::Ipv4(LOOPBACK_IP), LOOPBACK_PREFIX));
     });
     iface.routes_mut().remove_default_ipv4_route();
     if config::gateway_host() != 0 && !gw.is_unspecified() {
@@ -171,6 +211,37 @@ struct CactPhy {
     /// Frames dropped because the queue was full; never reset while running.
     rx_dropped: u32,
     tx: [u8; PHY_MTU],
+    /// Frames the stack emitted to a `127/8` peer.  Instead of the NIC they are
+    /// staged here and re-injected into `rx` by [`Device::receive`], so loopback
+    /// traffic never reaches the wire (see the loopback note above).
+    lo: [[u8; PHY_MTU]; RX_QUEUE_LEN],
+    lo_len: [usize; RX_QUEUE_LEN],
+    lo_head: usize,
+    lo_tail: usize,
+    lo_dropped: u32,
+}
+
+/// True when an Ethernet frame belongs to a 127/8 exchange and must be looped
+/// back by [`CactPhy`] rather than transmitted.
+///
+/// IPv4 frames match on the source *or* destination being in 127/8: the
+/// destination covers the request leg, and the source covers the reply leg when
+/// a socket's local address was pinned to 127.0.0.1 while its peer is a 127/8
+/// address.  ARP frames match on the sender or target protocol address, because
+/// smoltcp resolves a 127/8 peer with ARP even though the exchange stays local.
+fn frame_involves_loopback(frame: &[u8]) -> bool {
+    if frame.len() < 14 {
+        return false;
+    }
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    match ethertype {
+        // IPv4: the source address is at frame offset 26, the destination at 30
+        // (14-byte Ethernet header + 12 bytes before the addresses).
+        0x0800 => frame.len() >= 34 && (frame[26] == 127 || frame[30] == 127),
+        // ARP over Ethernet/IPv4: sender protocol address at 28, target at 38.
+        0x0806 => frame.len() >= 42 && (frame[28] == 127 || frame[38] == 127),
+        _ => false,
+    }
 }
 
 fn active_nic_ptr() -> *mut crate::types::NetDriver {
@@ -192,6 +263,11 @@ impl CactPhy {
             rx_tail: 0,
             rx_dropped: 0,
             tx: [0; PHY_MTU],
+            lo: [[0; PHY_MTU]; RX_QUEUE_LEN],
+            lo_len: [0; RX_QUEUE_LEN],
+            lo_head: 0,
+            lo_tail: 0,
+            lo_dropped: 0,
         }
     }
 }
@@ -209,8 +285,32 @@ impl RxToken for CactRxToken<'_> {
     }
 }
 
+/// TX token.  Besides the frame buffer it carries the loopback staging ring, so
+/// [`TxToken::consume`] can divert a 127/8 frame into it without ever touching
+/// the NIC.  Every field is a distinct borrow of [`CactPhy`], which is what keeps
+/// the split borrow-free.
 struct CactTxToken<'a> {
     buf: &'a mut [u8; PHY_MTU],
+    lo: &'a mut [[u8; PHY_MTU]; RX_QUEUE_LEN],
+    lo_len: &'a mut [usize; RX_QUEUE_LEN],
+    lo_head: &'a mut usize,
+    lo_tail: &'a mut usize,
+    lo_dropped: &'a mut u32,
+}
+
+impl CactTxToken<'_> {
+    /// Stage one already-built frame for loopback.  Drops it (counting the loss)
+    /// when the staging ring is full — the peer's retransmission recovers it.
+    fn push_loopback(&mut self, len: usize) {
+        let next = (*self.lo_tail + 1) % RX_QUEUE_LEN;
+        if next == *self.lo_head {
+            *self.lo_dropped = self.lo_dropped.wrapping_add(1);
+            return;
+        }
+        self.lo[*self.lo_tail][..len].copy_from_slice(&self.buf[..len]);
+        self.lo_len[*self.lo_tail] = len;
+        *self.lo_tail = next;
+    }
 }
 
 impl TxToken for CactTxToken<'_> {
@@ -218,7 +318,12 @@ impl TxToken for CactTxToken<'_> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let r = f(&mut self.buf[..len]);
+        let mut this = self;
+        let r = f(&mut this.buf[..len]);
+        if frame_involves_loopback(&this.buf[..len]) {
+            this.push_loopback(len);
+            return r;
+        }
         let nic = active_nic_ptr();
         if !nic.is_null() {
             let skb = skb::skb_alloc();
@@ -229,9 +334,9 @@ impl TxToken for CactTxToken<'_> {
                 let p = unsafe { skb::skb_put(skb, len as u16) };
                 if !p.is_null() {
                     // SAFETY: `p` points to `len` writable bytes inside `skb`
-                    // and `self.buf` is a local frame buffer, so the two ranges
+                    // and `this.buf` is a local frame buffer, so the two ranges
                     // cannot overlap.
-                    unsafe { core::ptr::copy_nonoverlapping(self.buf.as_ptr(), p, len) };
+                    unsafe { core::ptr::copy_nonoverlapping(this.buf.as_ptr(), p, len) };
                     // SAFETY: `nic` is the registered driver pointer (non-null
                     // checked above) and reading its `send` field only copies the
                     // function pointer.
@@ -263,6 +368,21 @@ impl Device for CactPhy {
             // the slot `rx_head` points at (it stops one short of it), so the
             // bytes cannot change after `rx_head` advances.
             let _rx_guard = RxGuard::new();
+            // Re-inject frames looped back last egress into the RX ring first, so
+            // the stack sees them on this poll.  A frame is left in `lo` if the RX
+            // ring is momentarily full; the next call retries.
+            while self.lo_head != self.lo_tail {
+                let next = (self.rx_tail + 1) % RX_QUEUE_LEN;
+                if next == self.rx_head {
+                    break;
+                }
+                let lo_slot = self.lo_head;
+                let m = self.lo_len[lo_slot].min(PHY_MTU);
+                self.rx[self.rx_tail][..m].copy_from_slice(&self.lo[lo_slot][..m]);
+                self.rx_len[self.rx_tail] = m;
+                self.rx_tail = next;
+                self.lo_head = (self.lo_head + 1) % RX_QUEUE_LEN;
+            }
             if self.rx_head == self.rx_tail {
                 return None;
             }
@@ -274,12 +394,26 @@ impl Device for CactPhy {
             CactRxToken {
                 slice: &self.rx[slot][..n],
             },
-            CactTxToken { buf: &mut self.tx },
+            CactTxToken {
+                buf: &mut self.tx,
+                lo: &mut self.lo,
+                lo_len: &mut self.lo_len,
+                lo_head: &mut self.lo_head,
+                lo_tail: &mut self.lo_tail,
+                lo_dropped: &mut self.lo_dropped,
+            },
         ))
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        Some(CactTxToken { buf: &mut self.tx })
+        Some(CactTxToken {
+            buf: &mut self.tx,
+            lo: &mut self.lo,
+            lo_len: &mut self.lo_len,
+            lo_head: &mut self.lo_head,
+            lo_tail: &mut self.lo_tail,
+            lo_dropped: &mut self.lo_dropped,
+        })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -440,9 +574,14 @@ pub fn stack_init() {
         if unsafe { STACK_READY } {
             return;
         }
-        // SAFETY: `runtime::my_mac` is a kernel-lifetime `static mut` read on the
-        // single-threaded registration path; a 6-byte copy cannot tear.
-        let mac = unsafe { runtime::my_mac.b };
+        // SAFETY: `runtime::my_mac` is a kernel-lifetime `static mut` read under
+        // the stack lock; a 6-byte copy cannot tear.
+        let mut mac = unsafe { runtime::my_mac.b };
+        // No NIC yet (the stack comes up at boot so loopback exists on its own):
+        // use a locally-administered placeholder until a driver registers.
+        if mac == [0u8; 6] {
+            mac = DEFAULT_NIC_MAC;
+        }
         let eth = EthernetAddress::from_bytes(&mac);
         let mut cfg = Config::new(HardwareAddress::Ethernet(eth));
         // SAFETY: `timer_ticks_get` is a kernel C service that reads the tick
@@ -506,6 +645,30 @@ pub fn stack_init() {
     }
 }
 
+/// Point the (already created) interface at a NIC's hardware address and re-derive
+/// its addresses.  Called by `register_netdev` / `unregister_netdev` so a NIC can
+/// come and go without disturbing the stack — and with it loopback, which the
+/// interface always carries and which must survive a module unload.
+pub(crate) fn stack_set_nic_mac(mac: [u8; 6]) {
+    let _stack_guard = StackGuard::new();
+    // SAFETY: `IFACE` is only used under `STACK_LOCK`, held here; the borrow ends
+    // before the `PHY` reset below.
+    let iface = unsafe { (*core::ptr::addr_of_mut!(IFACE)).as_mut() };
+    if let Some(iface) = iface {
+        iface.set_hardware_addr(HardwareAddress::Ethernet(EthernetAddress::from_bytes(&mac)));
+        sync_iface_ipv4_from_config(iface);
+    }
+    // Drop any frames staged by the previous driver and any loopback frame that
+    // still carries the old hardware address.
+    {
+        let _rx_guard = RxGuard::new();
+        // SAFETY: the RX lock and the stack lock are held and no other stack user
+        // exists on this single-threaded driver path, so this reset cannot race
+        // the RX producer.
+        unsafe { PHY = CactPhy::new() };
+    }
+}
+
 pub fn stack_poll() {
     let _stack_guard = StackGuard::new();
     let nic = active_nic_ptr();
@@ -534,7 +697,7 @@ pub fn stack_poll() {
         // SAFETY: `PHY` is borrowed exclusively here under the stack lock and
         // handed to the interface for the duration of the poll only.
         unsafe { iface.poll(now, &mut *core::ptr::addr_of_mut!(PHY), socks) };
-        crate::tcp::sync_tcp_pcbs_from_smoltcp(iface, socks);
+        crate::tcp::sync_tcp_pcbs_from_smoltcp(socks);
         crate::udp::sync_udp_pcbs_from_smoltcp(socks);
     }
 }

@@ -29,6 +29,15 @@ int rust_net_get_mac(uint8_t out[6]);
 /* Copy the registered NIC interface name into out as a NUL-terminated string
    (at most cap bytes); returns the name length, or -1 when no NIC/NULL/cap==0. */
 int rust_net_get_ifname(char* out, uint32_t cap);
+
+/* ── Per-interface enumeration (see cact_iface_info_t in ioctl_abi.h) ── */
+struct cact_iface_info; /* defined in ioctl_abi.h */
+/* Number of interfaces present: the NIC plus loopback, or 0 when the stack is
+   not up (no NIC registered). */
+int rust_net_iface_count(void);
+/* Fill *out with interface idx (0 = NIC, 1 = "lo"); 0 on success, -1 when the
+   stack is down, idx is out of range, or out is NULL. */
+int rust_net_iface_get(uint32_t idx, struct cact_iface_info* out);
 int rust_net_dns_resolve_a(const char* name, uint32_t* out_ip_host);
 
 /*

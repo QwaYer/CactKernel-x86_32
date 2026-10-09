@@ -101,6 +101,11 @@ fn wait_connected(sock: i32) -> i32 {
     // counter; it takes no pointers and is callable from task context.
     let deadline = unsafe { ffi_kernel::timer_ticks_get() }.saturating_add(CONNECT_TIMEOUT_TICKS);
     loop {
+        // Drive the interface here rather than waiting for `net_poll_task`: a
+        // loopback handshake never reaches the NIC, so it would otherwise inch
+        // forward only on the 100 ms timer kick.  This also matches
+        // `wait_close_settled` (close waits for the FIN the same way).
+        stack::stack_poll();
         match crate::tcp::with_tcp_socket(sock, |s| s.state()) {
             Some(tcp::State::Established) => return 0,
             // A RST (closed port) drops the socket straight back to CLOSED.
@@ -201,10 +206,18 @@ pub extern "C" fn tcp_connect(sock: i32, dst_ip: u32, dst_port: u16) -> i32 {
         }
         let cx = iface.context();
         let dst = IpAddress::Ipv4(Ipv4Addr::from_bits(dst_ip));
-        if s
-            .connect(cx, (dst, dst_port), IpListenEndpoint::from(local_port))
-            .is_err()
-        {
+        // For a 127/8 peer, pin the local address to 127.0.0.1.  smoltcp would
+        // otherwise pick the interface's *first* address (the configured NIC
+        // address), stamping a loopback connection with the box's real address.
+        let local = if stack::is_loopback_ipv4_host(dst_ip) {
+            IpListenEndpoint {
+                addr: Some(IpAddress::Ipv4(Ipv4Addr::new(127, 0, 0, 1))),
+                port: local_port,
+            }
+        } else {
+            IpListenEndpoint::from(local_port)
+        };
+        if s.connect(cx, (dst, dst_port), local).is_err() {
             return -1;
         }
         0
