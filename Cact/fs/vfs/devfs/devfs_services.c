@@ -406,6 +406,18 @@ static int _net_ioctl(void *p, uint32_t cmd, void *arg) {
         return 0;
     }
 
+    case CACT_NETCTL_ARP_COUNT: {
+        return rust_net_arp_count();
+    }
+
+    case CACT_NETCTL_ARP_GET: {
+        cact_arp_get_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        if (rust_net_arp_get(a.index, &a.entry) < 0) return -ENODEV;
+        return copy_to_user(arg, &a, sizeof(a));
+    }
+
     default:
         return -EINVAL;
     }

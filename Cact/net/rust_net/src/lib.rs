@@ -34,6 +34,7 @@ extern crate alloc;
 // The kernel Rust graph's single `#[global_allocator]` lives in the link
 // crate (`cact_kernel`); a crate graph may define exactly one.
 
+pub mod arp;
 pub mod config;
 pub mod dns_resolve;
 pub mod ffi;

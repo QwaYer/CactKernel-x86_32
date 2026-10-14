@@ -169,25 +169,34 @@ fn mutex_unlock_impl(m: &mut mutex_t) {
         return;
     }
 
-    if m.waiter_count > 0 {
-        let woken = m.waiters[0];
+    // Fully release, then wake one waiter.  The waiter must re-acquire through
+    // the normal path so its `recursion_count` starts at 0; transferring
+    // ownership directly (`owner = woken`) made the woken task take the
+    // recursive branch and increment `recursion_count`, so its first unlock was
+    // a no-op and the mutex stayed locked forever.
+    let woken = if m.waiter_count > 0 {
+        let w = m.waiters[0];
         let count = m.waiter_count as usize;
         for i in 1..count {
             m.waiters[i - 1] = m.waiters[i];
         }
         m.waiter_count -= 1;
+        m.waiters[count - 1] = ptr::null_mut();
+        w
+    } else {
+        ptr::null_mut()
+    };
 
-        m.owner = woken;
-        m.guard.release();
+    m.locked.store(0, Ordering::Release);
+    m.owner = ptr::null_mut();
+    m.recursion_count = 0;
+    m.guard.release();
 
+    if !woken.is_null() {
         let sched = sched_link::scheduler_lock_mut();
         sched.acquire();
         // State-aware wake: also unlinks a Sleeping task from the sleep queue.
         sched_link::mlfq_wake_locked(woken);
         sched.release();
-    } else {
-        m.locked.store(0, Ordering::Release);
-        m.owner = ptr::null_mut();
-        m.guard.release();
     }
 }

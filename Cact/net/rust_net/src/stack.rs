@@ -177,15 +177,49 @@ fn mask_prefix_len(mask_host: u32) -> u8 {
     mask_host.count_ones() as u8
 }
 
+/// True while the interface owns no real IPv4 address (nothing configured yet).
+///
+/// Userspace decides addressing, so between boot and the first lease the NIC
+/// carries only loopback.  This is the single source of truth for that state:
+/// [`sync_iface_ipv4_from_config`] keys the `any_ip` receive hack on it, and the
+/// TX path uses it to keep the unconfigured stack from emitting off-link unicast
+/// (see `CactTxToken`'s `TxToken::consume`).
+pub(crate) fn iface_unconfigured() -> bool {
+    config::ip_host() == 0 || config::netmask_host() == 0
+}
+
+/// True when `frame` is an IPv4 Ethernet frame whose destination is neither
+/// loopback (127/8) nor the limited broadcast (255.255.255.255).
+///
+/// Only consulted for the unconfigured stack; see `TxToken::consume`.
+fn ipv4_dst_is_offlink_unicast(frame: &[u8]) -> bool {
+    // 14-byte Ethernet header plus an IPv4 header far enough to reach the 4-byte
+    // destination address at offset 30..34.
+    if frame.len() < 34 {
+        return false;
+    }
+    if u16::from_be_bytes([frame[12], frame[13]]) != 0x0800 {
+        return false;
+    }
+    let dst = [frame[30], frame[31], frame[32], frame[33]];
+    // 127/8 and the limited broadcast are the only destinations the stack may
+    // legitimately reach while it owns no address of its own.
+    !(dst[0] == 127 || dst == [0xff, 0xff, 0xff, 0xff])
+}
+
 pub(crate) fn sync_iface_ipv4_from_config(iface: &mut Interface) {
     let ip = ipv4_from_host(config::ip_host());
     let gw = ipv4_from_host(config::gateway_host());
+    // "No address yet": addressing is decided in userspace, so between boot and
+    // the first lease the interface owns nothing on the wire — yet the DHCP
+    // client still has to receive its OFFER/ACK then (see the `any_ip` note).
+    let unconfigured = iface_unconfigured();
     iface.update_ip_addrs(|addrs| {
         addrs.clear();
         // The NIC address first: `get_source_address_ipv4` returns the first
         // entry, so this keeps the configured address as the default source for
         // off-box traffic (the loopback path pins 127.0.0.1 explicitly).
-        if config::ip_host() != 0 && config::netmask_host() != 0 {
+        if !unconfigured {
             let prefix = mask_prefix_len(config::netmask_host());
             let _ = addrs.push(IpCidr::new(IpAddress::Ipv4(ip), prefix));
         }
@@ -194,8 +228,28 @@ pub(crate) fn sync_iface_ipv4_from_config(iface: &mut Interface) {
         let _ = addrs.push(IpCidr::new(IpAddress::Ipv4(LOOPBACK_IP), LOOPBACK_PREFIX));
     });
     iface.routes_mut().remove_default_ipv4_route();
-    if config::gateway_host() != 0 && !gw.is_unspecified() {
-        let _ = iface.routes_mut().add_default_ipv4_route(gw);
+
+    if unconfigured {
+        // smoltcp's IPv4 ingress drops a datagram unless its destination is one
+        // of the interface's addresses, a multicast group, or a broadcast it
+        // recognises.  With nothing but 127.0.0.1/8 configured, a DHCPOFFER
+        // addressed to the *offered* address (unicast) or to the LAN's subnet
+        // broadcast is therefore dropped before any socket sees it — dhcpd then
+        // reports "no offer received" although the frame was received and
+        // decrypted on the air.  `any_ip` lets such a datagram through once a
+        // route resolves to an address the interface owns, so point the default
+        // route at the loopback address we always carry.  Egress is untouched:
+        // the client broadcasts (resolved straight to the Ethernet broadcast
+        // address, never through the route table) from source 0.0.0.0, see
+        // `udp::udp_sock_send`.  `any_ip` is switched back off the moment a real
+        // address is configured.
+        iface.set_any_ip(true);
+        let _ = iface.routes_mut().add_default_ipv4_route(LOOPBACK_IP);
+    } else {
+        iface.set_any_ip(false);
+        if config::gateway_host() != 0 && !gw.is_unspecified() {
+            let _ = iface.routes_mut().add_default_ipv4_route(gw);
+        }
     }
 }
 
@@ -320,6 +374,18 @@ impl TxToken for CactTxToken<'_> {
     {
         let mut this = self;
         let r = f(&mut this.buf[..len]);
+        // While no address is configured the interface carries only loopback and
+        // a default route pointing at it (see `sync_iface_ipv4_from_config`), so
+        // smoltcp sources *every* off-link flow from 127.0.0.1 and then accepts
+        // the frame right back on ingress (`any_ip`).  For ICMP that means the
+        // stack answers its own echo request: `ping` to any address "succeeds"
+        // with a sub-millisecond RTT even with no network at all.  Drop such a
+        // frame instead, so the failure is honest.  The DHCP client's broadcast
+        // DISCOVER/REQUEST (destination 255.255.255.255) is not off-link unicast
+        // and still leaves the box.
+        if iface_unconfigured() && ipv4_dst_is_offlink_unicast(&this.buf[..len]) {
+            return r;
+        }
         if frame_involves_loopback(&this.buf[..len]) {
             this.push_loopback(len);
             return r;
@@ -390,6 +456,10 @@ impl Device for CactPhy {
             self.rx_head = (self.rx_head + 1) % RX_QUEUE_LEN;
             (slot, self.rx_len[slot].min(PHY_MTU))
         };
+        // Learn the neighbor from any ARP frame before smoltcp consumes it, so
+        // the kernel's ARP table (`ip neigh`) mirrors the traffic on the wire.
+        // Safe to touch the table directly here: `receive` runs under `STACK_LOCK`.
+        crate::arp::note_frame(&self.rx[slot][..n]);
         Some((
             CactRxToken {
                 slice: &self.rx[slot][..n],
