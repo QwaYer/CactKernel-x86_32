@@ -364,6 +364,8 @@ typedef struct cact_recvfrom_arg {
 #define CACT_NETCTL_IFNAME       0x3408  // arg=char[CACT_IFNAME_MAX] (out): NIC name, -ENODEV if none
 #define CACT_NETCTL_IFACE_COUNT  0x3409  // no arg; returns the number of interfaces (NIC + lo)
 #define CACT_NETCTL_IFACE_GET    0x340A  // arg=cact_iface_get_arg_t*; in index, out interface info
+#define CACT_NETCTL_ARP_COUNT    0x340B  // no arg; returns the number of live ARP entries
+#define CACT_NETCTL_ARP_GET      0x340C  // arg=cact_arp_get_arg_t*; in index, out ARP entry
 
 // Interface name as the driver registered it ("eth0", "wlan0").  A separate
 // ioctl rather than a field in cact_netcfg_get_t so that binaries built against
@@ -428,6 +430,25 @@ typedef struct cact_iface_get_arg {
     uint32_t index;                 // in
     cact_iface_info_t info;         // out
 } cact_iface_get_arg_t;
+
+// ARP / IPv4 neighbor table (CACT_NETCTL_ARP_COUNT / CACT_NETCTL_ARP_GET).  The
+// table is learned from the ARP traffic the kernel sees; entries age out after
+// 60 s.  Same COUNT+GET shape as the interface view above.  Byte-compatible with
+// `CactArpEntry` in rust_net/src/arp.rs.
+#define CACT_ARP_TABLE_MAX       16
+
+typedef struct cact_arp_entry {
+    uint32_t ip_host;               // neighbor IPv4 address, host order
+    uint8_t  mac[6];                // neighbor hardware address
+    uint16_t _pad;                  // explicit padding keeps the u32 fields aligned
+    uint32_t age_ms;                // ms since the mapping was last seen
+    uint32_t flags;                 // reserved (0)
+} cact_arp_entry_t;
+
+typedef struct cact_arp_get_arg {
+    uint32_t index;                 // in
+    cact_arp_entry_t entry;         // out
+} cact_arp_get_arg_t;
 
 // ===========================================================================
 // /dev/sys control (privileged, root only). RANGE 0x3500.
@@ -726,51 +747,49 @@ typedef struct cact_vt_state {
 // ===========================================================================
 // Wireless control (ioctls on /dev/wlan0). RANGE 0x3F00.
 //
-// The driver is a dumb radio: it scans and keeps the AP list (served as text by
-// read()), moves raw 802.11 frames both ways, and runs the 802.11<->802.3
-// datapath with the CCMP keys it is given.  Association / authentication / WPA2
-// live in userspace (the wljoin utility), which drives this interface.
+// The 802.11 station engine lives in the kernel (cact80211): scan, open-system
+// auth/association, the 802.11<->802.3 datapath and CCMP.  Userspace (the
+// wljoin utility) is the WPA2 supplicant: it reads the BSS list, asks the
+// kernel to join a BSS, runs the 4-way handshake over EAPOL, and installs the
+// keys.  read() serves the AP list as text.
 // ===========================================================================
 #define CACT_WLANCTL_SCAN        0x3F00  // arg=NULL;          rescan, returns AP count
-#define CACT_WLANCTL_TX          0x3F01  // arg=cact_wlan_frame_t*   (raw 802.11 MPDU)
-#define CACT_WLANCTL_RX          0x3F02  // arg=cact_wlan_frame_t*   (out; len 0 = empty)
-#define CACT_WLANCTL_SET_CHANNEL 0x3F03  // arg=cact_wlan_channel_t*
-#define CACT_WLANCTL_SET_BSSID   0x3F04  // arg=cact_wlan_bssid_t*
-#define CACT_WLANCTL_SET_KEY     0x3F05  // arg=cact_wlan_key_t*
+#define CACT_WLANCTL_GET_BSS     0x3F01  // arg=cact_wlan_bss_t*     (index in, BSS out)
+#define CACT_WLANCTL_CONNECT     0x3F02  // arg=cact_wlan_connect_t* (auth + assoc)
+#define CACT_WLANCTL_DISCONNECT  0x3F03  // arg=NULL
+#define CACT_WLANCTL_SET_KEY     0x3F05  // arg=cact_wlan_key_t*     (TK / GTK install)
 #define CACT_WLANCTL_STATUS      0x3F06  // arg=cact_wlan_status_t*  (out)
-#define CACT_WLANCTL_SET_LINK    0x3F07  // arg=int*   1 = datapath up, 0 = down
-#define CACT_WLANCTL_SET_RATES   0x3F08  // arg=cact_wlan_rates_t*   (AP basic rates + ERP)
+#define CACT_WLANCTL_EAPOL_TX    0x3F07  // arg=cact_wlan_eapol_t*   (send EAPOL payload)
+#define CACT_WLANCTL_EAPOL_RX    0x3F08  // arg=cact_wlan_eapol_t*   (out; len 0 = none)
 
-#define CACT_WLAN_FRAME_MAX  2312   // max 802.11 MPDU
 #define CACT_WLAN_SSID_MAX   33
+#define CACT_WLAN_RSN_MAX    64
 #define CACT_WLAN_KEY_MAX    32
+#define CACT_WLAN_EAPOL_MAX  512
 
 #define CACT_WLAN_KEY_PAIRWISE 0    // TK: enables the CCMP data path
 #define CACT_WLAN_KEY_GROUP    1    // GTK: group-addressed frames
 
-// cact_wlan_rates_t.flags — what the AP's beacon says about these timings.
-#define CACT_WLAN_ERP_SHORT_PREAMBLE 0x0001  // use the short preamble
-#define CACT_WLAN_ERP_CTS_PROT       0x0002  // AP wants CTS-to-self protection
-#define CACT_WLAN_ERP_SHORT_SLOT     0x0004  // 9 us slot, else 20 us
+// One BSS from the engine's scan list.  GET_BSS takes `index` in and fills the
+// rest; the RSN IE is what the supplicant echoes in msg2/msg4.
+typedef struct cact_wlan_bss {
+    uint32_t index;                        // in: which entry to fetch
+    uint8_t  bssid[6];
+    uint8_t  ssid[CACT_WLAN_SSID_MAX];
+    uint8_t  ssid_len;
+    uint8_t  channel;
+    int8_t   rssi;
+    uint8_t  privacy;                      // 1 = the AP advertises privacy (WPA2)
+    uint8_t  rsn_len;
+    uint8_t  rsn[CACT_WLAN_RSN_MAX];
+} cact_wlan_bss_t;
 
-typedef struct cact_wlan_frame {
-    uint32_t len;                          // in/out: bytes used in data[]
-    uint8_t  data[CACT_WLAN_FRAME_MAX];    // raw 802.11 frame (no FCS)
-} cact_wlan_frame_t;
-
-typedef struct cact_wlan_channel { uint32_t channel; } cact_wlan_channel_t;
-typedef struct cact_wlan_bssid   { uint8_t  bssid[6]; } cact_wlan_bssid_t;
-
-// What the AP's beacon advertises: the basic-rate set (the rates management
-// frames and EAPOL must use) and the ERP timings.  Taken from the beacon's
-// information elements by wljoin and programmed before the first frame goes
-// out, mirroring mac80211's BSS_CHANGED_BASIC_RATES/ERP handling.
-typedef struct cact_wlan_rates {
-    uint16_t basic;                        // bit0=1M, 1=2M, 2=5.5M, 3=11M,
-                                           // 4=6M, 5=9M, 6=12M, 7=18M, 8=24M,
-                                           // 9=36M, 10=48M, 11=54M; 0 = unknown
-    uint16_t flags;                        // CACT_WLAN_ERP_*
-} cact_wlan_rates_t;
+// Join a BSS found by SCAN (the engine runs auth + association).
+typedef struct cact_wlan_connect {
+    uint8_t  bssid[6];
+    uint8_t  ssid[CACT_WLAN_SSID_MAX];
+    uint8_t  ssid_len;
+} cact_wlan_connect_t;
 
 typedef struct cact_wlan_key {
     uint32_t kind;                         // CACT_WLAN_KEY_*
@@ -779,16 +798,23 @@ typedef struct cact_wlan_key {
     uint8_t  key[CACT_WLAN_KEY_MAX];
 } cact_wlan_key_t;
 
+// One EAPOL payload (no 802.11/LLC framing — the engine adds it), both ways.
+typedef struct cact_wlan_eapol {
+    uint8_t  dst[6];                       // tx: the AP; rx: the source
+    uint32_t len;                          // bytes in data[]  (rx 0 = none yet)
+    uint8_t  data[CACT_WLAN_EAPOL_MAX];
+} cact_wlan_eapol_t;
+
 typedef struct cact_wlan_status {
-    int32_t  linked;                       // 1 = datapath usable
-    uint8_t  mac[6];                       // this station's MAC (SA for auth/assoc)
+    int32_t  linked;                       // 1 = associated (datapath usable)
+    uint8_t  mac[6];                       // this station's MAC
     uint8_t  bssid[6];
     uint32_t channel;
     uint8_t  ssid[CACT_WLAN_SSID_MAX];
     int32_t  last_error;                   // -errno of the last failure (0 = none);
                                            // the only channel for bring-up errors
     int32_t  ccmp_selftest;                // 1 = the CCMP known-answer test passed
-    // Data-path counters for bring-up diagnosis (the driver never prints):
+    // Data-path counters for bring-up diagnosis (the engine never prints):
     // read them after traffic has been attempted to see whether the netdev
     // TX/RX moved anything and where it failed.
     uint32_t tx_data;                      // data frames handed down by the stack
@@ -799,6 +825,10 @@ typedef struct cact_wlan_status {
     uint32_t rx_bad;                       // our AP's protected frames dropped (MIC)
     uint32_t rx_nokey;                     // protected, dropped: the key is not installed
     uint32_t rx_other;                     // data frames from another BSS (dropped)
+    uint32_t tx_drop_noassoc;              // TX dropped: not associated (link down)
+    uint32_t tx_drop_nokey;                // TX dropped: frame's key is not installed
+    uint32_t beacon_rx;                    // beacons from our BSSID (0 => link watchdog)
+    uint32_t deauth_rx;                    // deauth/disassoc from our BSSID (link drop)
 } cact_wlan_status_t;
 
 #endif

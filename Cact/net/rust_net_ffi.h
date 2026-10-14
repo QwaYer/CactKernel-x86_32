@@ -38,6 +38,14 @@ int rust_net_iface_count(void);
 /* Fill *out with interface idx (0 = NIC, 1 = "lo"); 0 on success, -1 when the
    stack is down, idx is out of range, or out is NULL. */
 int rust_net_iface_get(uint32_t idx, struct cact_iface_info* out);
+
+/* ── ARP / IPv4 neighbor table (see cact_arp_entry_t in ioctl_abi.h) ── */
+struct cact_arp_entry; /* defined in ioctl_abi.h */
+/* Number of live neighbors (entries not yet aged out). */
+int rust_net_arp_count(void);
+/* Fill *out with the idx-th live neighbor; 0 on success, -1 when out is NULL or
+   idx is out of range (the range is 0 .. rust_net_arp_count()-1). */
+int rust_net_arp_get(uint32_t idx, struct cact_arp_entry* out);
 int rust_net_dns_resolve_a(const char* name, uint32_t* out_ip_host);
 
 /*

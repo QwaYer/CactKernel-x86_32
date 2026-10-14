@@ -23,6 +23,12 @@ extern long long __divdi3(long long, long long);
 extern long long __moddi3(long long, long long);
 extern unsigned long long __udivdi3(unsigned long long, unsigned long long);
 
+/* In-kernel 802.11 station engine (Rust, cact80211): a Wi-Fi module registers
+ * its radio ops and hands received MPDUs to cact80211_rx. */
+int  cact80211_register(void *hw);
+void cact80211_unregister(void *hw);
+void cact80211_rx(void *hw, const unsigned char *frame, int len);
+
 typedef struct {
     const char* name;
     uint32_t    addr;
@@ -91,6 +97,11 @@ static const ksym_entry_t ksym_table[] = {
     { "active_nic",          (uint32_t)&active_nic },
     { "register_netdev",   (uint32_t)register_netdev },
     { "unregister_netdev", (uint32_t)unregister_netdev },
+    /* In-kernel 802.11 station engine: a Wi-Fi module is a dumb radio that
+     * registers its ops and hands received MPDUs to cact80211_rx. */
+    { "cact80211_register",   (uint32_t)cact80211_register },
+    { "cact80211_unregister", (uint32_t)cact80211_unregister },
+    { "cact80211_rx",         (uint32_t)cact80211_rx },
     { "msidev_alloc_vector",  (uint32_t)msidev_alloc_vector },
     { "msidev_free_vector",   (uint32_t)msidev_free_vector },
     { "msidev_register_handler", (uint32_t)msidev_register_handler },

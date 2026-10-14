@@ -77,6 +77,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "cact80211"
+version = "0.1.0"
+dependencies = [
+ "cact_net",
+ "cact_sync",
+]
+
+[[package]]
 name = "cact_crypto"
 version = "0.1.0"
 dependencies = [
@@ -124,6 +132,7 @@ dependencies = [
 name = "cact_kernel"
 version = "0.1.0"
 dependencies = [
+ "cact80211",
  "cact_drm",
  "cact_hmac_ffi",
  "cact_mm",

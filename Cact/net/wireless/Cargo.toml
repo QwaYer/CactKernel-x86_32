@@ -1,0 +1,15 @@
+[package]
+name = "cact80211"
+version = "0.1.0"
+edition = "2021"
+
+# An rlib, like every other kernel Rust crate: the single `staticlib` is the
+# link crate `cact_kernel`, which depends on this one and pulls its
+# `#[no_mangle]` entry points (`cact80211_register` …) into the kernel image.
+[lib]
+name = "cact80211"
+crate-type = ["lib"]
+
+[dependencies]
+cact_net = { path = "../rust_net" }
+cact_sync = { path = "../../kernel/sync" }
