@@ -7,7 +7,6 @@
 extern devfs_driver_t drv_null;
 extern devfs_driver_t drv_zero;
 extern devfs_driver_t drv_random;
-extern devfs_driver_t drv_tty;
 extern devfs_driver_t drv_keyboard;
 extern devfs_driver_t drv_mouse;
 extern devfs_driver_t drv_fb;
@@ -26,6 +25,12 @@ extern devfs_driver_t drv_epoll;
 
 /* devfs_crypto.c — /dev/crypto kernel crypto service. */
 extern devfs_driver_t drv_crypto;
+
+/* Each owner file registers the devices it defines, so devfs_init() keeps no
+ * device list.  Called once, in order, from devfs_init(). */
+void devfs_devices_init (void);   /* devfs_devices.c — null/zero/random/keyboard/mouse/fb0 */
+void devfs_services_init(void);   /* devfs_services.c — console/sys/net/pipe/memfd/... */
+void devfs_crypto_init  (void);   /* devfs_crypto.c  — crypto */
 
 /* devfs_proc.c — per-process nodes (/dev/tty, /dev/stdin, /dev/fd, /dev/core)
  * and the pty namespace (/dev/ptmx, /dev/pts).  Called once from devfs_init();

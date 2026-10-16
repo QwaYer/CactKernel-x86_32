@@ -42,6 +42,10 @@
 #define TIOCSPTLCK 0x40045431
 #endif
 
+// Fill in a VFS node in place (defined below, used by the lazy node factories).
+static void _init_node(vfs_node_t *n, const char *name, uint32_t type,
+                       vfs_ops_t *ops, vfs_file_ops_t *fops, void *priv);
+
 // ── /dev/tty ──────────────────────────────────────────────────────────────
 // Resolved once per open(): the VT the process calls its terminal.  A process
 // that has none yet adopts the active VT, so the boot path (cgoct opens
@@ -150,7 +154,7 @@ static vfs_node_t stdin_node, stdout_node, stderr_node;
 
 // /dev/fd is a directory of the process's descriptors.
 static vfs_node_t   fd_dir;
-static vfs_node_t   fd_nodes[MAX_FD];
+static vfs_node_t  *fd_nodes[MAX_FD];   // lazily created, one per used descriptor
 static vfs_dirent_t fd_de;
 
 static int _fd_parse(const char *name) {
@@ -164,11 +168,31 @@ static int _fd_parse(const char *name) {
     return n;
 }
 
+// Build /dev/fd/<fd> on first lookup instead of pre-creating MAX_FD nodes.
+static vfs_node_t *_fd_node_get(int fd) {
+    if (!fd_nodes[fd]) {
+        vfs_node_t *n = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
+        if (!n) return 0;
+        char nm[16];
+        snprintf(nm, sizeof(nm), "%d", fd);
+        _init_node(n, nm, VFS_CHARDEVICE, 0, &fd_alias_fops,
+                   (void *)(uintptr_t)fd);
+        fd_nodes[fd] = n;
+    }
+    return fd_nodes[fd];
+}
+
+// /dev/fd/N exists only while the caller holds fd N open (Linux makes /dev/fd
+// a symlink to /proc/self/fd, which behaves the same way); the node is created
+// on demand the first time the name is resolved.
 static vfs_node_t *_fd_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     int fd = _fd_parse(name);
     if (fd < 0) return 0;
-    return &fd_nodes[fd];
+    if (!current_task || !current_task->proc || !current_task->proc->fds)
+        return 0;
+    if (!current_task->proc->fds->files[fd]) return 0;
+    return _fd_node_get(fd);
 }
 
 static vfs_dirent_t *_fd_readdir(vfs_node_t *dir, uint32_t index) {
@@ -260,15 +284,29 @@ static vfs_file_ops_t pts_fops = {
 };
 
 static vfs_node_t   pts_dir;
-static vfs_node_t   pts_nodes[PTY_MAX];
+static vfs_node_t  *pts_nodes[PTY_MAX];   // lazily created, one per live pty
 static vfs_dirent_t pts_de;
+
+// Build /dev/pts/<n> on first lookup instead of pre-creating PTY_MAX nodes.
+static vfs_node_t *_pts_node_get(int n) {
+    if (!pts_nodes[n]) {
+        vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
+        if (!node) return 0;
+        char nm[16];
+        snprintf(nm, sizeof(nm), "%d", n);
+        _init_node(node, nm, VFS_CHARDEVICE, 0, &pts_fops,
+                   (void *)(uintptr_t)n);
+        pts_nodes[n] = node;
+    }
+    return pts_nodes[n];
+}
 
 static vfs_node_t *_pts_walk(vfs_node_t *dir, const char *name) {
     (void)dir;
     int n = _fd_parse(name);
     if (n < 0 || n >= PTY_MAX) return 0;
     if (!pty_used(n)) return 0;
-    return &pts_nodes[n];
+    return _pts_node_get(n);
 }
 
 static vfs_dirent_t *_pts_readdir(vfs_node_t *dir, uint32_t index) {
@@ -382,24 +420,12 @@ void devfs_proc_init(void) {
     devfs_add_node("stderr", &stderr_node);
 
     _init_node(&fd_dir, "fd", VFS_DIRECTORY, &fd_dir_ops, 0, 0);
-    for (int fd = 0; fd < MAX_FD; fd++) {
-        char nm[16];
-        snprintf(nm, sizeof(nm), "%d", fd);
-        _init_node(&fd_nodes[fd], nm, VFS_CHARDEVICE, 0, &fd_alias_fops,
-                   (void *)(uintptr_t)fd);
-    }
     devfs_add_node("fd", &fd_dir);
 
     _init_node(&core_node, "core", VFS_CHARDEVICE, &core_ops, 0, 0);
     devfs_add_node("core", &core_node);
 
     _init_node(&pts_dir, "pts", VFS_DIRECTORY, &pts_dir_ops, 0, 0);
-    for (int i = 0; i < PTY_MAX; i++) {
-        char nm[16];
-        snprintf(nm, sizeof(nm), "%d", i);
-        _init_node(&pts_nodes[i], nm, VFS_CHARDEVICE, 0, &pts_fops,
-                   (void *)(uintptr_t)i);
-    }
     devfs_add_node("pts", &pts_dir);
 
     _init_node(&ptmx_node, "ptmx", VFS_CHARDEVICE, 0, &ptmx_fops, 0);

@@ -738,10 +738,12 @@ typedef struct cact_epoll_wait_arg {
 #define CACT_TTYCTL_SET_FG      0x3D05  // arg=uint32_t* -> console foreground process group (0 = none);
                                         // the session leader claims it (tcsetpgrp) and the line
                                         // discipline delivers ^C/^\ /^Z/SIGWINCH to that whole group
+#define CACT_TTYCTL_VT_OPENQRY     0x3D06  // arg=int* -> number of a free VT to allocate (0 = cap reached)
+#define CACT_TTYCTL_VT_DISALLOCATE 0x3D07  // arg=int* -> release VT n (highest only, never the active one)
 
 typedef struct cact_vt_state {
     uint16_t v_active;   // active VT
-    uint16_t v_count;    // number of VTs
+    uint16_t v_count;    // number of allocated VTs (grows/shrinks as VTs come and go)
 } cact_vt_state_t;
 
 // ===========================================================================

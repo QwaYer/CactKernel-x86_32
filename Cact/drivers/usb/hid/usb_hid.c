@@ -239,10 +239,11 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         hid_repeat_clear();
 
         /* Alt+F1..F12 -> switch virtual terminal, as on a Linux console.
-         * HID 0x3A..0x45 are F1..F12; tty_activate() ignores VTs that do not
-         * exist, so the higher F-keys are simply no-ops. */
+         * HID 0x3A..0x45 are F1..F12; this runs in interrupt context, so the
+         * switch is queued and the VT (allocated on demand, up to the cap) is
+         * brought up by the tty console task. */
         if (alt && kc >= 0x3A && kc <= 0x45) {
-            tty_activate(kc - 0x3A + 1);
+            tty_activate_deferred(kc - 0x3A + 1);
             continue;
         }
 

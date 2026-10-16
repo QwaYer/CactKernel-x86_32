@@ -299,3 +299,8 @@ static int _crypto_ioctl(void *p, uint32_t cmd, void *arg) {
 devfs_driver_t drv_crypto = {
     .ioctl  = _crypto_ioctl,
 };
+
+// Register this file's device (see devfs_devices_init for the convention).
+void devfs_crypto_init(void) {
+    register_chrdev("crypto", DEVFS_F_CHAR, &drv_crypto, 0);
+}

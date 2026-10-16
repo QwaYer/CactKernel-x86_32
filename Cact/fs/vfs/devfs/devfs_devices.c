@@ -9,7 +9,6 @@
 #include "mouse.h"
 #include "fb.h"
 #include "validate.h"
-#include "tty.h"
 
 // ── Built-in driver tables ────────────────────────────────────────────────
 
@@ -37,20 +36,8 @@ devfs_driver_t drv_random = { .read=_rand_read, .write=_null_write };
 
 extern int keyboard_read_char(void);
 
-// ── /dev/tty0 + /dev/tty1..N ──────────────────────────────────────────────
-// The VT core owns the terminals; drv_priv is the VT index (0 = active).
-static int _tty_read(void *p, uint32_t off, uint32_t size, char *buf) {
-    return tty_read((int)(uintptr_t)p, off, size, buf);
-}
-static int _tty_write(void *p, uint32_t off, uint32_t size, char *buf) {
-    return tty_write((int)(uintptr_t)p, off, size, buf);
-}
-static int _tty_ioctl(void *p, uint32_t cmd, void *arg) {
-    return tty_ioctl((int)(uintptr_t)p, cmd, arg);
-}
-devfs_driver_t drv_tty = {
-    .read=_tty_read, .write=_tty_write, .ioctl=_tty_ioctl
-};
+// /dev/tty0 + /dev/ttyN are not devfs's business: the terminal driver owns its
+// devfs_driver_t and registers every VT node itself (Cact/drivers/tty/tty.c).
 
 // /dev/keyboard — raw character stream from keyboard circular buffer
 static int _kbd_read(void *p, uint32_t off, uint32_t size, char *buf) {
@@ -129,3 +116,16 @@ static int _fb_ioctl(void *p, uint32_t cmd, void *arg) {
 devfs_driver_t drv_fb = {
     .read=_fb_read, .write=_fb_write, .ioctl=_fb_ioctl
 };
+
+// Register this file's devices.  Each driver group registers the nodes it
+// owns, so devfs_init() stays a generic bootstrap and carries no device list.
+void devfs_devices_init(void) {
+    register_chrdev("null",    DEVFS_F_CHAR, &drv_null,   0);
+    register_chrdev("zero",    DEVFS_F_CHAR, &drv_zero,   0);
+    register_chrdev("random",  DEVFS_F_CHAR, &drv_random, 0);
+    register_chrdev("urandom", DEVFS_F_CHAR, &drv_random, 0);
+
+    register_chrdev("keyboard", DEVFS_F_CHAR, &drv_keyboard, 0);
+    register_chrdev("mouse",    DEVFS_F_CHAR, &drv_mouse,    0);
+    register_chrdev("fb0",      DEVFS_F_CHAR, &drv_fb,       0);
+}

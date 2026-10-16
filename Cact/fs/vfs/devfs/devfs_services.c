@@ -593,3 +593,20 @@ static int _epoll_ioctl(void *p, uint32_t cmd, void *arg) {
 }
 
 devfs_driver_t drv_epoll = { .ioctl = _epoll_ioctl };
+
+// Register this file's service devices (see devfs_devices_init for the
+// convention).  These are the kernel-service nodes that turn console output,
+// mount/reboot, module loading, socket/pipe/memfd/fd creation into plain VFS
+// nodes.
+void devfs_services_init(void) {
+    register_chrdev("console", DEVFS_F_CHAR, &drv_console, 0);
+    register_chrdev("sys",     DEVFS_F_CHAR, &drv_sys,     0);
+    register_chrdev("net",     DEVFS_F_CHAR, &drv_net,     0);
+    register_chrdev("pipe",    DEVFS_F_CHAR, &drv_pipe,    0);
+    register_chrdev("memfd",   DEVFS_F_CHAR, &drv_memfd,   0);
+    register_chrdev("eventfd", DEVFS_F_CHAR, &drv_eventfd, 0);
+    register_chrdev("timerfd", DEVFS_F_CHAR, &drv_timerfd, 0);
+    register_chrdev("signalfd",DEVFS_F_CHAR, &drv_signalfd,0);
+    register_chrdev("epoll",   DEVFS_F_CHAR, &drv_epoll,   0);
+    register_chrdev("kmsg",    DEVFS_F_CHAR, &drv_kmsg,    0);
+}

@@ -4,11 +4,7 @@
 #include "memory.h"
 #include "klib.h"
 #include "kernel.h"
-#include "pipe.h"
 #include "pci_driver.h"
-#include "mouse.h"
-#include "fb.h"
-#include "validate.h"
 #include "tty.h"
 
 // Global devfs state
@@ -222,11 +218,10 @@ int unregister_chrdev(const char *name) {
     return -1;
 }
 
-// one-time initialisation: set up root node and register built-in devices
+// One-time initialisation: set up the root node and let each device owner file
+// register its own nodes (devfs keeps no device list of its own).
 void devfs_init(void) {
     if (devfs_ready) return;
-
-    tty_init();
 
     memset(&devfs_root, 0, sizeof(vfs_node_t));
     strlcpy(devfs_root.name, "dev", 128);
@@ -238,40 +233,14 @@ void devfs_init(void) {
     modinfo_node.type = VFS_FILE;
     modinfo_node.ops  = &modinfo_ops;
 
-    register_chrdev("null",    DEVFS_F_CHAR,  &drv_null,   0);
-    register_chrdev("zero",    DEVFS_F_CHAR,  &drv_zero,   0);
-    register_chrdev("random",  DEVFS_F_CHAR,  &drv_random, 0);
-    register_chrdev("urandom", DEVFS_F_CHAR,  &drv_random, 0);
-
-    // Block device nodes (/dev/<disk>, /dev/<part>) are registered by vfsdev,
-    // not by devfs: devfs only owns character and kernel-service devices.
-
-    // Terminal family, Linux-style: /dev/tty0 aliases the active VT, tty1..N
-    // are the virtual terminals themselves.
-    register_chrdev("tty0", DEVFS_F_CHAR, &drv_tty, (void *)0);
-    for (int i = 1; i <= tty_count(); i++) {
-        char nm[16];
-        snprintf(nm, sizeof(nm), "tty%d", i);
-        register_chrdev(nm, DEVFS_F_CHAR, &drv_tty, (void *)(uintptr_t)i);
-    }
-
-    register_chrdev("keyboard", DEVFS_F_CHAR, &drv_keyboard, 0);
-    register_chrdev("mouse",    DEVFS_F_CHAR, &drv_mouse,    0);
-
-    register_chrdev("fb0", DEVFS_F_CHAR, &drv_fb, 0);
-
-    // Kernel-service devices (new VFS-node model)
-    register_chrdev("console", DEVFS_F_CHAR, &drv_console, 0);
-    register_chrdev("sys",     DEVFS_F_CHAR, &drv_sys,     0);
-    register_chrdev("net",     DEVFS_F_CHAR, &drv_net,     0);
-    register_chrdev("pipe",    DEVFS_F_CHAR, &drv_pipe,    0);
-    register_chrdev("memfd",   DEVFS_F_CHAR, &drv_memfd,   0);
-    register_chrdev("eventfd", DEVFS_F_CHAR, &drv_eventfd, 0);
-    register_chrdev("timerfd", DEVFS_F_CHAR, &drv_timerfd, 0);
-    register_chrdev("signalfd",DEVFS_F_CHAR, &drv_signalfd,0);
-    register_chrdev("epoll",   DEVFS_F_CHAR, &drv_epoll,   0);
-    register_chrdev("kmsg",    DEVFS_F_CHAR, &drv_kmsg,    0);
-    register_chrdev("crypto",  DEVFS_F_CHAR, &drv_crypto,  0);
+    // devfs itself registers no device: each owner file registers the nodes it
+    // defines (tty_alloc() for the terminals; devfs_devices_init() /
+    // devfs_services_init() / devfs_crypto_init() for the rest), and block
+    // devices come from vfsdev.  This keeps devfs a generic device filesystem.
+    tty_init();
+    devfs_devices_init();
+    devfs_services_init();
+    devfs_crypto_init();
 
     // Per-process nodes (/dev/tty, /dev/stdin|stdout|stderr, /dev/fd, /dev/core)
     // and the pty namespace (/dev/ptmx, /dev/pts).
