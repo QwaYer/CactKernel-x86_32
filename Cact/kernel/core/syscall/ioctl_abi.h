@@ -224,6 +224,7 @@ typedef struct cact_uname {
 #define CACT_PROCCTL_THREAD_EXIT 0x3213  // self; arg=uint32_t* exit code (may be NULL)
 #define CACT_PROCCTL_FUTEX       0x3214  // self; arg=cact_futex_arg_t*
 #define CACT_PROCCTL_GET_TID     0x3215  // self; arg=NULL; returns the calling task's tid
+#define CACT_PROCCTL_KILLPG      0x3216  // self; arg=cact_killpg_arg_t*  (killpg(pgid,sig))
 
 typedef struct cact_thread_create_arg {
     void*    entry;      // user entry point (called as entry(arg))
@@ -246,6 +247,8 @@ typedef struct cact_futex_arg {
 
 typedef struct cact_pgid_arg { uint32_t pid; uint32_t pgid; } cact_pgid_arg_t;
 typedef struct cact_signal_arg { uint32_t pid; uint32_t signum; } cact_signal_arg_t;
+/* killpg(pgid, sig): signal every task in one process group. */
+typedef struct cact_killpg_arg { uint32_t pgid; uint32_t signum; } cact_killpg_arg_t;
 typedef struct cact_sigaction_arg { uint32_t signum; uint32_t handler; } cact_sigaction_arg_t;
 typedef struct cact_sigprocmask_arg { uint32_t how; uint32_t set; uint32_t oldset; } cact_sigprocmask_arg_t;
 typedef struct cact_itimerval_arg { uint32_t it_value_ms; uint32_t it_interval_ms; uint32_t old_value_ms; uint32_t old_interval_ms; } cact_itimerval_arg_t;
@@ -732,6 +735,9 @@ typedef struct cact_epoll_wait_arg {
 #define CACT_TTYCTL_VT_GETSTATE 0x3D02  // arg=cact_vt_state_t*
 #define CACT_TTYCTL_SET_CTTY    0x3D03  // arg=int* -> make VT n the controlling terminal
 #define CACT_TTYCTL_GET_CTTY    0x3D04  // arg=int* -> controlling VT index (0 = none)
+#define CACT_TTYCTL_SET_FG      0x3D05  // arg=uint32_t* -> console foreground process group (0 = none);
+                                        // the session leader claims it (tcsetpgrp) and the line
+                                        // discipline delivers ^C/^\ /^Z/SIGWINCH to that whole group
 
 typedef struct cact_vt_state {
     uint16_t v_active;   // active VT

@@ -457,12 +457,12 @@ pub unsafe extern "C" fn task_exec(
     // SAFETY: the lock was acquired above.
     unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
 
-    // SAFETY: `terminal_fg_pid` is a kernel global for the console's foreground pid.
-    let fg_pid_ptr = unsafe { ffi::terminal_fg_pid.get() };
-    // SAFETY: `t` is the live current task.
-    let fg_pid = unsafe { (*t).pid };
-    // SAFETY: `fg_pid_ptr` points at the console's foreground-pid global.
-    unsafe { *fg_pid_ptr = fg_pid };
+    // The console's foreground process group is deliberately NOT reassigned
+    // here.  It used to be set to whichever process exec'd last, which is wrong
+    // for a pipeline: the last exec belongs to the last member, so ^C reached
+    // only that one and the rest of the job lived on.  The session leader (the
+    // shell) owns the console and claims it with CACT_TTYCTL_SET_FG, handing it
+    // to the running job's process group and taking it back afterwards.
 
     let pd_val = new_pd as u32;
     let entry_u = entry as u32;

@@ -41,7 +41,7 @@ pub struct InterpInfo {
 
 // SAFETY: All functions and statics are backed by C definitions in the kernel.
 // Pointer parameters must be non-null and correctly aligned.  The mutable
-// statics (`page_directory`, `tss_entry`, `vfs_root`, `terminal_fg_pid`) are
+// statics (`page_directory`, `tss_entry`, `vfs_root`) are
 // read/written under the scheduler spinlock or during boot — callers must
 // hold the appropriate lock (or be in a single-threaded context).
 unsafe extern "C" {
@@ -98,7 +98,6 @@ unsafe extern "C" {
     pub static page_directory: SyncUnsafeCell<u32>;       
     pub static tss_entry: SyncUnsafeCell<TssEntry>;
     pub static vfs_root: SyncUnsafeCell<*mut VfsNode>;
-    pub static terminal_fg_pid: SyncUnsafeCell<u32>;
     pub static sys_sigreturn_num: u32;
     
     pub fn syscall_set_esp0(esp: u32);

@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(sync_unsafe_cell)]
 // Safety baseline: unsafe ops inside `unsafe fn` bodies must be explicit, and every
 // `unsafe` block needs a SAFETY comment (the latter enforced under clippy).
 #![deny(unsafe_op_in_unsafe_fn)]

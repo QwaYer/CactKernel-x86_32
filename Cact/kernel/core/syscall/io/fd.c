@@ -549,7 +549,9 @@ static int _dirctl_handle(vfs_node_t *dir, uint32_t cmd, void *arg) {
         char *kname;
         if (_copy_name_arg(a.name, &kname) != 0) return -EFAULT;
         if (!_name_is_single(kname)) { kfree(kname); return -EINVAL; }
-        vfs_node_t *node = finddir_vfs(dir, kname);
+        // stat(2) follows a final symlink; userspace lstat() asks for
+        // CACT_DIRCTL_STATX with CACT_AT_SYMLINK_NOFOLLOW instead.
+        vfs_node_t *node = vfs_lookup_child(dir, kname, 1);
         kfree(kname);
         if (!node) return -ENOENT;
         return stat_vfs(node, (uint32_t *)a.buf);
@@ -684,8 +686,8 @@ int sys_ioctl(struct syscall_frame *regs) {
             terminal_winsize.ws_col    = ws_buf.ws_col;
             terminal_winsize.ws_xpixel = ws_buf.ws_xpixel;
             terminal_winsize.ws_ypixel = ws_buf.ws_ypixel;
-            if (terminal_fg_pid)
-                task_signal(terminal_fg_pid, SIGWINCH);
+            if (terminal_fg_pgid)
+                task_signal_pgid(terminal_fg_pgid, SIGWINCH);
         } else {
             ws_buf.ws_row    = terminal_winsize.ws_row;
             ws_buf.ws_col    = terminal_winsize.ws_col;

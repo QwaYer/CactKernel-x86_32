@@ -259,6 +259,6 @@ struct winsize {
 };
 
 extern struct winsize terminal_winsize;
-extern uint32_t       terminal_fg_pid;
+extern uint32_t       terminal_fg_pgid;
 
 #endif  

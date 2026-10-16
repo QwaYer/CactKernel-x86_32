@@ -7,7 +7,6 @@
 #include "ioctl_abi.h"
 
 extern void sched_sleep_ticks(uint32_t ticks);
-extern uint32_t terminal_fg_pid;
 
 #ifndef EINTR
 #define EINTR 4
@@ -164,9 +163,12 @@ static void line_commit(int i, int add_newline) {
 }
 
 // ── line discipline ─────────────────────────────────────────────────────────
+// ^C/^\ /^Z go to the console's foreground process *group*: a pipeline is
+// several processes and POSIX delivers these signals to every one of them, so
+// the line discipline must not pick a single pid.
 static void tty_signal_fg(uint32_t sig) {
-    if (terminal_fg_pid)
-        task_signal(terminal_fg_pid, sig);
+    if (terminal_fg_pgid)
+        task_signal_pgid(terminal_fg_pgid, sig);
 }
 
 // Word erase: drop trailing blanks, then the word before the cursor.
@@ -199,17 +201,17 @@ void tty_input(int idx, char c) {
      * Ctrl+C stop a foreground command whose terminal is non-canonical. */
     if (t->c_lflag & TTY_ISIG) {
         if (uc == t->c_cc[TTY_VINTR]) {
-            if (terminal_fg_pid) {
+            if (terminal_fg_pgid) {
                 tty_signal_fg(SIGINT);
                 line_clear(i);
                 if (t->c_lflag & TTY_ECHO) vt_echo_str(i, "^C\r\n");
             } else {
-                in_push(i, c);        // no foreground process: hand the byte through
+                in_push(i, c);        // no foreground process group: hand the byte through
             }
             return;
         }
         if (uc == t->c_cc[TTY_VQUIT]) {
-            if (terminal_fg_pid) {
+            if (terminal_fg_pgid) {
                 tty_signal_fg(SIGQUIT);
                 line_clear(i);
                 if (t->c_lflag & TTY_ECHO) vt_echo_str(i, "^\\\r\n");
@@ -219,7 +221,7 @@ void tty_input(int idx, char c) {
             return;
         }
         if (uc == t->c_cc[TTY_VSUSP]) {
-            if (terminal_fg_pid) {
+            if (terminal_fg_pgid) {
                 tty_signal_fg(SIGSTOP);
                 line_clear(i);
                 if (t->c_lflag & TTY_ECHO) vt_echo_str(i, "^Z\r\n");
@@ -448,6 +450,23 @@ int tty_ioctl(int idx, uint32_t cmd, void *arg) {
     case CACT_TTYCTL_GET_CTTY: {
         if (!arg || !validate_user_ptr(arg, sizeof(int))) return -1;
         *(int *)arg = tty_get_ctty();
+        return 0;
+    }
+
+    case CACT_TTYCTL_SET_FG: {
+        // tcsetpgrp: claim the console's foreground process group.  The session
+        // leader (the shell) sets it to a job's group while that job runs and
+        // back to its own group afterwards; 0 means "no foreground job".
+        uint32_t pgid;
+        if (!arg || copy_from_user(&pgid, arg, sizeof(pgid)) != 0) return -1;
+        if (pgid != 0) {
+            int found = 0;
+            for (struct task_struct *it = task_list_head; it && !found; it = it->next) {
+                if (it->proc && it->proc->pgid == pgid) found = 1;
+            }
+            if (!found) return -3;   // ESRCH: nothing would ever receive the signal
+        }
+        terminal_fg_pgid = pgid;
         return 0;
     }
 

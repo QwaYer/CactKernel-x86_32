@@ -222,7 +222,6 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         if (a.pid == 0 || a.pid == current_task->pid) {
             t = current_task;
         } else {
-            if (current_task->proc->euid != 0) return -1;   // EPERM
             t = 0;
             struct task_struct *cur = task_list_head;
             while (cur) {
@@ -230,6 +229,12 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
                 cur = cur->next;
             }
             if (!t || !t->proc) return -3;                  // ESRCH
+            /* POSIX: root may move any process; anyone may move one of their
+             * own children.  The shell relies on this to give a job its own
+             * process group before handing it the console. */
+            if (current_task->proc->euid != 0 &&
+                t->proc->parent_pid != current_task->pid)
+                return -1;                                  // EPERM
         }
         uint32_t pgid = (a.pgid == 0) ? t->pid : a.pgid;
         t->proc->pgid = pgid;
@@ -302,6 +307,27 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
          * passing the index raw set SIGKILL|SIGTERM for kill(SIGCONT), so
          * every userspace kill() killed the target instead of signalling it. */
         task_signal(a.pid, 1u << a.signum);
+        return 0;
+    }
+
+    case CACT_PROCCTL_KILLPG: {
+        cact_killpg_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        if (a.pgid == 0) return -EINVAL;
+        if (a.signum >= NSIG) return -EINVAL;
+        if (current_task->proc->euid != 0 && current_task->proc->pgid != a.pgid) {
+            /* Not the caller's own group: allowed only for a group one of its
+             * children is in — which is how a shell resumes a job it created. */
+            int mine = 0;
+            for (struct task_struct *it = task_list_head; it && !mine; it = it->next) {
+                if (it->proc && it->proc->pgid == a.pgid &&
+                    it->proc->parent_pid == current_task->pid) mine = 1;
+            }
+            if (!mine) return -1;                           // EPERM
+        }
+        /* Same convention as PROCCTL_SIGNAL: `signum` is the kernel bit index. */
+        task_signal_pgid(a.pgid, 1u << a.signum);
         return 0;
     }
 

@@ -277,6 +277,7 @@ int  sched_create_thread(void* entry, uint32_t user_esp, uint32_t tls,
 int  cact_futex_wake_addr(uint32_t* pd, uint32_t* uaddr, int count);
 /* Send `signal` to every task of the calling task's group except `except_pid`. */
 void task_signal_group(uint32_t except_pid, uint32_t signal);
+void task_signal_pgid(uint32_t pgid, uint32_t signal);
 /* Ioctl helpers for /proc/self/ctl (CACT_PROCCTL_THREAD_*); `arg` is the raw
  * userspace pointer the ioctl received. */
 int  proc_thread_create(const void* arg);
