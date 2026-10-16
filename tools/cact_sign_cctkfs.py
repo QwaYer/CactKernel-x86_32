@@ -94,6 +94,13 @@ def main():
     new_data_blobs = []
     for ent in entries:
         blob = ent["data"]
+        # Only .cctk loadable modules carry the ECDSA trailer; every other
+        # archive entry (the package repo's index/cpkgs, CA bundle, ...) must
+        # keep its exact bytes, or its reported size grows and readers
+        # (which trust stat/entry sizes) over-read into the next blob.
+        if not ent["name"].endswith(".cctk"):
+            new_data_blobs.append(blob)
+            continue
         if modsign.already_signed(blob):
             print(f"  [{ent['name']}]: already signed, OK")
             new_data_blobs.append(blob)
