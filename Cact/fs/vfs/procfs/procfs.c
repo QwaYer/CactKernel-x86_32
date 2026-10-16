@@ -150,7 +150,7 @@ void procfs_init(void) {
     uint32_t nfiles = 0;
     for (proc_file_t *f = file_list; f; f = f->next) nfiles++;
 
-    pr_info("  %-11s : root ready (%u virtual file(s) + /proc/self + /proc/<pid>)\n",
+    pr_info("%s: root ready (%u virtual file(s) + /proc/self + /proc/<pid>)\n",
             "procfs", nfiles);
 
     procfs_ready = 1;

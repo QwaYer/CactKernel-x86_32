@@ -10,7 +10,7 @@ int font_load_boot(const char *path) {
     uint32_t       size;
 
     if (!path || initfs_modblob_get(path, &blob, &size) != 0) {
-        pr_err("  %-11s : boot font not staged in cctkfs (%s)\n",
+        pr_err("%s: boot font not staged in cctkfs (%s)\n",
                "font", path ? path : "(null)");
         return FONT_ERR_NOT_FOUND;
     }
@@ -18,12 +18,12 @@ int font_load_boot(const char *path) {
     int rc = font_parse_psf2(blob, size, &boot_font);
     boot_font_ready = (rc == FONT_OK);
     if (rc != FONT_OK) {
-        pr_err("  %-11s : PSF2 parse failed (rc=%d, %u bytes)\n",
+        pr_err("%s: PSF2 parse failed (rc=%d, %u bytes)\n",
                "font", rc, (unsigned)size);
         return rc;
     }
 
-    pr_info("  %-11s : boot font %ux%u, %u glyphs (%u B)\n",
+    pr_info("%s: boot font %ux%u, %u glyphs (%u B)\n",
             "font", (unsigned)boot_font.width, (unsigned)boot_font.height,
             (unsigned)boot_font.num_glyphs, (unsigned)size);
     return rc;

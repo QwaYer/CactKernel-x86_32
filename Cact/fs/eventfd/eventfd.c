@@ -144,7 +144,7 @@ static int _eventfd_poll(vfs_node_t *node, uint32_t events) {
 vfs_node_t *eventfd_create_vnode(uint32_t initval, uint32_t flags) {
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
     if (!node) {
-        pr_err("  %-11s : cannot allocate node\n", "eventfd");
+        pr_err("%s: cannot allocate node\n", "eventfd");
         return 0;
     }
     memset(node, 0, sizeof(vfs_node_t));
@@ -152,7 +152,7 @@ vfs_node_t *eventfd_create_vnode(uint32_t initval, uint32_t flags) {
     eventfd_state_t *s = (eventfd_state_t *)kmalloc(sizeof(eventfd_state_t));
     if (!s) {
         kfree(node);
-        pr_err("  %-11s : cannot allocate state\n", "eventfd");
+        pr_err("%s: cannot allocate state\n", "eventfd");
         return 0;
     }
     memset(s, 0, sizeof(eventfd_state_t));

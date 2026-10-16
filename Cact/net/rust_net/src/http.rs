@@ -793,7 +793,7 @@ fn warn_tls_insecure() {
     if !TLS_INSECURE_WARNED.swap(true, Ordering::Relaxed) {
         ffi_kernel::klog_static(
             ffi_kernel::LOG_WARN,
-            b"HTTPS: certificate chain verification disabled by CACT_HTTP_FLAG_INSECURE_TLS\0",
+            b"http: certificate chain verification disabled by CACT_HTTP_FLAG_INSECURE_TLS\0",
         );
     }
 }

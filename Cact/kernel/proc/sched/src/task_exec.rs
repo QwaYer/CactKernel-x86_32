@@ -266,7 +266,7 @@ pub unsafe extern "C" fn task_exec(
         Some(n) => n,
         None => {
             // SAFETY: `printk` takes a static NUL-terminated byte string.
-            unsafe { ffi::printk(c"[EXEC] abort: argv copy / stack overflow\n".as_ptr().cast()) };
+            unsafe { ffi::printk(c"exec: abort: argv copy / stack overflow\n".as_ptr().cast()) };
             // SAFETY: `p` is the live current task's `ProcMeta`.
             unsafe { (*p).ustack_phys = old_ustack_pages[0] };
             // SAFETY: `p` is live.
@@ -286,7 +286,7 @@ pub unsafe extern "C" fn task_exec(
         Some(n) => n,
         None => {
             // SAFETY: `printk` takes a static NUL-terminated byte string.
-            unsafe { ffi::printk(c"[EXEC] abort: envp copy / stack overflow\n".as_ptr().cast()) };
+            unsafe { ffi::printk(c"exec: abort: envp copy / stack overflow\n".as_ptr().cast()) };
             // SAFETY: `p` is the live current task's `ProcMeta`.
             unsafe { (*p).ustack_phys = old_ustack_pages[0] };
             // SAFETY: `p` is live.
@@ -342,7 +342,7 @@ pub unsafe extern "C" fn task_exec(
     let ptr_overhead = (argc as u32 + envc as u32 + 5) * 4;
     if sp < ustack_virt + ptr_overhead {
         // SAFETY: `printk` takes a static NUL-terminated byte string.
-        unsafe { ffi::printk(c"[EXEC] abort: stack layout preflight failed\n".as_ptr().cast()) };
+        unsafe { ffi::printk(c"exec: abort: stack layout preflight failed\n".as_ptr().cast()) };
         // SAFETY: `p` is the live current task's `ProcMeta`.
         unsafe { (*p).ustack_phys = old_ustack_pages[0] };
         // SAFETY: `p` is live.

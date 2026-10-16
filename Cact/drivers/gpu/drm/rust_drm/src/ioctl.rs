@@ -187,7 +187,7 @@ pub extern "C" fn drm_ioctl_dispatch(file: *mut DrmFile, cmd: u32, arg: *mut c_v
         // SAFETY: fixed format string, no arguments.
         unsafe {
             crate::ffi::printk(
-                c"\x017  drm         : ioctl payload too large\n".as_ptr() as *const u8,
+                c"\x017drm: ioctl payload too large\n".as_ptr() as *const u8,
             );
         }
         return -22;

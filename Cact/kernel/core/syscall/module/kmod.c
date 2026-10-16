@@ -200,7 +200,7 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
         return -EINVAL;
 
     if (kmod_slot_by_name(name)) {
-        pr_warn("kmod module already loaded: %s", name);
+        pr_warn("kmod: module already loaded: %s", name);
         return -EEXIST;
     }
 
@@ -226,7 +226,7 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
 
     kmod_slot_t *slot = kmod_slot_free();
     if (!slot) {
-        pr_warn("kmod no free module slot");
+        pr_warn("kmod: no free module slot (max %d) for %s", (int)KMOD_MAX_SLOTS, name);
         return -ENOSPC;
     }
 
@@ -254,12 +254,12 @@ int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id) {
         // Manifest parsed fine, but no enumerated PCI function matched its
         // VID/DID (or the image failed to relocate and the probe was never
         // linked).  Look for the "[LDR]" lines in the kernel log.
-        pr_warn("kmod probe not linked: %s", name);
+        pr_warn("kmod: probe not linked: %s", name);
         kmod_release_driver(&slot->drv);
         return -ENODEV;
     }
 
-    pr_info("kmod module loaded: %s (slot %d)", name, (int)(slot - kmod_slots));
+    pr_info("kmod: module loaded: %s (slot %d)", name, (int)(slot - kmod_slots));
     return 0;
 }
 
@@ -287,17 +287,17 @@ int kmod_unload_kname(const char *name) {
     if (user_str_all_decimal(name)) {
         int idx;
         if (parse_pci_modinfo_index(name, &idx) != 0) {
-            pr_warn("kmod invalid pci index");
+            pr_warn("kmod: invalid pci index '%s'", name);
             return -EINVAL;
         }
         pci_device_t *dev = pci_device_by_index(idx);
         if (!dev) {
-            pr_warn("kmod pci function index not found");
+            pr_warn("kmod: pci function index %d not found", idx);
             return -ENOENT;
         }
         pci_driver_t *rdrv = pci_driver_find_reloc_for_device(dev);
         if (!rdrv) {
-            pr_warn("kmod no relocatable module for pci function");
+            pr_warn("kmod: no relocatable module for pci function %d", idx);
             return -ENODEV;
         }
         kmod_release_driver(rdrv);
@@ -306,11 +306,11 @@ int kmod_unload_kname(const char *name) {
 
     pci_driver_t *drv = pci_driver_find_by_name(name);
     if (!drv) {
-        pr_warn("kmod driver not found");
+        pr_warn("kmod: driver '%s' not found", name);
         return -ENOENT;
     }
     if (!(drv->flags & PCI_DRV_F_RELOC_MODULE)) {
-        pr_warn("kmod driver is built-in");
+        pr_warn("kmod: driver '%s' is built-in, cannot unload", name);
         return -EOPNOTSUPP;
     }
 

@@ -161,7 +161,7 @@ static void usb_parse_config(usb_device_t *dev) {
 usb_device_t *usb_device_enumerate(usb_hc_t *hc, uint8_t port, uint8_t speed)
 {
     if (hc->port_reset(hc, port) != 0) {
-        pr_err("[USB] Port reset failed\n");
+        pr_err("usb: port %u reset failed (speed %u)\n", (unsigned)port, (unsigned)speed);
         return NULL;
     }
 
@@ -175,14 +175,15 @@ usb_device_t *usb_device_enumerate(usb_hc_t *hc, uint8_t port, uint8_t speed)
     dev->address = USB_DEFAULT_ADDRESS;
 
     if (usb_get_descriptor(dev, USB_DESC_DEVICE, 0, &dev->dev_desc, 8) < 0) {
-        pr_err("[USB] Failed to read device descriptor\n");
+        pr_err("usb: port %u device descriptor read failed\n", (unsigned)port);
         kfree(dev);
         return NULL;
     }
 
     uint8_t new_addr = usb_alloc_address();
     if (!new_addr || usb_set_address(dev, new_addr) < 0) {
-        pr_err("[USB] SET_ADDRESS failed\n");
+        pr_err("usb: port %u SET_ADDRESS failed (addr %u)\n",
+               (unsigned)port, (unsigned)new_addr);
         usb_free_address(new_addr);
         kfree(dev);
         return NULL;
@@ -268,7 +269,7 @@ void usb_init(void) {
 
     extern void xhci_pci_init(void);
     xhci_pci_init();
-    pr_info("  %-11s : xHCI stack ready (hubs, HID, PCI)\n", "usb");
+    pr_info("%s: xHCI stack ready (hubs, HID, PCI)\n", "usb");
 }
 
 

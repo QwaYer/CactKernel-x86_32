@@ -82,9 +82,9 @@ int search_pci(void) {
     port_dword_out(PCI_CONFIG_ADDRESS, 0x80000000);
     uint32_t readback = port_dword_in(PCI_CONFIG_ADDRESS);
     if (readback == 0x80000000) {
-        pr_info("  %-11s : config mechanism #1 (IO ports 0xCF8/0xCFC)\n", "pci");
+        pr_info("%s: config mechanism #1 (IO ports 0xCF8/0xCFC)\n", "pci");
         return 0;
     }
-    pr_warn("  %-11s : config space not responding — no PCI bus?\n", "pci");
+    pr_warn("%s: config space not responding — no PCI bus?\n", "pci");
     return 1;
 }

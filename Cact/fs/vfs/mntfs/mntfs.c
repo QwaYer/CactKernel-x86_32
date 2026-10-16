@@ -30,18 +30,18 @@ static int _ensure_dir(vfs_node_t *root, const char *name) {
 static void _mount(vfs_node_t *host, const char *name, vfs_node_t *target,
                    const char *src) {
     if (vfs_mount_ex(host, name, target, src) == 0) {
-        pr_info("  %-11s : /%-6s <- %s\n", "mntfs", name, src);
+        pr_info("%s: /%-6s <- %s\n", "mntfs", name, src);
     } else {
-        pr_warn("  %-11s : mount of /%s (%s) failed\n", "mntfs", name, src);
+        pr_warn("%s: mount of /%s (%s) failed\n", "mntfs", name, src);
     }
 }
 
 // Register a usrmerge symlink at the root: /bin -> usr/bin and friends.
 static void _symlink(const char *name, const char *target) {
     if (vfs_symlink(vfs_root, name, target) == 0) {
-        pr_info("  %-11s : /%-6s -> %s\n", "mntfs", name, target);
+        pr_info("%s: /%-6s -> %s\n", "mntfs", name, target);
     } else {
-        pr_warn("  %-11s : symlink /%s -> %s failed\n", "mntfs", name, target);
+        pr_warn("%s: symlink /%s -> %s failed\n", "mntfs", name, target);
     }
 }
 
@@ -57,19 +57,19 @@ void mntfs_init(void) {
 
     if (ext4) {
         vfs_root = ext4;
-        pr_info("  %-11s : root = %s filesystem at /\n", "mntfs", boot->name);
+        pr_info("%s: root = %s filesystem at /\n", "mntfs", boot->name);
     } else {
         vfs_root = tmpfs_create_root("/");
         if (!vfs_root) {
-            pr_warn("  %-11s : RAM rootfs allocation failed — VFS unusable\n",
+            pr_warn("%s: RAM rootfs allocation failed — VFS unusable\n",
                     "mntfs");
             return;
         }
         if (boot) {
-            pr_warn("  %-11s : filesystem on %s not available, RAM rootfs at /\n",
+            pr_warn("%s: filesystem on %s not available, RAM rootfs at /\n",
                     "mntfs", boot->name);
         } else {
-            pr_warn("  %-11s : no boot block device — RAM rootfs at /\n", "mntfs");
+            pr_warn("%s: no boot block device — RAM rootfs at /\n", "mntfs");
         }
     }
 
@@ -108,7 +108,7 @@ void mntfs_init(void) {
     };
     for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
         if (_ensure_dir(vfs_root, dirs[i]) < 0) {
-            pr_warn("  %-11s : cannot create /%s on root fs\n", "mntfs", dirs[i]);
+            pr_warn("%s: cannot create /%s on root fs\n", "mntfs", dirs[i]);
         }
     }
 
@@ -123,10 +123,17 @@ void mntfs_init(void) {
     _mount(vfs_root, "tmp",   tmpfs_get_root(),   "tmpfs");
     _mount(vfs_root, "dev",   devfs_get_root(),   "devfs");
     _mount(vfs_root, "proc",  procfs_get_root(),  "procfs");
+
+    // /mnt: the conventional mount point for user-mounted filesystems.  Give
+    // it its own tmpfs instance so it is a real, writable mount and appears in
+    // the layout like the other points.
+    vfs_node_t *mnt_fs = tmpfs_create_root("/mnt");
+    if (mnt_fs)
+        _mount(vfs_root, "mnt", mnt_fs, "tmpfs");
+    else
+        pr_warn("%s: /mnt tmpfs allocation failed\n", "mntfs");
+
     _symlink("bin",  "usr/bin");
     _symlink("sbin", "usr/sbin");
     _symlink("lib",  "usr/lib");
-
-    pr_info("  %-11s : layout ready: /usr/{bin,sbin,lib} mounted, /bin /sbin"
-            " /lib symlinked, /dev /etc /home /mnt /proc /tmp /var\n", "mntfs");
 }

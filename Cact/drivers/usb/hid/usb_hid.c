@@ -189,10 +189,10 @@ static void hid_repeat_task(void) {
  * list. */
 void usb_hid_repeat_init(void) {
     if (!create_task(hid_repeat_task)) {
-        pr_warn("USB HID: key repeat task could not be created");
+        pr_warn("usb-hid: key repeat task could not be created");
         return;
     }
-    pr_info("  %-11s : key repeat up (%u ms delay, %u ms rate)\n", "usb-hid",
+    pr_info("%s: key repeat up (%u ms delay, %u ms rate)\n", "usb-hid",
             (unsigned)(HID_REPEAT_DELAY_TICKS * 10),
             (unsigned)(HID_REPEAT_RATE_TICKS * 10));
 }
@@ -391,7 +391,7 @@ static int hid_probe(usb_device_t *dev) {
     }
 
     if (type == HID_TYPE_UNKNOWN) {
-        pr_warn("USB HID: unsupported protocol");
+        pr_warn("usb-hid: unsupported protocol");
         return -1;
     }
 
@@ -409,7 +409,7 @@ static int hid_probe(usb_device_t *dev) {
         }
     }
     if (!priv->intr_ep) {
-        pr_warn("USB HID: interrupt IN endpoint not found");
+        pr_warn("usb-hid: interrupt IN endpoint not found");
         kfree(priv);
         return -1;
     }
@@ -454,7 +454,7 @@ static int hid_probe(usb_device_t *dev) {
                                          hid_irq_notify, priv);
 
     if (rc != 0) {
-        pr_warn("USB HID: interrupt transfer registration failed");
+        pr_warn("usb-hid: interrupt transfer registration failed");
         kfree(priv);
         dev->driver_priv = NULL;
         return -1;

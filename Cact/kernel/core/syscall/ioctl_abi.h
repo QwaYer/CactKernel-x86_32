@@ -463,6 +463,8 @@ typedef struct cact_arp_get_arg {
 #define CACT_SYSCTL_MODULE_UNLOAD 0x3505 // arg=char* name
 #define CACT_SYSCTL_BLKDEV_RESCAN 0x3506 // arg=char* disk name; returns #partitions
 #define CACT_SYSCTL_SETHOSTNAME   0x3507 // arg=char* name (root): set the host name
+#define CACT_SYSCTL_GET_CONSOLE_LOGLEVEL 0x3508 // arg=int*: read the console log level
+#define CACT_SYSCTL_SET_CONSOLE_LOGLEVEL 0x3509 // arg=int* (root): set console log level 0..7
 
 typedef struct cact_mount_arg { char *src; char *target; char *fstype; } cact_mount_arg_t;
 typedef struct cact_module_arg { char *path; uint32_t vendor_id; uint32_t device_id; } cact_module_arg_t;

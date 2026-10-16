@@ -20,7 +20,7 @@ static uint32_t mod_tag_read_le32(const uint8_t *p) {
 
 int mod_tag_verify(uint8_t *elf_data, uint32_t *file_size) {
     if (*file_size <= CACT_MOD_TAG_SIZE) {
-        pr_err("[MODTAG] unsigned module (no signature) — rejected\n");
+        pr_err("modtag: unsigned module (no signature) — rejected\n");
         return CACT_MOD_TAG_E_UNSIGNED;
     }
 
@@ -31,7 +31,7 @@ int mod_tag_verify(uint8_t *elf_data, uint32_t *file_size) {
 
     if (magic[0] != CACT_MOD_TAG_MAGIC0 || magic[1] != CACT_MOD_TAG_MAGIC1 ||
         magic[2] != CACT_MOD_TAG_MAGIC2 || magic[3] != CACT_MOD_TAG_MAGIC3) {
-        pr_err("[MODTAG] no module trailer (stale or unsigned) — rejected\n");
+        pr_err("modtag: no module trailer (stale or unsigned) — rejected\n");
         return CACT_MOD_TAG_E_UNSIGNED;
     }
 
@@ -40,14 +40,14 @@ int mod_tag_verify(uint8_t *elf_data, uint32_t *file_size) {
                                  elf_data, data_len + CACT_MOD_TAG_MAGIC_SIZE
                                              + CACT_MOD_TAG_VERMAGIC_SIZE,
                                  sig, CACT_MOD_TAG_SIG_SIZE) != 0) {
-        pr_err("[MODTAG] signature mismatch — rejected\n");
+        pr_err("modtag: signature mismatch — rejected\n");
         return CACT_MOD_TAG_E_SIG;
     }
 
     uint32_t want = ksym_vermagic();
     uint32_t got  = mod_tag_read_le32(vmagic);
     if (got != want) {
-        pr_err("[MODTAG] ABI mismatch: module vermagic 0x%x, kernel 0x%x — "
+        pr_err("modtag: ABI mismatch: module vermagic 0x%x, kernel 0x%x — "
                "rebuild the module against this kernel\n",
                (unsigned)got, (unsigned)want);
         return CACT_MOD_TAG_E_VERMAGIC;

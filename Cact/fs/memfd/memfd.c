@@ -117,7 +117,7 @@ vfs_node_t *memfd_vnode_from_handle(int handle, const char *name, uint32_t size)
 
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
     if (!node) {
-        pr_err("  %-11s : cannot allocate node for '%s'\n", "memfd", name);
+        pr_err("%s: cannot allocate node for '%s'\n", "memfd", name);
         return 0;
     }
     memset(node, 0, sizeof(vfs_node_t));
@@ -141,7 +141,7 @@ vfs_node_t *memfd_create_vnode(const char *name, int flags) {
 
     int h = memfd_create(name, nlen, flags);
     if (h < 0) {
-        pr_err("  %-11s : create '%s' failed (%d)\n", "memfd", name, h);
+        pr_err("%s: create '%s' failed (%d)\n", "memfd", name, h);
         return 0;
     }
     return memfd_vnode_from_handle(h, name, 0);

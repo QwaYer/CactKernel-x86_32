@@ -76,7 +76,7 @@ void* acpi_temp_map(UINT32 phys, UINT32 size)
     if (!m) {
         /* Error path only: the mapping itself still works, but its VA can no
          * longer be tracked or freed.  Do not log per access. */
-        pr_err("  %-11s : mapping table exhausted (phys 0x%x) — mapping untracked\n",
+        pr_err("%s: mapping table exhausted (phys 0x%x) — mapping untracked\n",
                "acpi-osl", (unsigned)phys_page);
     }
 
@@ -143,7 +143,7 @@ ACPI_STATUS AcpiOsInitialize(void)
         acpi_mappings[i].pages = 0;
         acpi_mappings[i].refs  = 0;
     }
-    pr_info("  %-11s : temporary-map window @ 0x%x ready (%d slots)\n",
+    pr_info("%s: temporary-map window @ 0x%x ready (%d slots)\n",
             "acpi-osl", (unsigned)acpi_mapping_next_va, ACPI_OSL_MAX_MAPPINGS);
     return AE_OK;
 }
@@ -198,7 +198,7 @@ ACPI_PHYSICAL_ADDRESS AcpiOsGetRootPointer(void)
         }
         AcpiOsUnmapMemory(mem, 4096);
     }
-    pr_err("  %-11s : RSDP not found (EBDA + 0x%x-0x%x scan)\n",
+    pr_err("%s: RSDP not found (EBDA + 0x%x-0x%x scan)\n",
            "acpi-osl", (unsigned)RSDP_SCAN_START, (unsigned)RSDP_SCAN_END);
     return 0;
 }
@@ -277,7 +277,7 @@ ACPI_STATUS AcpiOsCreateCache(
     if (!ReturnCache) return AE_NO_MEMORY;
     struct acpi_osl_cache    *c = (struct acpi_osl_cache *)kmalloc(sizeof(*c));
     if (!c) {
-        pr_err("  %-11s : cache alloc failed (size %u, depth %u)\n",
+        pr_err("%s: cache alloc failed (size %u, depth %u)\n",
                "acpi-osl", (unsigned)ObjectSize, (unsigned)MaxDepth);
         return AE_NO_MEMORY;
     }

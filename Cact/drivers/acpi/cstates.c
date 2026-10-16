@@ -88,7 +88,7 @@ static int cst_configure_handle(ACPI_HANDLE handle)
         if (state != 1 && hint < 0)
             continue;
 
-        pr_info("ACPI: _CST type %u -> our C%s, MWAIT hint 0x%x, latency %u us",
+        pr_info("acpi: _CST type %u -> our C%s, MWAIT hint 0x%x, latency %u us",
                 (unsigned)type,
                 state == 2 ? "3" : (state == 3 ? "6" : "1"),
                 (unsigned)(hint < 0 ? 0 : hint), (unsigned)latency);

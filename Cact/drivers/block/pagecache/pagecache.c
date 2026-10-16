@@ -107,7 +107,7 @@ static void _lru_touch(struct page *p) {
 static void _writeback(struct page *p) {
     if (!(p->flags & PC_FLAG_DIRTY)) return;
     if (!p->data) {
-        pr_warn("[pc] _writeback: page has no data buffer, clearing dirty flag\n");
+        pr_warn("pagecache: _writeback: page has no data buffer, clearing dirty flag\n");
         p->flags &= (uint8_t)~PC_FLAG_DIRTY;
         return;
     }
@@ -174,7 +174,7 @@ void pc_init(void) {
     stat_evictions  = 0;
     stat_writebacks = 0;
     irq_spinlock_init(&pc_lock);
-    pr_info("  %-11s : ready\n", "pagecache");
+    pr_info("%s: ready (%u-page cache)\n", "pagecache", (unsigned)PC_MAX_PAGES);
 }
 
 // Get a page from cache; on miss, read from disk into a new or evicted slot
@@ -192,12 +192,12 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     irq_spinlock_release(&pc_lock);
 
     if (block_size == 0 || block_size % 512 != 0) {
-        pr_err("[pc] pc_get_page: block_size must be non-zero multiple of 512\n");
+        pr_err("pagecache: pc_get_page: block_size must be non-zero multiple of 512\n");
         return 0;
     }
 
     if (block_size > PC_MAX_BLOCK_SIZE) {
-        pr_err("[pc] pc_get_page: block_size exceeds PC_MAX_BLOCK_SIZE\n");
+        pr_err("pagecache: pc_get_page: block_size exceeds PC_MAX_BLOCK_SIZE\n");
         return 0;
     }
 
@@ -210,13 +210,13 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
         bd = blkdev_get_boot();
     if (bd) {
         if (block_no > (UINT32_MAX / spb)) {
-            pr_err("[pc] pc_get_page: LBA computation overflow\n");
+            pr_err("pagecache: pc_get_page: LBA computation overflow\n");
             return 0;
         }
         uint32_t lba = block_no * spb;
         // Compare overflow-safely: `lba + spb` can wrap near UINT32_MAX.
         if (lba > bd->max_lba || spb > bd->max_lba - lba) {
-            pr_warn("[pc] pc_get_page: LBA out of device range\n");
+            pr_warn("pagecache: pc_get_page: LBA out of device range\n");
             return 0;
         }
     }
@@ -225,7 +225,7 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     p = _alloc_page();
     if (!p) {
         irq_spinlock_release(&pc_lock);
-        pr_err("[pc] pc_get_page: all pages pinned, cache full!\n");
+        pr_err("pagecache: pc_get_page: all pages pinned, cache full!\n");
         return 0;
     }
     p->dev        = dev;
@@ -239,7 +239,7 @@ uint8_t *pc_get_page(uint32_t dev, uint32_t block_no, uint32_t block_size) {
     if (!p->data) {
         p->data = (uint8_t*)kalloc();
         if (!p->data) {
-            pr_err("[pc] pc_get_page: kalloc failed\n");
+            pr_err("pagecache: pc_get_page: kalloc failed\n");
             irq_spinlock_acquire(&pc_lock);
             p->flags     = 0;
             p->pin_count = 0;
@@ -290,7 +290,7 @@ void pc_put_page(uint32_t dev, uint32_t block_no) {
     if (!p) { irq_spinlock_release(&pc_lock); return; }
     if (p->pin_count == 0) {
         irq_spinlock_release(&pc_lock);
-        pr_err("[pc] pc_put_page: pin_count underflow (dev=%d, block=%d)\n",
+        pr_err("pagecache: pc_put_page: pin_count underflow (dev=%d, block=%d)\n",
                (int)dev, (int)block_no);
         return;
     }
@@ -362,7 +362,7 @@ void pc_invalidate_dev(uint32_t dev) {
 // Print cache statistics and current state
 void pc_dump_stats(void) {
     irq_spinlock_acquire(&pc_lock);
-    pr_info("[pc] hits=%d misses=%d evictions=%d writebacks=%d\n",
+    pr_info("pagecache: hits=%d misses=%d evictions=%d writebacks=%d\n",
             (int)((int)(stat_hits)), (int)((int)(stat_misses)),
             (int)((int)(stat_evictions)), (int)((int)(stat_writebacks)));
 
@@ -373,7 +373,7 @@ void pc_dump_stats(void) {
         if (pool[i].pin_count > 0)          pinned++;
     }
     irq_spinlock_release(&pc_lock);
-    pr_info("[pc] pages: valid=%d dirty=%d pinned=%d/%d\n",
+    pr_info("pagecache: pages: valid=%d dirty=%d pinned=%d/%d\n",
             (int)((int)(valid)), (int)((int)(dirty)), (int)((int)(pinned)),
             (int)((int)(PC_MAX_PAGES)));
 }

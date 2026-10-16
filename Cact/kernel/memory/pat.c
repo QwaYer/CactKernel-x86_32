@@ -39,7 +39,7 @@ void pat_init(void) {
     uint32_t a, b, c, d;
     cpuid_raw(1, &a, &b, &c, &d);
     if (!(d & (1u << PAT_CPUID_EDX_BIT))) {
-        pr_warn("  %-11s : unsupported (CPUID.01H:EDX.PAT=0) — framebuffer stays UC\n",
+        pr_warn("%s: unsupported (CPUID.01H:EDX.PAT=0) — framebuffer stays UC\n",
                 "pat");
         return;
     }
@@ -60,7 +60,7 @@ void pat_init(void) {
     if (g_pat_present)
         return;
     g_pat_present = 1;
-    pr_info("  %-11s : per-PTE memory types (WC) available\n", "pat");
+    pr_info("%s: per-PTE memory types (WC) available\n", "pat");
 }
 
 int pat_available(void) {

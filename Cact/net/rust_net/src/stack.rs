@@ -710,7 +710,7 @@ pub fn stack_init() {
         unsafe { STACK_READY = true };
         ffi_kernel::klog_static(
             ffi_kernel::LOG_OK,
-            b"smoltcp interface and sockets ready (poll from net_poll_task)\0",
+            b"net: smoltcp stack ready (sockets, poll from net_poll_task)\0",
         );
     }
 }

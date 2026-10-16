@@ -332,7 +332,7 @@ void tmpfs_init(void) {
     _root_init(&tmpfs_root_node, "tmp");
     // Superblock profile for statfs (RAM filesystem: block size 4096).
     vfs_sb_register("tmpfs", 4096, 0, 0, 0, 0, 0);
-    pr_info("  %-11s : root ready\n", "tmpfs");
+    pr_info("%s: root ready\n", "tmpfs");
     tmpfs_ready = 1;
 }
 

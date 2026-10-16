@@ -317,13 +317,13 @@ int cpudev_init(void) {
 
     if (g_brand[0]) {
         if (g_vendor != CPU_VENDOR_UNKNOWN) {
-            pr_info("  %-11s : %s %s\n", "cpu", cpu_vendor_str(g_vendor),
+            pr_info("%s: %s %s\n", "cpu", cpu_vendor_str(g_vendor),
                     (char*)cpu_brand_str());
         } else {
-            pr_info("  %-11s : %s\n", "cpu", (char*)cpu_brand_str());
+            pr_info("%s: %s\n", "cpu", (char*)cpu_brand_str());
         }
     } else {
-        pr_info("  %-11s : %s\n", "cpu", cpu_vendor_str(g_vendor));
+        pr_info("%s: %s\n", "cpu", cpu_vendor_str(g_vendor));
     }
 
     // Choose the fastest syscall mechanism this CPU can do in 32-bit mode.
@@ -336,10 +336,10 @@ int cpudev_init(void) {
         g_syscall_mech = SYSCALL_MECH_SYSENTER;
     } else {
         g_syscall_mech = SYSCALL_MECH_SYSENTER;  // placeholder
-        pr_crit("  %-11s : CPU has neither SYSCALL nor SEP — syscalls will NOT work\n", "syscall");
+        pr_crit("%s: CPU has neither SYSCALL nor SEP — syscalls will NOT work\n", "syscall");
     }
 
-    pr_info("  %-11s : %s\n", "syscall",
+    pr_info("%s: %s\n", "syscall",
             (char*)cpu_syscall_mech_str(g_syscall_mech));
 
     return 0;

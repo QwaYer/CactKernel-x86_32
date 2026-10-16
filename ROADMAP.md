@@ -21,10 +21,10 @@ actually has, not a promise. What already works is described in
 - MSI-X is the preferred device interrupt, with a single **MSI** message as the
   fallback (`msidev_register()`); both paths need coverage across the driver set.
 - **GPU / KMS**: the DRM uapi and a virtio-gpu driver exist as a sibling repo;
-  the VT/PTY layer has no automated self-test. The Intel
-  display half now exists as the out-of-tree module
-  `Intel-GPU-for-Cact-x86_32` (stage 1: bind + EDID → `/dev/dri`); see
-  [GPU / Intel (i915)](#gpu--intel-i915) for what a full port still needs.
+  the VT/PTY layer has no automated self-test. There is **no Intel GPU driver
+  in 2.0.0** — the i915 port is heavily 64-bit-bound, so it is deferred to
+  3.0.0 (see [GPU / Intel (i915)](#gpu--intel-i915) for the kernel gaps it
+  exposes).
 
 ## GPU / Intel (i915)
 
@@ -75,9 +75,9 @@ Ordered by how hard each gap blocks a port:
   (64-bit included) but trusts whatever firmware programmed; there is no
   allocator to move one.
 - **The module ABI is narrower than the full DRM core.** `kernel/elf/ksym.c`
-  exports the generic KMS/GEM/connector API (enough for the out-of-tree display
-  half below) but no property/blob or framebuffer creation, so the
-  property/framebuffer surface a full render driver needs is still missing.
+  exports the generic KMS/GEM/connector API but no property/blob or framebuffer
+  creation, so the property/framebuffer surface a full render driver needs is
+  still missing.
 - **RAM above 4 GiB is unreachable.** The PMM only manages frames below 4 GiB
   (`TOTAL_PAGES = 1024*1024`) and stops at the runtime PCI hole (`pmm::ram_end()`,
   default `0xC0000000`); a 32-bit non-PAE kernel cannot map the rest.
@@ -94,57 +94,19 @@ The order that unblocks the most:
 5. Then the driver itself, **in-tree**, because it needs the
    property/framebuffer/ACPI/PAT surface the module ABI does not export.
 
-### Update 2026-10-01 — display half started as an out-of-tree `.cctk`
+### Dropped from 2.0.0 (2026-10-16) — the out-of-tree Intel-GPU (i915) module
 
-The **display** half turned out to be reachable out-of-tree after all: `ksym.c`
-already exports the whole generic DRM/KMS API (`drm_dev_create`, KMS object
-init, GEM, connector/EDID helpers) and the loader matches PCI by
-vendor + device-list, which is what a display driver needs.  Only the *full*
-i915 (property/blob creation, render engine) still needs the in-tree surface.
-
-Started `Intel-GPU-for-Cact-x86_32/` (`i915.cctk`, ported from Linux i915
-7.3-rc4; CFL is DISPLAY_VER **9**, not 10): stage 1 = bind + power wells + EDID
-over GMBUS/DDC or DP AUX → `/dev/dri` with real connector modes.  `set_config`
-answers `EOPNOTSUPP` — nothing is scanned out yet.
-
-Kernel side: **gap 1 is half closed** — `drm_gem_page_phys()` /
-`drm_gem_page_count()` now export the physical backing of a GEM object (via
-`vmm_get_phys`), which is what GGTT scanout needs.  Still absent for a real
-modeset: the CDCLK/DPLL/pipe/plane programming (stage 3) and, for tiling and
-plane/GTT-mapped scanout, the WC mapping API (gap 2).
-
-### Update 2026-10-02 — stage 3 scanout + console handoff
-
-The driver now **drives the display**: on load it finds the transcoder already
-serving the connected DDI, maps the kernel's boot framebuffer into the GGTT and
-programs pipe/plane, transcoder timings, `TRANS_DDI_FUNC_CTL`, watermarks and
-the DDI encoder, so the console keeps working through the driver's own modeset.
-`set_config()` programs a client framebuffer the same way.  CDCLK/WRPLL are
-still inherited from firmware — programming them is the remaining stage-3 work.
-
-Kernel side: `ksym.c` exports `__divdi3`/`__moddi3`/`__udivdi3` (the driver's
-WRPLL calculator does 64-bit division).  Two driver-side fixes came out of this:
-the module is registered in `CactBridge build.py`'s `DRIVERS`
-(a missing entry meant it was silently never rebuilt), and `intel_probe_ports()`
-now keeps the DDI index instead of compacting the port array (it mislabelled
-every sink as DDI-A, which would have programmed the wrong port).
-
-### Update 2026-10-02 — stage 3 clocks + stage 4 (vblank / flip / cursor)
-
-Stage 3 is complete: the driver programs **CDCLK** (kept or changed via the
-Wa #1183 DIVMUX sequence + PCODE) and the **HDMI WRPLL** from scratch
-(`skl_ddi_calculate_wrpll` ported, `DPLL1` lock), routes the DPLL to the port
-and transcoder, and takes over pipe/encoder/plane.  Because the boot
-framebuffer's address is an *aperture* address (GMADR + 0), not physical
-memory, the console handoff keeps the firmware's plane buffer/mapping rather
-than re-mapping pages.
-
-Stage 4 is implemented: a real **vblank interrupt** (GPU MSI handler →
-`GEN8_DE_PIPE_IIR` ack → `drm_crtc_handle_vblank`), an MMIO **page flip**
-(`drm_gem_page_phys` → GGTT → `PLANE_SURF`), and the **SKL hardware cursor**
-(`CUR_CTL/POS/BASE` + `CUR_WM`/`CUR_BUF_CFG`).  Kernel side gained
-`__divdi3`/`__moddi3`/`__udivdi3` in `ksym` (the WRPLL calculator does 64-bit
-division).
+An out-of-tree port (`Intel-GPU-for-Cact-x86_32`, `i915.cctk`, from Linux i915
+7.3-rc4) had reached stages 1–4 — bind + EDID over GMBUS/DDC, CDCLK/WRPLL,
+pipe/plane scanout with console handoff, and vblank/flip/hardware cursor.  It is
+**no longer part of the 2.0.0 build**: `Intel-GPU` was removed from
+`CactBridge-x86/drivers.list` (the single list the integrator also reads), so the
+module is no longer built, staged or packed into `cctkfs.img`.  The port is
+heavily 64-bit-bound, so it belongs to the 3.0.0 x86_64 line, not the last 32-bit
+release; the source repo stays out-of-tree for that work.  The kernel-side
+facilities it needed remain on the gap list above, and `ksym.c` keeps its
+`drm_gem_page_phys()` / `drm_gem_page_count()` exports (GGTT scanout backing) and
+the `__divdi3` / `__moddi3` / `__udivdi3` helpers the WRPLL calculator used.
 
 ## CPU topology: SMP, SMT (Hyper-Threading) & core power
 

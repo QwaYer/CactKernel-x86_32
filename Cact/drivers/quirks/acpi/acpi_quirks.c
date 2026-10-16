@@ -12,7 +12,7 @@ uint32_t acpi_board_quirks(void)
      * actually identifies the board as an HP 290 G1 — every other board
      * evaluates _OSC normally. */
     if (dmi_is_hp_290g1()) {
-        pr_notice("  %-11s : HP 290 G1 board quirk applied — _OSC disabled\n",
+        pr_notice("%s: HP 290 G1 board quirk applied — _OSC disabled\n",
                   "acpi-quirk");
         return ACPI_QUIRK_DISABLE_OSC;
     }

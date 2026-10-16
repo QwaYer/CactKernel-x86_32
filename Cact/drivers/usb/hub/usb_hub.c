@@ -93,7 +93,7 @@ static void hub_handle_port(usb_hub_priv_t *priv, uint8_t port) {
             __asm__ __volatile__("pause");
 
         if (hub_port_reset(priv->dev, port) != 0) {
-            printk("[HUB] Port reset fail port="); printk_hex(port); printk("\n");
+            pr_warn("usb-hub: Port reset fail port=%u\n", (unsigned)port);
             return;
         }
 
@@ -111,9 +111,6 @@ static void hub_handle_port(usb_hub_priv_t *priv, uint8_t port) {
         else
             speed = USB_SPEED_FULL;
 
-        printk("[HUB] Connect port="); printk_hex(port);
-        printk(" speed="); printk_hex(speed); printk("\n");
-
         usb_device_t *child;
         if (priv->dev->hc->enumerate_hub_child) {
             /* The controller assigns the address itself (xHCI: Enable Slot +
@@ -125,7 +122,7 @@ static void hub_handle_port(usb_hub_priv_t *priv, uint8_t port) {
             hub_hc_wrapper_t *wrap = (hub_hc_wrapper_t *)
                 kmalloc(sizeof(hub_hc_wrapper_t));
             if (!wrap) {
-                pr_err("[HUB] wrapper alloc failed for port %u\n", (unsigned)port);
+                pr_err("usb-hub: wrapper alloc failed for port %u\n", (unsigned)port);
                 return;
             }
             memset(wrap, 0, sizeof(hub_hc_wrapper_t));
@@ -144,7 +141,6 @@ static void hub_handle_port(usb_hub_priv_t *priv, uint8_t port) {
         }
 
     } else {
-        printk("[HUB] Disconnect port="); printk_hex(port); printk("\n");
         usb_device_disconnect(priv->dev->hc, port);
     }
 
@@ -195,24 +191,24 @@ static void usb_hub_task(void) {
 
 void usb_hub_hotplug_init(void) {
     if (!create_task(usb_hub_task))
-        pr_warn("[HUB] hub hotplug task could not be created\n");
+        pr_warn("usb-hub: hub hotplug task could not be created\n");
     else
-        pr_info("  %-11s : hub port-change task up\n", "usb-hub");
+        pr_info("%s: hub port-change task up\n", "usb-hub");
 }
 
 static int hub_probe(usb_device_t *dev) {
-    pr_info("[HUB] Hub detected\n");
-
     usb_hub_priv_t *priv = (usb_hub_priv_t *)kmalloc(sizeof(usb_hub_priv_t));
     if (!priv) {
-        pr_err("[HUB] hub private data alloc failed\n");
+        pr_err("usb-hub: hub private data alloc failed (%04x:%04x)\n",
+               (unsigned)dev->dev_desc.idVendor, (unsigned)dev->dev_desc.idProduct);
         return -1;
     }
     memset(priv, 0, sizeof(usb_hub_priv_t));
     priv->dev = dev;
 
     if (hub_get_descriptor(dev, &priv->desc) < 0) {
-        pr_err("[HUB] Failed to get hub descriptor\n");
+        pr_err("usb-hub: hub descriptor read failed (%04x:%04x)\n",
+               (unsigned)dev->dev_desc.idVendor, (unsigned)dev->dev_desc.idProduct);
         kfree(priv); return -1;
     }
     priv->num_ports = priv->desc.bNbrPorts;
@@ -251,13 +247,13 @@ static int hub_probe(usb_device_t *dev) {
                                              sizeof(priv->status_buf),
                                              hub_irq_notify, priv);
         if (rc != 0)
-            pr_warn("[HUB] Failed to register interrupt EP\n");
+            pr_warn("usb-hub: interrupt EP registration failed (%04x:%04x)\n",
+                    (unsigned)dev->dev_desc.idVendor, (unsigned)dev->dev_desc.idProduct);
     }
 
     priv->next = hub_list;
     hub_list   = priv;
 
-    printk("[HUB] Ports="); printk_hex(priv->num_ports); printk("\n");
     return 0;
 }
 
@@ -286,5 +282,5 @@ static usb_driver_t hub_driver = {
 
 void usb_hub_init(void) {
     usb_driver_register(&hub_driver);
-    pr_info("  %-11s : hub driver registered\n", "usb-hub");
+    pr_info("%s: hub driver registered\n", "usb-hub");
 }

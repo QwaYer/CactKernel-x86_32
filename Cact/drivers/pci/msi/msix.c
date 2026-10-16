@@ -25,13 +25,13 @@ extern uint32_t page_directory[1024];
 static void msix_dump_chain(pci_device_t *dev, uint8_t head)
 {
     if (head < 0x40 || head == 0xFF) {
-        pr_warn("  %-11s : %02x:%02x.%u capability list absent (byte 0x34=0x%02x)\n",
+        pr_warn("%s: %02x:%02x.%u capability list absent (byte 0x34=0x%02x)\n",
                 "msi-x", (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn,
                 (unsigned)head);
         return;
     }
 
-    pr_warn("  %-11s : %02x:%02x.%u capability chain from 0x%02x:\n",
+    pr_warn("%s: %02x:%02x.%u capability chain from 0x%02x:\n",
             "msi-x", (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn,
             (unsigned)head);
 
@@ -39,7 +39,7 @@ static void msix_dump_chain(pci_device_t *dev, uint8_t head)
     for (int i = 0; i < 32 && p >= 0x40 && p != 0xFF; i++) {
         uint8_t id   = pcidev_cfg_read8(dev, p);
         uint8_t next = pcidev_cfg_read8(dev, (uint16_t)(p + 1));
-        pr_info("  %-11s :   +0x%02x: id=0x%02x next=0x%02x%s\n",
+        pr_info("%s:   +0x%02x: id=0x%02x next=0x%02x%s\n",
                 "msi-x", (unsigned)p, (unsigned)id, (unsigned)next,
                 id == PCI_CAP_ID_MSIX ? "   <-- MSI-X" : "");
         p = next;
@@ -50,11 +50,11 @@ static void msix_dump_chain(pci_device_t *dev, uint8_t head)
  * broken list pointer can be told apart from an unreadable config space. */
 static void msix_dump_header(pci_device_t *dev, uint8_t head)
 {
-    pr_warn("  %-11s : %02x:%02x.%u byte 0x34=0x%02x — header 0x30..0x3f:\n",
+    pr_warn("%s: %02x:%02x.%u byte 0x34=0x%02x — header 0x30..0x3f:\n",
             "msi-x", (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn,
             (unsigned)head);
     for (unsigned int off = 0x30; off < 0x40; off += 8) {
-        pr_info("  %-11s :   %02x: %02x %02x %02x %02x  %02x %02x %02x %02x\n",
+        pr_info("%s:   %02x: %02x %02x %02x %02x  %02x %02x %02x %02x\n",
                 "msi-x", off,
                 pcidev_cfg_read8(dev, (uint16_t)(off + 0)),
                 pcidev_cfg_read8(dev, (uint16_t)(off + 1)),
@@ -84,7 +84,7 @@ static int msix_brute_scan(pci_device_t *dev)
         unsigned int bir  = tbl & 0x7;
 
         if (bir >= 6) {
-            pr_info("  %-11s : 0x11 at 0x%x rejected (bir=%u out of range)\n",
+            pr_info("%s: 0x11 at 0x%x rejected (bir=%u out of range)\n",
                     "msi-x", off, bir);
             continue;
         }
@@ -94,14 +94,14 @@ static int msix_brute_scan(pci_device_t *dev)
                        (dev->bars[bir].is_io || !dev->bars[bir].base));
 
         if (bar_ok && (next == 0x00 || next >= 0x40)) {
-            pr_info("  %-11s : capability found by scan at 0x%x (bir %u)\n",
+            pr_info("%s: capability found by scan at 0x%x (bir %u)\n",
                     "msi-x", off, bir);
             return (int)off;
         }
 
         /* Log the rejection: a silent skip is indistinguishable from "the
          * device has no MSI-X", which is exactly what sent this hunt wrong. */
-        pr_info("  %-11s : 0x11 at 0x%x rejected (next=0x%02x ctrl=0x%04x bar=%d)\n",
+        pr_info("%s: 0x11 at 0x%x rejected (next=0x%02x ctrl=0x%04x bar=%d)\n",
                 "msi-x", off, (unsigned)next, (unsigned)msg_ctrl, bar_ok);
     }
     return 0;
@@ -112,7 +112,7 @@ static int msix_brute_scan(pci_device_t *dev)
 static void msix_diag_halt(void) __attribute__((noreturn));
 static void msix_diag_halt(void)
 {
-    pr_warn("  %-11s : diagnostic halt — reset the machine to continue\n", "msi-x");
+    pr_warn("%s: diagnostic halt — reset the machine to continue\n", "msi-x");
     __asm__ volatile("cli");
     for (;;) __asm__ volatile("hlt");
 }
@@ -145,7 +145,7 @@ int pci_msix_support(pci_device_t *dev)
      * 0xFF for an absent device. */
     uint32_t id_now  = pcidev_cfg_read32(dev, 0x00);
     uint8_t  cap_now = pcidev_cfg_read8(dev, 0x34);
-    pr_warn("  %-11s : capability not found (pcie=%d, byte0x34=0x%02x re-read=0x%02x, "
+    pr_warn("%s: capability not found (pcie=%d, byte0x34=0x%02x re-read=0x%02x, "
             "id=%04x:%04x re-read-id=%04x:%04x)\n",
             "msi-x", (int)pcie_is_available(), (unsigned)cap_head, (unsigned)cap_now,
             (unsigned)dev->vendor_id, (unsigned)dev->device_id,
@@ -191,13 +191,13 @@ int pci_msix_table_map(pci_device_t *dev,
     uint64_t table_end = table_addr + table_size_bytes;
 
     if (table_end <= table_addr) return -1;
-    if (table_end > bar->base + bar->size) { pr_warn("  %-11s : table beyond BAR\n", "msi-x"); return -1; }
+    if (table_end > bar->base + bar->size) { pr_warn("%s: table beyond BAR\n", "msi-x"); return -1; }
 
     /* 32-bit non-PAE kernel: an identity map can only reach below 4 GiB. */
     uint64_t page_base = table_addr & ~0xFFFULL;
     uint64_t page_end  = (table_end + 0xFFF) & ~0xFFFULL;
     if (page_end > 0x100000000ULL) {
-        pr_warn("  %-11s : table above 4 GiB not mappable\n", "msi-x");
+        pr_warn("%s: table above 4 GiB not mappable\n", "msi-x");
         return -1;
     }
 
@@ -282,7 +282,7 @@ int pci_msix_enable(pci_device_t *dev, int vector,
     table[entry_idx].vector_ctrl = 0;
     __asm__ volatile("sfence" ::: "memory");
 
-    pr_info("  %-11s : vec 0x%x enabled, entry %u (%02x:%02x.%u, table 0x%x)\n",
+    pr_info("%s: vec 0x%x enabled, entry %u (%02x:%02x.%u, table 0x%x)\n",
             "msi-x", (unsigned)vector, (unsigned)entry_idx,
             (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn,
             (unsigned)((uint32_t)(uintptr_t)table));

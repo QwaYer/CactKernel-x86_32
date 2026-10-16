@@ -109,21 +109,21 @@ int read_rel_elf_from_path(const char *path, uint8_t **elf_data, uint32_t *file_
 // find the exported symbol "pci_driver_probe", and wire it into 'drv'.
 int pci_load_module(const char *path, struct pci_driver *drv) {
 
-    pr_debug("[LDR] loading module: %s", path);
+    pr_debug("pciloader: loading module: %s", path);
 
     uint8_t *elf_data = NULL;
     uint32_t file_size = 0;
     int      rr        = read_rel_elf_from_path(path, &elf_data, &file_size);
     if (rr == -1) {
-        pr_err("[LDR] File not found\n");
+        pr_err("pciloader: module file not found: %s\n", path);
         return -1;
     }
     if (rr == -2) {
-        pr_err("[LDR] Invalid ELF32 relocatable\n");
+        pr_err("pciloader: not an ELF32 relocatable: %s\n", path);
         return -2;
     }
     if (mod_tag_verify(elf_data, &file_size) != 0) {
-        pr_err("[LDR] signature/ABI check failed\n");
+        pr_err("pciloader: signature/ABI check failed: %s\n", path);
         kfree(elf_data);
         return -8;
     }
@@ -135,7 +135,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     if (__builtin_umul_overflow(eh->e_shnum, eh->e_shentsize, &sh_tab_end) ||
         __builtin_uadd_overflow(eh->e_shoff, sh_tab_end, &sh_tab_end) ||
         eh->e_shentsize < sizeof(Elf32_Shdr) || sh_tab_end > file_size) {
-        pr_err("[LDR] corrupted module ELF\n");
+        pr_err("pciloader: corrupted module ELF: %s\n", path);
         kfree(elf_data);
         return -8;
     }
@@ -155,7 +155,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     // Allocate and zero the module private image
     uint8_t *image = (uint8_t *)kmalloc(total);
     if (!image) {
-        pr_err("[LDR] module image alloc failed (%u bytes)", (unsigned)total);
+        pr_err("pciloader: module image alloc failed (%u bytes)", (unsigned)total);
         kfree(elf_data); return -3;
     }
     memset(image, 0, total);
@@ -165,7 +165,9 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         Elf32_Shdr *sh = get_shdr(eh, i);
         if (!(sh->sh_flags & SHF_ALLOC) || sh->sh_type != SHT_PROGBITS) continue;
         if (sh->sh_offset + sh->sh_size > file_size) {
-            pr_err("[LDR] section offset exceeds file\n");
+            pr_err("pciloader: section %u exceeds file (off=0x%x size=0x%x file=0x%x): %s\n",
+                   (unsigned)i, (unsigned)sh->sh_offset, (unsigned)sh->sh_size,
+                   (unsigned)file_size, path);
             kfree(image); kfree(elf_data);
             return -8;
         }
@@ -184,19 +186,22 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         }
     }
     if (!symtab_sh) {
-        pr_err("[LDR] No .symtab found\n");
+        pr_err("pciloader: no .symtab in %s\n", path);
         kfree(image); kfree(elf_data);
         return -4;
     }
 
     if (symtab_sh->sh_offset + symtab_sh->sh_size > file_size) {
-        pr_err("[LDR] symtab exceeds file\n");
+        pr_err("pciloader: symtab exceeds file (off=0x%x size=0x%x file=0x%x): %s\n",
+               (unsigned)symtab_sh->sh_offset, (unsigned)symtab_sh->sh_size,
+               (unsigned)file_size, path);
         kfree(image); kfree(elf_data);
         return -8;
     }
     Elf32_Shdr *strtab_sh = get_shdr(eh, strtab_idx);
     if (!strtab_sh || strtab_sh->sh_offset + strtab_sh->sh_size > file_size) {
-        pr_err("[LDR] strtab exceeds file\n");
+        pr_err("pciloader: strtab exceeds file (idx=%u file=0x%x): %s\n",
+               (unsigned)strtab_idx, (unsigned)file_size, path);
         kfree(image); kfree(elf_data);
         return -8;
     }
@@ -215,7 +220,8 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
         for (uint32_t r = 0; r < rel_cnt; r++) {
             uint32_t   sym_idx = ELF32_R_SYM(rels[r].r_info);
             if (sym_idx >= sym_cnt) {
-                pr_err("[LDR] Relocation symbol index out of bounds\n");
+                pr_err("pciloader: relocation symbol index %u >= %u: %s\n",
+                       (unsigned)sym_idx, (unsigned)sym_cnt, path);
                 kfree(image);
                 kfree(elf_data);
                 return -7;
@@ -227,14 +233,15 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
             if (sym->st_shndx == SHN_UNDEF) {
                 const char *sym_name = get_str(eh, strtab_idx, sym->st_name);
                 if (!sym_name) {
-                    pr_err("[LDR] Bad string table index\n");
+                    pr_err("pciloader: bad string table index (name %u): %s\n",
+                           (unsigned)sym->st_name, path);
                     kfree(image);
                     kfree(elf_data);
                     return -7;
                 }
                 S = ksym_resolve(sym_name);
                 if (S == 0 && ELF32_ST_BIND(sym->st_info) != STB_WEAK) {
-                    pr_err("[LDR] Unresolved symbol: %s", (char *)sym_name);
+                    pr_err("pciloader: unresolved symbol '%s': %s", (char *)sym_name, path);
                     kfree(image);
                     kfree(elf_data);
                     return -7;
@@ -242,13 +249,15 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
             } else {
                 Elf32_Shdr *sym_sh = get_shdr(eh, sym->st_shndx);
                 if (!sym_sh) {
-                    pr_err("[LDR] Symbol section index out of bounds\n");
+                    pr_err("pciloader: symbol section index %u out of bounds: %s\n",
+                           (unsigned)sym->st_shndx, path);
                     kfree(image);
                     kfree(elf_data);
                     return -7;
                 }
                 if (!(sym_sh->sh_flags & SHF_ALLOC)) {
-                    pr_err("[LDR] Symbol in non-ALLOC section\n");
+                    pr_err("pciloader: symbol in non-ALLOC section %u: %s\n",
+                           (unsigned)sym->st_shndx, path);
                     kfree(image);
                     kfree(elf_data);
                     return -7;
@@ -256,7 +265,8 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
                 S = (uint32_t)(image + sym_sh->sh_addr + sym->st_value);
             }
             if (rels[r].r_offset + sizeof(uint32_t) > target_sh->sh_size) {
-                pr_err("[LDR] Relocation offset out of section bounds\n");
+                pr_err("pciloader: relocation offset 0x%x >= section size 0x%x: %s\n",
+                       (unsigned)rels[r].r_offset, (unsigned)target_sh->sh_size, path);
                 kfree(image);
                 kfree(elf_data);
                 return -7;
@@ -286,7 +296,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     }
 
     if (!found_probe) {
-        pr_err("[LDR] Symbol 'pci_driver_probe' not found\n");
+        pr_err("pciloader: symbol 'pci_driver_probe' not found in %s\n", path);
         kfree(image);
         kfree(elf_data);
         return -5;
@@ -312,7 +322,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     // Bookkeeping: store image pointer so it can be freed on unload
     mod_mem_t *mm  = (mod_mem_t *)kmalloc(sizeof(mod_mem_t));
     if (!mm) {
-        pr_err("[LDR] module bookkeeping alloc failed");
+        pr_err("pciloader: module bookkeeping alloc failed for %s", path);
         kfree(image);
         kfree(elf_data);
         drv->probe = NULL;
@@ -325,7 +335,7 @@ int pci_load_module(const char *path, struct pci_driver *drv) {
     drv->flags    |= PCI_DRV_F_RELOC_MODULE;
 
     kfree(elf_data);   // ELF header no longer needed
-    printk("[LDR] module ready: "); printk(mm->proc_name);
+    printk("pciloader: module ready: "); printk(mm->proc_name);
 
     return 0;
 }
@@ -341,5 +351,5 @@ void pci_unload_module(struct pci_driver *drv) {
     drv->probe  = NULL;
     drv->remove = NULL;
     drv->flags &= ~PCI_DRV_F_RELOC_MODULE;
-    pr_info("[LDR] Module unloaded: %s", drv->name);
+    pr_info("pciloader: module unloaded: %s", drv->name);
 }

@@ -14,12 +14,12 @@ int xhci_enable_slot(xhci_priv_t *priv, uint8_t *slot_id) {
     memset(&trb, 0, sizeof(trb));
     trb.control = (XHCI_TRB_ENABLE_SLOT << XHCI_TRB_TYPE_SHIFT);
     if (xhci_send_cmd(priv, &trb) < 0) {
-        pr_warn("xHCI enable_slot failed");
+        pr_warn("xhci: enable_slot failed");
         return -1;
     }
     *slot_id = (uint8_t)((priv->cmd_result >> 24) & 0xFF);
     if (*slot_id == 0 || *slot_id > priv->max_slots || *slot_id > XHCI_MAX_SLOTS) {
-        pr_err("xHCI: bad slot id %d", (int)*slot_id);
+        pr_err("xhci: bad slot id %d", (int)*slot_id);
         return -1;
     }
     return 0;
@@ -54,7 +54,7 @@ void xhci_setup_ep_ring(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
         return;
     xhci_trb_t *mem = (xhci_trb_t *)kmalloc_aligned(XHCI_EP_RING_SIZE * sizeof(xhci_trb_t), 64);
     if (!mem) {
-        pr_warn("xHCI endpoint ring allocation failed");
+        pr_warn("xhci: endpoint ring allocation failed");
         return;
     }
     xhci_ring_init(ring, mem, XHCI_EP_RING_SIZE);
@@ -466,13 +466,13 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
         }
     }
     if (!s) {
-        pr_warn("xHCI interrupt endpoint slots full");
+        pr_warn("xhci: interrupt endpoint slots full");
         return -1;
     }
 
     /* Endpoint number 1..15 keeps dci = 2*ep_num+1 within 3..31. */
     if (ep_num == 0 || ep_num > 15) {
-        pr_warn("xHCI: invalid interrupt endpoint number %d", (int)ep_num);
+        pr_warn("xhci: invalid interrupt endpoint number %d", (int)ep_num);
         return -1;
     }
 
@@ -489,10 +489,6 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     if (len > mps) len = mps;
     uint8_t binterval = ep ? ep->interval : 8;
     uint8_t interval  = xhci_encode_intr_interval(dev->speed, binterval);
-
-    pr_info("  %-11s : ep%u slot %u dci %u mps %u interval %u (bInterval %u) len %u\n",
-            "xhci-ep", (unsigned)ep_num, (unsigned)slot, (unsigned)dci,
-            (unsigned)mps, (unsigned)interval, (unsigned)binterval, (unsigned)len);
 
     if (xhci_configure_endpoint(priv, slot, dci, XHCI_EP_CTX_TYPE_INTR_IN, mps, interval) < 0)
         return -1;
@@ -520,7 +516,7 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     trb.status   = len;
     trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
     if (xhci_ring_enqueue(s->ring, &trb) < 0) {
-        pr_warn("xHCI: interrupt ring full for slot %u dci %u\n",
+        pr_warn("xhci: interrupt ring full for slot %u dci %u\n",
                 (unsigned)slot, (unsigned)dci);
         s->active = 0;
         s->ring   = NULL;
@@ -554,11 +550,6 @@ int xhci_configure_device_endpoints(usb_hc_t *hc, usb_device_t *dev) {
 
         int rc = xhci_configure_endpoint(priv, slot, dci, type,
                                          ep->max_packet, ep->interval);
-        pr_info("  %-11s : bulk ep%u %s dci %u mps %u %s\n", "xhci-ep",
-                (unsigned)ep->address,
-                ep->direction == USB_DIR_IN ? "IN" : "OUT",
-                (unsigned)dci, (unsigned)ep->max_packet,
-                rc == 0 ? "ok" : "failed");
         if (rc == 0)
             configured++;
     }

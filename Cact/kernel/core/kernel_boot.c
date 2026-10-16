@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "klog.h"
 #include "multiboot2.h"
 #include "vfs.h"
 #include "pci_driver.h"
@@ -51,12 +52,17 @@ static void kernel_bootstrap_main(void) {
 
     struct task_struct* init = create_elf_task("usr/bin/init");
     if (!init) {
-        pr_err("  boot        : FAILED — /usr/bin/init not found\n");
+        pr_err("boot: failed to spawn /usr/bin/init — not found\n");
     } else {
         task_comm_set(init->pid, "init");
-        pr_info("  boot        : /usr/bin/init spawned as pid %d\n",
+        pr_info("boot: /usr/bin/init spawned as pid %d\n",
                 (int)init->pid);
     }
+
+    /* Kernel boot is over and userspace takes over: keep only NOTICE and above
+     * on the console.  INFO/DEBUG still flow to /dev/kmsg, so nothing is lost
+     * — the console just stops carrying steady-state chatter. */
+    console_loglevel_set(KLOG_LEVEL_NOTICE);
 
     /* Bootstrap thread is done. Yield forever so scheduler keeps running. */
     while (1) {

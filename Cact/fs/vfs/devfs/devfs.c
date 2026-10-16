@@ -184,12 +184,12 @@ devfs_entry_t *register_chrdev(const char *name, uint32_t flags,
                                devfs_driver_t *drv, void *drv_priv) {
     if (!name || !drv) return 0;
     if (devfs_find(name)) {
-        pr_warn("[devfs] already registered: %s\n", name);
+        pr_warn("devfs: already registered: %s\n", name);
         return 0;
     }
 
     devfs_entry_t *e = (devfs_entry_t *)kmalloc(sizeof(devfs_entry_t));
-    if (!e) { pr_err("[devfs] kmalloc failed\n"); return 0; }
+    if (!e) { pr_err("devfs: kmalloc failed allocating entry '%s'\n", name); return 0; }
     memset(e, 0, sizeof(devfs_entry_t));
 
     strlcpy(e->name, name, 64);
@@ -249,7 +249,7 @@ void devfs_init(void) {
     uint32_t ndev = 0;
     for (devfs_entry_t *e = dev_list; e; e = e->next) ndev++;
 
-    pr_info("  %-11s : root ready (%u device node(s) + %d proc node(s) + /dev/modinfo)\n",
+    pr_info("%s: root ready (%u device node(s) + %d proc node(s) + /dev/modinfo)\n",
             "devfs", ndev, extra_count);
 
     devfs_ready = 1;

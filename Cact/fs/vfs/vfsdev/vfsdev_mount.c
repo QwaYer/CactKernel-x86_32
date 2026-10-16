@@ -69,17 +69,17 @@ int vfsdev_mount(const char *devarg, const char *target, const char *fstype) {
 
     blkdev_t *bd = blkdev_find(nm);
     if (!bd) {
-        pr_err("  %-11s : no such block device '%s'\n", "vfsdev", nm);
+        pr_err("%s: no such block device '%s'\n", "vfsdev", nm);
         return -ENODEV;
     }
     if (_find_dev(bd->name)) {
-        pr_warn("  %-11s : %s is already mounted\n", "vfsdev", bd->name);
+        pr_warn("%s: %s is already mounted\n", "vfsdev", bd->name);
         return -EBUSY;
     }
 
     vfs_node_t *root = fs_mod_mount_type(bd, fstype);
     if (!root) {
-        pr_err("  %-11s : %s: no filesystem mounted (fstype '%s')\n",
+        pr_err("%s: %s: no filesystem mounted (fstype '%s')\n",
                "vfsdev", bd->name, fstype);
         return -ENODEV;
     }
@@ -88,7 +88,7 @@ int vfsdev_mount(const char *devarg, const char *target, const char *fstype) {
     vfs_node_t *parent = vfs_resolve_parent(target, basename, 128);
     if (!parent || !basename[0] || parent->type != VFS_DIRECTORY) {
         fs_mod_unmount_dev(bd);
-        pr_err("  %-11s : bad mount point '%s'\n", "vfsdev", target);
+        pr_err("%s: bad mount point '%s'\n", "vfsdev", target);
         return -EINVAL;
     }
 
@@ -110,7 +110,7 @@ int vfsdev_mount(const char *devarg, const char *target, const char *fstype) {
     m->next = mount_list;
     mount_list = m;
 
-    pr_info("  %-11s : %s -> %s (%s)\n", "vfsdev", bd->name, target, fstype);
+    pr_info("%s: %s -> %s (%s)\n", "vfsdev", bd->name, target, fstype);
     return 0;
 }
 
@@ -123,7 +123,7 @@ int vfsdev_umount(const char *arg) {
         if (nm && nm[0]) m = _find_dev(nm);
     }
     if (!m) {
-        pr_warn("  %-11s : not mounted: %s\n", "vfsdev", arg);
+        pr_warn("%s: not mounted: %s\n", "vfsdev", arg);
         return -1;
     }
 
@@ -137,7 +137,7 @@ int vfsdev_umount(const char *arg) {
     if (bd) fs_mod_unmount_dev(bd);
 
     if (r == 0)
-        pr_info("  %-11s : %s unmounted\n", "vfsdev", m->target);
+        pr_info("%s: %s unmounted\n", "vfsdev", m->target);
 
     // Drop the tracking entry regardless of the vfs_umount result.
     vfsdev_mount_t **pp = &mount_list;

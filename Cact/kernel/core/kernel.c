@@ -130,7 +130,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     // Memory management (order matters!)
     init_gdt();                     // Global Descriptor Table
-    pr_info("  %-11s : loaded\n", "gdt");
+    pr_info("%s: loaded\n", "gdt");
 
     // CPU feature detection — before IDT / APIC / PAT so the rest of
     // the kernel can query cpu_vendor(), cpu_has_sep(), etc.
@@ -142,36 +142,36 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // fxsave/fxrstor path needs it too. Must be done before anything uses
     // 64-bit locals/returns in C.
     if (fpu_global_init() == 0)
-        pr_info("  %-11s : x87 FPU + SSE enabled\n", "fpu/sse");
+        pr_info("%s: x87 FPU + SSE enabled\n", "fpu/sse");
     else
-        pr_warn("  %-11s : x87 only — no SSE operations\n", "fpu/sse");
+        pr_warn("%s: x87 only — no SSE operations\n", "fpu/sse");
 
     pmm_init_from_mmap(mmap);       // Physical Memory Manager
     init_memory_manager();          // Virtual memory manager
-    pr_info("  %-11s : %u MiB installed (MB2 map), %u MiB usable below the PCI hole\n",
+    pr_info("%s: %u MiB installed (MB2 map), %u MiB usable below the PCI hole\n",
             "pmm", mem_total_kb / 1024u,
             (unsigned)(pmm_total_frames() * (PAGE_SIZE / 1024u) / 1024u));
-    pr_info("  %-11s : virtual address-space manager ready\n", "vmm");
+    pr_info("%s: virtual address-space manager ready\n", "vmm");
     init_heap();                    // Kernel heap (kmalloc)
-    pr_info("  %-11s : kmalloc arena ready (%u KiB free)\n",
+    pr_info("%s: kmalloc arena ready (%u KiB free)\n",
             "heap", get_free_heap_memory() / 1024u);
     init_paging();                  // Enable paging, load page directory
-    pr_info("  %-11s : enabled\n", "paging");
+    pr_info("%s: enabled\n", "paging");
     slab_init();                    // Slab allocator for kernel objects
-    pr_info("  %-11s : kernel object caches ready\n", "slab");
+    pr_info("%s: kernel object caches ready\n", "slab");
     page_fault_init();              // Page fault handler
-    pr_info("  %-11s : #PF handler installed\n", "pagefault");
+    pr_info("%s: #PF handler installed\n", "pagefault");
 
     // Interrupts
     init_idt();                     // Interrupt Descriptor Table
-    pr_info("  %-11s : 256-vector table loaded\n", "idt");
+    pr_info("%s: 256-vector table loaded\n", "idt");
 
     // Program fast-syscall MSRs now that GDT and IDT are ready.
     // IA32_SYSENTER_ESP is updated per-task by the scheduler on every switch.
     cpu_syscall_commit();
 
     serial_init();                  // COM1 — printk/klog also go here (QEMU: -serial stdio)
-    pr_info("  %-11s : COM1 @ 115200 8N1\n", "serial");
+    pr_info("%s: COM1 @ 115200 8N1\n", "serial");
 
     // Display
     init_framebuffer();
@@ -192,7 +192,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         // printk(). Must run AFTER PAT enables WC (the seeding memcpy reads
         // the FB once; under UC this would stall, under WC it's bearable).
         fb_enable_shadow();
-        pr_info("  %-11s : %ux%u @ %ubpp, %s(PAT) + WB shadow ready\n",
+        pr_info("%s: %ux%u @ %ubpp, %s(PAT) + WB shadow ready\n",
                 "framebuffer",
                 fb_get_width(), fb_get_height(), (unsigned)fb_get_bpp(),
                 (fbwc == 0) ? "WC" : "UC");
@@ -214,36 +214,37 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     {
         int mem_status = detect_memory();
         if (mem_status)
-            pr_warn("  %-11s : CMOS reported 0 KB — size unreliable\n", "memory");
+            pr_warn("%s: CMOS reported 0 KB — size unreliable\n", "memory");
     }
 
     // ACPI subsystem (before PCI — APIC needs ACPI tables)
-    if (acpi_init())
-        pr_warn("  %-11s : init failed — hardware limited\n", "acpi");
+    int acpi_rc = acpi_init();
+    if (acpi_rc)
+        pr_warn("%s: init failed (rc=%d) — ACPI features unavailable\n", "acpi", acpi_rc);
 
     /* Timekeeping: TSC when present and calibrated, otherwise the ACPI PM
      * timer.  The scheduler tick itself is the LAPIC timer, armed in
      * apic_init() below. */
     if (ktime_init() != 0)
-        pr_warn("  %-11s : no wall clock — timekeeping degraded\n", "ktime");
+        pr_warn("%s: no wall clock — timekeeping degraded\n", "ktime");
 
     /* Civil time, for the things that have to agree with the outside world —
      * X.509 validity windows above all.  Everything above counts since boot. */
     rtc_init();
     if (rtc_have_time())
-        pr_info("  %-11s : %u s since the epoch\n", "rtc",
+        pr_info("%s: %u s since the epoch\n", "rtc",
                 (unsigned)rtc_epoch_sec());
     else
-        pr_warn("  %-11s : no usable CMOS date — only uptime is known\n", "rtc");
+        pr_warn("%s: no usable CMOS date — only uptime is known\n", "rtc");
 
     /* CSPRNG self-test.  Everything downstream trusts this generator (TLS keys,
      * /dev/urandom), and a generator that hands out zeros fails silently, so
      * check it once here where the failure is one line in the boot log. */
     if (cact_csprng_selftest() != 0)
-        pr_err("  %-11s : SELF-TEST FAILED — the DRBG returns zeros/duplicates\n",
+        pr_err("%s: SELF-TEST FAILED — the DRBG returns zeros/duplicates\n",
                "csprng");
     else
-        pr_info("  %-11s : selftest passed\n", "csprng");
+        pr_info("%s: selftest passed\n", "csprng");
 
     /* Module-signing self-test: verify the embedded known-answer signature with
      * the compiled-in public key.  This proves the kernel image and the signing
@@ -251,27 +252,28 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
      * every module at load.  The printed vermagic is the ABI fingerprint a
      * module must carry; cact_check.sh cross-checks it against the signer. */
     if (mod_sign_selftest() != 0)
-        pr_err("  %-11s : SELF-TEST FAILED — public key rejected its own "
+        pr_err("%s: SELF-TEST FAILED — public key rejected its own "
                "signature\n", "sigmagic");
     else
-        pr_info("  %-11s : selftest passed (ECDSA P-256)\n", "sigmagic");
-    pr_info("  %-11s : ksym vermagic 0x%08x\n", "sigmagic",
+        pr_info("%s: selftest passed (ECDSA P-256)\n", "sigmagic");
+    pr_info("%s: ksym vermagic 0x%08x\n", "sigmagic",
             (unsigned)ksym_vermagic());
 
-    if (apic_init() == 0) {
-        pr_info("  %-11s : LAPIC + IOAPIC operational\n", "apic");
+    int apic_rc = apic_init();
+    if (apic_rc == 0) {
+        pr_info("%s: LAPIC + IOAPIC operational\n", "apic");
         /* Read the LVT back and check the counter is moving: this is what
          * turns an "armed but silent" tick into a visible warning instead of
          * a hang waiting for a scheduler tick that never arrives. */
         (void)lapic_timer_selftest();
     } else {
-        pr_warn("  %-11s : init failed — interrupts will not work\n", "apic");
+        pr_warn("%s: init failed (rc=%d) — interrupts will not work\n", "apic", apic_rc);
     }
 
     // ACPI power path: S5 soft-off, reset register and S1/S3 suspend.  Runs
     // after the namespace is loaded (acpi_init) so \_Sx can be evaluated.
     if (acpi_pm_init() == 0)
-        pr_info("  %-11s : power transitions ready\n", "power");
+        pr_info("%s: power transitions ready\n", "power");
 
     // Master/Worker core map + C-state model (Step 1 of the energy governor).
     // Implementation is in Rust (sched/src/energy.rs); runs after apic_init so
@@ -280,10 +282,10 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     {
         uint32_t e_present = energy_core_count_present();
         uint32_t e_online  = energy_core_count_online();
-        pr_info("  %-11s : %u core(s) present, %u online — cpu0 = master C0\n",
+        pr_info("%s: %u core(s) present, %u online — cpu0 = master C0\n",
                 "energy", (unsigned)e_present, (unsigned)e_online);
         for (uint32_t i = 1; i < e_present; i++) {
-            pr_info("  %-11s : cpu%u worker lapic=0x%02x offline (C6)\n",
+            pr_info("%s: cpu%u worker lapic=0x%02x offline (C6)\n",
                     "energy", (unsigned)i,
                     (unsigned)energy_core_lapic_id(i));
         }
@@ -293,58 +295,58 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     // /proc/cpuinfo can report core id / physical id / siblings / cpu cores.
     // Runs after energy_init, which recorded every present core's LAPIC id.
     cpu_topo_init();
-    pr_info("  %-11s : %u package(s), %u core(s)/pkg, %u thread(s)/core%s\n",
+    pr_info("%s: %u package(s), %u core(s)/pkg, %u thread(s)/core%s\n",
             "cpu-topo", (unsigned)cpu_topo_packages(),
             (unsigned)cpu_topo_cpu_cores(0), (unsigned)cpu_topo_threads_per_core(),
             cpu_topo_valid() ? "" : " (no CPUID topology)");
     for (uint32_t i = 0; i < energy_core_count_present(); i++) {
-        pr_info("  %-11s : cpu%u lapic=0x%02x pkg=%u core=%u siblings=%u\n",
+        pr_info("%s: cpu%u lapic=0x%02x pkg=%u core=%u siblings=%u\n",
                 "cpu-topo", (unsigned)i, (unsigned)energy_core_lapic_id(i),
                 (unsigned)cpu_topo_package(i), (unsigned)cpu_topo_core(i),
                 (unsigned)cpu_topo_siblings(i));
     }
     if (placement_selftest() != 0)
-        pr_err("  %-11s : SELF-TEST FAILED — placement shares the master core\n",
+        pr_err("%s: SELF-TEST FAILED — placement shares the master core\n",
                "placement");
     else
-        pr_info("  %-11s : selftest passed\n", "placement");
+        pr_info("%s: selftest passed\n", "placement");
 
     // C-state controller + master->worker IPI protocol (Step 2 of the energy
     // governor). Re-arms IDT vectors 0xF8/0xF9 for IPI_HALT/IPI_WAKEUP.
     energy_cstate_init();
     energy_ipi_init();
-    pr_info("  %-11s : C-state controller ready (C1 hlt, C3/C6 pending _CST)\n",
+    pr_info("%s: C-state controller ready (C1 hlt, C3/C6 pending _CST)\n",
             "energy");
 
     // Per-tick load monitor on the master core (Step 3 of the energy
     // governor). Sampled automatically from the scheduler tick.
     energy_monitor_init();
-    pr_info("  %-11s : load monitor on cpu0 (1 sample / tick, 1 s window)\n",
+    pr_info("%s: load monitor on cpu0 (1 sample / tick, 1 s window)\n",
             "energy");
 
     // Decision engine (Step 4): evaluates workers once per scheduler tick
     // and drives IPI_HALT / IPI_WAKEUP transitions.
     energy_decision_init();
-    pr_info("  %-11s : decision engine ready (benefit/cost, 1 pass / tick)\n",
+    pr_info("%s: decision engine ready (benefit/cost, 1 pass / tick)\n",
             "energy");
 
     // MLFQ <-> C-state mapping (Step 5): queue classes bound core idle depth.
-    pr_info("  %-11s : mlfq map: RT=C0 interactive=C1 normal=C3 bg=C6\n",
+    pr_info("%s: mlfq map: RT=C0 interactive=C1 normal=C3 bg=C6\n",
             "energy");
 
     // Load balancing / migration (Step 6). Per-core runqueues are pending SMP;
     // the scanner and throttle are live, the cross-runqueue move is not.
     energy_balance_init();
-    pr_info("  %-11s : balancer ready (migration awaits per-core runqueues)\n",
+    pr_info("%s: balancer ready (migration awaits per-core runqueues)\n",
             "energy");
 
     // Energy governor self-tests (Step 7, unit-style checks).
     {
         int e_st = energy_selftest();
         if (e_st == 0)
-            pr_info("  %-11s : selftest passed\n", "energy");
+            pr_info("%s: selftest passed\n", "energy");
         else
-            pr_warn("  %-11s : selftest: %d check(s) FAILED\n",
+            pr_warn("%s: selftest: %d check(s) FAILED\n",
                     "energy", e_st);
     }
 
@@ -355,12 +357,12 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
         uint32_t s_online = 0;
         for (uint32_t s_cpu = 1; s_cpu < 64; s_cpu++) {
             if (smp_cpu_online(s_cpu)) {
-                pr_info("  %-11s : cpu%u worker online\n",
+                pr_info("%s: cpu%u worker online\n",
                         "smp", (unsigned)s_cpu);
                 s_online++;
             }
         }
-        pr_info("  %-11s : %u worker(s) online\n", "smp", (unsigned)s_online);
+        pr_info("%s: %u worker(s) online\n", "smp", (unsigned)s_online);
     }
 
     msidev_init();
@@ -381,7 +383,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     pcidev_init();
     {
         if (pci_device_count <= 0)
-            pr_warn("  %-11s : no devices found\n", "pci");
+            pr_warn("%s: no devices found\n", "pci");
     }
 
     // USB xHCI stack
@@ -395,9 +397,10 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     {
         int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
         if (swap_status)
-            pr_warn("  %-11s : init failed — OOM killer is last resort\n", "swap");
+            pr_warn("%s: init failed (rc=%d) — OOM killer is last resort\n",
+                    "swap", swap_status);
         else
-            pr_info("  %-11s : disk-backed VM ready\n", "swap");
+            pr_info("%s: disk-backed VM ready\n", "swap");
     }
 
     // Virtual filesystem (mntfs_init is deferred — needs the scheduler).
@@ -440,7 +443,7 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     extern void usb_hub_hotplug_init(void);
     usb_hub_hotplug_init();
 
-    pr_info("  %-11s : hardware setup complete — scheduler live\n", "boot");
+    pr_info("%s: hardware setup complete — scheduler live\n", "boot");
 }
 
 // Kernel entry point (called from boot.S)
@@ -520,7 +523,7 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
 
         if (timer_ticks_get() == wd_ticks) {
             printk_color_level(KLOG_LEVEL_CRIT,
-                         "  timer       : FATAL — no tick for 2 s (LAPIC timer dead), "
+                         "timer: FATAL — no tick for 2 s (LAPIC timer dead), "
                          "scheduler cannot start\n",
                          COLOR_LIGHT_RED);
             apic_dump_state("fatal");

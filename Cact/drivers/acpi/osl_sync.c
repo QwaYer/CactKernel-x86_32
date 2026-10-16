@@ -122,7 +122,7 @@ ACPI_STATUS AcpiOsInstallInterruptHandler(
      * vector 0x20 — historically the LAPIC timer vector — and the scheduler
      * would never see a tick. */
     if (InterruptNumber == 0) {
-        pr_warn("  %-11s : SCI_INT=0 — SCI interrupt handler not installed\n", "acpi");
+        pr_warn("%s: SCI_INT=0 — SCI interrupt handler not installed\n", "acpi");
         return AE_OK;
     }
 

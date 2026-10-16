@@ -108,6 +108,6 @@ void vfsdev_init(void) {
         blkdev_t *bd = blkdev_by_id((uint32_t)i);
         if (bd) vfsdev_register_block_device(bd);
     }
-    pr_info("  %-11s : %d block device node(s) exposed in /dev\n",
+    pr_info("%s: %d block device node(s) exposed in /dev\n",
             "vfsdev", blk_node_count);
 }

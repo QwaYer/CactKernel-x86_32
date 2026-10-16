@@ -80,7 +80,7 @@ pub extern "C" fn oom_kill() -> i32 {
         // SAFETY: release of `scheduler_lock`, still held from the acquire above.
         lock_release(unsafe { scheduler_lock.get() });
         // SAFETY: printk_color takes a valid string.
-        unsafe { printk_color(c"[OOM] no killable process found\n".as_ptr() as *const u8, COLOR_LIGHT_RED); }
+        unsafe { printk_color(c"oom: no killable process found\n".as_ptr() as *const u8, COLOR_LIGHT_RED); }
         return -1;
     }
 
@@ -119,7 +119,7 @@ pub extern "C" fn oom_kill() -> i32 {
     let mut buf = [0u8; 16];
     // SAFETY: `printk_color` takes a NUL-terminated static string; the literal
     // below is one.
-    unsafe { printk_color(c"\n[OOM] Killed pid=".as_ptr() as *const u8, COLOR_LIGHT_RED) };
+    unsafe { printk_color(c"\noom: Killed pid=".as_ptr() as *const u8, COLOR_LIGHT_RED) };
     // SAFETY: `buf` is a live 16-byte stack array, so `itoa` writes in bounds.
     unsafe { itoa(victim_pid as i32, buf.as_mut_ptr()) };
     // SAFETY: `buf` was just made a NUL-terminated string by `itoa`.
@@ -149,7 +149,7 @@ pub extern "C" fn oom_get_stats() -> OomStats {
 pub extern "C" fn oom_print_stats() {
     // SAFETY: read-only snapshot of `G_STATS` for printing.
     let stats = *unsafe { KStatic::get_mut(G_STATS.as_ptr()) };
-    kprint_str(c"[OOM] === OOM Killer Statistics ===\n".as_ptr() as *const u8);
+    kprint_str(c"oom: === OOM Killer Statistics ===\n".as_ptr() as *const u8);
     kprint_str(c"  oom_kills:       ".as_ptr() as *const u8);
     kprint_int(stats.oom_kills as i32);
     kprint_str(c"\n".as_ptr() as *const u8);

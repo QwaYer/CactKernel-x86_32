@@ -91,12 +91,13 @@ int pcidev_register_driver(pci_driver_t *drv)
 {
     if (!drv || (!drv->probe && !drv->module_path)) return -1;
     if (pcidev_driver_count >= MAX_PCI_DRIVERS) {
-        pr_warn("  %-11s : driver table full\n", "pci");
+        pr_warn("%s: driver table full (max %d), refusing '%s'\n",
+                "pci", (int)MAX_PCI_DRIVERS, drv->name);
         return -1;
     }
     for (pci_driver_t *d = pcidev_driver_list; d; d = d->next)
         if (streq(d->name, drv->name)) {
-            pr_warn("  %-11s : duplicate driver name\n", "pci");
+            pr_warn("%s: duplicate driver name '%s'\n", "pci", drv->name);
             return -1;
         }
     drv->next   = pcidev_driver_list;
@@ -129,14 +130,14 @@ int pcidev_match_device(pci_device_t *dev)
 
         if (drv->module_path && !drv->probe) {
             if (pci_load_module(drv->module_path, drv) != 0) {
-                pr_warn("  %-11s : module load failed\n", "pci");
+                pr_warn("%s: module '%s' load failed\n", "pci", drv->module_path);
                 continue;
             }
         }
 
         if (!drv->probe) return -1;
 
-        pr_info("  %-11s : driver \"%s\" attached (%02x:%02x.%u)\n",
+        pr_info("%s: driver \"%s\" attached (%02x:%02x.%u)\n",
                 "pci", drv->name,
                 (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn);
         if (drv->probe(dev) != 0) return -1;
@@ -255,7 +256,7 @@ void pcidev_probe_all(void)
         else               { dev->drv_probe_state = 3; fail++; }
     }
     deferred_count = 0;
-    pr_info("  %-11s : deferred probe complete (%u matched, %u idle, %u failed)\n",
+    pr_info("%s: deferred probe complete (%u matched, %u idle, %u failed)\n",
             "pci-probe", ok, none, fail);
 }
 
@@ -265,7 +266,7 @@ void pcidev_init(void)
     pcie_init();
 
     if (search_pci())
-        pr_warn("  %-11s : PCI scan reported error\n", "pci");
+        pr_warn("%s: PCI scan reported error\n", "pci");
 
     pci_enumerate();
 }

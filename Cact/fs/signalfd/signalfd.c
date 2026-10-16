@@ -15,8 +15,8 @@
 // set.  Signals are never stolen from normal delivery: unblocked signals are
 // handled at the syscall-return boundary, only blocked ones accumulate and
 // can be consumed here.  poll(2) reports POLLIN while such a signal is
-// pending.  This matches the way libwayland uses signalfd (sigprocmask
-// SIG_BLOCK first, then signalfd()).
+// pending.  This matches the usual signalfd pattern (sigprocmask SIG_BLOCK
+// first, then signalfd()).
 
 #ifndef EINVAL
 #define EINVAL 22
@@ -152,7 +152,7 @@ static int _signalfd_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
 vfs_node_t *signalfd_create_vnode(uint32_t mask, uint32_t flags) {
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
     if (!node) {
-        pr_err("  %-11s : cannot allocate node\n", "signalfd");
+        pr_err("%s: cannot allocate node\n", "signalfd");
         return 0;
     }
     memset(node, 0, sizeof(vfs_node_t));
@@ -160,7 +160,7 @@ vfs_node_t *signalfd_create_vnode(uint32_t mask, uint32_t flags) {
     signalfd_state_t *s = (signalfd_state_t *)kmalloc(sizeof(signalfd_state_t));
     if (!s) {
         kfree(node);
-        pr_err("  %-11s : cannot allocate state\n", "signalfd");
+        pr_err("%s: cannot allocate state\n", "signalfd");
         return 0;
     }
     memset(s, 0, sizeof(signalfd_state_t));

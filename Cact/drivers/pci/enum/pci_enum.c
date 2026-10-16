@@ -103,13 +103,13 @@ static void probe_fn(uint8_t bus, uint8_t dev, uint8_t fn) {
     if (id == 0xFFFFFFFF || id == 0x00000000) return;  // absent function
 
     pci_device_t *d = alloc_dev();
-    if (!d) { pr_warn("  %-11s : device pool exhausted\n", "pci"); return; }
+    if (!d) { pr_warn("%s: device pool exhausted\n", "pci"); return; }
 
     d->bus = bus; d->dev = dev; d->fn = fn;
     d->vendor_id = (uint16_t)(id & 0xFFFF);
     d->device_id = (uint16_t)(id >> 16);
 
-    pr_info("  %-11s : %02x:%02x.%u  %04x:%04x\n",
+    pr_info("%s: %02x:%02x.%u  %04x:%04x\n",
             "pci", (unsigned)bus, (unsigned)dev, (unsigned)fn,
             (unsigned)d->vendor_id, (unsigned)d->device_id);
 
@@ -166,7 +166,7 @@ static void scan_bus(uint8_t bus) {
     if (scan_depth >= MAX_SCAN_DEPTH) return;
     scan_depth++;
 
-    pr_info("  %-11s : scanning bus %u\n", "pci", (unsigned)bus);
+    pr_info("%s: scanning bus %u\n", "pci", (unsigned)bus);
 
     for (uint8_t dev = 0; dev < PCI_MAX_DEV; dev++) {
         // Quick check for device presence by reading vendor/device ID
@@ -201,7 +201,7 @@ void pci_enumerate(void) {
             scan_bus(fn);
         }
     }
-    pr_info("  %-11s : enumeration finished\n", "pci-bus");
+    pr_info("%s: enumeration finished\n", "pci-bus");
 }
 
 void pci_enum_dump(void) {

@@ -166,7 +166,7 @@ void binfs_init(vfs_node_t *ext4_node) {
     uint32_t files = 0, dirs = 0;
     cctkfs_tree_count(&bin_tree, &files, &dirs);
 
-    pr_info("  %-11s : root ready (%u on disk, %u cctkfs files, %u dirs)\n",
+    pr_info("%s: root ready (%u on disk, %u cctkfs files, %u dirs)\n",
             "binfs", binfs_disk_count, files, dirs);
 
     binfs_ready = 1;

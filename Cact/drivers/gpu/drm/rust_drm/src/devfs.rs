@@ -135,7 +135,7 @@ pub extern "C" fn drm_devfs_init() -> c_int {
         // SAFETY: static NUL-terminated string.
         unsafe {
             crate::ffi::printk(
-                c"\x013  drm         : cannot register /dev/dri\n".as_ptr() as *const u8,
+                c"\x013drm: cannot register /dev/dri\n".as_ptr() as *const u8,
             );
         }
         return -1;
