@@ -5,6 +5,7 @@
 #include "fb.h"
 #include "validate.h"
 #include "ioctl_abi.h"
+#include "devfs.h"
 
 extern void sched_sleep_ticks(uint32_t ticks);
 
@@ -15,11 +16,16 @@ extern void sched_sleep_ticks(uint32_t ticks);
 // tty.c — virtual terminal core and line discipline.
 //
 // One physical console (keyboard in, framebuffer out) is multiplexed into
-// TTY_MAX virtual terminals.  The active VT owns the console: its input is
+// virtual terminals.  The active VT owns the console: its input is
 // delivered to readers and its output is drawn.  A background VT keeps its
 // output in a ring of recent bytes and gets it replayed when it is activated,
 // which is what gives each /dev/ttyN a screen of its own without a real VT
 // switch in the video hardware.
+//
+// The VT count is dynamic (as on Linux): VTs are allocated on demand up to
+// the hard cap TTY_MAX_VT, and each allocation registers its own /dev/ttyN
+// node through devfs (see tty_alloc()).  The tty driver owns that registration
+// — devfs does not know the terminal family exists.
 //
 // Each VT also carries a termios and a small line discipline.  In canonical
 // mode the kernel edits the line (erase/kill/word-erase/EOF) and echoes it; in
@@ -72,33 +78,49 @@ typedef struct {
     uint32_t out_len;
 } tty_vt_t;
 
-static tty_vt_t vts[TTY_MAX + 1];   // index 1..TTY_MAX
+static tty_vt_t vts[TTY_MAX_VT + 1];   // index 1..tty_num (allocated VTs)
 static int      tty_ready = 0;
 static int      tty_cur   = 1;
+static int      tty_num   = 0;         // number of allocated VTs, contiguous 1..tty_num
 
 // Per-VT termios.  tio[0] is unused; the active VT is resolved at call time.
-static tty_termios_t tio[TTY_MAX + 1];
+static tty_termios_t tio[TTY_MAX_VT + 1];
 
 // Per-VT cooked queue: in raw mode a keystroke lands here directly; in
 // canonical mode a whole committed line does.  tty_read() drains it.
 #define TTY_IBUF 1024
-static volatile char     in_buf[TTY_MAX + 1][TTY_IBUF];
-static volatile uint32_t in_wr[TTY_MAX + 1];
-static volatile uint32_t in_rd[TTY_MAX + 1];
+static volatile char     in_buf[TTY_MAX_VT + 1][TTY_IBUF];
+static volatile uint32_t in_wr[TTY_MAX_VT + 1];
+static volatile uint32_t in_rd[TTY_MAX_VT + 1];
 
 // Canonical line edit buffer.  Capped two bytes below the queue so that even a
 // full line plus its '\n' always fits in the ring without a drop.
 #define TTY_LINE_MAX (TTY_IBUF - 2)
-static char     line_buf[TTY_MAX + 1][TTY_LINE_MAX];
-static uint16_t line_len[TTY_MAX + 1];
-static uint8_t  eof_pending[TTY_MAX + 1];
+static char     line_buf[TTY_MAX_VT + 1][TTY_LINE_MAX];
+static uint16_t line_len[TTY_MAX_VT + 1];
+static uint8_t  eof_pending[TTY_MAX_VT + 1];
 
 // pid -> controlling VT.  Small fixed table: terminals here are a single-user
 // console, so a handful of sessions is more than enough.
 #define TTY_CTTY_MAX 32
 static struct { uint32_t pid; int idx; } ctty_tbl[TTY_CTTY_MAX];
 
-int tty_count(void)  { return TTY_MAX; }
+// The terminal driver's devfs table.  The tty driver registers every VT node
+// itself (tty_init / tty_alloc); drv_priv is the VT index (0 = active).
+static int _tty_dev_read(void *p, uint32_t off, uint32_t size, char *buf) {
+    return tty_read((int)(uintptr_t)p, off, size, buf);
+}
+static int _tty_dev_write(void *p, uint32_t off, uint32_t size, char *buf) {
+    return tty_write((int)(uintptr_t)p, off, size, buf);
+}
+static int _tty_dev_ioctl(void *p, uint32_t cmd, void *arg) {
+    return tty_ioctl((int)(uintptr_t)p, cmd, arg);
+}
+static devfs_driver_t drv_tty = {
+    .read = _tty_dev_read, .write = _tty_dev_write, .ioctl = _tty_dev_ioctl
+};
+
+int tty_count(void)  { return tty_num; }
 int tty_active(void) { return tty_cur; }
 
 int tty_index(int idx) { return (idx <= 0) ? tty_cur : idx; }
@@ -189,7 +211,7 @@ static void line_werase(int i) {
 void tty_input(int idx, char c) {
     if (!c) return;
     int i = tty_index(idx);
-    if (i < 1 || i > TTY_MAX) return;
+    if (i < 1 || i > TTY_MAX_VT) return;
 
     tty_termios_t *t = &tio[i];
     unsigned char uc = (unsigned char)c;
@@ -321,11 +343,46 @@ static void vt_render(int i) {
 }
 
 int tty_activate(int n) {
-    if (n < 1 || n > TTY_MAX) return -1;
+    if (n < 1 || n > TTY_MAX_VT) return -1;
+    // Switching to a VT that is not allocated yet allocates it (and every VT
+    // below it), exactly as Linux's VT_ACTIVATE calls vc_allocate().  This
+    // registers a device node, so it must run in process context — interrupt
+    // callers (Alt+F<n>) go through tty_activate_deferred() instead.
+    while (tty_num < n) {
+        if (tty_alloc() < 0) return -1;
+    }
     if (n == tty_cur) return 0;
     tty_cur = n;
     vt_render(n);
     return 0;
+}
+
+// ── deferred console switch ────────────────────────────────────────────────
+// A keystroke arrives in interrupt context, where allocating and registering a
+// /dev/ttyN node is not allowed.  Alt+F<n> records the wanted VT here and the
+// console task performs the (possibly allocating) switch in process context,
+// mirroring Linux's console_callback work item.
+static volatile int tty_pending_vt = 0;
+
+void tty_activate_deferred(int n) {
+    if (n < 1 || n > TTY_MAX_VT) return;
+    tty_pending_vt = n;
+}
+
+static void tty_console_task(void) {
+    while (1) {
+        int want = tty_pending_vt;
+        if (want) {
+            tty_pending_vt = 0;
+            tty_activate(want);
+        }
+        sched_sleep_ticks(1);
+    }
+}
+
+void tty_console_task_init(void) {
+    if (!create_task(tty_console_task))
+        pr_warn("tty: console switch task could not be created");
 }
 
 int tty_write(int idx, uint32_t off, uint32_t size, char *buf) {
@@ -334,7 +391,7 @@ int tty_write(int idx, uint32_t off, uint32_t size, char *buf) {
     if (!buf || !validate_user_ptr(buf, size)) return -1;
 
     int i = tty_index(idx);
-    if (i < 1 || i > TTY_MAX) return -1;
+    if (i < 1 || i > TTY_MAX_VT) return -1;
 
     if (i == tty_cur) {
         // Rendering through console_puts() records the bytes in the active VT's
@@ -361,7 +418,7 @@ int tty_read(int idx, uint32_t off, uint32_t size, char *buf) {
     if (!size) return 0;
 
     int i = tty_index(idx);
-    if (i < 1 || i > TTY_MAX) return -1;
+    if (i < 1 || i > TTY_MAX_VT) return -1;
 
     uint32_t k = 0;
     while (k < size) {
@@ -435,14 +492,31 @@ int tty_ioctl(int idx, uint32_t cmd, void *arg) {
         if (!arg || !validate_user_ptr(arg, sizeof(cact_vt_state_t))) return -1;
         cact_vt_state_t st;
         st.v_active = (uint16_t)tty_cur;
-        st.v_count  = (uint16_t)TTY_MAX;
+        st.v_count  = (uint16_t)tty_num;
         return copy_to_user(arg, &st, sizeof(st));
+    }
+
+    case CACT_TTYCTL_VT_OPENQRY: {
+        // Linux VT_OPENQRY: hand back the number of a not-yet-allocated VT so
+        // the caller can allocate it by switching to it (VT_ACTIVATE) or by an
+        // explicit request.  0 means "the cap is reached, none free".
+        if (!arg || !validate_user_ptr(arg, sizeof(int))) return -1;
+        *(int *)arg = (tty_num < TTY_MAX_VT) ? tty_num + 1 : 0;
+        return 0;
+    }
+
+    case CACT_TTYCTL_VT_DISALLOCATE: {
+        // Linux VT_DISALLOCATE: release a VT.  Only the highest one can be
+        // freed, and never the active VT, so the live set stays contiguous.
+        int n;
+        if (!arg || copy_from_user(&n, arg, sizeof(n)) != 0) return -1;
+        return tty_free(n);
     }
 
     case CACT_TTYCTL_SET_CTTY: {
         int n;
         if (!arg || copy_from_user(&n, arg, sizeof(n)) != 0) return -1;
-        if (n < 0 || n > TTY_MAX) return -1;
+        if (n < 0 || n > tty_num) return -1;
         tty_set_ctty(n);
         return 0;
     }
@@ -483,7 +557,7 @@ int tty_ioctl(int idx, uint32_t cmd, void *arg) {
         tty_termios_t t;
         if (!arg || copy_from_user(&t, arg, sizeof(t)) != 0) return -1;
         int i = tty_index(idx);
-        if (i < 1 || i > TTY_MAX) return -1;
+        if (i < 1 || i > TTY_MAX_VT) return -1;
         if (cmd == TTY_TCSETSF) {
             // Flush pending input, as Linux does, so a mode change out of
             // canonical does not deliver a half-edited line afterwards.
@@ -535,19 +609,73 @@ void tty_clear_ctty(uint32_t pid) {
     }
 }
 
+// ── VT lifetime ────────────────────────────────────────────────────────────
+// A VT is "allocated" once its /dev/tty<n> node is registered; the live set is
+// always contiguous 1..tty_num, so no per-index allocation bookkeeping is
+// needed.  This is what makes the terminal family dynamic: nodes appear as VTs
+// are created and disappear as the highest ones are released.
+
+static void tty_vt_reset(int n) {
+    tty_termios_default(&tio[n]);
+    in_wr[n] = 0;
+    in_rd[n] = 0;
+    line_len[n] = 0;
+    eof_pending[n] = 0;
+}
+
+static int tty_vt_register(int n) {
+    if (n < 1 || n > TTY_MAX_VT) return -1;
+    char nm[16];
+    snprintf(nm, sizeof(nm), "tty%d", n);
+    if (!register_chrdev(nm, DEVFS_F_CHAR, &drv_tty, (void *)(uintptr_t)n))
+        return -1;
+    tty_vt_reset(n);
+    return 0;
+}
+
+static void tty_vt_unregister(int n) {
+    char nm[16];
+    snprintf(nm, sizeof(nm), "tty%d", n);
+    unregister_chrdev(nm);
+    // Drop any controlling-terminal reference to a VT that no longer exists.
+    for (int i = 0; i < TTY_CTTY_MAX; i++)
+        if (ctty_tbl[i].idx == n) ctty_tbl[i].idx = 0;
+}
+
+int tty_alloc(void) {
+    if (tty_num >= TTY_MAX_VT) return -1;
+    int n = tty_num + 1;
+    if (tty_vt_register(n) != 0) return -1;
+    memset(&vts[n], 0, sizeof(vts[n]));   // a fresh VT starts with an empty screen
+    tty_num = n;
+    return n;
+}
+
+int tty_free(int n) {
+    if (n < 1 || n != tty_num) return -1;   // only the highest VT can be freed
+    if (n == tty_cur) return -1;            // and never the one that is active
+    tty_vt_unregister(n);
+    tty_num = n - 1;
+    return 0;
+}
+
 void tty_init(void) {
     if (tty_ready) return;
     // vts[] is intentionally not cleared: console output produced before this
     // point (early boot log) has already been recorded there, and keeping it
     // means a VT switch back shows the boot messages.
     memset(ctty_tbl, 0, sizeof(ctty_tbl));
-    for (int i = 0; i <= TTY_MAX; i++) {
-        tty_termios_default(&tio[i]);
-        in_wr[i] = 0;
-        in_rd[i] = 0;
-        line_len[i] = 0;
-        eof_pending[i] = 0;
-    }
     tty_cur   = 1;
+    tty_num   = 0;
     tty_ready = 1;
+
+    // The terminal driver registers its own nodes.  /dev/tty0 is the
+    // Linux-style alias for whichever VT is active; VT1 is allocated so the
+    // boot console (the shell's /dev/tty) exists.  No fixed ceiling of nodes
+    // is pre-created — higher VTs appear on demand (see tty_alloc()).
+    register_chrdev("tty0", DEVFS_F_CHAR, &drv_tty, (void *)0);
+    if (tty_vt_register(1) != 0)
+        pr_err("[tty] failed to register /dev/tty1\n");
+    else
+        tty_num = 1;
 }
