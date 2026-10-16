@@ -73,18 +73,22 @@ void mntfs_init(void) {
         }
     }
 
-    // 2. Initialise the subsystem filesystems (bound to the boot ext4 when
-    //    present, otherwise they serve the RAM/cctkfs userland).
+    // 2. Initialise the subsystem filesystems.  The /etc, /usr and /var
+    //    overlays bind to the root filesystem — the boot ext4 when a disk was
+    //    mounted, otherwise the RAM tmpfs — so those trees stay writable either
+    //    way.  Binding the raw `ext4` node instead (NULL without a disk) left
+    //    their create/mkdir ops dead on a RAM boot, so nothing could be written
+    //    under /etc, /usr or /var.
     devfs_init();
     vfsdev_init();
     procfs_init();
     tmpfs_init();
-    etcfs_init(ext4);
-    binfs_init(ext4);
-    sbinfs_init(ext4);
-    libfs_init(ext4);
-    varfs_init(ext4);
-    usrfs_init(ext4);
+    etcfs_init(vfs_root);
+    binfs_init(vfs_root);
+    sbinfs_init(vfs_root);
+    libfs_init(vfs_root);
+    varfs_init(vfs_root);
+    usrfs_init(vfs_root);
 
     // Dynamic synthetic filesystems: procfs creates /proc/<pid> as processes
     // come and go, and devfs gains nodes on runtime register_chrdev().  Their
