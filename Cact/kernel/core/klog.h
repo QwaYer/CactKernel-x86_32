@@ -70,4 +70,13 @@ uint32_t klog_dropped_bytes(void);
 /* Next sequence number to be assigned. */
 uint32_t klog_seq(void);
 
+/* Console log level (0..7).  printk() always feeds the log, but renders to
+ * the console only when the message level is <= this threshold.  It starts at
+ * DEBUG so the boot transcript is complete, and the kernel raises it when
+ * userspace init is launched so steady-state INFO/DEBUG goes to /dev/kmsg
+ * only.  Userspace may read/set it through CACT_SYSCTL_GET/SET_CONSOLE_LOGLEVEL
+ * on /dev/sys. */
+int  console_loglevel_get(void);
+void console_loglevel_set(int level);
+
 #endif

@@ -251,7 +251,7 @@ static int dmi_collect_once(void)
     }
 
     if (dmi_state == 1)
-        pr_info("DMI: %s / %s (BIOS %s)",
+        pr_info("dmi: %s / %s (BIOS %s)",
                 dmi_vendor, dmi_product, dmi_bios_version);
 
     return dmi_state;

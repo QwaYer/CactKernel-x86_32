@@ -41,7 +41,7 @@ int request_firmware(const char *name, const uint8_t **data, uint32_t *len) {
         copy = fw_load(path, &size);
     }
     if (!copy) {
-        pr_warn("[firmware] %s not found in cctkfs\n", name);
+        pr_warn("firmware: %s not found in cctkfs\n", name);
         return -1;
     }
 

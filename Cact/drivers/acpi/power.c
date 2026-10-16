@@ -117,14 +117,14 @@ int acpi_sleep_states(uint32_t *mask)
 int acpi_pm_init(void)
 {
     if (!acpi_available()) {
-        pr_warn("  %-11s : no ACPI — power paths fall back to port I/O\n", "power");
+        pr_warn("%s: no ACPI — power paths fall back to port I/O\n", "power");
         return -1;
     }
 
     pm_ready = 1;
     acpi_sleep_states(&s_state_mask);
 
-    pr_info("  %-11s : PM1a_CNT=0x%x reset-reg=%s sleep=[%s%s%s%s%s]\n",
+    pr_info("%s: PM1a_CNT=0x%x reset-reg=%s sleep=[%s%s%s%s%s]\n",
             "power",
             (unsigned)AcpiGbl_FADT.Pm1aControlBlock,
             (AcpiGbl_FADT.Flags & ACPI_FADT_RESET_REGISTER) ? "yes" : "no",
@@ -140,7 +140,7 @@ void acpi_power_off(void)
 {
     int prep_ok = 0;
 
-    pr_notice("  %-11s : poweroff (S5)\n", "power");
+    pr_notice("%s: poweroff (S5)\n", "power");
 
     if (pm_ready)
         prep_ok = ACPI_SUCCESS(AcpiEnterSleepStatePrep(ACPI_STATE_S5));
@@ -149,12 +149,12 @@ void acpi_power_off(void)
 
     if (prep_ok) {
         (void)AcpiEnterSleepState(ACPI_STATE_S5);
-        pr_warn("  %-11s : S5 returned without powering off\n", "power");
+        pr_warn("%s: S5 returned without powering off\n", "power");
     }
 
     if (pm1_write_direct(ACPI_STATE_S5)) {
         spin_ms(2000);
-        pr_warn("  %-11s : direct PM1 write did not power off\n", "power");
+        pr_warn("%s: direct PM1 write did not power off\n", "power");
     }
 
     /* QEMU/Bochs convention: SLP_EN|SLP_TYP=0 on the well-known PM1a ports. */
@@ -162,20 +162,20 @@ void acpi_power_off(void)
     outw(BOCHS_PM1A_CNT, (uint16_t)PM1_SLP_EN);
 
     spin_ms(2000);
-    pr_err("  %-11s : poweroff unavailable — system halted\n", "power");
+    pr_err("%s: poweroff unavailable — system halted\n", "power");
     cpu_stop();
 }
 
 void acpi_reboot(void)
 {
-    pr_notice("  %-11s : reboot (reset-reg=0x%x val=0x%x)\n",
+    pr_notice("%s: reboot (reset-reg=0x%x val=0x%x)\n",
               "power",
               (unsigned)AcpiGbl_FADT.ResetRegister.Address,
               (unsigned)AcpiGbl_FADT.ResetValue);
     __asm__ volatile ("cli");
 
     if (pm_ready && ACPI_SUCCESS(AcpiReset())) {
-        pr_notice("  %-11s : reset via the ACPI reset register\n", "power");
+        pr_notice("%s: reset via the ACPI reset register\n", "power");
         spin_ms(2000);
     }
 
@@ -188,12 +188,12 @@ void acpi_reboot(void)
     kbc_reset();
     spin_ms(1000);
 
-    pr_warn("  %-11s : reset fallbacks exhausted — triple fault\n", "power");
+    pr_warn("%s: reset fallbacks exhausted — triple fault\n", "power");
     triple_fault();
 }
 
 void acpi_halt(void)
 {
-    pr_notice("  %-11s : halt\n", "power");
+    pr_notice("%s: halt\n", "power");
     cpu_stop();
 }

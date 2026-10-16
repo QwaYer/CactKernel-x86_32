@@ -67,7 +67,7 @@ static int xhci_program_regs(xhci_priv_t *priv) {
     if (priv->quirks & XHCI_QUIRK_SPURIOUS_REBOOT) {
         /* Intel 300-series can raise a spurious host-system-error that trips
          * a chipset reboot; keep HSEE disabled so it can never fire. */
-        pr_info("  %-11s : HSE interrupt masked (spurious-reboot quirk)\n", "xhci");
+        pr_info("%s: HSE interrupt masked (spurious-reboot quirk)\n", "xhci");
     } else {
         run_cmd |= XHCI_CMD_HSEE;
     }
@@ -78,7 +78,7 @@ static int xhci_program_regs(xhci_priv_t *priv) {
         xhci_udelay(1000);
     }
     if (xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH) {
-        pr_warn("  %-11s : host controller did not start\n", "xhci");
+        pr_warn("%s: host controller did not start\n", "xhci");
         return -1;
     }
     return 0;
@@ -93,7 +93,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
                 PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
 
     xhci_priv_t *priv = (xhci_priv_t *)kmalloc(sizeof(xhci_priv_t));
-    if (!priv) { pr_warn("  %-11s : state allocation failed\n", "xhci"); return -1; }
+    if (!priv) { pr_warn("%s: state allocation failed\n", "xhci"); return -1; }
     memset(priv, 0, sizeof(xhci_priv_t));
     priv->scanning = 1;   /* stay off-limits to the hotplug task until scanned */
     spin_lock_init(&priv->ctx_lock);
@@ -134,7 +134,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
                     xhci_udelay(10000);
                 }
                 if (ecap[0] & (1u << 16))
-                    pr_warn("  %-11s : BIOS ownership handoff timed out\n", "xhci");
+                    pr_warn("%s: BIOS ownership handoff timed out\n", "xhci");
                 ecap[1] = 0;
                 break;
             }
@@ -151,7 +151,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
         xhci_udelay(1000);
     }
     if (!(xhci_op_read32(priv, XHCI_OP_USBSTS) & XHCI_STS_HCH))
-        pr_warn("  %-11s : controller did not halt (USBSTS=0x%x)\n", "xhci",
+        pr_warn("%s: controller did not halt (USBSTS=0x%x)\n", "xhci",
                 xhci_op_read32(priv, XHCI_OP_USBSTS));
 
     xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
@@ -164,7 +164,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
         xhci_udelay(1000);
     }
     if (xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)
-        pr_warn("  %-11s : HCRST never self-cleared\n", "xhci");
+        pr_warn("%s: HCRST never self-cleared\n", "xhci");
     xhci_op_write32(priv, XHCI_OP_USBSTS, xhci_op_read32(priv, XHCI_OP_USBSTS));
 
     /* The ring registers (CRCR, DCBAAP) are only accepted while the controller
@@ -179,7 +179,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
         }
         sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
         if (!(sts & XHCI_STS_HCH) || (sts & XHCI_STS_CNR)) {
-            pr_err("  %-11s : controller not halted/ready after reset (USBSTS=0x%x)\n",
+            pr_err("%s: controller not halted/ready after reset (USBSTS=0x%x)\n",
                    "xhci", sts);
             kfree(priv);
             return -1;
@@ -204,7 +204,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
         priv->scratchpad_array = (uint64_t *)kmalloc_aligned(sp_count * sizeof(uint64_t), 64);
         priv->scratchpad_pool  = (uint8_t *)kmalloc_aligned(sp_count * 4096u, 4096);
         if (!priv->scratchpad_array || !priv->scratchpad_pool) {
-            pr_err("  %-11s : scratchpad allocation failed (%u buffers)\n",
+            pr_err("%s: scratchpad allocation failed (%u buffers)\n",
                    "xhci", (unsigned)sp_count);
             kfree(priv->scratchpad_array); kfree(priv->scratchpad_pool);
             kfree(priv->dcbaa); kfree(priv);
@@ -215,7 +215,7 @@ int xhci_init_one(uint32_t phys_base, uint32_t quirks) {
         for (uint32_t i = 0; i < sp_count; i++)
             priv->scratchpad_array[i] = xhci_va_to_pa(priv->scratchpad_pool + i * 4096u);
         priv->dcbaa[0] = xhci_va_to_pa(priv->scratchpad_array);
-        pr_info("  %-11s : %u scratchpad buffers, pool=0x%x array=0x%x\n", "xhci",
+        pr_info("%s: %u scratchpad buffers, pool=0x%x array=0x%x\n", "xhci",
                 (unsigned)sp_count, xhci_va_to_pa(priv->scratchpad_pool),
                 xhci_va_to_pa(priv->scratchpad_array));
     }
@@ -341,7 +341,7 @@ static int xhci_probe_port(xhci_priv_t *priv, usb_hc_t *hc, uint8_t port)
 
     if (xhci_port_reset(hc, port) != 0) {
         sc = xhci_portsc_read(priv, port);
-        pr_warn("  %-11s : port %u did not enable (PORTSC=0x%x)\n",
+        pr_warn("%s: port %u did not enable (PORTSC=0x%x)\n",
                 "xhci", (unsigned)port, sc);
         return -1;
     }
@@ -355,7 +355,7 @@ static int xhci_probe_port(xhci_priv_t *priv, usb_hc_t *hc, uint8_t port)
     priv->slot_port[slot_id] = port;
 
     if (xhci_address_device(priv, slot_id, port, speed, 0, 0, 0) != 0) {
-        pr_warn("  %-11s : port %u Address Device failed (speed %u, cc 0x%x)\n",
+        pr_warn("%s: port %u Address Device failed (speed %u, cc 0x%x)\n",
                 "xhci", (unsigned)port, (unsigned)speed, (unsigned)priv->cmd_cc);
         goto fail;
     }
@@ -370,7 +370,7 @@ static int xhci_probe_port(xhci_priv_t *priv, usb_hc_t *hc, uint8_t port)
     dev->address = slot_id;
 
     if (xhci_finish_enumeration(hc, dev) != 0) {
-        pr_warn("  %-11s : port %u descriptor read failed\n",
+        pr_warn("%s: port %u descriptor read failed\n",
                 "xhci", (unsigned)port);
         goto fail_dev;
     }
@@ -378,9 +378,6 @@ static int xhci_probe_port(xhci_priv_t *priv, usb_hc_t *hc, uint8_t port)
     priv->port_dev[port] = dev;
 
     usb_register_device(dev);
-    pr_info("  %-11s : port %u device %04x:%04x registered\n", "xhci",
-            (unsigned)port, (unsigned)dev->dev_desc.idVendor,
-            (unsigned)dev->dev_desc.idProduct);
     return 0;
 
 fail_dev:
@@ -418,7 +415,7 @@ static usb_device_t *xhci_enumerate_hub_child(usb_hc_t *hc, usb_device_t *hub_de
      * supported yet, but the SuperSpeed/high-speed cases do not. */
     if (xhci_address_device(priv, slot_id, hub_dev->port, speed, 0,
                             hub_dev->address, port) != 0) {
-        pr_warn("  %-11s : hub port %u Address Device failed (speed %u, cc 0x%x)\n",
+        pr_warn("%s: hub port %u Address Device failed (speed %u, cc 0x%x)\n",
                 "xhci", (unsigned)port, (unsigned)speed, (unsigned)priv->cmd_cc);
         goto fail;
     }
@@ -434,15 +431,12 @@ static usb_device_t *xhci_enumerate_hub_child(usb_hc_t *hc, usb_device_t *hub_de
     dev->address = slot_id;
 
     if (xhci_finish_enumeration(hc, dev) != 0) {
-        pr_warn("  %-11s : hub port %u descriptor read failed\n",
+        pr_warn("%s: hub port %u descriptor read failed\n",
                 "xhci", (unsigned)port);
         goto fail_dev;
     }
 
     usb_register_device(dev);
-    pr_info("  %-11s : hub port %u device %04x:%04x registered\n", "xhci",
-            (unsigned)port, (unsigned)dev->dev_desc.idVendor,
-            (unsigned)dev->dev_desc.idProduct);
     return dev;
 
 fail_dev:
@@ -493,9 +487,6 @@ static void xhci_scan_ports(xhci_priv_t *priv, usb_hc_t *hc)
         uint32_t sc = xhci_portsc_read(priv, p);
         if (!(sc & XHCI_PORTSC_CCS))
             continue;
-        pr_info("  %-11s : port %u connected (PED=%u speed=%u)\n", "xhci",
-                (unsigned)p, (unsigned)((sc >> 1) & 1),
-                (unsigned)((sc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT));
         if (priv->port_dev[p])
             continue;                 /* already enumerated */
         xhci_probe_retry(priv, hc, p);
@@ -524,7 +515,7 @@ static void xhci_probe_retry(xhci_priv_t *priv, usb_hc_t *hc, uint8_t port) {
             return;
         xhci_udelay(20000);
     }
-    pr_warn("  %-11s : port %u bring-up failed after retries\n",
+    pr_warn("%s: port %u bring-up failed after retries\n",
             "xhci", (unsigned)port);
 }
 
@@ -555,7 +546,7 @@ void xhci_handle_port_event(xhci_priv_t *priv, usb_hc_t *hc, uint8_t port) {
  * knew about the topology is stale.  Drop the devices, tear down their slots,
  * re-program the registers and enumerate again. */
 static void xhci_recover_after_reset(xhci_priv_t *priv, usb_hc_t *hc) {
-    pr_info("  %-11s : recovering controller after reset\n", "xhci");
+    pr_info("%s: recovering controller after reset\n", "xhci");
 
     for (uint8_t p = 0; p < priv->max_ports; p++)
         if (priv->port_dev[p])
@@ -577,7 +568,7 @@ static void xhci_recover_after_reset(xhci_priv_t *priv, usb_hc_t *hc) {
     priv->intr_ep_count = 0;
 
     if (xhci_program_regs(priv) < 0) {
-        pr_err("  %-11s : recovery failed, controller left halted\n", "xhci");
+        pr_err("%s: recovery failed, controller left halted\n", "xhci");
         return;
     }
     xhci_scan_ports(priv, hc);
@@ -629,8 +620,8 @@ static void xhci_hotplug_task(void) {
 
 void xhci_hotplug_init(void) {
     if (!create_task(xhci_hotplug_task)) {
-        pr_warn("  %-11s : hotplug task could not be created\n", "xhci");
+        pr_warn("%s: hotplug task could not be created\n", "xhci");
         return;
     }
-    pr_info("  %-11s : root-port hotplug task up\n", "xhci");
+    pr_info("%s: root-port hotplug task up\n", "xhci");
 }

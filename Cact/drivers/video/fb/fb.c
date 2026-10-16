@@ -212,20 +212,20 @@ void fb_enable_shadow(void) {
     size_t fb_pitch_s = (size_t)fb_pitch;
     size_t fb_height_s = (size_t)fb_height;
     if (fb_pitch_s > 0 && fb_height_s > SIZE_MAX / fb_pitch_s) {
-        pr_warn("  %-11s : pitch*height overflow — staying in direct mode\n", "fb");
+        pr_warn("%s: pitch*height overflow — staying in direct mode\n", "fb");
         return;
     }
     size_t shadow_bytes = fb_pitch_s * fb_height_s;
     uint32_t* shadow = (uint32_t*)kmalloc_aligned((uint32_t)shadow_bytes, 4096);
     if (!shadow) {
-        pr_warn("  %-11s : shadow buffer alloc failed — direct mode\n", "fb");
+        pr_warn("%s: shadow buffer alloc failed — direct mode\n", "fb");
         return;
     }
 
     uint8_t* dirty = (uint8_t*)kmalloc(fb_height);
     if (!dirty) {
         kfree(shadow);
-        pr_warn("  %-11s : dirty bitmap alloc failed\n", "fb");
+        pr_warn("%s: dirty bitmap alloc failed (%u bytes)\n", "fb", (unsigned)fb_height);
         return;
     }
     memset(dirty, 0, fb_height);

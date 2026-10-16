@@ -303,13 +303,15 @@ void console_replay(const char* message, uint32_t len, uint32_t color) {
  * level.  Kept for callers that already have a rendered string. */
 void printk_color(char* message, uint32_t color) {
     klog_feed(KLOG_LEVEL_DEFAULT, message, strlen(message));
-    console_puts(message, color);
+    if (KLOG_LEVEL_DEFAULT <= console_loglevel_get())
+        console_puts(message, color);
 }
 
 /* Same as printk_color(), but the text enters the log at `level`. */
 void printk_color_level(int level, char* message, uint32_t color) {
     klog_feed(level, message, strlen(message));
-    console_puts(message, color);
+    if (level <= console_loglevel_get())
+        console_puts(message, color);
 }
 
 // Linux-style printk: format string with optional KERN_<level> prefix.
@@ -340,7 +342,8 @@ void printk(const char* fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     klog_feed(level, buf, strlen(buf));
-    console_puts(buf, color);
+    if (level <= console_loglevel_get())
+        console_puts(buf, color);
 }
 
 void printk_at(char* message, int x, int y) {
@@ -361,8 +364,8 @@ void init_framebuffer(void) {
             [FB_INIT_NULL_PARAM] = "null address or zero width/height",
             [FB_INIT_BAD_PITCH]  = "pitch smaller than one scanline of pixels",
         };
-        pr_err("  %-11s : %s\n", "framebuffer", fb_errors[status]);
-        pr_crit("  %-11s : cannot continue without display\n", "framebuffer");
+        pr_err("%s: %s\n", "framebuffer", fb_errors[status]);
+        pr_crit("%s: cannot continue without display\n", "framebuffer");
         return;
     }
     /* Success line (geometry / PAT / shadow) is printed once by kernel.c. */

@@ -290,7 +290,7 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         kfree(k);
         if (!n || n->type != VFS_DIRECTORY) return -ENOTDIR;
         current_task->proc->root = n;
-        pr_notice("  %-11s : chroot by pid %d\n", "proc", current_task->pid);
+        pr_notice("%s: chroot by pid %d\n", "proc", current_task->pid);
         return 0;
     }
 
@@ -474,7 +474,7 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         return proc_thread_gettid();
 
     default:
-        pr_debug("  %-11s : unknown ctl ioctl 0x%x\n", "proc", cmd);
+        pr_debug("%s: unknown ctl ioctl 0x%x\n", "proc", cmd);
         return -1;
     }
 }
@@ -806,6 +806,6 @@ void procfs_proc_init(void) {
     self_ctl_node.type = VFS_FILE;
     self_ctl_node.ops  = &self_ctl_ops;
 
-    pr_info("  %-11s : /proc/self ready (info, cwd, comm, ctl)\n", "proc");
-    pr_info("  %-11s : /proc/<pid> ready (info, cwd, comm)\n", "proc");
+    pr_info("%s: /proc/self ready (info, cwd, comm, ctl)\n", "proc");
+    pr_info("%s: /proc/<pid> ready (info, cwd, comm)\n", "proc");
 }

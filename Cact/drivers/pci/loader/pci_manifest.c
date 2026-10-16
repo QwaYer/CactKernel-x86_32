@@ -91,20 +91,20 @@ static uint16_t choose_did_from_manifest(uint16_t vendor, const uint16_t *ids, i
 
 int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *device_out,
                              uint8_t *class_out, uint8_t *subclass_out) {
-    pr_debug("[LDR] peeking module manifest: %s", path);
+    pr_debug("pciloader: peeking module manifest: %s", path);
     uint8_t *elf_data = NULL;
     uint32_t file_size = 0;
     int      rr        = read_rel_elf_from_path(path, &elf_data, &file_size);
     if (rr == -1) {
-        pr_err("[LDR] manifest: file not found\n");
+        pr_err("pciloader: manifest: file not found: %s\n", path);
         return -1;
     }
     if (rr == -2) {
-        pr_err("[LDR] manifest: not a valid ELF32 relocatable\n");
+        pr_err("pciloader: manifest: not an ELF32 relocatable: %s\n", path);
         return -2;
     }
     if (mod_tag_verify(elf_data, &file_size) != 0) {
-        pr_err("[LDR] manifest: signature/ABI check failed\n");
+        pr_err("pciloader: manifest: signature/ABI check failed: %s\n", path);
         kfree(elf_data);
         return -5;
     }
@@ -116,7 +116,10 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     if (__builtin_umul_overflow(eh->e_shnum, eh->e_shentsize, &sh_tab_end) ||
         __builtin_uadd_overflow(eh->e_shoff, sh_tab_end, &sh_tab_end) ||
         eh->e_shentsize < sizeof(Elf32_Shdr) || sh_tab_end > file_size) {
-        pr_err("[LDR] manifest: corrupted section header table\n");
+        pr_err("pciloader: manifest: corrupted section header table "
+               "(shoff=%u shnum=%u shentsize=%u file=%u): %s\n",
+               (unsigned)eh->e_shoff, (unsigned)eh->e_shnum,
+               (unsigned)eh->e_shentsize, (unsigned)file_size, path);
         kfree(elf_data);
         return -3;
     }
@@ -132,20 +135,23 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
         }
     }
     if (!symtab_sh) {
-        pr_err("[LDR] manifest: no .symtab\n");
+        pr_err("pciloader: manifest: no .symtab in %s\n", path);
         kfree(elf_data);
         return -3;
     }
 
     // Validate symtab and its string table section data fit in file
     if (symtab_sh->sh_offset + symtab_sh->sh_size > file_size) {
-        pr_err("[LDR] manifest: symtab exceeds file\n");
+        pr_err("pciloader: manifest: symtab exceeds file (off=0x%x size=0x%x file=0x%x): %s\n",
+               (unsigned)symtab_sh->sh_offset, (unsigned)symtab_sh->sh_size,
+               (unsigned)file_size, path);
         kfree(elf_data);
         return -3;
     }
     Elf32_Shdr *strtab_sh = get_shdr(eh, strtab_idx);
     if (!strtab_sh || strtab_sh->sh_offset + strtab_sh->sh_size > file_size) {
-        pr_err("[LDR] manifest: strtab exceeds file\n");
+        pr_err("pciloader: manifest: strtab exceeds file (idx=%u file=0x%x): %s\n",
+               (unsigned)strtab_idx, (unsigned)file_size, path);
         kfree(elf_data);
         return -3;
     }
@@ -183,7 +189,7 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
         (void)read_sym_u8(eh, elf_data, ss, subclass_out);
 
     if (!have_vendor && !have_class) {
-        pr_err("[LDR] manifest: need cact_pci_vendor_id or cact_pci_class\n");
+        pr_err("pciloader: manifest: need cact_pci_vendor_id or cact_pci_class: %s\n", path);
         kfree(elf_data);
         return -4;
     }
@@ -200,7 +206,7 @@ int pci_peek_module_manifest(const char *path, uint16_t *vendor_out, uint16_t *d
     *vendor_out = vendor;
     *device_out = did;
 
-    pr_debug("[LDR] manifest %s: vendor=%04x device=%04x class=%02x",
+    pr_debug("pciloader: manifest %s: vendor=%04x device=%04x class=%02x",
              path, (unsigned)vendor, (unsigned)did,
              (unsigned)(have_class ? *class_out : 0xFFu));
 

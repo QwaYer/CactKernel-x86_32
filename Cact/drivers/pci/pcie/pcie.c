@@ -131,13 +131,13 @@ uint16_t pcie_read_ext_cap(uint8_t bus, uint8_t dev, uint8_t fn,
 void pcie_dump_all(void)
 {
     if (!pcie_ready) {
-        pr_warn("  %-11s : not available\n", "pcie");
+        pr_warn("%s: not available\n", "pcie");
         return;
     }
     for (pci_device_t *d = pci_device_list; d; d = d->next) {
         int cap = pcie_find_cap(d->bus, d->dev, d->fn, PCIE_CAP_ID);
         if (!cap) continue;
-        pr_info("PCIe device detected");
+        pr_info("pcie: device detected");
     }
 }
 
@@ -147,7 +147,7 @@ bool pcie_init(void)
     ACPI_STATUS status = AcpiGetTable("MCFG", 1, (ACPI_TABLE_HEADER **)&mcfg);
 
     if (ACPI_FAILURE(status) || !mcfg) {
-        pr_warn("  %-11s : MCFG table not found — legacy PCI config\n", "pcie");
+        pr_warn("%s: MCFG table not found — legacy PCI config\n", "pcie");
         return false;
     }
 
@@ -166,7 +166,7 @@ bool pcie_init(void)
         uint32_t bus_count   = end_bus - start_bus + 1;
         uint32_t region_size;
         if (bus_count > 4095u) {
-            pr_warn("  %-11s : ECAM region size overflow, skipping segment\n", "pcie");
+            pr_warn("%s: ECAM region size overflow, skipping segment\n", "pcie");
             entry++;
             offset += sizeof(ACPI_MCFG_ALLOCATION);
             continue;
@@ -182,7 +182,7 @@ bool pcie_init(void)
          * refused: the window address would wrap into the identity-mapped low
          * memory and remap real kernel/RAM pages. */
         if ((uint64_t)vaddr + (uint64_t)pages * 4096 > 0x100000000ull) {
-            pr_warn("  %-11s : ECAM window for segment %u exceeds 4 GB, skipping\n",
+            pr_warn("%s: ECAM window for segment %u exceeds 4 GB, skipping\n",
                     "pcie", (unsigned)entry->PciSegment);
             entry++;
             offset += sizeof(ACPI_MCFG_ALLOCATION);
@@ -207,7 +207,7 @@ bool pcie_init(void)
 
     if (mapped > 0) {
         pcie_ready = 1;
-        pr_info("  %-11s : ECAM @ 0x%x, bus %u-%u (%u segment(s))\n",
+        pr_info("%s: ECAM @ 0x%x, bus %u-%u (%u segment(s))\n",
                 "pcie", (unsigned)pcie_ecams[0].base_addr,
                 (unsigned)pcie_ecams[0].start_bus,
                 (unsigned)pcie_ecams[0].end_bus,
@@ -215,7 +215,7 @@ bool pcie_init(void)
         return true;
     }
 
-    pr_warn("  %-11s : MCFG table invalid\n", "pcie");
+    pr_warn("%s: MCFG table invalid\n", "pcie");
     return false;
 }
 

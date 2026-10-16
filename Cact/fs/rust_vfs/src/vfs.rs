@@ -199,7 +199,7 @@ pub unsafe extern "C" fn vfs_init() {
         cact_sync::mutex_init(symlink_mutex());
         MOUNT_COUNT = 0;
         crate::dcache::reset();
-        printk(b"  vfs         : mount table + symlinks ready\n\0".as_ptr() as *const c_char);
+        printk(b"vfs: mount table + symlinks ready\n\0".as_ptr() as *const c_char);
     }
 }
 

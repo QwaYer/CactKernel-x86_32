@@ -187,18 +187,18 @@ static void _do_reboot(uint32_t cmd) {
 
     switch (cmd) {
     case CACT_REBOOT_POWEROFF:
-        pr_notice("  %-11s : poweroff requested by pid %d\n", "power", pid);
+        pr_notice("%s: poweroff requested by pid %d\n", "power", pid);
         acpi_power_off();
         break;
 
     case CACT_REBOOT_HALT:
-        pr_notice("  %-11s : halt requested by pid %d\n", "power", pid);
+        pr_notice("%s: halt requested by pid %d\n", "power", pid);
         acpi_halt();
         break;
 
     case CACT_REBOOT_RESTART:
     default:
-        pr_notice("  %-11s : reboot requested by pid %d\n", "power", pid);
+        pr_notice("%s: reboot requested by pid %d\n", "power", pid);
         acpi_reboot();
         break;
     }
@@ -288,6 +288,24 @@ static int _sys_ioctl(void *p, uint32_t cmd, void *arg) {
         if (n == 0 || n > 64) { kfree(kname); return -EINVAL; }
         procfs_set_nodename(kname);
         kfree(kname);
+        return 0;
+    }
+
+    case CACT_SYSCTL_GET_CONSOLE_LOGLEVEL: {
+        if (!arg) return -EINVAL;
+        int lv = console_loglevel_get();
+        if (copy_to_user(arg, &lv, sizeof(lv)) != 0) return -EFAULT;
+        return lv;
+    }
+
+    case CACT_SYSCTL_SET_CONSOLE_LOGLEVEL: {
+        int r = _root_only();
+        if (r) return r;
+        if (!arg) return -EINVAL;
+        int lv;
+        if (copy_from_user(&lv, arg, sizeof(lv)) != 0) return -EFAULT;
+        if (lv < 0 || lv > 7) return -EINVAL;
+        console_loglevel_set(lv);
         return 0;
     }
 

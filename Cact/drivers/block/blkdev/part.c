@@ -222,12 +222,12 @@ int part_scan_disk(blkdev_t *disk) {
     memset(lba0, 0, 512);
     memset(lba1, 0, 512);
     if (blkdev_read(disk, 0, lba0) != 0) {
-        pr_err("[part] %s: read LBA0 failed, partition scan skipped\n",
+        pr_err("part: %s: read LBA0 failed, partition scan skipped\n",
                disk->name);
         return -2;
     }
     if (blkdev_read(disk, 1, lba1) != 0) {
-        pr_err("[part] %s: read LBA1 failed, partition scan skipped\n",
+        pr_err("part: %s: read LBA1 failed, partition scan skipped\n",
                disk->name);
         return -2;
     }
@@ -240,7 +240,7 @@ int part_scan_disk(blkdev_t *disk) {
         int found = 0;
         part_parse_gpt(disk, lba1, &found);
         disk->table = PART_TABLE_GPT;
-        pr_info("[part] %s GPT: %d partition(s)\n", disk->name, found);
+        pr_info("part: %s GPT: %d partition(s)\n", disk->name, found);
         return found;
     }
 
@@ -249,11 +249,11 @@ int part_scan_disk(blkdev_t *disk) {
         int found = 0;
         part_parse_mbr(disk, lba0, &found);
         disk->table = PART_TABLE_MBR;
-        pr_info("[part] %s MBR: %d partition(s)\n", disk->name, found);
+        pr_info("part: %s MBR: %d partition(s)\n", disk->name, found);
         return found;
     }
 
-    pr_info("[part] %s: no partition table (whole-disk volume)\n", disk->name);
+    pr_info("part: %s: no partition table (whole-disk volume)\n", disk->name);
     return 0;
 }
 
@@ -269,7 +269,7 @@ int part_scan_all(void) {
         if (n > 0)
             total += n;
     }
-    pr_info("  %-11s : %d disk(s) scanned, %d partition(s) exposed\n",
+    pr_info("%s: %d disk(s) scanned, %d partition(s) exposed\n",
             "blkdev", disks, total);
     return total;
 }
@@ -291,6 +291,6 @@ static void part_auto_scan(blkdev_t *disk) {
 
 void part_probe_init(void) {
     blkdev_set_probe_hook(part_auto_scan);
-    pr_info("  %-11s : auto-scan armed (partitions probed on disk register)\n",
+    pr_info("%s: auto-scan armed (partitions probed on disk register)\n",
             "part");
 }

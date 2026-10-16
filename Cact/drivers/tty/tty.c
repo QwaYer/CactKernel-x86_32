@@ -675,7 +675,7 @@ void tty_init(void) {
     // is pre-created — higher VTs appear on demand (see tty_alloc()).
     register_chrdev("tty0", DEVFS_F_CHAR, &drv_tty, (void *)0);
     if (tty_vt_register(1) != 0)
-        pr_err("[tty] failed to register /dev/tty1\n");
+        pr_err("tty: failed to register /dev/tty1\n");
     else
         tty_num = 1;
 }

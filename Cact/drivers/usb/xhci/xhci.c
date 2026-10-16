@@ -33,7 +33,7 @@ static int xhci_pci_probe(pci_device_t *pdev) {
             /* 64-bit BAR decoded above 4 GiB cannot be reached by the
              * 32-bit identity MMIO map — refuse instead of truncating. */
             if (bar->base >= 0x100000000ULL) {
-                pr_warn("  %-11s : BAR%d above 4 GiB (0x%llx) not supported\n",
+                pr_warn("%s: BAR%d above 4 GiB (0x%llx) not supported\n",
                         "xhci", i, (unsigned long long)bar->base);
                 return -1;
             }
@@ -41,7 +41,7 @@ static int xhci_pci_probe(pci_device_t *pdev) {
             break;
         }
     }
-    if (!mmio) { pr_warn("  %-11s : MMIO BAR missing\n", "xhci"); return -1; }
+    if (!mmio) { pr_warn("%s: MMIO BAR missing\n", "xhci"); return -1; }
 
     /* Memory space + bus mastering on.  Legacy INTx stays off: this driver
      * delivers interrupts through MSI-X, or through MSI where the controller
@@ -52,13 +52,13 @@ static int xhci_pci_probe(pci_device_t *pdev) {
 
     uint32_t quirks = xhci_quirks_for(pdev);
     if (quirks & XHCI_QUIRK_SPURIOUS_REBOOT)
-        pr_info("  %-11s : spurious-reboot quirk active\n", "xhci");
+        pr_info("%s: spurious-reboot quirk active\n", "xhci");
 
     /* msidev picks the best mechanism the controller offers and does the
      * vector/table/enable dance, so the driver only supplies the handler. */
     int vec = msidev_register(pdev, xhci_irq_handler);
     if (vec <= 0) {
-        pr_err("  %-11s : no MSI-X and no MSI — controller not supported\n", "xhci");
+        pr_err("%s: no MSI-X and no MSI — controller not supported\n", "xhci");
         return -1;
     }
 

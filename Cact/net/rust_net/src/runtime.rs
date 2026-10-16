@@ -83,7 +83,7 @@ pub unsafe extern "C" fn register_netdev(drv: *mut NetDriver) {
     // `stack_init` is a no-op then.  Attach this NIC's hardware address to it.
     stack::stack_init();
     stack::stack_set_nic_mac(mac.b);
-    ffi_kernel::klog_static(ffi_kernel::LOG_OK, b"NIC driver registered\0");
+    ffi_kernel::klog_static(ffi_kernel::LOG_OK, b"net: NIC driver registered\0");
 }
 
 /// Clear `active_nic` only if it still points at `drv` (symmetric to registration).
@@ -213,7 +213,7 @@ pub extern "C" fn net_init() {
     stack::stack_init();
     ffi_kernel::klog_static(
         ffi_kernel::LOG_OK,
-        b"  net         : ready (net_poll_task, RX semaphore, timer kick)\0",
+        b"net: ready (net_poll_task, RX semaphore, timer kick)\0",
     );
 }
 

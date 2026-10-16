@@ -70,7 +70,7 @@ int register_blkdev(const char *name, uint32_t max_lba,
     if (!boot_dev)
         boot_dev = d;
 
-    pr_info("[BLKDEV] registered %s max_lba=0x%x%s\n", d->name,
+    pr_info("blkdev: registered %s max_lba=0x%x%s\n", d->name,
             (unsigned)max_lba, boot_dev == d ? " *boot*" : "");
 
     // Let the partition layer look at the new disk immediately (hotplug and
@@ -103,7 +103,7 @@ void unregister_blkdev(const char *name) {
 
     blkdev_pick_boot();
 
-    pr_info("[BLKDEV] unregistered %s\n", (char *)name);
+    pr_info("blkdev: unregistered %s\n", (char *)name);
 }
 
 // Storage drivers call register_blkdev() during PCI probe (NVMe/AHCI kmods).
@@ -113,7 +113,7 @@ void blkdev_init(void) {
     dev_count = 0;
     boot_dev  = 0;
 
-    pr_info("  %-11s : layer ready (kmods attach during PCI probe)\n", "block");
+    pr_info("%s: layer ready (kmods attach during PCI probe)\n", "block");
 }
 
 // Return the boot device (first successfully probed whole disk)
@@ -152,7 +152,7 @@ int blkdev_disk_count(void) {
 
 // Print all registered devices with LBA and boot flag
 void blkdev_dump(void) {
-    pr_info("[blkdev] Devices:\n");
+    pr_info("blkdev: devices:\n");
     char b[16];
     for (int i = 0; i < BLKDEV_SLOTS; i++) {
         if (!dev_used[i])
@@ -178,7 +178,7 @@ void blkdev_dump(void) {
 // Returns true if lba is out of range; prints diagnostic
 static int blkdev_lba_oob(const char *op, uint32_t lba, uint32_t max_lba) {
     if (lba < max_lba) return 0;
-    pr_warn("[blkdev] %s out of range: lba=0x%x >= max_lba=0x%x\n",
+    pr_warn("blkdev: %s out of range: lba=0x%x >= max_lba=0x%x\n",
             op, (unsigned)(lba), (unsigned)(max_lba));
     return 1;
 }
@@ -228,7 +228,7 @@ int blkdev_write(blkdev_t *dev, uint32_t lba, uint8_t *buf) {
 void blkdev_read_sector(uint32_t lba, uint8_t *buf) {
     blkdev_t *dev = boot_dev;
     if (!dev) {
-        pr_err("[blkdev] no boot device for read\n");
+        pr_err("blkdev: no boot device for read\n");
         memset(buf, 0, 512);
         return;
     }
@@ -241,7 +241,7 @@ void blkdev_read_sector(uint32_t lba, uint8_t *buf) {
 void blkdev_write_sector(uint32_t lba, uint8_t *buf) {
     blkdev_t *dev = boot_dev;
     if (!dev) {
-        pr_err("[blkdev] no boot device for write\n");
+        pr_err("blkdev: no boot device for write\n");
         return;
     }
     (void)blkdev_write(dev, lba, buf);
@@ -283,20 +283,24 @@ blkdev_t *blkdev_add_partition(blkdev_t *disk, uint32_t part_no,
 
     // Ensure the partition actually lies inside the disk.
     if (start_lba >= disk->max_lba || len_lba > disk->max_lba - start_lba) {
-        pr_warn("[BLKDEV] partition out of disk range, skipped\n");
+        pr_warn("blkdev: partition %u on %s out of disk range "
+                "(start=0x%x len=0x%x, max=0x%x), skipped\n",
+                (unsigned)part_no, disk->name, (unsigned)start_lba,
+                (unsigned)len_lba, (unsigned)disk->max_lba);
         return 0;
     }
 
     char name[BLKDEV_NAME_MAX];
     blkdev_partition_name(disk, part_no, name, sizeof(name));
     if (blkdev_find(name)) {
-        pr_warn("[BLKDEV] duplicate partition device: %s\n", name);
+        pr_warn("blkdev: duplicate partition device: %s\n", name);
         return 0;
     }
 
     int idx = alloc_slot();
     if (idx < 0) {
-        pr_err("[BLKDEV] no free slot for partition\n");
+        pr_err("blkdev: no free slot for partition %u on %s\n",
+               (unsigned)part_no, disk->name);
         return 0;
     }
 
@@ -314,7 +318,7 @@ blkdev_t *blkdev_add_partition(blkdev_t *disk, uint32_t part_no,
     dev_used[idx] = 1;
     dev_count++;
 
-    pr_info("[BLKDEV] partition %s: start=0x%x len=0x%x on %s\n",
+    pr_info("blkdev: partition %s: start=0x%x len=0x%x on %s\n",
             name, (unsigned)(start_lba), (unsigned)(len_lba), disk->name);
     return d;
 }

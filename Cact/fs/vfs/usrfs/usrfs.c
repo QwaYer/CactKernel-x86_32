@@ -163,7 +163,7 @@ void usrfs_init(vfs_node_t *ext4_node) {
     uint32_t files = 0, dirs = 0;
     cctkfs_tree_count(&usr_tree, &files, &dirs);
 
-    pr_info("  %-11s : root ready (%u on disk, %u cctkfs files, %u dirs)\n",
+    pr_info("%s: root ready (%u on disk, %u cctkfs files, %u dirs)\n",
             "usrfs", usrfs_disk_count, files, dirs);
 
     usrfs_ready = 1;

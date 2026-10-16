@@ -34,7 +34,7 @@ uint32_t xhci_quirks_for(pci_device_t *pdev)
         if ((e->vendor_id == PCI_ANY_ID || e->vendor_id == pdev->vendor_id) &&
             (e->device_id == PCI_ANY_ID || e->device_id == pdev->device_id)) {
             if (e->quirks && e->vendor_id != PCI_ANY_ID)
-                pr_notice("  %-11s : quirk entry %04x:%04x applied (0x%x)\n",
+                pr_notice("%s: quirk entry %04x:%04x applied (0x%x)\n",
                           "xhci-quirk", (unsigned)pdev->vendor_id,
                           (unsigned)pdev->device_id, (unsigned)e->quirks);
             return e->quirks;

@@ -251,7 +251,7 @@ vfs_node_t *timerfd_create_vnode(int32_t clockid, uint32_t flags) {
 
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));
     if (!node) {
-        pr_err("  %-11s : cannot allocate node\n", "timerfd");
+        pr_err("%s: cannot allocate node\n", "timerfd");
         return 0;
     }
     memset(node, 0, sizeof(vfs_node_t));
@@ -259,7 +259,7 @@ vfs_node_t *timerfd_create_vnode(int32_t clockid, uint32_t flags) {
     timerfd_state_t *s = (timerfd_state_t *)kmalloc(sizeof(timerfd_state_t));
     if (!s) {
         kfree(node);
-        pr_err("  %-11s : cannot allocate state\n", "timerfd");
+        pr_err("%s: cannot allocate state\n", "timerfd");
         return 0;
     }
     memset(s, 0, sizeof(timerfd_state_t));

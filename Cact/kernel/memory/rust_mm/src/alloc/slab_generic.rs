@@ -51,7 +51,7 @@ pub extern "C" fn slab_init() {
             // SAFETY: `printk_color` is a C function that takes a valid string;
             // the literal below is a NUL-terminated static.
             unsafe {
-                printk_color(c"[SLAB] failed to create cache: ".as_ptr() as *const u8, COLOR_LIGHT_RED);
+                printk_color(c"slab: failed to create cache: ".as_ptr() as *const u8, COLOR_LIGHT_RED);
             }
             // SAFETY: `name` is the NUL-terminated stack buffer built above.
             unsafe { printk_color(name.as_ptr(), COLOR_LIGHT_RED) };

@@ -178,13 +178,13 @@ void apic_clear_in_service(void)
         if (vec < 0)
             break;
         if (retired < 8)
-            pr_warn("  %-11s : stale in-service vector 0x%x — retiring it\n",
+            pr_warn("%s: stale in-service vector 0x%x — retiring it\n",
                     "apic", (unsigned)vec);
         apic_lapic_write(LAPIC_EOI, 0);
         retired++;
     }
     if (retired > 8)
-        pr_warn("  %-11s : %d stale in-service entries retired\n",
+        pr_warn("%s: %d stale in-service entries retired\n",
                 "apic", retired);
 }
 
@@ -209,7 +209,7 @@ void spurious_apic_handler(void)
 
     spurious_count++;
     if (spurious_count <= 8) {
-        pr_warn("  %-11s : spurious interrupt #%u (isr=%d irr=%d ppr=0x%x) — "
+        pr_warn("%s: spurious interrupt #%u (isr=%d irr=%d ppr=0x%x) — "
                 "retiring in-service bit\n",
                 "apic", (unsigned)spurious_count,
                 lapic_pending_vector(LAPIC_ISR),
@@ -253,13 +253,13 @@ static void lapic_common_setup(void)
      * at the real culprit instead of the timer code. */
     uint32_t tpr = apic_lapic_read(LAPIC_TPR);
     if ((tpr & 0xFFu) != 0)
-        pr_warn("  %-11s : TPR reads 0x%x after clearing — priority class %u "
+        pr_warn("%s: TPR reads 0x%x after clearing — priority class %u "
                 "masks lower-priority interrupts\n",
                 "apic", (unsigned)tpr, (unsigned)(tpr >> 4));
 
     uint32_t svr = apic_lapic_read(LAPIC_SVR);
     if (!(svr & LAPIC_SVR_ENABLE))
-        pr_warn("  %-11s : SVR reads 0x%x — software-enable bit clear, "
+        pr_warn("%s: SVR reads 0x%x — software-enable bit clear, "
                 "LAPIC will not deliver\n", "apic", (unsigned)svr);
 }
 
@@ -283,7 +283,7 @@ static void lapic_init(uint32_t lapic_base)
         apic_x2apic = 1;
         wrmsr(IA32_APIC_BASE, msr_val | APIC_ENABLE | APIC_X2APIC_ENABLE);
         if (!(rdmsr(IA32_APIC_BASE) & APIC_X2APIC_ENABLE)) {
-            pr_warn("  %-11s : x2APIC enable did not take — staying on xAPIC "
+            pr_warn("%s: x2APIC enable did not take — staying on xAPIC "
                     "(IA32_APIC_BASE[10] would not set)\n", "apic");
             apic_x2apic = 0;
             x2apic_note = "IA32_APIC_BASE[10] would not set";
@@ -315,12 +315,12 @@ static void lapic_init(uint32_t lapic_base)
 
     lapic_common_setup();
 
-    pr_info("  %-11s : %s, %s, LAPIC ID %u\n", "apic",
+    pr_info("%s: %s, %s, LAPIC ID %u\n", "apic",
             apic_x2apic ? "x2APIC (MSR access)" : "xAPIC (MMIO)",
             apic_x2apic_note(), (unsigned)apic_lapic_id());
     /* Unmistakable build marker: when a fix "does not work" on hardware, the
      * first question is whether the image actually contains it. */
-    pr_info("  %-11s : diag v4 (ISR drain + vector numbers)\n", "apic");
+    pr_info("%s: diag v4 (ISR drain + vector numbers)\n", "apic");
 }
 
 int apic_init(void)
@@ -329,7 +329,7 @@ int apic_init(void)
     ACPI_STATUS status = AcpiGetTable("APIC", 1, (ACPI_TABLE_HEADER **)&madt);
 
     if (ACPI_FAILURE(status) || !madt) {
-        pr_warn("  %-11s : MADT not found\n", "apic");
+        pr_warn("%s: MADT table not found (status 0x%x)\n", "apic", (unsigned)status);
         return -1;
     }
 
@@ -371,7 +371,7 @@ int apic_init(void)
     ioapic_id = ioapic_id_local;
 
     if (ioapic_base == 0) {
-        pr_warn("  %-11s : IOAPIC not found\n", "apic");
+        pr_warn("%s: no IOAPIC entry in MADT\n", "apic");
         return -1;
     }
 
@@ -435,7 +435,7 @@ int apic_init(void)
                     flags |= REDIR_LOW_POL;
 
                 ioapic_set_redir(entry_idx, 0x20 + sci_gsi, flags, 0);
-                pr_info("  %-11s : SCI on GSI %u (level/%s)\n", "apic",
+                pr_info("%s: SCI on GSI %u (level/%s)\n", "apic",
                         (unsigned)sci_gsi,
                         (flags & REDIR_LOW_POL) ? "active-low" : "active-high");
             }
@@ -458,7 +458,7 @@ int apic_init(void)
      * scheduler with no ticks at all.
      */
     if (idt_gate_handler(LAPIC_TIMER_VECTOR) != (uint32_t)timer_isr)
-        pr_warn("  %-11s : timer vector 0x%x was not the LAPIC ISR — restoring\n",
+        pr_warn("%s: timer vector 0x%x was not the LAPIC ISR — restoring\n",
                 "apic", (unsigned)LAPIC_TIMER_VECTOR);
     set_idt_gate(LAPIC_TIMER_VECTOR, (uint32_t)timer_isr);
 
@@ -466,7 +466,7 @@ int apic_init(void)
     if (per_ms == 0)
         per_ms = lapic_timer_calibrate();   /* first bring-up only */
     if (per_ms == 0)
-        pr_crit("  %-11s : LAPIC timer calibration failed — no system tick\n", "apic");
+        pr_crit("%s: LAPIC timer calibration failed — no system tick\n", "apic");
     else
         lapic_timer_start_periodic(per_ms);
 
@@ -542,7 +542,7 @@ uint32_t apic_msi_address(void)
         static bool warned = false;
         if (!warned) {
             warned = true;
-            pr_warn("  %-11s : LAPIC ID %u exceeds MSI's 8-bit destination — "
+            pr_warn("%s: LAPIC ID %u exceeds MSI's 8-bit destination — "
                     "messages go to ID %u (no interrupt remapping)\n",
                     "apic", (unsigned)id, (unsigned)(id & 0xFFu));
         }
@@ -558,7 +558,7 @@ uint32_t apic_msi_address(void)
 void apic_dump_state(const char *tag)
 {
     if (!apic_lapic_ready()) {
-        pr_warn("  %-11s : %s: LAPIC not reachable\n", "apic", tag);
+        pr_warn("%s: %s: LAPIC not reachable\n", "apic", tag);
         return;
     }
 
@@ -587,46 +587,46 @@ void apic_dump_state(const char *tag)
     int in_service = lapic_pending_vector(LAPIC_ISR);
     int pending    = lapic_pending_vector(LAPIC_IRR);
 
-    pr_info("  %-11s : %s: %s, APIC_BASE=0x%llx EN=%u X2=%u IF=%u\n", "apic", tag,
+    pr_info("%s: %s: %s, APIC_BASE=0x%llx EN=%u X2=%u IF=%u\n", "apic", tag,
             apic_x2apic_mode() ? "x2APIC" : "xAPIC",
             (unsigned long long)base,
             (unsigned)((base >> 11) & 1u), (unsigned)((base >> 10) & 1u),
             (unsigned)((flags >> 9) & 1u));
-    pr_info("  %-11s :   TPR=0x%x PPR=0x%x SVR=0x%x LVT=0x%x mask=%u periodic=%u\n",
+    pr_info("%s:   TPR=0x%x PPR=0x%x SVR=0x%x LVT=0x%x mask=%u periodic=%u\n",
             "apic", (unsigned)tpr, (unsigned)ppr, (unsigned)svr, (unsigned)lvt,
             (unsigned)((lvt >> 16) & 1u), (unsigned)((lvt >> 17) & 1u));
-    pr_info("  %-11s :   INIT=0x%x CUR=0x%x->0x%x TDCR=0x%x isr=%d irr=%d gate=0x%x\n",
+    pr_info("%s:   INIT=0x%x CUR=0x%x->0x%x TDCR=0x%x isr=%d irr=%d gate=0x%x\n",
             "apic", (unsigned)init, (unsigned)cur, (unsigned)cur2, (unsigned)tdcr,
             in_service, pending, (unsigned)gate);
 
     if (!(base & APIC_ENABLE))
-        pr_warn("  %-11s :   -> APIC_BASE[11] clear: LAPIC globally disabled\n", "apic");
+        pr_warn("%s:   -> APIC_BASE[11] clear: LAPIC globally disabled\n", "apic");
     if (!((flags >> 9) & 1u))
-        pr_warn("  %-11s :   -> EFLAGS.IF clear: interrupts globally disabled\n", "apic");
+        pr_warn("%s:   -> EFLAGS.IF clear: interrupts globally disabled\n", "apic");
     if (!(svr & LAPIC_SVR_ENABLE))
-        pr_warn("  %-11s :   -> SVR[8] clear: LAPIC ignores local interrupts\n", "apic");
+        pr_warn("%s:   -> SVR[8] clear: LAPIC ignores local interrupts\n", "apic");
     if (lvt & 0x10000u)
-        pr_warn("  %-11s :   -> LVT mask set: tick gated at the source\n", "apic");
+        pr_warn("%s:   -> LVT mask set: tick gated at the source\n", "apic");
     if ((lvt & 0xFFu) != LAPIC_TIMER_VECTOR)
-        pr_warn("  %-11s :   -> LVT vector 0x%x, expected 0x%x\n", "apic",
+        pr_warn("%s:   -> LVT vector 0x%x, expected 0x%x\n", "apic",
                 (unsigned)(lvt & 0xFFu), (unsigned)LAPIC_TIMER_VECTOR);
     if (init == 0)
-        pr_warn("  %-11s :   -> INIT count 0: timer never started\n", "apic");
+        pr_warn("%s:   -> INIT count 0: timer never started\n", "apic");
     else if (cur == cur2)
-        pr_warn("  %-11s :   -> counter frozen at 0x%x (INIT=0x%x): LAPIC timer "
+        pr_warn("%s:   -> counter frozen at 0x%x (INIT=0x%x): LAPIC timer "
                 "is not counting\n", "apic", (unsigned)cur, (unsigned)init);
     if (in_service >= 0)
-        pr_warn("  %-11s :   -> in-service vector 0x%x was never EOI'd (PPR=0x%x): "
+        pr_warn("%s:   -> in-service vector 0x%x was never EOI'd (PPR=0x%x): "
                 "the tick waits in IRR\n", "apic",
                 (unsigned)in_service, (unsigned)ppr);
     else if (ppr > tpr)
-        pr_warn("  %-11s :   -> PPR 0x%x > TPR 0x%x with no ISR bit set\n",
+        pr_warn("%s:   -> PPR 0x%x > TPR 0x%x with no ISR bit set\n",
                 "apic", (unsigned)ppr, (unsigned)tpr);
     else if (pending == LAPIC_TIMER_VECTOR)
-        pr_info("  %-11s :   -> tick sits in IRR: the timer fires, delivery is "
+        pr_info("%s:   -> tick sits in IRR: the timer fires, delivery is "
                 "what is blocked\n", "apic");
     if (gate != (uint32_t)timer_isr)
-        pr_warn("  %-11s :   -> IDT gate 0x%x is not timer_isr 0x%x\n", "apic",
+        pr_warn("%s:   -> IDT gate 0x%x is not timer_isr 0x%x\n", "apic",
                 (unsigned)gate, (unsigned)(uint32_t)timer_isr);
 }
 
@@ -637,7 +637,7 @@ void apic_dump_state(const char *tag)
 void apic_probe(const char *tag, unsigned ms, unsigned ticks)
 {
     if (!apic_lapic_ready()) {
-        pr_warn("  %-11s : %s t=%ums ticks=%u: LAPIC not reachable\n",
+        pr_warn("%s: %s t=%ums ticks=%u: LAPIC not reachable\n",
                 "apic", tag, ms, ticks);
         return;
     }
@@ -658,7 +658,7 @@ void apic_probe(const char *tag, unsigned ms, unsigned ticks)
         __asm__ __volatile__("pause");
     uint32_t cur1 = apic_lapic_read(LAPIC_TIMER_CURCNT);
 
-    pr_info("  %-11s : %s t=%ums ticks=%u cur=%s isr=%d irr=%d tpr=0x%x ppr=0x%x "
+    pr_info("%s: %s t=%ums ticks=%u cur=%s isr=%d irr=%d tpr=0x%x ppr=0x%x "
             "svr=0x%x lvt=0x%x if=%u\n", "apic", tag, ms, ticks,
             (cur1 != cur0) ? "run" : "FROZEN", in_service, pending,
             (unsigned)tpr, (unsigned)ppr, (unsigned)svr, (unsigned)lvt,
@@ -716,7 +716,7 @@ static void apic_icr_send(uint32_t dest_lapic, uint32_t icrlo)
      * instead of taking the system down.  Compare against the reading of this
      * CPU's own LAPIC id, not against 0: the BSP's id need not be 0. */
     if (dest_lapic == 0xFFFFFFFFu || dest_lapic == apic_lapic_id()) {
-        pr_warn("  %-11s : refusing IPI icrlo=0x%x to APIC id %u (this CPU)\n",
+        pr_warn("%s: refusing IPI icrlo=0x%x to APIC id %u (this CPU)\n",
                 "apic", (unsigned)icrlo, (unsigned)dest_lapic);
         return;
     }

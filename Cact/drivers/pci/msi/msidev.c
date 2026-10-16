@@ -22,7 +22,7 @@ void msidev_init(void)
         msidev_vector_alloc[syscall_idx] = 1;
 
     msidev_initialized = 1;
-    pr_info("  %-11s : vector pool ready\n", "msidev");
+    pr_info("%s: vector pool ready\n", "msidev");
 }
 
 int msidev_alloc_vector(void)
@@ -34,7 +34,7 @@ int msidev_alloc_vector(void)
             return MSIDEV_VECTOR_BASE + i;
         }
     }
-    pr_warn("  %-11s : no free vectors\n", "msidev");
+    pr_warn("%s: no free vectors\n", "msidev");
     return -1;
 }
 
@@ -112,9 +112,9 @@ void msidev_ensure_enabled(pci_device_t *dev)
     if (want == cmd) return;
 
     pcidev_cfg_write32(dev, 0x04, want);
-    pr_info("  %-11s : %02x:%02x.%u command 0x%04x -> 0x%04x (memory+master on)\n",
-            "msidev", (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn,
-            (unsigned)cmd, (unsigned)want);
+    pr_debug("%s: %02x:%02x.%u command 0x%04x -> 0x%04x (memory+master on)\n",
+             "msidev", (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn,
+             (unsigned)cmd, (unsigned)want);
 }
 
 int msidev_register(pci_device_t *dev, void (*handler)(void))
@@ -133,9 +133,6 @@ int msidev_register(pci_device_t *dev, void (*handler)(void))
         int vec = msidev_alloc_vector();
         if (vec > 0 && msidev_register_handler(vec, handler) == 0 &&
             pci_msix_enable(dev, vec, table, 0) == 0) {
-            pr_info("  %-11s : %02x:%02x.%u on MSI-X vec 0x%x\n",
-                    "msidev", (unsigned)dev->bus, (unsigned)dev->dev,
-                    (unsigned)dev->fn, (unsigned)vec);
             return vec;
         }
         if (vec > 0) {
@@ -158,9 +155,9 @@ int msidev_register(pci_device_t *dev, void (*handler)(void))
         return -1;
     }
 
-    pr_info("  %-11s : %02x:%02x.%u on MSI vec 0x%x\n",
-            "msidev", (unsigned)dev->bus, (unsigned)dev->dev,
-            (unsigned)dev->fn, (unsigned)vec);
+    pr_debug("%s: %02x:%02x.%u on MSI vec 0x%x\n",
+             "msidev", (unsigned)dev->bus, (unsigned)dev->dev,
+             (unsigned)dev->fn, (unsigned)vec);
     return vec;
 }
 

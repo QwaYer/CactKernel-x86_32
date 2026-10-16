@@ -13,7 +13,7 @@ int acpi_init(void)
 
     /* Breadcrumbs: if the machine hard-reboots mid-init (bad SCI polarity,
      * _OSC, firmware SMI), the last printed step tells us where it died. */
-    pr_info("ACPI [1/8]: initializing ACPICA subsystem");
+    pr_info("acpi: [1/8] initializing ACPICA subsystem");
 
     /*
      * Firmware AML is written and tested mostly against Windows and often
@@ -27,40 +27,40 @@ int acpi_init(void)
 
     status = AcpiInitializeSubsystem();
     if (ACPI_FAILURE(status)) {
-        pr_err("  %-11s : AcpiInitializeSubsystem failed\n", "acpi");
+        pr_err("%s: AcpiInitializeSubsystem failed\n", "acpi");
         return -1;
     }
-    pr_info("ACPI [2/8]: subsystem initialized");
+    pr_info("acpi: [2/8] subsystem initialized");
 
     status = AcpiInitializeTables(NULL, 32, FALSE);
     if (ACPI_FAILURE(status)) {
-        pr_err("  %-11s : AcpiInitializeTables failed\n", "acpi");
+        pr_err("%s: AcpiInitializeTables failed\n", "acpi");
         return -1;
     }
-    pr_info("ACPI [3/8]: tables loaded");
+    pr_info("acpi: [3/8] tables loaded");
 
     status = AcpiLoadTables();
     if (ACPI_FAILURE(status)) {
-        pr_warn("  %-11s : AcpiLoadTables failed (tables still available)\n", "acpi");
+        pr_warn("%s: AcpiLoadTables failed (tables still available)\n", "acpi");
     } else {
-        pr_info("ACPI [4/8]: namespace tables loaded");
+        pr_info("acpi: [4/8] namespace tables loaded");
     }
 
     /* SCI gets enabled here — with a wrong (edge/high) IOAPIC entry the
      * chipset can hard-reset the machine the moment events start flowing. */
-    pr_info("ACPI [5/8]: enabling subsystem (SCI live)");
+    pr_info("acpi: [5/8] enabling subsystem (SCI live)");
     status = AcpiEnableSubsystem(ACPI_FULL_INITIALIZATION);
     if (ACPI_FAILURE(status)) {
-        pr_warn("  %-11s : AcpiEnableSubsystem failed (partial ACPI)\n", "acpi");
+        pr_warn("%s: AcpiEnableSubsystem failed (partial ACPI)\n", "acpi");
     } else {
-        pr_info("ACPI [6/8]: subsystem enabled");
+        pr_info("acpi: [6/8] subsystem enabled");
     }
 
     status = AcpiInitializeObjects(ACPI_FULL_INITIALIZATION);
     if (ACPI_FAILURE(status)) {
-        pr_warn("  %-11s : AcpiInitializeObjects failed\n", "acpi");
+        pr_warn("%s: AcpiInitializeObjects failed\n", "acpi");
     } else {
-        pr_info("ACPI [7/8]: namespace objects initialized");
+        pr_info("acpi: [7/8] namespace objects initialized");
     }
 
     acpi_initialized = 1;
@@ -71,7 +71,7 @@ int acpi_init(void)
      * PCIe hierarchy; without it the firmware keeps ACPI-level control and
      * may reboot the machine once ECAM/hotplug/AER traffic starts.
      */
-    pr_info("ACPI [8/8]: evaluating _OSC");
+    pr_info("acpi: [8/8] evaluating _OSC");
     acpi_osc_pcie_init();
 
     {
@@ -79,16 +79,16 @@ int acpi_init(void)
         if (rsdp_phys) {
             char buf[48];
             char hex[16];
-            strcpy(buf, "ACPI: RSDP at 0x");
+            strcpy(buf, "acpi: RSDP at 0x");
             snprintf(hex, sizeof(hex), "0x%x", (unsigned)((uint32_t)rsdp_phys));
             strcat(buf, hex);
             pr_info("%s", buf);
         } else {
-            pr_warn("  %-11s : RSDP not found\n", "acpi");
+            pr_warn("%s: RSDP not found\n", "acpi");
         }
     }
 
-    pr_info("ACPI: initialization complete");
+    pr_info("acpi: initialization complete");
     return 0;
 }
 
@@ -150,7 +150,7 @@ static void acpi_osc_pcie_bridge(ACPI_HANDLE handle)
 
     status = AcpiEvaluateObject(handle, "_OSC", &params, &ret);
     if (ACPI_FAILURE(status)) {
-        pr_warn("  %-11s : _OSC failed on the PCIe root bridge\n", "acpi");
+        pr_warn("%s: _OSC failed on the PCIe root bridge\n", "acpi");
         return;
     }
 
@@ -160,7 +160,7 @@ static void acpi_osc_pcie_bridge(ACPI_HANDLE handle)
                           | ((UINT32)b[2] << 16) | ((UINT32)b[3] << 24);
         UINT32 ctrl = (UINT32)b[4] | ((UINT32)b[5] << 8)
                     | ((UINT32)b[6] << 16) | ((UINT32)b[7] << 24);
-        pr_info("ACPI: _OSC granted PCIe control 0x%x (status 0x%x)",
+        pr_info("acpi: _OSC granted PCIe control 0x%x (status 0x%x)",
                 (unsigned)ctrl, (unsigned)cap_status);
     }
 
@@ -178,16 +178,16 @@ void acpi_osc_pcie_init(void)
 
     /* Manufacturer quirk: some boards ship a broken _OSC method. */
     if (acpi_board_quirks() & ACPI_QUIRK_DISABLE_OSC) {
-        pr_info("ACPI: _OSC skipped (board quirk: broken _OSC AML)");
+        pr_info("acpi: _OSC skipped (board quirk: broken _OSC AML)");
         return;
     }
 
     status = AcpiGetHandle(ACPI_ROOT_OBJECT, "\\_SB.PCI0", &handle);
     if (ACPI_FAILURE(status) || !handle) {
-        pr_warn("  %-11s : \\_SB.PCI0 not found — _OSC skipped\n", "acpi");
+        pr_warn("%s: \\_SB.PCI0 not found — _OSC skipped\n", "acpi");
         return;
     }
 
-    pr_info("ACPI: evaluating _OSC on \\_SB.PCI0");
+    pr_info("acpi: evaluating _OSC on \\_SB.PCI0");
     acpi_osc_pcie_bridge(handle);
 }

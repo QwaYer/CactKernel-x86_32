@@ -140,7 +140,7 @@ static int xhci_wait_flag(xhci_priv_t *priv, volatile uint8_t *flag,
         if ((loops % 100u) == 0u) {
             uint32_t sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
             if (sts & XHCI_STS_HSE) {
-                pr_err("xHCI: Host System Error during command (USBSTS=0x%x)\n", sts);
+                pr_err("xhci: Host System Error during command (USBSTS=0x%x)\n", sts);
                 break;
             }
         }
@@ -152,7 +152,7 @@ static int xhci_wait_flag(xhci_priv_t *priv, volatile uint8_t *flag,
      * never completed — are reported by xhci_recover_ep().  Logging every one
      * of them buried the console in hundreds of lines per scan. */
     if (what)
-        pr_warn("xHCI %s timeout\n", what);
+        pr_warn("xhci: %s timeout\n", what);
     *flag = 0;
     return -1;
 }
@@ -168,7 +168,7 @@ int xhci_send_cmd(xhci_priv_t *priv, xhci_trb_t *trb) {
     priv->cmd_result = 0;
     priv->cmd_done   = 0;
     if (xhci_ring_enqueue(&priv->cmd_ring, trb) < 0) {
-        pr_warn("xHCI: command ring full\n");
+        pr_warn("xhci: command ring full\n");
         return -1;
     }
     xhci_db_write32(priv, 0, 0);
@@ -222,7 +222,7 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
                     s->notify(s->dev, s->buf, s->len, s->notify_priv);
             } else if (!s->err_logged) {
                 s->err_logged = 1;
-                pr_warn("xHCI: interrupt EP slot %u dci %u completion code %u\n",
+                pr_warn("xhci: interrupt EP slot %u dci %u completion code %u\n",
                         (unsigned)slot, (unsigned)dci, (unsigned)cc);
             }
 
@@ -293,14 +293,14 @@ void xhci_handle_irq(usb_hc_t *hc) {
          * chipset-triggered system reboot. */
         xhci_op_write32(priv, XHCI_OP_USBSTS, XHCI_STS_HSE);
         if (priv->quirks & XHCI_QUIRK_SPURIOUS_REBOOT) {
-            pr_warn("xHCI: spurious host error ignored (Intel quirk)");
+            pr_warn("xhci: spurious host error ignored (Intel quirk)");
         } else {
             /* A real HSE puts the xHC into a fatal state: clearing the bit is
              * not enough, further register access just hangs the bus.  Reset
              * it here and hand the re-programming/re-enumeration to the
              * hotplug task — that path sleeps and issues commands, which an
              * interrupt handler may not. */
-            pr_err("[XHCI] Host System Error! resetting controller\n");
+            pr_err("xhci: Host System Error! resetting controller\n");
             xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
             for (int i = 0; i < 100; i++) {
                 if (!(xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)) break;

@@ -287,7 +287,7 @@ void unix_sock_init(void) {
     mutex_init(unix_bound_lock);
     memset(unix_bound, 0, sizeof(unix_bound_t) * UNIX_BOUND_MAX);
     unix_ready = 1;
-    pr_info("  %-11s : path registry ready (%d slots)\n",
+    pr_info("%s: path registry ready (%d slots)\n",
             "unix-sock", UNIX_BOUND_MAX);
 }
 

@@ -69,7 +69,7 @@ pub extern "C" fn drm_copy_in(
     let size = drm_ioctl_size(cmd);
     if size != expect {
         // SAFETY: static NUL-terminated string.
-        unsafe { printk(c"[drm] ioctl payload size mismatch\n".as_ptr() as *const u8) };
+        unsafe { printk(c"drm: ioctl payload size mismatch\n".as_ptr() as *const u8) };
         return -1;
     }
     // SAFETY: `user` is a non-null userspace pointer the caller asked us to read;

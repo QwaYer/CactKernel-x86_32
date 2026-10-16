@@ -33,6 +33,10 @@ static uint32_t klog_pend_len = 0;
 static uint32_t klog_pend_trunc = 0;       /* chars dropped (line too long) */
 static int      klog_pend_level = KLOG_LEVEL_DEFAULT;
 
+/* Console log level — see klog.h.  DEBUG during boot so the whole bring-up
+ * transcript reaches the screen; raised once init is launched. */
+static int      console_loglevel = KLOG_LEVEL_DEBUG;
+
 /* Serialises the ring, the partial-line buffer and the escape-parser state
  * across CPUs.  Taken for a whole klog_feed()/klog_write_user() call so two
  * cores cannot interleave into the same record. */
@@ -249,4 +253,13 @@ int klog_read(uint32_t off, uint32_t size, char *buf) {
     }
     irq_spinlock_release(&klog_lock);
     return (int)copied;
+}
+
+int console_loglevel_get(void) {
+    return console_loglevel;
+}
+
+void console_loglevel_set(int level) {
+    if (level < 0 || level > 7) level = KLOG_LEVEL_DEFAULT;
+    console_loglevel = level;
 }

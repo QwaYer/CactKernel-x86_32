@@ -177,7 +177,7 @@ pub unsafe extern "C" fn slab_cache_create(
         obj_size = SLAB_MIN_OBJ_SIZE;
     }
     if obj_size > SLAB_MAX_OBJ_SIZE {
-        kprint_str(c"[SLAB] obj_size too large (> 2048)\n".as_ptr() as *const u8);
+        kprint_str(c"slab: obj_size too large (> 2048)\n".as_ptr() as *const u8);
         return core::ptr::null_mut();
     }
     if obj_size < core::mem::size_of::<*mut u8>() as u32 {
@@ -324,7 +324,7 @@ pub unsafe extern "C" fn slab_free(cache: *mut SlabCache, obj: *mut u8) {
         // operations below re-touch `s` through the raw pointer.
         let s_ref = unsafe { &mut *s };
         if s_ref.cache != cache {
-            kprint_str(c"[SLAB] slab_free: wrong cache!\n".as_ptr() as *const u8);
+            kprint_str(c"slab: slab_free: wrong cache!\n".as_ptr() as *const u8);
             lock_release(G_CACHE_LOCK.as_ptr());
             return;
         }
@@ -489,7 +489,7 @@ pub unsafe extern "C" fn slab_print_stats(cache: *const SlabCache) {
         s = unsafe { (*s).next };
     }
 
-    kprint_str(c"[SLAB] cache=".as_ptr() as *const u8);
+    kprint_str(c"slab: cache=".as_ptr() as *const u8);
     // SAFETY: `cache` is a live `SlabCache` and `name` is a NUL-terminated array
     // inside it, so `printk` reads a valid string.
     unsafe { printk(cache.name.as_ptr()) };

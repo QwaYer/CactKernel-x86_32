@@ -62,7 +62,7 @@ int pci_msi_enable(pci_device_t *dev, int vector)
                        (uint16_t)(ctrl | MSI_CTRL_ENABLE));
     __asm__ volatile("sfence" ::: "memory");
 
-    pr_info("  %-11s : vec 0x%x enabled (cap 0x%x%s, %02x:%02x.%u)\n",
+    pr_info("%s: vec 0x%x enabled (cap 0x%x%s, %02x:%02x.%u)\n",
             "msi", (unsigned)vector, (unsigned)cap, is64 ? ", 64-bit" : "",
             (unsigned)dev->bus, (unsigned)dev->dev, (unsigned)dev->fn);
     return 0;

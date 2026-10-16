@@ -182,7 +182,7 @@ pub extern "C" fn drm_dev_register(dev: *mut DrmDevice) -> c_int {
         // SAFETY: `printk` takes a NUL-terminated format string plus its arguments.
         unsafe {
             printk(
-                c"\x013  drm         : cannot publish /dev/dri/card%d\n".as_ptr() as *const u8,
+                c"\x013drm: cannot publish /dev/dri/card%d\n".as_ptr() as *const u8,
                 minor,
             );
         }
@@ -200,7 +200,7 @@ pub extern "C" fn drm_dev_register(dev: *mut DrmDevice) -> c_int {
             // SAFETY: `printk` takes a NUL-terminated format string plus arguments.
             unsafe {
                 printk(
-                    c"\x013  drm         : '%s' load failed (%d)\n".as_ptr() as *const u8,
+                    c"\x013drm: '%s' load failed (%d)\n".as_ptr() as *const u8,
                     name,
                     rc,
                 );

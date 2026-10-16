@@ -82,14 +82,14 @@ uint32_t lapic_timer_calibrate(void)
 
     uint32_t per_ms = lapic_calibrate_pm();
     if (per_ms == 0) {
-        pr_warn("  %-11s : calibration failed (ACPI PM timer unavailable)\n",
+        pr_warn("%s: calibration failed (ACPI PM timer unavailable)\n",
                 "timer");
         return 0;
     }
 
     {
         char buf[80]; char num[32];
-        strcpy(buf, "LAPIC timer: calibrated at ");
+        strcpy(buf, "lapic-timer: calibrated at ");
         snprintf(num, sizeof(num), "%llu", (unsigned long long)per_ms * 1000ull);
         strcat(buf, num);
         strcat(buf, " Hz (ACPI PM timer)");
@@ -123,7 +123,7 @@ void lapic_timer_start_periodic(uint32_t ticks_per_ms)
      * write, and a still-masked gate makes the timer tick silently. */
     uint32_t lvt = apic_lapic_read(LAPIC_LVT_TIMER);
     if ((lvt & LAPIC_LVT_MASK) || ((lvt & 0xFFu) != LAPIC_TIMER_VECTOR))
-        pr_warn("  %-11s : LVT Timer reads 0x%x after arming — vector 0x%x "
+        pr_warn("%s: LVT Timer reads 0x%x after arming — vector 0x%x "
                 "unmasked expected, tick may not fire\n",
                 "timer", (unsigned)lvt, (unsigned)LAPIC_TIMER_VECTOR);
 
@@ -148,7 +148,7 @@ void lapic_timer_mask(void)
 int lapic_timer_selftest(void)
 {
     if (!apic_lapic_ready()) {
-        pr_warn("  %-11s : selftest: LAPIC not mapped\n", "timer");
+        pr_warn("%s: selftest: LAPIC not mapped\n", "timer");
         return -1;
     }
 
@@ -157,7 +157,7 @@ int lapic_timer_selftest(void)
     const uint32_t expect = LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC;
     uint32_t lvt = apic_lapic_read(LAPIC_LVT_TIMER);
     if ((lvt & fields) != expect) {
-        pr_warn("  %-11s : selftest: LVT=0x%x (expected 0x%x) — vector/mask wrong\n",
+        pr_warn("%s: selftest: LVT=0x%x (expected 0x%x) — vector/mask wrong\n",
                 "timer", (unsigned)lvt, (unsigned)expect);
         return -1;
     }
@@ -169,12 +169,12 @@ int lapic_timer_selftest(void)
         __asm__ __volatile__("pause");
     uint32_t b = apic_lapic_read(LAPIC_TIMER_CURCNT);
     if (a == b) {
-        pr_warn("  %-11s : selftest: LAPIC counter stuck at 0x%x — timer not running\n",
+        pr_warn("%s: selftest: LAPIC counter stuck at 0x%x — timer not running\n",
                 "timer", (unsigned)a);
         return -1;
     }
 
-    pr_info("  %-11s : selftest OK (vector 0x%x, CURCNT 0x%x->0x%x)\n",
+    pr_info("%s: selftest OK (vector 0x%x, CURCNT 0x%x->0x%x)\n",
             "timer", (unsigned)LAPIC_TIMER_VECTOR, (unsigned)a, (unsigned)b);
     return 0;
 }

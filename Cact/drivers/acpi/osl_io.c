@@ -19,7 +19,7 @@ ACPI_STATUS AcpiOsReadPort(
     case 16: *Value = inw((UINT16)Address); break;
     case 32: *Value = port_dword_in((UINT16)Address); break;
     default:
-        pr_err("  %-11s : read port 0x%x: bad width %u\n",
+        pr_err("%s: read port 0x%x: bad width %u\n",
                "acpi-io", (unsigned)Address, (unsigned)Width);
         return AE_BAD_PARAMETER;
     }
@@ -36,7 +36,7 @@ ACPI_STATUS AcpiOsWritePort(
     case 16: outw((UINT16)Address, (UINT16)Value); break;
     case 32: port_dword_out((UINT16)Address, Value); break;
     default:
-        pr_err("  %-11s : write port 0x%x: bad width %u\n",
+        pr_err("%s: write port 0x%x: bad width %u\n",
                "acpi-io", (unsigned)Address, (unsigned)Width);
         return AE_BAD_PARAMETER;
     }
@@ -50,7 +50,7 @@ ACPI_STATUS AcpiOsReadMemory(
 {
     void *virt = acpi_temp_map((UINT32)Address, 4);
     if (!virt) {
-        pr_err("  %-11s : read memory 0x%x: map failed\n",
+        pr_err("%s: read memory 0x%x: map failed\n",
                "acpi-io", (unsigned)Address);
         return AE_BAD_ADDRESS;
     }
@@ -60,7 +60,7 @@ ACPI_STATUS AcpiOsReadMemory(
     case 32: *Value = *(volatile UINT32*)virt; break;
     case 64: *Value = *(volatile UINT64*)virt; break;
     default:
-        pr_err("  %-11s : read memory 0x%x: bad width %u\n",
+        pr_err("%s: read memory 0x%x: bad width %u\n",
                "acpi-io", (unsigned)Address, (unsigned)Width);
         acpi_temp_unmap(virt, 4);
         return AE_BAD_PARAMETER;
@@ -76,7 +76,7 @@ ACPI_STATUS AcpiOsWriteMemory(
 {
     void *virt = acpi_temp_map((UINT32)Address, 4);
     if (!virt) {
-        pr_err("  %-11s : write memory 0x%x: map failed\n",
+        pr_err("%s: write memory 0x%x: map failed\n",
                "acpi-io", (unsigned)Address);
         return AE_BAD_ADDRESS;
     }
@@ -86,7 +86,7 @@ ACPI_STATUS AcpiOsWriteMemory(
     case 32: *(volatile UINT32*)virt = (UINT32)Value; break;
     case 64: *(volatile UINT64*)virt = Value;          break;
     default:
-        pr_err("  %-11s : write memory 0x%x: bad width %u\n",
+        pr_err("%s: write memory 0x%x: bad width %u\n",
                "acpi-io", (unsigned)Address, (unsigned)Width);
         acpi_temp_unmap(virt, 4);
         return AE_BAD_PARAMETER;

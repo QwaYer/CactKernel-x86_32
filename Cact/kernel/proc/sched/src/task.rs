@@ -123,7 +123,7 @@ pub fn task_check_kernel_stack() {
         REPORTED.store(true, Ordering::Relaxed);
         // SAFETY: `printk` takes a static NUL-terminated byte string.
         unsafe {
-            ffi::printk(c"  sched       : KERNEL STACK OVERFLOW (canary destroyed)\n".as_ptr().cast())
+            ffi::printk(c"\x01\x32sched: KERNEL STACK OVERFLOW (canary destroyed)\n".as_ptr().cast())
         };
     }
 }
@@ -457,7 +457,7 @@ pub unsafe extern "C" fn task_init() {
     mlfq::mlfq_init();
     timer_wheel::timer_wheel_global_init();
     // SAFETY: `printk` takes a static NUL-terminated byte string.
-    unsafe { ffi::printk(c"\x01\x36  sched       : MLFQ, timer wheel, scheduler lock\n".as_ptr().cast()) };
+    unsafe { ffi::printk(c"\x01\x36sched: MLFQ, timer wheel, scheduler lock\n".as_ptr().cast()) };
 }
 
 /// Allocate and initialise a bare idle task: pid 0, ring-0, running, with no
@@ -499,7 +499,7 @@ pub unsafe extern "C" fn init_scheduler() -> i32 {
     let idle = unsafe { alloc_idle_task() };
     if idle.is_null() {
         // SAFETY: `printk` takes a static NUL-terminated byte string.
-        unsafe { ffi::printk(c"\x01\x33  sched       : cannot allocate idle task\n".as_ptr().cast()) };
+        unsafe { ffi::printk(c"\x01\x33sched: cannot allocate idle task\n".as_ptr().cast()) };
         return -1;
     }
 
@@ -511,7 +511,7 @@ pub unsafe extern "C" fn init_scheduler() -> i32 {
     unsafe { task_list_tail = idle };
 
     // SAFETY: `printk` takes a static NUL-terminated byte string.
-    unsafe { ffi::printk(c"\x01\x36  sched       : idle task pid 0, circular run queue\n".as_ptr().cast()) };
+    unsafe { ffi::printk(c"\x01\x36sched: idle task pid 0, circular run queue\n".as_ptr().cast()) };
     0
 }
 

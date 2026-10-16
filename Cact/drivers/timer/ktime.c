@@ -40,7 +40,7 @@ int acpi_pm_timer_init(void)
     ACPI_TABLE_FADT *fadt = &AcpiGbl_FADT;
 
     if (fadt->PmTimerBlock == 0 && fadt->XPmTimerBlock.Address == 0) {
-        pr_warn("  %-11s : no PM timer block in FADT\n", "pm-timer");
+        pr_warn("%s: no PM timer block in FADT\n", "pm-timer");
         return -1;
     }
 
@@ -51,12 +51,12 @@ int acpi_pm_timer_init(void)
     } else if (fadt->PmTimerBlock != 0) {
         pm_timer_port = (uint16_t)fadt->PmTimerBlock;
     } else {
-        pr_warn("  %-11s : unsupported address space\n", "pm-timer");
+        pr_warn("%s: unsupported address space\n", "pm-timer");
         return -1;
     }
 
     if (pm_timer_port == 0) {
-        pr_warn("  %-11s : invalid port 0\n", "pm-timer");
+        pr_warn("%s: invalid port 0\n", "pm-timer");
         return -1;
     }
 
@@ -71,7 +71,7 @@ int acpi_pm_timer_init(void)
     pm_timer_available = 1;
 
     char buf[96];
-    snprintf(buf, sizeof(buf), "  %-11s : timekeeping ready (port 0x%x, %s)\n",
+    snprintf(buf, sizeof(buf), "%s: timekeeping ready (port 0x%x, %s)\n",
              "pm-timer", (unsigned)pm_timer_port,
              pm_timer_32bit ? "32-bit" : "24-bit");
     pr_info("%s", buf);
@@ -191,7 +191,7 @@ int ktime_init(void)
     int pm_ok = (acpi_pm_timer_init() == 0);
 
     if (!tsc_supported()) {
-        pr_warn("  %-11s : no TSC — using ACPI PM timer for timekeeping\n", "tsc");
+        pr_warn("%s: no TSC — using ACPI PM timer for timekeeping\n", "tsc");
         tsc_available = 0;
         return pm_ok ? 0 : -1;
     }
@@ -209,7 +209,7 @@ int ktime_init(void)
             calib = 0;
     }
     if (calib != 0) {
-        pr_warn("  %-11s : calibration failed — using ACPI PM timer\n", "tsc");
+        pr_warn("%s: calibration failed — using ACPI PM timer\n", "tsc");
         tsc_available = 0;
         return pm_ok ? 0 : -1;
     }
@@ -222,17 +222,17 @@ int ktime_init(void)
 
     if (!invariant && pm_ok) {
         tsc_available = 0;
-        pr_warn("  %-11s : %u MHz, no invariant TSC — ACPI PM timer is the wall clock\n",
+        pr_warn("%s: %u MHz, no invariant TSC — ACPI PM timer is the wall clock\n",
                 "tsc", (unsigned)(tsc_hz / 1000000ull));
         return 0;
     }
 
     tsc_available = 1;
     if (!invariant)
-        pr_warn("  %-11s : %u MHz, no invariant TSC and no PM timer — TSC is the only clock\n",
+        pr_warn("%s: %u MHz, no invariant TSC and no PM timer — TSC is the only clock\n",
                 "tsc", (unsigned)(tsc_hz / 1000000ull));
     else
-        pr_info("  %-11s : %u MHz, invariant, calibrated against %s\n", "tsc",
+        pr_info("%s: %u MHz, invariant, calibrated against %s\n", "tsc",
                 (unsigned)(tsc_hz / 1000000ull), reference);
     return 0;
 }
@@ -273,7 +273,7 @@ void ktime_resume(void)
             return;
         }
 
-        pr_warn("  %-11s : ACPI PM timer stopped by the sleep — TSC is the wall clock\n",
+        pr_warn("%s: ACPI PM timer stopped by the sleep — TSC is the wall clock\n",
                 "ktime");
     }
 
