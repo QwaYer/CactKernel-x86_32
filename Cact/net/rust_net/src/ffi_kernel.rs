@@ -2,7 +2,6 @@
 //!
 //! All symbols are implemented in C and linked into the final kernel image.
 
-use core::cell::SyncUnsafeCell;
 use core::ffi::{c_char, c_int};
 
 use crate::types::{MacAddr, Skb, VfsNode};
@@ -32,8 +31,6 @@ unsafe extern "C" {
 
     pub fn inb(port: u16) -> u8;
     pub fn outw(port: u16, data: u16);
-
-    pub static terminal_fg_pid: SyncUnsafeCell<u32>;
 }
 
 pub use cact_mm::kmalloc;

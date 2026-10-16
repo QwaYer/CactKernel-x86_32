@@ -92,9 +92,19 @@ int sys_exec(struct syscall_frame* regs) {
 int sys_exit(struct syscall_frame* regs) {
     if (!current_task) return -1;
 
-    // Clear foreground process group if this was the terminal's leader
-    if (terminal_fg_pid == current_task->pid)
-        terminal_fg_pid = 0;
+    // Drop the console's foreground process group once its last member is gone.
+    // A stale pgid would swallow ^C (the line discipline only hands the byte
+    // through to a raw-mode reader when no foreground group is set) instead of
+    // letting the shell's line editor see it.
+    if (terminal_fg_pgid != 0 && current_task->proc &&
+        terminal_fg_pgid == current_task->proc->pgid) {
+        int still_alive = 0;
+        for (struct task_struct *it = task_list_head; it; it = it->next) {
+            if (it == current_task || !it->proc) continue;
+            if (it->proc->pgid == terminal_fg_pgid) { still_alive = 1; break; }
+        }
+        if (!still_alive) terminal_fg_pgid = 0;
+    }
 
     // Drop the process's controlling-terminal assignment
     tty_clear_ctty(current_task->pid);

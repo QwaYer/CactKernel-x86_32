@@ -3,7 +3,7 @@
 use cact_mm::vmm_create_address_space;
 use core::ffi::c_void;
 use core::ptr;
-use crate::ffi::{self, ContextFrame, MmapTable, VfsNode, PAGE_PRESENT, PAGE_RW, PAGE_SIZE, PAGE_USER};
+use crate::ffi::{self, ContextFrame, MmapTable, PAGE_PRESENT, PAGE_RW, PAGE_SIZE, PAGE_USER};
 use crate::mlfq;
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 use crate::task::{
@@ -147,6 +147,11 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
     child_p.ustack_phys       = ustack_pages[0];
     child_p.ustack_phys_extra = [ustack_pages[1], ustack_pages[2], ustack_pages[3]];
     child_p.parent_pid        = parent.pid;
+    // POSIX: a fork stays in the parent's process group and session.  Job
+    // control depends on it — the shell forks a job, moves the whole job into a
+    // fresh group, and the console's foreground group is what receives ^C.
+    child_p.pgid              = parent_p_ref.pgid;
+    child_p.sid               = parent_p_ref.sid;
     child_p.exit_code         = 0;
     child_p.wait_for_pid      = 0;
     child_p.sleep_until       = 0;
@@ -295,18 +300,13 @@ pub unsafe extern "C" fn task_fork(regs: *mut ContextFrame) -> *mut TaskStruct {
         };
     }
 
-    for i in 0..MAX_FD {
-        // SAFETY: `child_p.fds` is the live fd table installed just above and `i < MAX_FD`.
-        let ft = unsafe { (*child_p.fds).fd_table[i] };
-        if !ft.is_null() {
-            // SAFETY: `ft` is a live file-table entry (a non-null slot of the copied table).
-            let node = unsafe { *(ft as *const *mut VfsNode) };
-            if !node.is_null() {
-                // SAFETY: `node` is a live VFS node.
-                unsafe { ffi::open_vfs(node) };
-            }
-        }
-    }
+    // No `open_vfs` here: the child inherits the parent's *file descriptions*
+    // (dup semantics), so `file_ref` above is the whole story.  Calling
+    // `ops->open` once per inherited fd inflated every node's open count
+    // (`node.refcount`, and for pipes `read_open`/`write_open`) while only one
+    // `close` ever runs — at `file_free`, when the shared `file_t` drops to 0.
+    // That leak broke pipes: a reader never saw EOF and a writer never saw
+    // EPIPE, so `cmd | cmd` blocked forever.
 
     for attach in child_p.shm_attachments.iter_mut() {
         attach.shm_id    = 0;
@@ -369,6 +369,9 @@ pub unsafe extern "C" fn sched_task_exit(exit_code: i32) {
     }
     // SAFETY: `t` is the live current task (non-null checked above).
     let p = unsafe { (*t).proc };
+
+    // SAFETY: `t` is the live current task and this is its own exit path.
+    unsafe { release_fds_on_death(t) };
 
     // If this is a thread, publish its exit to any joiner: clear the join word
     // and wake its futex.  Done before taking the scheduler lock (the wake
@@ -518,6 +521,108 @@ pub unsafe extern "C" fn sched_waitpid(target_pid: i32, status: *mut i32, option
         unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
         // SAFETY: `schedule` is the scheduler's core switch routine, called with the lock free.
         unsafe { crate::mlfq::schedule() };
+    }
+}
+
+/// Release every file description a dying process still holds, so a pipe or
+/// socket end it owned disappears the moment the process dies — not when its
+/// parent eventually gets around to reaping the zombie.
+///
+/// This is what keeps `A | B` from deadlocking: the parent waits for A before
+/// reaping B, so if B's read end outlives B, A never sees EOF/EPIPE and both
+/// sleep forever.  (Linux closes files in exit(), never at wait().)  The table
+/// is shared by the whole thread group, so only its last live member releases
+/// it; the unref loop in `reap_task_free` stays as a fallback for the rare case
+/// where two members die concurrently and each still sees the other as alive.
+///
+/// # Safety
+///
+/// `t` must be the live current task on its way out, and must not be `Zombie`
+/// yet: a reap during the release would free the stack underneath it.
+pub unsafe fn release_fds_on_death(t: *mut TaskStruct) {
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; this runs with it free.
+    unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
+    // SAFETY: `t` is the live current task; the lock is held.
+    let last = unsafe { last_live_member(t) };
+    // SAFETY: the lock was acquired above.
+    unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+    if last {
+        // SAFETY: `t` is the live current task and owns its fd table.
+        unsafe { close_all_fds(t) };
+    }
+}
+
+/// True when no other member of `t`'s thread group is still alive, i.e. `t` is
+/// the member that owns the group's shared fd-table teardown.  A Zombie holds
+/// nothing open, so a Zombie sibling does not count.
+///
+/// # Safety
+///
+/// `t` must be the live current task; must be called with `SCHEDULER_LOCK` held.
+unsafe fn last_live_member(t: *mut TaskStruct) -> bool {
+    // SAFETY: `t` is the live current task (see # Safety), so `proc` is in bounds.
+    let p = unsafe { (*t).proc };
+    if p.is_null() || unsafe { (*p).fds }.is_null() {
+        return false;
+    }
+    // SAFETY: `p` is that task's live `ProcMeta`.
+    let tgid = unsafe { (*p).tgid };
+    // SAFETY: `t` is live.
+    let my_pid = unsafe { (*t).pid };
+
+    // SAFETY: `task_list_head` is a scheduler-owned global, read under `SCHEDULER_LOCK`.
+    let mut cur = unsafe { task_list_head };
+    while !cur.is_null() {
+        // SAFETY: `cur` is a live task on the list.
+        let next = unsafe { (*cur).next };
+        // SAFETY: `cur` is live, so its `proc` field is in bounds.
+        let cp = unsafe { (*cur).proc };
+        if !cp.is_null() {
+            // SAFETY: `cp` is that task's live `ProcMeta`.
+            let c_tgid = unsafe { (*cp).tgid };
+            // SAFETY: `cur` is live.
+            let c_pid = unsafe { (*cur).pid };
+            // SAFETY: `cur` is live.
+            let c_state = unsafe { (*cur).state };
+            if c_pid != my_pid && c_tgid == tgid && !matches!(c_state, TaskState::Zombie) {
+                return false;
+            }
+        }
+        cur = next;
+    }
+    true
+}
+
+/// Release every file description `t` still holds, leaving the (now empty)
+/// table allocated: `reap_task_free` frees it together with the rest of the
+/// task once the zombie is collected.
+///
+/// # Safety
+///
+/// `t` must be the live current task and must own its fd table (the last live
+/// member of its thread group).
+unsafe fn close_all_fds(t: *mut TaskStruct) {
+    // SAFETY: `t` is the live current task (see # Safety).
+    let p = unsafe { (*t).proc };
+    if p.is_null() {
+        return;
+    }
+    // SAFETY: `p` is that task's live `ProcMeta`.
+    let fds = unsafe { (*p).fds };
+    if fds.is_null() {
+        return;
+    }
+    for i in 0..MAX_FD {
+        // SAFETY: `fds` is the live fd table and `i < MAX_FD`.
+        let ft = unsafe { (*fds).fd_table[i] };
+        if !ft.is_null() {
+            // Clear the slot first: the unref below runs VFS code that must not
+            // be able to observe this task still holding the descriptor.
+            // SAFETY: `fds` is the live fd table and `i < MAX_FD`.
+            unsafe { (*fds).fd_table[i] = ptr::null_mut() };
+            // SAFETY: `ft` is a live file object (a non-null slot of the table).
+            unsafe { ffi::file_unref(ft as *mut c_void) };
+        }
     }
 }
 

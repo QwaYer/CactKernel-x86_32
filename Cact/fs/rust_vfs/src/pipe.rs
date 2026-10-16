@@ -217,9 +217,13 @@ unsafe fn pipe_read(p: *mut Pipe, size: u32, buffer: *mut c_char) -> i32 {
         return -1;
     }
     let nonblock = unsafe { (*p).flags } & PIPE_O_NONBLOCK != 0;
-    let mut copied: u32 = 0;
 
-    while copied < size {
+    // POSIX: a blocking read hands back as soon as *some* data is available and
+    // waits only while the pipe is empty.  Waiting for the caller's whole
+    // buffer (as this did) made any producer that writes and then stays alive —
+    // `producer | grep`, a status pipe — look hung: the reader never returned
+    // bytes, so nothing downstream ever ran.
+    loop {
         // SAFETY: live pipe; state read/copied under the pipe lock.
         unsafe {
             cact_sync::mutex_lock(&mut (*p).lock);
@@ -227,50 +231,47 @@ unsafe fn pipe_read(p: *mut Pipe, size: u32, buffer: *mut c_char) -> i32 {
             if (*p).len == 0 {
                 if (*p).write_open == 0 {
                     cact_sync::mutex_unlock(&mut (*p).lock);
-                    return copied as i32; // EOF
+                    return 0; // EOF
                 }
                 if nonblock {
                     cact_sync::mutex_unlock(&mut (*p).lock);
-                    return if copied > 0 { copied as i32 } else { -EAGAIN };
+                    return -EAGAIN;
                 }
                 cact_sync::mutex_unlock(&mut (*p).lock);
                 sched_sleep_ticks(1);
-                if validate_user_ptr(buffer.add(copied as usize) as *const c_void, 1) == 0 {
-                    return if copied > 0 { copied as i32 } else { -1 };
+                if validate_user_ptr(buffer as *const c_void, 1) == 0 {
+                    return -1;
                 }
                 continue;
             }
 
-            let want = size - copied;
-            let avail = (*p).len;
-            let chunk = if want < avail { want } else { avail };
+            let chunk = if size < (*p).len { size } else { (*p).len };
             let to_end = PIPE_BUF_SIZE as u32 - (*p).read_pos;
             if chunk <= to_end {
                 ptr::copy_nonoverlapping(
                     (*p).buf.as_ptr().add((*p).read_pos as usize),
-                    buffer.add(copied as usize) as *mut u8,
+                    buffer as *mut u8,
                     chunk as usize,
                 );
             } else {
                 ptr::copy_nonoverlapping(
                     (*p).buf.as_ptr().add((*p).read_pos as usize),
-                    buffer.add(copied as usize) as *mut u8,
+                    buffer as *mut u8,
                     to_end as usize,
                 );
                 ptr::copy_nonoverlapping(
                     (*p).buf.as_ptr(),
-                    (buffer.add(copied as usize) as *mut u8).add(to_end as usize),
+                    (buffer as *mut u8).add(to_end as usize),
                     (chunk - to_end) as usize,
                 );
             }
             (*p).read_pos = ((*p).read_pos + chunk) % PIPE_BUF_SIZE as u32;
             (*p).len -= chunk;
-            copied += chunk;
 
             cact_sync::mutex_unlock(&mut (*p).lock);
+            return chunk as i32;
         }
     }
-    copied as i32
 }
 
 unsafe fn pipe_write(p: *mut Pipe, size: u32, buffer: *mut c_char) -> i32 {

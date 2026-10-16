@@ -41,7 +41,13 @@ extern uint32_t page_directory[1024];
 
 // Terminal window size for ioctl() calls
 struct winsize terminal_winsize;
-uint32_t       terminal_fg_pid = 0;
+// Console foreground process *group* (0 = none).  SIGINT/SIGQUIT/SIGSTOP from
+// the line discipline and SIGWINCH from TIOCSWINSZ go to every task whose
+// `proc->pgid` matches this value, so ^C reaches a whole pipeline.  The
+// session leader (the shell) claims it with CACT_TTYCTL_SET_FG; exec() no
+// longer assigns it, because "the last process that exec'd" is not the
+// foreground job.
+uint32_t       terminal_fg_pgid = 0;
 
 // ACPI SCI callback pointer — set by AcpiOsInstallInterruptHandler
 void (*acpi_sci_callback)(void) = NULL;

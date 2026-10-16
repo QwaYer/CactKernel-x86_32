@@ -7,7 +7,7 @@ use crate::timer_wheel;
 use crate::task::{
     find_task_by_pid, task_list_head, TaskStruct, TaskState, SCHEDULER_LOCK,
     KERNEL_BASE, NSIG, SIGALRM, SIGCHLD, SIGCONT, SIGFPE, SIGHUP, SIGINT, SIGKILL,
-    SIGQUIT, SIGSEGV, SIGTERM, SIGSTOP, SIGWINCH, SIG_DFL, SIG_IGN, SIG_UNCATCHABLE,
+    SIGPIPE, SIGQUIT, SIGSEGV, SIGTERM, SIGSTOP, SIGWINCH, SIG_DFL, SIG_IGN, SIG_UNCATCHABLE,
 };
 
 /// # Safety
@@ -125,6 +125,44 @@ pub unsafe extern "C" fn task_signal_locked(pid: u32, signal: u32) {
     }
 }
 
+/// Send `signal` to every task whose process group is `pgid` — the console's
+/// foreground job.  POSIX delivers ^C/^\ /^Z/size-change to the foreground
+/// process *group*, which is what makes the signal reach a whole pipeline
+/// rather than just its last member.
+///
+/// # Safety
+///
+/// Must be called from a task context with `SCHEDULER_LOCK` free.
+#[no_mangle]
+pub unsafe extern "C" fn task_signal_pgid(pgid: u32, signal: u32) {
+    if pgid == 0 {
+        return;
+    }
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the caller must not hold it.
+    unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
+    // SAFETY: `task_list_head` is a scheduler-owned global, read under `SCHEDULER_LOCK`.
+    let mut t = unsafe { task_list_head };
+    while !t.is_null() {
+        // SAFETY: `t` is a live task on the list.
+        let next = unsafe { (*t).next };
+        // SAFETY: `t` is live, so its `proc` field is in bounds.
+        let tp = unsafe { (*t).proc };
+        if !tp.is_null() {
+            // SAFETY: `tp` is that task's live `ProcMeta`.
+            let t_pgid = unsafe { (*tp).pgid };
+            if t_pgid == pgid {
+                // SAFETY: `t` is live.
+                let t_pid = unsafe { (*t).pid };
+                // SAFETY: `t` is live and the lock is held.
+                unsafe { task_signal_locked(t_pid, signal) };
+            }
+        }
+        t = next;
+    }
+    // SAFETY: the lock was acquired above.
+    unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+}
+
 /// Send `signal` to every task of the calling task's thread group except
 /// `except_pid` (normally the caller).  Used by `exit()` to take the whole
 /// process down when one thread exits.
@@ -207,6 +245,11 @@ pub unsafe extern "C" fn task_handle_signals(t: *mut TaskStruct) {
         unsafe { crate::task::clear_child_tid_on_exit(t) };
         // SAFETY: signalling the parent requires `SCHEDULER_LOCK`, held by the caller.
         unsafe { task_signal_locked(parent_pid, SIGCHLD) };
+        // Same invariant as the terminating-signal path below: a task killed by
+        // SIGKILL also never runs `sched_task_exit`, so its file descriptions
+        // (pipe/socket ends) have to go away here or they linger until reap.
+        // SAFETY: `t` is the live task being killed.
+        unsafe { crate::task::release_fds_on_death(t) };
         // SAFETY: `t` is live.
         unsafe { (*t).state = TaskState::Zombie };
         return;
@@ -230,6 +273,11 @@ pub unsafe extern "C" fn task_handle_signals(t: *mut TaskStruct) {
 
     handle_signal_bit(t, deliverable, SIGTERM,  1,  true);
     handle_signal_bit(t, deliverable, SIGCONT,  3,  false);
+    // SIGPIPE: writing to a pipe/socket whose read end is gone kills the writer
+    // by default.  It was missing from this table, so the bit was set by
+    // `pipe_write`/`unix_sock` and then never acted on (and never cleared) —
+    // a writer kept looping on its own `-EPIPE` instead of dying.
+    handle_signal_bit(t, deliverable, SIGPIPE,  4,  true);
     handle_signal_bit(t, deliverable, SIGALRM,  5,  true);
     handle_signal_bit(t, deliverable, SIGCHLD,  6,  false);
     handle_signal_bit(t, deliverable, SIGFPE,   7,  true);
@@ -353,6 +401,14 @@ fn handle_signal_bit(
         // SAFETY: `t_pid` is this live task's pid; `task_signal_group` takes the
         // scheduler lock itself (the caller holds none).
         unsafe { task_signal_group(t_pid, SIGKILL) };
+        // A task killed by a signal never runs `sched_task_exit`, so its file
+        // descriptions have to be released here too: otherwise the pipe/socket
+        // ends it held stay open until its parent reaps it, which is exactly what
+        // wedges `A | B` when ^C kills only the far end of the pipeline.  Done
+        // before the Zombie transition so a `waitpid()` cannot reap the task
+        // while the release is still running.
+        // SAFETY: `t` is the live task being terminated.
+        unsafe { crate::task::release_fds_on_death(t) };
         // SAFETY: `t` is live.
         unsafe { (*t).state = TaskState::Zombie };
     }
