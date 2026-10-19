@@ -61,7 +61,9 @@ static const char hid_keymap_shift[0x80] = {
     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-#define HID_KEY_CAPSLOCK 0x39
+#define HID_KEY_CAPSLOCK   0x39
+#define HID_KEY_SCROLLLOCK 0x47
+#define HID_KEY_NUMLOCK    0x53
 
 /* Extended (non-character) keys, emitted as the xterm CSI sequences every
  * terminal program already parses — cactsole's readline handles exactly these,
@@ -197,6 +199,79 @@ void usb_hid_repeat_init(void) {
             (unsigned)(HID_REPEAT_RATE_TICKS * 10));
 }
 
+/* ── Keyboard indicator LEDs (Num / Caps / Scroll) ────────────────────────
+ * The report handler runs inside the controller's event drain, often in
+ * interrupt context, where the SET_REPORT control transfer that programs the
+ * LEDs may not run: it sleeps and re-enters the event lock.  So the handler
+ * only leaves the wanted LED byte in a one-slot mailbox and hid_led_task() —
+ * spawned after the scheduler is live, like the key-repeat task — sends it.
+ * The task never touches the keyboard's hid_priv_t, so that struct can be
+ * freed normally when the device is unplugged. */
+
+static irq_spinlock_t hid_led_lock;
+static struct {
+    usb_device_t *dev;       /* keyboard owing an LED update, or NULL */
+    uint8_t       iface;
+    uint8_t       want;      /* full LED byte to send */
+    uint8_t       pending;
+} hid_led;
+
+/* HID boot-protocol LED output report: one byte, bit0 Num Lock, bit1 Caps
+ * Lock, bit2 Scroll Lock, report id 0. */
+static int hid_set_leds(usb_device_t *dev, uint8_t iface, uint8_t leds) {
+    usb_setup_pkt_t setup = {
+        .bmRequestType = USB_RT_HOST_TO_DEV | USB_RT_CLASS | USB_RT_INTERFACE,
+        .bRequest      = HID_REQ_SET_REPORT,
+        .wValue        = (HID_REPORT_OUTPUT << 8) | 0,
+        .wIndex        = iface,
+        .wLength       = 1
+    };
+    return dev->hc->control_transfer(dev->hc, dev, &setup, &leds, 1);
+}
+
+/* Hand a wanted LED byte to the task.  Called from the report handler, so it
+ * only takes the (non-sleeping) spinlock. */
+static void hid_led_request(hid_priv_t *priv, uint8_t want) {
+    irq_spinlock_acquire(&hid_led_lock);
+    hid_led.dev     = priv->dev;
+    hid_led.iface   = priv->iface_num;
+    hid_led.want    = want;
+    hid_led.pending = 1;
+    irq_spinlock_release(&hid_led_lock);
+}
+
+static void hid_led_task(void) {
+    while (1) {
+        usb_device_t *dev = NULL;
+        uint8_t iface = 0, want = 0;
+
+        irq_spinlock_acquire(&hid_led_lock);
+        if (hid_led.pending && hid_led.dev) {
+            dev   = hid_led.dev;
+            iface = hid_led.iface;
+            want  = hid_led.want;
+            hid_led.pending = 0;
+        }
+        irq_spinlock_release(&hid_led_lock);
+
+        /* A lost update (a send that fails, or a second toggle within the
+         * same 20 ms) is harmless: the next lock key re-sends the whole LED
+         * byte, which always reflects the current state. */
+        if (dev)
+            hid_set_leds(dev, iface, want);
+
+        sched_sleep_ticks(2);
+    }
+}
+
+void usb_hid_led_init(void) {
+    if (!create_task(hid_led_task)) {
+        pr_warn("usb-hid: LED task could not be created");
+        return;
+    }
+    pr_info("%s: keyboard indicator LEDs up\n", "usb-hid");
+}
+
 static void hid_post_sequence(hid_priv_t *priv, uint8_t kc, const char *seq) {
     char    last = 0;
     uint8_t len  = 0;
@@ -216,12 +291,27 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
     uint8_t ctrl  = (rep->modifier & (HID_MOD_LCTRL  | HID_MOD_RCTRL))  ? 1 : 0;
     uint8_t alt   = (rep->modifier & (HID_MOD_LALT   | HID_MOD_RALT))   ? 1 : 0;
 
+    /* Lock keys toggle on the press edge and drive the keyboard's indicator
+     * LEDs.  They are only reported, not acted on, so Num/Scroll Lock change
+     * nothing in the keymap (only Caps Lock does, further down). */
     for (int i = 0; i < 6; i++) {
-        if (rep->keycode[i] != HID_KEY_CAPSLOCK) continue;
+        uint8_t lk = rep->keycode[i];
+        if (lk != HID_KEY_CAPSLOCK && lk != HID_KEY_NUMLOCK
+            && lk != HID_KEY_SCROLLLOCK)
+            continue;
         int already = 0;
         for (int j = 0; j < 6; j++)
-            if (priv->prev_kbd.keycode[j] == HID_KEY_CAPSLOCK) { already = 1; break; }
-        if (!already) priv->caps_lock ^= 1;
+            if (priv->prev_kbd.keycode[j] == lk) { already = 1; break; }
+        if (already) continue;
+
+        if (lk == HID_KEY_CAPSLOCK)      priv->caps_lock   ^= 1;
+        else if (lk == HID_KEY_NUMLOCK)  priv->num_lock    ^= 1;
+        else                             priv->scroll_lock ^= 1;
+
+        hid_led_request(priv,
+              (priv->num_lock    ? HID_LED_NUM_LOCK    : 0)
+            | (priv->caps_lock   ? HID_LED_CAPS_LOCK   : 0)
+            | (priv->scroll_lock ? HID_LED_SCROLL_LOCK : 0));
     }
 
     for (int i = 0; i < 6; i++) {
@@ -460,6 +550,14 @@ static int hid_probe(usb_device_t *dev) {
         return -1;
     }
 
+    /* Keyboards have indicator LEDs; remember the device for the LED path and
+     * set the initial state (all off).  This runs in task context, so the
+     * SET_REPORT right here is fine. */
+    if (type == HID_TYPE_KEYBOARD) {
+        priv->dev = dev;
+        hid_set_leds(dev, priv->iface_num, 0);
+    }
+
     return 0;
 }
 
@@ -470,6 +568,17 @@ static void hid_remove(usb_device_t *dev) {
         priv->removed = 1;
         __sync_synchronize();
         hid_repeat_forget(priv);
+
+        /* Drop a pending LED update for this device before it is freed.  The
+         * task copies the device pointer out under this lock and sends
+         * outside it, so it never dereferences hid_priv_t. */
+        irq_spinlock_acquire(&hid_led_lock);
+        if (hid_led.dev == dev) {
+            hid_led.dev     = NULL;
+            hid_led.pending = 0;
+        }
+        irq_spinlock_release(&hid_led_lock);
+
         kfree(priv);
         dev->driver_priv = NULL;
     }
@@ -486,9 +595,11 @@ static usb_driver_t hid_driver = {
 };
 
 void usb_hid_init(void) {
-    /* The repeat lock must exist before the first keyboard report; the task
-     * that drains it is spawned from the boot sequence (usb_hid_repeat_init)
-     * because it needs the scheduler. */
+    /* The repeat and LED locks must exist before the first keyboard report;
+     * the tasks that use them are spawned from the boot sequence
+     * (usb_hid_repeat_init / usb_hid_led_init) because they need the
+     * scheduler. */
     irq_spinlock_init(&hid_repeat_lock);
+    irq_spinlock_init(&hid_led_lock);
     usb_driver_register(&hid_driver);
 }

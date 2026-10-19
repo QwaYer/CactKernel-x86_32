@@ -35,6 +35,7 @@
 #define XHCI_STS_EINT  (1u << 3)
 #define XHCI_STS_PCD   (1u << 4)
 #define XHCI_STS_CNR   (1u << 11)
+#define XHCI_STS_HCE   (1u << 12)   /* Host Controller Error (event-ring overrun, ...) */
 
 #define XHCI_PORTSC_CCS  (1u << 0)
 #define XHCI_PORTSC_PED  (1u << 1)

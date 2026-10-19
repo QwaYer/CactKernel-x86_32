@@ -15,6 +15,11 @@
 #define HID_PROTO_BOOT   0x00
 #define HID_PROTO_REPORT 0x01
 
+#define HID_REPORT_OUTPUT   0x02   /* Report Type in wValue for SET_REPORT */
+#define HID_LED_NUM_LOCK    0x01
+#define HID_LED_CAPS_LOCK   0x02
+#define HID_LED_SCROLL_LOCK 0x04
+
 typedef struct {
     uint8_t modifier;
     uint8_t reserved;
@@ -58,11 +63,20 @@ typedef struct {
     } report_buf;
     hid_kbd_report_t prev_kbd;
     uint8_t          caps_lock;
+    /* Lock state and back-pointer the indicator-LED path needs: the report
+     * handler toggles these and hands the wanted LED byte to hid_led_task()
+     * through a mailbox (the SET_REPORT it needs is a control transfer, which
+     * interrupt context may not issue). */
+    uint8_t          num_lock;
+    uint8_t          scroll_lock;
+    usb_device_t    *dev;
 } hid_priv_t;
 
 
 //Public api
 void usb_hid_init(void);
+void usb_hid_repeat_init(void);
+void usb_hid_led_init(void);
 
 extern volatile char usb_last_char;
 extern volatile int  usb_key_event;

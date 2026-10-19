@@ -135,12 +135,13 @@ static int xhci_wait_flag(xhci_priv_t *priv, volatile uint8_t *flag,
                 *err = 0;
             return e ? 1 : 0;
         }
-        /* A Host System Error halts the controller and no completion will ever
-         * arrive: report it instead of burning the whole timeout. */
+        /* A fatal controller error (HSE, or HCE — an event-ring overrun and
+         * the like) halts the controller and no completion will ever arrive:
+         * report it instead of burning the whole timeout. */
         if ((loops % 100u) == 0u) {
             uint32_t sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
-            if (sts & XHCI_STS_HSE) {
-                pr_err("xhci: Host System Error during command (USBSTS=0x%x)\n", sts);
+            if (sts & (XHCI_STS_HSE | XHCI_STS_HCE)) {
+                pr_err("xhci: fatal controller error during wait (USBSTS=0x%x)\n", sts);
                 break;
             }
         }
@@ -163,12 +164,26 @@ int xhci_wait_transfer(xhci_priv_t *priv, xhci_ring_t *ring, uint32_t timeout_ms
     return xhci_wait_flag(priv, &ring->done, &ring->err, timeout_ms, NULL);
 }
 
+/* Retire the one TRB this submission put on the command ring: the command ring
+ * carries exactly one command at a time (every caller waits for its completion
+ * before returning), so once the wait below finishes the controller has
+ * consumed it and the ring's dequeue must move with the enqueue.  It never
+ * moved before, so from the 62nd command on xhci_ring_enqueue() reported "ring
+ * full" for ever: no later Enable Slot / Address Device / Configure Endpoint
+ * could be queued, every device operation failed, and replugging could not
+ * revive it because the wedge was in driver-global state, not on a port. */
+static void xhci_cmd_retire(xhci_priv_t *priv) {
+    priv->cmd_ring.dequeue = priv->cmd_ring.enqueue;
+}
+
 int xhci_send_cmd(xhci_priv_t *priv, xhci_trb_t *trb) {
     priv->cmd_error  = 0;
     priv->cmd_result = 0;
     priv->cmd_done   = 0;
     if (xhci_ring_enqueue(&priv->cmd_ring, trb) < 0) {
-        pr_warn("xhci: command ring full\n");
+        pr_warn("xhci: command ring full (enqueue=%u dequeue=%u)\n",
+                (unsigned)priv->cmd_ring.enqueue,
+                (unsigned)priv->cmd_ring.dequeue);
         return -1;
     }
     xhci_db_write32(priv, 0, 0);
@@ -184,8 +199,11 @@ int xhci_send_cmd(xhci_priv_t *priv, xhci_trb_t *trb) {
         xhci_op_write32(priv, XHCI_OP_CRCR, priv->cmd_ring_phys | 0x1 | (1u << 2));
         xhci_op_write32(priv, XHCI_OP_CRCR + 4, 0);
         xhci_wait_flag(priv, &priv->cmd_done, &priv->cmd_error, 500, NULL);
+        /* Aborting consumes the TRB too, so retire it either way. */
+        xhci_cmd_retire(priv);
         return -1;
     }
+    xhci_cmd_retire(priv);
     return rc == 0 ? 0 : -1;
 }
 
@@ -282,6 +300,21 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
     }
 }
 
+/* Put a fatally-errored controller back into reset.  Only the reset happens
+ * here — re-programming the registers and re-enumerating sleep and issue
+ * commands, which an interrupt handler may not, so the hotplug task does that
+ * once it sees reset_pending. */
+static void xhci_fatal_reset(xhci_priv_t *priv, const char *what) {
+    pr_err("xhci: %s! resetting controller\n", what);
+    xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
+    for (int i = 0; i < 100; i++) {
+        if (!(xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)) break;
+        xhci_udelay(1000);
+    }
+    xhci_op_write32(priv, XHCI_OP_USBSTS, xhci_op_read32(priv, XHCI_OP_USBSTS));
+    priv->reset_pending = 1;
+}
+
 void xhci_handle_irq(usb_hc_t *hc) {
     xhci_priv_t *priv = (xhci_priv_t *)hc->priv;
 
@@ -296,20 +329,21 @@ void xhci_handle_irq(usb_hc_t *hc) {
             pr_warn("xhci: spurious host error ignored (Intel quirk)");
         } else {
             /* A real HSE puts the xHC into a fatal state: clearing the bit is
-             * not enough, further register access just hangs the bus.  Reset
-             * it here and hand the re-programming/re-enumeration to the
-             * hotplug task — that path sleeps and issues commands, which an
-             * interrupt handler may not. */
-            pr_err("xhci: Host System Error! resetting controller\n");
-            xhci_op_write32(priv, XHCI_OP_USBCMD, XHCI_CMD_HCRST);
-            for (int i = 0; i < 100; i++) {
-                if (!(xhci_op_read32(priv, XHCI_OP_USBCMD) & XHCI_CMD_HCRST)) break;
-                xhci_udelay(1000);
-            }
-            xhci_op_write32(priv, XHCI_OP_USBSTS, xhci_op_read32(priv, XHCI_OP_USBSTS));
-            priv->reset_pending = 1;
+             * not enough, further register access just hangs the bus. */
+            xhci_fatal_reset(priv, "Host System Error");
             return;
         }
+    }
+
+    /* A Host Controller Error — most often an event-ring overrun — stops the
+     * controller just as hard as an HSE (it halts and posts no further
+     * events).  Unlike the Intel HSE case it is never spurious, so always
+     * reset; left unhandled the driver keeps looking alive while no device
+     * ever works again and replugging cannot revive it. */
+    if (sts & XHCI_STS_HCE) {
+        xhci_op_write32(priv, XHCI_OP_USBSTS, XHCI_STS_HCE);
+        xhci_fatal_reset(priv, "Host Controller Error");
+        return;
     }
 
     /* A port change latches PCD regardless of whether the controller posted a

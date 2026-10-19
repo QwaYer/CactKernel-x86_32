@@ -434,6 +434,12 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     extern void usb_hid_repeat_init(void);
     usb_hid_repeat_init();
 
+    // Keyboard indicator LEDs (Num/Caps/Scroll).  The SET_REPORT that programs
+    // them is a control transfer, which the report handler (interrupt context)
+    // may not issue; this task sends it.  Spawned here for the same reason.
+    extern void usb_hid_led_init(void);
+    usb_hid_led_init();
+
     // Console VT switch (Alt+F<n>).  The keystroke is handled in interrupt
     // context, where a VT cannot be allocated; this task performs the switch
     // (and any device-node registration it needs) in process context.  Spawned
