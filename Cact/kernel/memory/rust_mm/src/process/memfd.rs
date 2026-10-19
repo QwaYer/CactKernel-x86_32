@@ -12,11 +12,23 @@
 //! Frame refcounts additionally track per-PTE mappings for fork/unmap.
 
 use crate::ffi::*;
+use crate::alloc::heap::{kfree, kmalloc};
 use crate::pmm::{kalloc, free_page};
 use crate::safe::{KStatic, lock_acquire, lock_release, zero_page, kprint_str};
 
 pub const MEMFD_MAX: usize = 128;
-pub const MEMFD_MAX_PAGES: u32 = 1024;
+/// Initial slot count of an object's frame-pointer array (4 MiB worth); the
+/// array is a `kmalloc` block grown in `MEMFD_PAGES_GROW` steps, so an object is
+/// no longer capped at 4 MiB.  A fixed `MEMFD_MAX_PAGES = 1024` array (or cap)
+/// is what kept a 502 MiB tmpfs file — the localrepo firmware archive — from
+/// ever being written.
+pub const MEMFD_PAGES_INITIAL: u32 = 1024;
+/// Slots added per growth step (64 MiB worth).
+pub const MEMFD_PAGES_GROW: u32 = 16 * 1024;
+/// Ceiling on one object's frame count: the frames the PMM can actually hand out
+/// between the boot reservation and `USER_FRAME_CEIL`.  `grow_locked` also rolls
+/// back when `kalloc` runs out, so free RAM is the real limit.
+pub const MEMFD_PAGES_MAX: u32 = USER_FRAME_CEIL / PAGE_SIZE;
 pub const MEMFD_NAME_MAX: usize = 128;
 
 pub const MFD_CLOEXEC: i32 = 0x0001;
@@ -28,7 +40,11 @@ struct MemFd {
     name_len: u32,
     size: u32,
     num_pages: u32,
-    pages: [*mut u8; MEMFD_MAX_PAGES as usize],
+    /// Slots `pages` can hold (0 while `pages` is null).
+    pages_cap: u32,
+    /// `kmalloc` block of `pages_cap` frame pointers, grown on demand; released
+    /// by `maybe_free_locked` when the object is destroyed.
+    pages: *mut *mut u8,
     flags: u32,
     fds: i32,
     maps: i32,
@@ -40,7 +56,8 @@ const MEMFD_EMPTY: MemFd = MemFd {
     name_len: 0,
     size: 0,
     num_pages: 0,
-    pages: [core::ptr::null_mut(); MEMFD_MAX_PAGES as usize],
+    pages_cap: 0,
+    pages: core::ptr::null_mut(),
     flags: 0,
     fds: 0,
     maps: 0,
@@ -76,12 +93,49 @@ fn ceil_pages(bytes: u32) -> u32 {
     bytes.div_ceil(PAGE_SIZE)
 }
 
+/// Make sure `s` can index `need_pages` slots, growing the `kmalloc` block in
+/// place (copying the live entries, freeing the old block).  Caller holds
+/// `MEMFD_LOCK`.
+fn ensure_capacity_locked(s: &mut MemFd, need_pages: u32) -> bool {
+    if need_pages <= s.pages_cap {
+        return true;
+    }
+    if need_pages > MEMFD_PAGES_MAX {
+        return false;
+    }
+    let mut cap = if s.pages_cap == 0 { MEMFD_PAGES_INITIAL } else { s.pages_cap };
+    while cap < need_pages {
+        // `need_pages <= MEMFD_PAGES_MAX` (checked above), so the clamp cannot
+        // leave `cap` short of `need_pages` and the loop terminates.
+        cap = core::cmp::min(cap.saturating_add(MEMFD_PAGES_GROW), MEMFD_PAGES_MAX);
+    }
+    let bytes = cap * core::mem::size_of::<*mut u8>() as u32;
+    let new_arr = kmalloc(bytes) as *mut *mut u8;
+    if new_arr.is_null() {
+        return false;
+    }
+    // SAFETY: `new_arr` is a fresh `kmalloc` block of `cap` slots (checked
+    // non-null); zeroing all `cap` slots is in bounds, copying the
+    // `num_pages <= pages_cap` live entries out of the old array is in bounds
+    // for both, and the old block is freed exactly once and replaced.
+    unsafe {
+        core::ptr::write_bytes(new_arr, 0, cap as usize);
+        if !s.pages.is_null() {
+            core::ptr::copy_nonoverlapping(s.pages, new_arr, s.num_pages as usize);
+            kfree(s.pages as *mut u8);
+        }
+    }
+    s.pages = new_arr;
+    s.pages_cap = cap;
+    true
+}
+
 /// Grow the object so it covers `need_pages` frames.  Caller holds MEMFD_LOCK.
 fn grow_locked(s: &mut MemFd, need_pages: u32) -> bool {
     if need_pages <= s.num_pages {
         return true;
     }
-    if need_pages > MEMFD_MAX_PAGES {
+    if !ensure_capacity_locked(s, need_pages) {
         return false;
     }
     let start = s.num_pages;
@@ -90,14 +144,16 @@ fn grow_locked(s: &mut MemFd, need_pages: u32) -> bool {
         if p.is_null() {
             // Roll back the frames allocated in this call.
             for j in start..i {
-                // SAFETY: the frame is live and PMM-managed; this call releases exactly one reference to it.
-                unsafe { free_page(s.pages[j as usize]) };
-                s.pages[j as usize] = core::ptr::null_mut();
+                // SAFETY: slot `j < num_pages <= pages_cap` still holds a live
+                // frame allocated above; one reference is released per slot.
+                unsafe { free_page(*s.pages.add(j as usize)) };
+                unsafe { *s.pages.add(j as usize) = core::ptr::null_mut() };
             }
             return false;
         }
         zero_page(p);
-        s.pages[i as usize] = p;
+        // SAFETY: `i < need_pages <= pages_cap`, so the slot exists.
+        unsafe { *s.pages.add(i as usize) = p };
     }
     s.num_pages = need_pages;
     true
@@ -112,12 +168,22 @@ fn maybe_free_locked(slot: usize) {
         return;
     }
     for i in 0..s.num_pages as usize {
-        if !s.pages[i].is_null() {
+        // SAFETY: `i < num_pages <= pages_cap` and `pages` is this object's live
+        // array, so the slot load is in bounds.
+        let p = unsafe { *s.pages.add(i) };
+        if !p.is_null() {
             // SAFETY: the frame is live and PMM-managed; this call releases exactly one reference to it.
-            unsafe { free_page(s.pages[i]) };
-            s.pages[i] = core::ptr::null_mut();
+            unsafe { free_page(p) };
         }
     }
+    // SAFETY: `s.pages` is this object's own `kmalloc` block (or null) and this
+    // is the single release for it; the slot becomes reusable only after the
+    // reset below.
+    if !s.pages.is_null() {
+        unsafe { kfree(s.pages as *mut u8) };
+        s.pages = core::ptr::null_mut();
+    }
+    s.pages_cap = 0;
     s.num_pages = 0;
     s.size = 0;
     s.name_len = 0;
@@ -158,6 +224,10 @@ pub unsafe extern "C" fn memfd_create(name: *const u8, name_len: u32, flags: i32
     s.name_len = len as u32;
     s.size = 0;
     s.num_pages = 0;
+    // A reusable slot has already released its frame array in
+    // `maybe_free_locked` (the only path that clears `valid`), so the block is
+    // allocated lazily by the first `grow_locked`.
+    s.pages_cap = 0;
     s.flags = flags as u32;
     s.fds = 0;
     s.maps = 0;
@@ -290,7 +360,8 @@ pub extern "C" fn memfd_get_page(handle: i32, idx: u32) -> *mut u8 {
         // `page_ref_inc` for the caller.
         let s = &(unsafe { KStatic::get_mut(MEMFD_TABLE.as_ptr()) })[(handle - 1) as usize];
         if idx < s.num_pages {
-            s.pages[idx as usize]
+            // SAFETY: `idx < num_pages <= pages_cap`, so the slot is in bounds.
+            unsafe { *s.pages.add(idx as usize) }
         } else {
             core::ptr::null_mut()
         }
@@ -342,7 +413,10 @@ pub unsafe extern "C" fn memfd_read(handle: i32, off: u32, buf: *mut u8, size: u
         let page_idx = pos / PAGE_SIZE;
         let in_page = pos % PAGE_SIZE;
         let chunk = core::cmp::min(n - copied, PAGE_SIZE - in_page);
-        let page = s.pages[page_idx as usize];
+        // SAFETY: `page_idx < num_pages` (the caller is bounded by `size`, which
+        // never exceeds `num_pages` frames) and `num_pages <= pages_cap`, so the
+        // slot load is in bounds.
+        let page = unsafe { *s.pages.add(page_idx as usize) };
         // SAFETY: `in_page < PAGE_SIZE` and `page` is a live frame, so this is a
         // valid pointer to `chunk <= PAGE_SIZE - in_page` readable bytes.
         let src = unsafe { page.add(in_page as usize) };
@@ -378,7 +452,7 @@ pub unsafe extern "C" fn memfd_write(handle: i32, off: u32, buf: *const u8, size
         return -1;
     }
     let end = off.saturating_add(size);
-    if end < off || end > MEMFD_MAX_PAGES * PAGE_SIZE {
+    if end < off || ceil_pages(end) > MEMFD_PAGES_MAX {
         lock_release(MEMFD_LOCK.as_ptr());
         return -1;
     }
@@ -399,7 +473,10 @@ pub unsafe extern "C" fn memfd_write(handle: i32, off: u32, buf: *const u8, size
         let page_idx = pos / PAGE_SIZE;
         let in_page = pos % PAGE_SIZE;
         let chunk = core::cmp::min(size - written, PAGE_SIZE - in_page);
-        let page = s.pages[page_idx as usize];
+        // SAFETY: `page_idx < num_pages` (the `grow_locked` above covers `end`,
+        // and `end <= num_pages * PAGE_SIZE`) and `num_pages <= pages_cap`, so
+        // the slot load is in bounds.
+        let page = unsafe { *s.pages.add(page_idx as usize) };
         // SAFETY: `written < size` and `buf` is a valid C buffer of at least `size`
         // bytes, so this is a valid pointer to `chunk` readable bytes.
         let src = unsafe { buf.add(written as usize) };
@@ -418,7 +495,7 @@ pub unsafe extern "C" fn memfd_write(handle: i32, off: u32, buf: *const u8, size
 
 #[unsafe(no_mangle)]
 pub extern "C" fn memfd_truncate(handle: i32, new_size: u32) -> i32 {
-    if new_size > MEMFD_MAX_PAGES * PAGE_SIZE {
+    if ceil_pages(new_size) > MEMFD_PAGES_MAX {
         return -1;
     }
     memfd_ensure_init();

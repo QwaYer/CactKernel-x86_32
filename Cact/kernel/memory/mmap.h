@@ -17,7 +17,14 @@
 
 #define MAP_FAILED      ((void*)-1)
 
-#define MMAP_BASE       0x40000000u
+/* mmap window.  It must stay ABOVE the highest physical address the PMM hands
+ * out (`USER_FRAME_CEIL` in rust_mm/ffi.rs, == MMAP_BASE here): the kernel
+ * dereferences kalloc'd frames through their identity VA, so a user mapping
+ * below that ceiling would shadow the kernel's own frame in the process PD and
+ * the kernel would fault on (or silently corrupt) its own memory.  It starts at
+ * 0x80000000 and runs to MMAP_LIMIT; the SHM window and the user stack live in
+ * the upper part of that range. */
+#define MMAP_BASE       0x80000000u
 #define MMAP_LIMIT      0xBF000000u
 
 #define MMAP_MAX_REGIONS  256

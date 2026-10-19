@@ -52,6 +52,50 @@ pub extern "C" fn cact_mmio_window_base() -> u32 {
 /// machine's usable RAM (see `pmm_total_frames`).
 static TOTAL_USABLE_FRAMES: KStatic<u32> = KStatic::new(0);
 
+/// End of the physical range the PMM never hands out, and base of the kernel
+/// heap window that follows it.  Starts at the compile-time low reservation
+/// (`RESERVED_END`) and is raised by `pmm_reserve_boot_images()` past the
+/// Multiboot2 module images: GRUB loads them into ordinary available RAM right
+/// after the kernel, and they are handed to userspace *in place* (the localrepo
+/// archive via /dev/localrepo), so both `kalloc` and `kmalloc` must stay off
+/// that RAM.  Written once during single-threaded boot, read-only afterwards.
+static BOOT_RESERVED_END: KStatic<u32> = KStatic::new(RESERVED_END);
+
+pub(crate) fn reserved_end() -> u32 {
+    // SAFETY: written once in `pmm_reserve_boot_images` before the scheduler
+    // starts, plain read afterwards.
+    unsafe { *KStatic::get_mut(BOOT_RESERVED_END.as_ptr()) }
+}
+
+/// Base of the kernel heap window: right after the boot reservation.
+pub(crate) fn heap_start() -> u32 {
+    reserved_end()
+}
+
+/// End of the kernel heap window (exclusive), clipped to the PCI hole.
+pub(crate) fn heap_end() -> u32 {
+    heap_start().saturating_add(HEAP_SIZE).min(PCI_HOLE_START)
+}
+
+/// C entry point: reserve the RAM the bootloader loaded its module images into.
+///
+/// `end` is the highest module end address from the Multiboot2 tags; 0 when the
+/// medium carried no modules.  Must be called before `init_memory_manager`, and
+/// returns the boundary now in use (the low reservation raised past `end`).
+#[unsafe(no_mangle)]
+pub extern "C" fn pmm_reserve_boot_images(end: u32) -> u32 {
+    const ALIGN: u32 = 2 * 1024 * 1024;
+    let aligned = match end.checked_add(ALIGN - 1) {
+        Some(v) => v & !(ALIGN - 1),
+        None => RESERVED_END,
+    };
+    let value = if aligned > RESERVED_END { aligned } else { RESERVED_END };
+    // SAFETY: written once, single-threaded, before `init_memory_manager` reads
+    // it and long before any `kalloc`/`kmalloc` caller can run.
+    *unsafe { KStatic::get_mut(BOOT_RESERVED_END.as_ptr()) } = value;
+    value
+}
+
 pub(crate) static PAGE_LOCK: KStatic<IrqSpinlock> =
     KStatic::new(IrqSpinlock { spin_locked: 0, saved_flags: 0 });
 
@@ -105,15 +149,28 @@ pub unsafe extern "C" fn pmm_init_from_mmap(mmap: *const Mb2MmapTable) {
     // scheduler starts; the kernel is still single-threaded.
     let dst = unsafe { KStatic::get_mut(MMAP_TABLE.as_ptr()) };
     dst.count = count as u32;
+    let mut clipped_beyond_ceiling = false;
     for i in 0..count {
         let mut e = src.entries[i];
-        if let Some((base, end)) = pmm_math::clip_to_limit(e.base, e.len, PMM_MAX_ADDR) {
+        // Clip to `USER_FRAME_CEIL` as well as to the end of the address space:
+        // RAM at or above the first user VA window is not kernel-addressable, so
+        // installing it would hand out frames the kernel cannot dereference.
+        if let Some((base, end)) = pmm_math::clip_to_limit(e.base, e.len, USER_FRAME_CEIL as u64) {
+            if end < e.base.saturating_add(e.len).min(PMM_MAX_ADDR) {
+                clipped_beyond_ceiling = true;
+            }
             e.base = base;
             e.len = end - base;
         } else {
+            if e.ty == MB2_MMAP_TYPE_AVAILABLE && e.len > 0 && e.base >= USER_FRAME_CEIL as u64 {
+                clipped_beyond_ceiling = true;
+            }
             e.len = 0;
         }
         dst.entries[i] = e;
+    }
+    if clipped_beyond_ceiling {
+        kprint_str(c"[PMM] RAM above USER_FRAME_CEIL (0x80000000) is not kernel-addressable and is left unmanaged\n".as_ptr() as *const u8);
     }
 }
 
@@ -165,7 +222,7 @@ pub extern "C" fn init_memory_manager() {
         }
     } else {
         klog_msg(LOG_WARN, c"pmm has no mmap; assuming RAM above reserved area".as_ptr() as *const u8);
-        let first_free = addr_to_page(RESERVED_END);
+        let first_free = addr_to_page(reserved_end());
         let fallback_end = addr_to_page(PCI_HOLE_START);
         for pg in first_free..fallback_end {
             bitmap_clear(pg);
@@ -175,7 +232,9 @@ pub extern "C" fn init_memory_manager() {
 
     // Publish the RAM/MMIO boundary and the fixed-window VA base.  Keep the
     // conservative default when the map yielded no RAM above the reservation.
-    let ram_end = pmm_math::ram_end_from_candidate(ram_end_candidate, RESERVED_END, PMM_MAX_ADDR)
+    // The ceiling is `USER_FRAME_CEIL`: nothing at or above the first user VA
+    // window is kernel-addressable (see the constant's own comment).
+    let ram_end = pmm_math::ram_end_from_candidate(ram_end_candidate, reserved_end(), USER_FRAME_CEIL as u64)
         .unwrap_or(PCI_HOLE_START);
     // The ACPI/PCIe windows must sit at or above the RAM top, otherwise their
     // remapping would shadow a managed frame under the identity map.  Align to
@@ -190,28 +249,23 @@ pub extern "C" fn init_memory_manager() {
     // any `kalloc`/`free_page` caller can run.
     *unsafe { KStatic::get_mut(TOTAL_USABLE_FRAMES.as_ptr()) } = usable_frames;
 
-    let reserved_pages = addr_to_page(RESERVED_END); // = 32 MB / 4096 = 8192
+    let reserved_pages = addr_to_page(reserved_end());
     for pg in 0..reserved_pages {
         bitmap_set(pg);
     }
 
     // Keep the dedicated heap window out of PMM allocations even when
-    // RESERVED_END == HEAP_START (C/Rust layout sync for 4 GB mode).
-    let heap_start_page = addr_to_page(HEAP_START);
-    let heap_end_addr = HEAP_START.saturating_add(HEAP_SIZE).min(PCI_HOLE_START);
-    let heap_end_page = addr_to_page(heap_end_addr);
+    // the reservation covers everything below it (C/Rust layout sync).
+    let heap_start_page = addr_to_page(heap_start());
+    let heap_end_page = addr_to_page(heap_end());
     if heap_start_page < heap_end_page {
         for pg in heap_start_page..heap_end_page {
             bitmap_set(pg);
         }
     }
 
-    // Initialise the first-fit search hint.
-    let initial_hint = if reserved_pages > heap_start_page {
-        reserved_pages
-    } else {
-        heap_end_page
-    };
+    // Initialise the first-fit search hint: first frame past the heap window.
+    let initial_hint = heap_end_page;
     // SAFETY: `FIRST_AVAILABLE_PAGE` is the first-fit hint; initialising it during
     // single-threaded boot cannot race `kalloc`/`free_page`.
     *unsafe { KStatic::get_mut(FIRST_AVAILABLE_PAGE.as_ptr()) } = initial_hint;
@@ -288,13 +342,12 @@ pub unsafe extern "C" fn free_page(ptr: *mut u8) {
     let page_idx = addr_to_page(addr);
     if page_idx >= TOTAL_PAGES { return; }
 
-    // Never allow freeing the hard-reserved low 32 MB (below the heap window).
-    if addr < RESERVED_END { return; }
+    // Never allow freeing the reserved boot range (below the heap window).
+    if addr < reserved_end() { return; }
 
-    // RESERVED_END == HEAP_START: pages in the dedicated kernel heap *window*
-    // must never be returned to the PMM — they are not tracked like kalloc pages.
-    let heap_end_addr = HEAP_START.saturating_add(HEAP_SIZE).min(PCI_HOLE_START);
-    if addr >= HEAP_START && addr < heap_end_addr {
+    // The heap window starts at the reservation end and is not tracked like
+    // kalloc pages, so its pages must never be returned to the PMM.
+    if addr >= heap_start() && addr < heap_end() {
         return;
     }
 
@@ -323,7 +376,7 @@ pub unsafe extern "C" fn free_page(ptr: *mut u8) {
 
 pub fn page_ref_inc(phys: *const u8) {
     let addr = phys as u32;
-    if addr < RESERVED_END { return; }
+    if addr < reserved_end() { return; }
     let idx = addr_to_page(addr);
     if idx >= TOTAL_PAGES { return; }
 
@@ -343,7 +396,7 @@ pub fn page_ref_inc(phys: *const u8) {
 /// here provides a sequentially-consistent view of the refcount.
 pub fn page_ref_get(phys: *const u8) -> u16 {
     let addr = phys as u32;
-    if addr < RESERVED_END { return 0; }
+    if addr < reserved_end() { return 0; }
     let idx = addr_to_page(addr);
     if idx >= TOTAL_PAGES { return 0; }
     lock_acquire(PAGE_LOCK.as_ptr());
@@ -362,7 +415,7 @@ pub fn page_ref_get(phys: *const u8) -> u16 {
 /// the COW sole-owner fast path in `vmm_handle_cow`).
 pub(crate) fn page_ref_get_locked(phys: *const u8) -> u16 {
     let addr = phys as u32;
-    if addr < RESERVED_END { return 0; }
+    if addr < reserved_end() { return 0; }
     let idx = addr_to_page(addr);
     if idx >= TOTAL_PAGES { return 0; }
     // SAFETY: `PAGE_REFCOUNTS[idx]` read without taking `PAGE_LOCK`; that is this

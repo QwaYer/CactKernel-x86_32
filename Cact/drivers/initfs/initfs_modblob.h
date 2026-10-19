@@ -4,8 +4,12 @@
 #include <stdint.h>
 
 /* Maximum supported size of the cctkfs image staged in .bss.
- * Packed userland (bin/sbin/lib + drivers) can exceed 256 KiB. */
-#define INITFS_MODBLOB_MAX_IMAGE  (4096u * 4096u)
+ * Packed userland (bin/sbin/lib + drivers + the cactpkg repository + the
+ * installer media) is over 12 MiB.  This buffer dominates the kernel image's
+ * bss, so raising it moves the image end up with it: keep the result below the
+ * PMM reservation floor (HEAP_START/RESERVED_END in memory.h and ffi.rs), or
+ * the tail of the image lands inside the heap window. */
+#define INITFS_MODBLOB_MAX_IMAGE  (4096u * 6144u)   /* 24 MiB */
 
 /* Initialise the in-memory module table from a cctkfs image previously
  * loaded by GRUB as a multiboot2 module.  Must be called BEFORE the

@@ -69,19 +69,27 @@ pub const BITMAP_SIZE: u32 = TOTAL_PAGES / 8; /* 131 072 bytes = 128 KB */
 /// Exclusive upper bound of the 4 GiB physical address space, as u64.
 pub const PMM_MAX_ADDR: u64 = (TOTAL_PAGES as u64) * (PAGE_SIZE as u64);
 
-/// Heap starts right after the hard-reserved 32 MB low-memory region.
-pub const HEAP_START: u32 = 32 * 1024 * 1024; /* 0x0200_0000 */
+/// Heap starts right after the hard-reserved low-memory region.
+pub const HEAP_START: u32 = 0x2000_0000;
 pub const HEAP_SIZE: u32 = 16 * 1024 * 1024;  /* 16 MB heap window */
 pub const HEAP_MAGIC: u32 = 0xDEAD_BEEF;
 
 /// Hard reservation: every physical page below RESERVED_END is permanently
 /// marked "used" in the PMM bitmap so it is never handed out via kalloc().
 ///
-/// 0 … 32 MB covers:
+/// 0 … 512 MB covers:
 ///   BIOS / IVT / ROM        0x0000_0000 – 0x000F_FFFF
-///   Kernel text/data/BSS    0x0010_0000 – (kernel_end)
+///   Kernel text/data/BSS    0x0010_0000 – (kernel_end, 24 MB cctkfs stage)
 ///   Static page-tables BSS  up to 0x00BF_FFFF
-pub const RESERVED_END: u32 = 32 * 1024 * 1024; /* 0x0200_0000 */
+///   Low user VA region      `USER_HEAP_START` (0x0800_0000) … ELF image +
+///                           `brk` heap.  Those VAs must never coincide with a
+///                           handed-out frame, or a process's own heap would
+///                           shadow the kernel's identity view of that frame —
+///                           see `USER_FRAME_CEIL`.  The floor therefore stays
+///                           above the reachable brk end, not just above the
+///                           image.  (Boot modules raise the live value past
+///                           this anyway — see `pmm_reserve_boot_images`.)
+pub const RESERVED_END: u32 = 0x2000_0000;
 
 /// Maximum number of MMAP entries copied from the MB2 boot info.
 pub const MB2_MMAP_MAX_ENTRIES: usize = 128;
@@ -120,7 +128,10 @@ pub const USER_STACK_LIMIT: u32 = 0xBF000000;
 /// Lowest user virtual address: below this is the low identity-mapped kernel
 /// area.  Mirrors `USER_SPACE_START` in `core/syscall/validate.h`.
 pub const USER_SPACE_START: u32 = 0x08000000;
-pub const USER_HEAP_START: u32 = 0x40000000;
+/// Low user region: the ELF image plus the `brk` heap (`USER_BRK_MAX_GROWTH`
+/// caps how far it can reach).  Its addresses are inside the low reservation
+/// (`RESERVED_END`), so nothing here can shadow a kernel frame.
+pub const USER_HEAP_START: u32 = 0x08000000;
 pub const USER_HEAP_LIMIT: u32 = 0x80000000;
 
 pub const PROT_NONE: i32 = 0x0;
@@ -132,8 +143,31 @@ pub const MAP_PRIVATE: i32 = 0x02;
 pub const MAP_FIXED: i32 = 0x10;
 pub const MAP_ANON: i32 = 0x20;
 pub const MAP_FAILED: u32 = 0xFFFFFFFF;
-pub const MMAP_BASE: u32 = 0x40000000;
+pub const MMAP_BASE: u32 = 0x80000000;
+/// Highest physical address the PMM may hand out.
+///
+/// The kernel reaches a kalloc'd frame through its **identity VA**, and a
+/// process PD inherits the kernel identity map only as *shared* page tables: as
+/// soon as the process claims a PDE inside a user window (its mmap/SHM region
+/// or its stack), the identity mapping for that 4 MiB window is replaced in
+/// that PD.  A frame whose address falls in such a window is therefore
+/// unaddressable — or silently aliased onto user data — while the process is
+/// current.  So every user VA window lives at or above this ceiling
+/// (`MMAP_BASE` = 0x80000000, `SHM_VA_BASE`, `USER_STACK_LIMIT`) and the PMM
+/// installs no RAM at or above it.  On a board with usable RAM above 2 GiB
+/// (e.g. `-M pc`, whose PCI hole starts at 3.5 GiB) that RAM is simply left
+/// unmanaged.
+pub const USER_FRAME_CEIL: u32 = 0x80000000;
 pub const MMAP_LIMIT: u32 = 0xBF000000;
+
+/// True when a user mapping at `[va, va+len)` cannot shadow a kernel frame: it
+/// lies inside the low PMM reservation (the ELF image / brk heap region, which
+/// is never handed out) or at/above `USER_FRAME_CEIL` (where no RAM is
+/// installed).  Anything in between would replace the kernel's identity view of
+/// a live frame in the process PD.
+pub const fn user_va_is_safe(va: u32, len: u32) -> bool {
+    va >= USER_FRAME_CEIL || va.saturating_add(len) <= RESERVED_END
+}
 pub const MMAP_MAX_REGIONS: usize = 256;
 // The shared array size must stay in step with this crate's constant.
 const _: () = assert!(MMAP_MAX_REGIONS == cact_sync::kernel_types::MMAP_MAX_REGIONS);

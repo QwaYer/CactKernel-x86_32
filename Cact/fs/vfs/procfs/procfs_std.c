@@ -304,7 +304,7 @@ int _meminfo_read(uint32_t off, uint32_t size, char *buf) {
     char tmp[768]; int p = 0;
 
     const uint32_t frame_kb    = PAGE_SIZE / 1024u;      /* 4 KiB per frame      */
-    const uint32_t reserved_kb = RESERVED_END / 1024u;   /* 32 MB kernel reserve */
+    const uint32_t reserved_kb = RESERVED_END / 1024u;   /* low-memory reserve */
 
     uint32_t pmm_total_kb = pmm_total_frames() * frame_kb;
     uint32_t pmm_free_kb  = pmm_free_frames()  * frame_kb;

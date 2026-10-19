@@ -12,6 +12,13 @@
 // Module info captured from MB2_TAG_MODULE; written by multiboot2_parse(),
 // consumed by init() to stage the cctkfs image into kernel .bss.
 mb2_module_info_t mb2_cctkfs_module;
+mb2_module_info_t mb2_localrepo_module;
+
+// Highest end address over all MB2 module tags: the RAM the bootloader loaded
+// images into.  It is ordinary "available" RAM as far as the memory map says,
+// so the PMM has to reserve it explicitly — init() passes this to
+// pmm_reserve_boot_images() before the memory managers come up.
+uint32_t mb2_modules_end;
 
 static int starts_with(const char* s, const char* prefix) {
     while (*prefix) {
@@ -64,6 +71,10 @@ void multiboot2_parse(uint32_t mb2_info_addr,
     mb2_cctkfs_module.mod_start = 0;
     mb2_cctkfs_module.mod_size  = 0;
     mb2_cctkfs_module.name[0]   = '\0';
+    mb2_localrepo_module.mod_start = 0;
+    mb2_localrepo_module.mod_size  = 0;
+    mb2_localrepo_module.name[0]   = '\0';
+    mb2_modules_end = 0;
 
     // Zero output structures
     out->flags             = 0;
@@ -184,13 +195,34 @@ void multiboot2_parse(uint32_t mb2_info_addr,
                 (struct mb2_tag_module*)(uintptr_t)cursor;
             if (t->mod_end <= t->mod_start) break;
 
-            // Only record the first cctkfs module; any later modules ignored.
+            // Highest module end over the whole tag list: see mb2_modules_end.
+            if (t->mod_end > mb2_modules_end) mb2_modules_end = t->mod_end;
+
+            // Where the bootloader put it.  cctkfs and localrepo are both
+            // served *in place* (RAM is identity-mapped), so this physical
+            // range is the only address the module ever has; it lies inside the
+            // boot reservation the PMM logs right after this parse.
+            pr_info("%s: module %s at phys 0x%x-0x%x (%u B, %u KiB)\n",
+                    "multiboot2", t->string,
+                    (unsigned)t->mod_start, (unsigned)t->mod_end,
+                    (unsigned)(t->mod_end - t->mod_start),
+                    (unsigned)((t->mod_end - t->mod_start) / 1024));
+
+            // Only record the first module of each kind; any later ones ignored.
             if (mb2_cctkfs_module.mod_start == 0 &&
                 starts_with(t->string, "cctkfs"))
             {
                 mb2_cctkfs_module.mod_start = t->mod_start;
                 mb2_cctkfs_module.mod_size  = t->mod_end - t->mod_start;
                 copy_module_name(mb2_cctkfs_module.name, t->string,
+                                 MB2_MODULE_NAME_MAX);
+            }
+            if (mb2_localrepo_module.mod_start == 0 &&
+                starts_with(t->string, "localrepo"))
+            {
+                mb2_localrepo_module.mod_start = t->mod_start;
+                mb2_localrepo_module.mod_size  = t->mod_end - t->mod_start;
+                copy_module_name(mb2_localrepo_module.name, t->string,
                                  MB2_MODULE_NAME_MAX);
             }
             break;

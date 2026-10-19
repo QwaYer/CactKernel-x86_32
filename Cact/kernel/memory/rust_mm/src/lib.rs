@@ -30,6 +30,7 @@ mod ffi;
 // reachable as ordinary Rust items, so `sched`/`rust_drm`/`rust_net` call them
 // with `use cact_mm::…` instead of re-declaring `extern "C"` themselves.
 pub use crate::alloc::heap::{kfree, kmalloc, kmalloc_aligned};
+pub use crate::ffi::USER_FRAME_CEIL;
 pub use crate::pmm::{free_page, kalloc};
 pub use crate::process::proc_mm::{proc_free_pages, proc_tracker_add};
 pub use crate::process::shm::shm_detach_all;

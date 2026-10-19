@@ -1,8 +1,11 @@
-//! Intrusive free-list heap in the fixed `[HEAP_START, HEAP_START+HEAP_SIZE)` window.
+//! Intrusive free-list heap in the `[HEAP_START, HEAP_START+HEAP_SIZE)` window,
+//! which starts where the PMM's boot reservation ends (see
+//! `pmm::heap_start()` — the reservation covers the bootloader's module images).
 //!
 //! `kmalloc` / `kfree` are IRQ-spinlocked and back much of the kernel and Rust MM code.
 
 use crate::ffi::*;
+use crate::pmm::{heap_end, heap_start};
 use crate::safe::{KStatic, lock_acquire, lock_release, kprint_str, klog_msg};
 
 #[repr(C)]
@@ -19,14 +22,15 @@ const HEAP_TAIL_MAGIC: u32 = 0xC0DEC0DE;
 
 #[inline(always)]
 fn heap_addr_in_range(addr: u32) -> bool {
-    let start = HEAP_START;
-    let end = HEAP_START + HEAP_SIZE;
-    addr >= start && addr < end
+    addr >= heap_start() && addr < heap_end()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn init_heap() {
-    if HEAP_START < RESERVED_END {
+    let start = heap_start();
+    let end = heap_end();
+    let window = end.saturating_sub(start);
+    if window <= core::mem::size_of::<HeapBlock>() as u32 {
         klog_msg(LOG_FAIL, c"heap layout invalid".as_ptr() as *const u8);
         return;
     }
@@ -36,17 +40,17 @@ pub extern "C" fn init_heap() {
     unsafe { irq_spinlock_init(HEAP_LOCK.as_ptr()) };
     // SAFETY: `HEAP_START_PTR` is seeded with the start of the dedicated heap
     // window during single-threaded boot; no concurrent allocator call yet.
-    *unsafe { KStatic::get_mut(HEAP_START_PTR.as_ptr()) } = HEAP_START as *mut HeapBlock;
+    *unsafe { KStatic::get_mut(HEAP_START_PTR.as_ptr()) } = start as *mut HeapBlock;
 
     // SAFETY: `HEAP_START_PTR` read during the same single-threaded init.
     let head = *unsafe { KStatic::get_mut(HEAP_START_PTR.as_ptr()) };
-    // SAFETY: `head` is the freshly seeded first `HeapBlock` at `HEAP_START`, a
-    // 16 MB identity-mapped window reserved for the heap; it is large enough for
+    // SAFETY: `head` is the freshly seeded first `HeapBlock` at the window start,
+    // an identity-mapped RAM window reserved for the heap; it is large enough for
     // the header it is being initialised with and this is its only reference
     // during single-threaded init.
     let head = unsafe { &mut *head };
     head.magic = HEAP_MAGIC;
-    head.size = HEAP_SIZE - core::mem::size_of::<HeapBlock>() as u32;
+    head.size = window - core::mem::size_of::<HeapBlock>() as u32;
     head.is_free = 1;
     head.next = core::ptr::null_mut();
 
@@ -66,7 +70,7 @@ pub extern "C" fn kmalloc(size: u32) -> *mut u8 {
     // SAFETY: `HEAP_START_PTR` read under `HEAP_LOCK`, acquired above, so the list
     // head cannot be swapped by a concurrent allocation.
     let mut current = *unsafe { KStatic::get_mut(HEAP_START_PTR.as_ptr()) };
-    if (current as u32) < RESERVED_END {
+    if (current as u32) < heap_start() {
         lock_release(HEAP_LOCK.as_ptr());
         kprint_str(c"[FATAL] kmalloc: heap pointer below reserved boundary\n".as_ptr() as *const u8);
         return core::ptr::null_mut();

@@ -15,9 +15,20 @@ use core::ffi::{c_char, c_void};
 use core::ptr;
 
 const AS_MAX: usize = 128;
-const AS_MAX_PAGES: usize = 1024;
-const BITMAP_BYTES: usize = AS_MAX_PAGES / 8;
+/// Initial page count the per-object mirror bitmaps cover (4 MiB); they are
+/// grown from the heap on demand, so an object is not limited to this.  The old
+/// fixed `AS_MAX_PAGES = 1024` silently stopped tracking anything past 4 MiB —
+/// and on the populate path it stopped *filling* those pages entirely.
+const AS_PAGES_INITIAL: usize = 1024;
 const PAGE: usize = 4096;
+/// Ceiling on one object's mirror bitmaps: the frames the PMM can hand out.
+const AS_PAGES_MAX: usize = (cact_mm::USER_FRAME_CEIL / PAGE as u32) as usize;
+
+/// Bytes a bitmap describing `pages` pages occupies.
+#[inline]
+const fn bitmap_bytes(pages: usize) -> usize {
+    (pages + 7) / 8
+}
 
 /// Raw backing I/O: read/write `size` bytes at file offset `off` for
 /// `(owner, ino)`.  Returns the byte count, or negative on error.
@@ -29,8 +40,12 @@ struct AddrSpace {
     ino:     u32,
     mfd:     i32,
     size:    u32,
-    present: [u8; BITMAP_BYTES],
-    dirty:   [u8; BITMAP_BYTES],
+    /// Pages the two bitmaps below can describe (0 until the first growth).
+    cap_pages: u32,
+    /// `kmalloc`'d "page is populated" bitmap (`bitmap_bytes(cap_pages)` bytes).
+    present: *mut u8,
+    /// `kmalloc`'d "page needs write-back" bitmap, same size as `present`.
+    dirty:   *mut u8,
     rfn:     Option<BackingFn>,
     wfn:     Option<BackingFn>,
 }
@@ -41,8 +56,9 @@ const AS_EMPTY: AddrSpace = AddrSpace {
     ino:     0,
     mfd:     0,
     size:    0,
-    present: [0; BITMAP_BYTES],
-    dirty:   [0; BITMAP_BYTES],
+    cap_pages: 0,
+    present: ptr::null_mut(),
+    dirty:   ptr::null_mut(),
     rfn:     None,
     wfn:     None,
 };
@@ -65,19 +81,80 @@ unsafe extern "C" {
     fn memfd_get_page(handle: i32, idx: u32) -> *mut u8;
 }
 
+/// # Safety
+///
+/// `bm` must point to a bitmap covering page index `i`.
 #[inline]
-fn bit(bm: &[u8; BITMAP_BYTES], i: usize) -> bool {
-    bm[i / 8] & (1 << (i % 8)) != 0
+unsafe fn bit(bm: *const u8, i: usize) -> bool {
+    // SAFETY: per the caller contract the byte holding bit `i` is in bounds.
+    unsafe { *bm.add(i / 8) & (1 << (i % 8)) != 0 }
 }
 
+/// # Safety
+///
+/// `bm` must point to a bitmap covering page index `i`.
 #[inline]
-fn set_bit(bm: &mut [u8; BITMAP_BYTES], i: usize) {
-    bm[i / 8] |= 1 << (i % 8);
+unsafe fn set_bit(bm: *mut u8, i: usize) {
+    // SAFETY: per the caller contract the byte holding bit `i` is in bounds.
+    unsafe { *bm.add(i / 8) |= 1 << (i % 8) };
 }
 
+/// # Safety
+///
+/// `bm` must point to a bitmap covering page index `i`.
 #[inline]
-fn clear_bit(bm: &mut [u8; BITMAP_BYTES], i: usize) {
-    bm[i / 8] &= !(1 << (i % 8));
+unsafe fn clear_bit(bm: *mut u8, i: usize) {
+    // SAFETY: per the caller contract the byte holding bit `i` is in bounds.
+    unsafe { *bm.add(i / 8) &= !(1 << (i % 8)) };
+}
+
+/// Make sure `a`'s mirror bitmaps can describe `need_pages` pages, growing both
+/// from the heap (and preserving what they already record).  Returns false when
+/// the growth is impossible; the caller then simply does not track those pages.
+fn ensure_bits(a: &mut AddrSpace, need_pages: usize) -> bool {
+    if !a.present.is_null() && need_pages <= a.cap_pages as usize {
+        return true;
+    }
+    let mut cap = if a.cap_pages == 0 { AS_PAGES_INITIAL } else { a.cap_pages as usize };
+    while cap < need_pages {
+        cap = core::cmp::min(cap.saturating_mul(2), AS_PAGES_MAX);
+    }
+    if cap < need_pages {
+        return false;
+    }
+    let bytes = bitmap_bytes(cap);
+    let new_present = cact_mm::kmalloc(bytes as u32);
+    let new_dirty = cact_mm::kmalloc(bytes as u32);
+    if new_present.is_null() || new_dirty.is_null() {
+        // SAFETY: each non-null block was just allocated here and is owned here.
+        unsafe {
+            if !new_present.is_null() { cact_mm::kfree(new_present); }
+            if !new_dirty.is_null() { cact_mm::kfree(new_dirty); }
+        }
+        return false;
+    }
+    // SAFETY: both new blocks are `bitmap_bytes(cap)`-byte `kmalloc` allocations
+    // (checked non-null), the old ones are this object's own (or null) and hold
+    // `bitmap_bytes(cap_pages)` bytes each; the copy stays inside both, and the
+    // old blocks are released exactly once as they are replaced.
+    unsafe {
+        core::ptr::write_bytes(new_present, 0, bytes);
+        core::ptr::write_bytes(new_dirty, 0, bytes);
+        if !a.present.is_null() {
+            let old = bitmap_bytes(a.cap_pages as usize);
+            core::ptr::copy_nonoverlapping(a.present, new_present, old.min(bytes));
+            cact_mm::kfree(a.present);
+        }
+        if !a.dirty.is_null() {
+            let old = bitmap_bytes(a.cap_pages as usize);
+            core::ptr::copy_nonoverlapping(a.dirty, new_dirty, old.min(bytes));
+            cact_mm::kfree(a.dirty);
+        }
+    }
+    a.present = new_present;
+    a.dirty = new_dirty;
+    a.cap_pages = cap as u32;
+    true
 }
 
 unsafe fn as_of(owner: *mut c_void, ino: u32) -> *mut AddrSpace {
@@ -101,6 +178,11 @@ unsafe fn as_of(owner: *mut c_void, ino: u32) -> *mut AddrSpace {
         a.ino = ino;
         a.mfd = h;
         a.size = 0;
+        // Slots are appended once and never reused, so an object starts with no
+        // bitmaps; `ensure_bits` allocates them at the first write/populate.
+        a.cap_pages = 0;
+        a.present = ptr::null_mut();
+        a.dirty = ptr::null_mut();
         AS_COUNT += 1;
         AS_OBJECTS += 1;
         ptr::addr_of_mut!(AS[AS_COUNT - 1])
@@ -177,8 +259,11 @@ unsafe fn populate(a: *mut AddrSpace, off: u32, size: u32) {
         let h = (*a).mfd;
         let first = (off as usize) / PAGE;
         let last = ((off + size - 1) as usize) / PAGE;
+        // Pages past the bitmap can only be re-populated every time (never
+        // skipped as present), which keeps reads correct at any file size.
+        let tracked = ensure_bits(&mut *a, last + 1);
         for p in first..=last {
-            if p >= AS_MAX_PAGES || bit(&(*a).present, p) {
+            if tracked && bit((*a).present, p) {
                 continue;
             }
             if let Some(rfn) = (*a).rfn {
@@ -192,7 +277,9 @@ unsafe fn populate(a: *mut AddrSpace, off: u32, size: u32) {
                     rfn((*a).owner, (*a).ino, (p * PAGE) as u32, PAGE as u32, page as *mut c_char);
                 }
             }
-            set_bit(&mut (*a).present, p);
+            if tracked {
+                set_bit((*a).present, p);
+            }
             AS_POPULATES += 1;
         }
     }
@@ -252,20 +339,21 @@ pub unsafe extern "C" fn vfs_as_write(
         }
         let first = (off as usize) / PAGE;
         let last = ((end - 1) as usize) / PAGE;
-        for p in first..=last {
-            if p < AS_MAX_PAGES {
-                set_bit(&mut (*a).present, p);
-                set_bit(&mut (*a).dirty, p);
+        // A page the bitmaps cannot describe is simply left untracked; the write
+        // itself already went through the memfd.
+        let tracked = ensure_bits(&mut *a, last + 1);
+        if tracked {
+            for p in first..=last {
+                set_bit((*a).present, p);
+                set_bit((*a).dirty, p);
             }
         }
         // Write through to the backing store so normal write() is durable.
         if let Some(wfn) = (*a).wfn {
             let r = wfn((*a).owner, (*a).ino, off, w as u32, buf);
-            if r == w {
+            if r == w && tracked {
                 for p in first..=last {
-                    if p < AS_MAX_PAGES {
-                        clear_bit(&mut (*a).dirty, p);
-                    }
+                    clear_bit((*a).dirty, p);
                 }
             }
         }
@@ -281,9 +369,8 @@ pub unsafe extern "C" fn vfs_as_truncate(owner: *mut c_void, ino: u32, length: u
     }
     // SAFETY: `a` is live.
     unsafe {
-        if ((length + PAGE as u32 - 1) / PAGE as u32) as usize > AS_MAX_PAGES {
-            return -1;
-        }
+        // No fixed size ceiling here: the memfd behind the object grows to
+        // whatever `MEMFD_PAGES_MAX` (the PMM's own frame ceiling) allows.
         if length > (*a).size {
             memfd_truncate((*a).mfd, length);
         } else {
@@ -315,7 +402,7 @@ pub unsafe extern "C" fn vfs_as_flush(owner: *mut c_void, ino: u32, off: u32, si
         let first = (off as usize) / PAGE;
         let last = ((end - 1) as usize) / PAGE;
         for p in first..=last {
-            if p >= AS_MAX_PAGES || !bit(&(*a).present, p) {
+            if p >= (*a).cap_pages as usize || !bit((*a).present, p) {
                 continue;
             }
             let page_off = (p * PAGE) as u32;
@@ -324,7 +411,7 @@ pub unsafe extern "C" fn vfs_as_flush(owner: *mut c_void, ino: u32, off: u32, si
             if !page.is_null() {
                 wfn((*a).owner, (*a).ino, page_off, chunk, page as *mut c_char);
             }
-            clear_bit(&mut (*a).dirty, p);
+            clear_bit((*a).dirty, p);
             AS_FLUSHES += 1;
         }
     }

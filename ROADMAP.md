@@ -43,10 +43,12 @@ Ordered by how hard each gap blocks a port:
   `kernel/memory/memory.h`); `kalloc` is exported to modules (ksym, 2.0.0) but
   still has no multi-frame/contiguous variant. Scanout and a GTT both assume
   contiguous, aligned backing.
-- **GEM storage is scattered and capped.** A GEM is a memfd: individually
-  allocated frames with `MEMFD_MAX_PAGES = 1024` (`rust_mm/src/process/memfd.rs`)
-  — a 4 MiB object ceiling — and nothing exported to walk an object's frames to
-  collect their physical addresses, which is exactly what a GTT needs.
+- **GEM storage is scattered but no longer size-capped.** A GEM is a memfd:
+  individually allocated frames whose pointer array now grows from the heap, so
+  objects are bounded by free RAM rather than the old 4 MiB ceiling (the fixed
+  `MEMFD_MAX_PAGES = 1024` in `rust_mm/src/process/memfd.rs`). Still nothing is
+  exported to walk an object's frames to collect their physical addresses, which
+  is exactly what a GTT needs.
 - **Only `DRM_FORMAT_MOD_LINEAR` is accepted.** Every Intel tiling modifier is
   refused in `kms/src/framebuffer.rs`, so tiled scanout cannot be described even
   though the constants are vendored in `drm/uapi/drm_fourcc.h`.

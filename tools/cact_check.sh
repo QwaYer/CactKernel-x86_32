@@ -4,9 +4,9 @@
 #
 # Boots a CactOS ISO in QEMU with no display, captures COM1 to a file, waits
 # until the guest reaches userspace (or a deadline passes), then greps the boot
-# log for the kernel self-test markers and for failure markers.  Exits non-zero
-# if any required marker is missing or any failure marker is present, so the
-# release can be gated with a single command:
+# log for the kernel self-test markers, the localrepo staging and for failure
+# markers.  Exits non-zero if any required marker is missing or any failure
+# marker is present, so the release can be gated with a single command:
 #
 #     ninja -C build-meson check
 #
@@ -77,10 +77,28 @@ if [[ -w /dev/kvm ]]; then
   accel_args=(-accel kvm -cpu host)
 fi
 
+# The disk is optional (the kernel self-tests and the localrepo pipeline do not
+# need it), and attaching it fails outright while a dev guest holds it: QEMU
+# refuses to open an image another instance has locked, which used to surface as
+# an empty log and a screenful of MISSes.  So attach it only when the lock is
+# free — probe with the same fcntl write lock QEMU takes.
 disk_args=()
-if [[ -f "$root/build/nvme.img" ]]; then
-  disk_args=(-drive file="$root/build/nvme.img",if=none,id=sata0,format=raw
-             -device ide-hd,drive=sata0,bus=ide.0)
+disk_img="$root/build/nvme.img"
+if [[ -f "$disk_img" ]]; then
+  if python3 - "$disk_img" <<'PY'
+import fcntl, sys
+try:
+    with open(sys.argv[1], "r+b") as f:
+        fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(1)
+PY
+  then
+    disk_args=(-drive file="$disk_img",if=none,id=sata0,format=raw
+               -device ide-hd,drive=sata0,bus=ide.0)
+  else
+    echo "cact-check: $disk_img is in use (a dev guest is running) — booting without it" >&2
+  fi
 fi
 
 qemu_args=(
@@ -144,15 +162,20 @@ trap - EXIT
 # ------------------------------------------------------------------------------
 fail_re='PANIC|SELF-TEST FAILED|check\(s\) FAILED'
 fail_re+='|CACT-CHECK: [A-Za-z0-9_]+ FAIL|CACT-CHECK: DONE.*fail=[1-9]'
+# localrepo pipeline: a boot medium without the module, an empty /dev/localrepo
+# or a failed/partial copy into tmpfs.
+fail_re+='|devfs: no localrepo module|localrepo source is empty'
+fail_re+='|localrepo copy failed|no localrepo archive source found'
 
-# Markers that must be present for the check to pass.  Keep this in sync with
-# the kernel self-tests in Cact/kernel/core/kernel.c.
+# Markers that must be present for the check to pass.  These are the kernel's
+# `tag: message` log lines; keep the list in sync with the self-tests in
+# Cact/kernel/core/kernel.c.
 required=(
-  "csprng      : selftest passed"
-  "sigmagic    : selftest passed"
-  "energy      : selftest passed"
-  "timer       : selftest OK"
-  "placement   : selftest passed"
+  "csprng: selftest passed"
+  "sigmagic: selftest passed"
+  "energy: selftest passed"
+  "timer: selftest OK"
+  "placement: selftest passed"
 )
 
 rc=0
@@ -182,7 +205,7 @@ fi
 # every module would be rejected at load, so gate on them matching.
 vm_py="$(python3 "$root/tools/modsign.py" vermagic)"
 echo "cact-check: --- module signing ---"
-if grep -qF "sigmagic    : ksym vermagic $vm_py" "$log"; then
+if grep -qF "sigmagic: ksym vermagic $vm_py" "$log"; then
   echo "cact-check:   ok    vermagic $vm_py (kernel == signer)"
 else
   echo "cact-check:   MISS  vermagic $vm_py not in boot log (kernel/signer drift)"
@@ -207,6 +230,40 @@ if grep -qF "CACT-CHECK: BEGIN" "$log"; then
     echo "cact-check:   MISS  no userspace test PASS line"
     rc=1
   fi
+fi
+
+# The localrepo archive: the bootloader must have handed the kernel the
+# `localrepo` module, and the supervisor must have copied it into tmpfs.  A
+# medium built without the module (or with an empty /dev/localrepo) boots
+# cleanly and only shows up much later as firmextr's confusing "not a readable
+# zstd archive" at the shell, so both halves are hard failures here.
+echo "cact-check: --- localrepo archive ---"
+if grep -qF "devfs: localrepo module " "$log"; then
+  grep -Fm1 "devfs: localrepo module " "$log" | sed 's/^/cact-check:   ok    /'
+else
+  echo "cact-check:   MISS  no localrepo module in the boot log" >&2
+  echo "cact-check:         (this ISO carries no localrepo.tar.zst — /dev/localrepo reads empty)" >&2
+  rc=1
+fi
+if grep -qF "cgoct: localrepo staged -> " "$log"; then
+  grep -Fm1 "cgoct: localrepo staged -> " "$log" | sed 's/^/cact-check:   ok    /'
+elif grep -qF "cgoct: supervisor online" "$log"; then
+  echo "cact-check:   MISS  cgoct ran but never staged the archive into tmpfs" >&2
+  rc=1
+else
+  echo "cact-check:   skip  no supervisor in this image (cgoct did not run)"
+fi
+
+# The boot cctkfs image: the kernel serves the module in place as /dev/cctkfs,
+# which is what cact-install lays onto a target disk (the media carries no copy
+# of the image).  The node is only there if the module was handed over, so its
+# absence is a hard failure — an installer run would find no image source.
+echo "cact-check: --- cctkfs image device ---"
+if grep -qF "devfs: cctkfs module " "$log"; then
+  grep -Fm1 "devfs: cctkfs module " "$log" | sed 's/^/cact-check:   ok    /'
+else
+  echo "cact-check:   MISS  no cctkfs module in the boot log — /dev/cctkfs reads empty" >&2
+  rc=1
 fi
 
 echo "cact-check: --- failure markers ---"

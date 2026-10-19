@@ -9,6 +9,7 @@
 #include "mouse.h"
 #include "fb.h"
 #include "validate.h"
+#include "multiboot2.h"
 
 // ── Built-in driver tables ────────────────────────────────────────────────
 
@@ -117,6 +118,35 @@ devfs_driver_t drv_fb = {
     .read=_fb_read, .write=_fb_write, .ioctl=_fb_ioctl
 };
 
+// /dev/localrepo, /dev/cctkfs — the two Multiboot2 modules GRUB hands over:
+// the compressed localrepo archive and the cctkfs image.  Both are far too big
+// to stage a second time, so they stay in place in physical memory (RAM is
+// identity-mapped) and are served read-only.  cgoct copies the archive into
+// tmpfs at boot and firmextr/cact-install stream firmware out of it; the
+// installer lays the cctkfs image onto the target straight from /dev/cctkfs,
+// which is why the image must not be bundled inside itself.
+static int _module_read(const mb2_module_info_t *mod, uint32_t off,
+                        uint32_t size, char *buf) {
+    uint32_t total = mod->mod_size;
+    if (!total || off >= total) return 0;
+    if (size > total - off) size = total - off;
+    memcpy(buf, (const void *)(uintptr_t)(mod->mod_start + off), size);
+    return (int)size;
+}
+
+static int _localrepo_read(void *p, uint32_t off, uint32_t size, char *buf) {
+    (void)p;
+    return _module_read(&mb2_localrepo_module, off, size, buf);
+}
+
+static int _cctkfs_read(void *p, uint32_t off, uint32_t size, char *buf) {
+    (void)p;
+    return _module_read(&mb2_cctkfs_module, off, size, buf);
+}
+
+devfs_driver_t drv_localrepo = { .read=_localrepo_read };
+devfs_driver_t drv_cctkfs    = { .read=_cctkfs_read };
+
 // Register this file's devices.  Each driver group registers the nodes it
 // owns, so devfs_init() stays a generic bootstrap and carries no device list.
 void devfs_devices_init(void) {
@@ -128,4 +158,36 @@ void devfs_devices_init(void) {
     register_chrdev("keyboard", DEVFS_F_CHAR, &drv_keyboard, 0);
     register_chrdev("mouse",    DEVFS_F_CHAR, &drv_mouse,    0);
     register_chrdev("fb0",      DEVFS_F_CHAR, &drv_fb,       0);
+
+    // /dev/localrepo serves whatever GRUB handed over; report its size so a
+    // boot medium without the `module2 … localrepo` line — or with a module
+    // that turned out to be empty — is visible in the log instead of surfacing
+    // as an empty archive at firmextr's first read.
+    if (mb2_localrepo_module.mod_start)
+        pr_info("%s: localrepo module %s, %u KiB (served as /dev/localrepo)\n",
+                "devfs", mb2_localrepo_module.name,
+                (unsigned)(mb2_localrepo_module.mod_size / 1024));
+    else
+        pr_warn("%s: no localrepo module — /dev/localrepo reads empty\n", "devfs");
+
+    if (mb2_cctkfs_module.mod_start)
+        pr_info("%s: cctkfs module %s, %u KiB (served as /dev/cctkfs)\n",
+                "devfs", mb2_cctkfs_module.name,
+                (unsigned)(mb2_cctkfs_module.mod_size / 1024));
+
+    devfs_entry_t *lr =
+        register_chrdev("localrepo", DEVFS_F_CHAR, &drv_localrepo, 0);
+    // Publish the module size on the node: with no module it stays 0, which is
+    // how cgoct/cact-install tell "this device carries no archive" (they skip
+    // zero-size sources) instead of copying an empty file out of it.
+    if (lr)
+        lr->node.size = mb2_localrepo_module.mod_size;
+
+    // /dev/cctkfs serves the boot cctkfs image in place, so the installer can
+    // put the image being booted — not a stale copy bundled inside it — onto a
+    // target disk.  Same "size 0 means no module" contract as /dev/localrepo.
+    devfs_entry_t *cf =
+        register_chrdev("cctkfs", DEVFS_F_CHAR, &drv_cctkfs, 0);
+    if (cf)
+        cf->node.size = mb2_cctkfs_module.mod_size;
 }

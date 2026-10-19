@@ -10,7 +10,10 @@
 
 #define USER_STACK_TOP    0xC0000000
 #define USER_STACK_LIMIT  0xBF000000
-#define USER_HEAP_START   0x40000000
+/* Low user region — the ELF image plus the brk heap.  Its VAs sit inside the
+ * low PMM reservation, so a process mapping them can never shadow a kernel
+ * frame (see USER_FRAME_CEIL in rust_mm/ffi.rs). */
+#define USER_HEAP_START   0x08000000
 #define USER_HEAP_LIMIT   0x80000000
 
 #define PF_PRESENT     0x01
