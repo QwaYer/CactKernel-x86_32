@@ -9,9 +9,16 @@
 // layer. All of them live in one statically allocated table (BLKDEV_SLOTS),
 // so pointers into it stay valid as long as the slot is not reused.
 #define BLKDEV_NAME_MAX       16
+#define BLKDEV_IDENT_MAX      64
 #define BLKDEV_MAX_DISKS       8
 #define BLKDEV_PARTS_PER_DISK 16
 #define BLKDEV_SLOTS          (BLKDEV_MAX_DISKS * (1 + BLKDEV_PARTS_PER_DISK))
+
+// Highest addressable LBA.  The block layer, page cache and fs modules all
+// carry 32-bit LBAs, so a device or partition beyond this is not addressable:
+// storage drivers must clamp their capacity here (and say so), and the
+// partition layer refuses to expose what lies past it.
+#define BLKDEV_MAX_LBA        0xFFFFFFFFu
 
 // Partition-table formats recognised by the partition layer.
 #define PART_TABLE_NONE 0
@@ -34,6 +41,7 @@ struct blkdev {
     char     name[BLKDEV_NAME_MAX];
     uint32_t id;               // stable slot index / device id
     uint32_t max_lba;          // capacity of THIS device in 512-byte sectors
+                               // (<= BLKDEV_MAX_LBA; see the note there)
 
     blkdev_t *parent;          // NULL for a physical disk
     uint32_t start_lba;        // partition start in parent sectors (0 = disk)
@@ -45,6 +53,12 @@ struct blkdev {
     // Whole-disk I/O callbacks (set by register_blkdev only).
     void (*read_sector) (uint32_t lba, uint8_t *buf);
     void (*write_sector)(uint32_t lba, uint8_t *buf);
+
+    // Stable identity string supplied by the driver ("ata-<model>",
+    // "nvme-<model>_<serial>"); serves the /dev/disk/by-id links.  Empty when
+    // the driver has no identity for the device.  Appended last so the offsets
+    // fs modules and drivers already rely on stay put.
+    char     ident[BLKDEV_IDENT_MAX];
 };
 
 // Public API
@@ -73,6 +87,11 @@ int register_blkdev(const char *name, uint32_t max_lba,
                     void (*write_sector)(uint32_t lba, uint8_t *buf));
 
 void unregister_blkdev(const char *name);
+
+// Attach a stable identity to a registered whole disk and (re)publish its
+// /dev/disk/by-id/<ident> link plus one <ident>-part<N> link per partition.
+// Called by a storage kmod once it knows the device's model/serial.
+int blkdev_set_ident(const char *name, const char *ident);
 
 // Hook invoked from register_blkdev() right after a whole-disk device appears
 // (used by the partition layer to probe MBR/GPT labels on hotplug). Runs in

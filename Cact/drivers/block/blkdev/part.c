@@ -112,8 +112,15 @@ int part_drop_disk(blkdev_t *disk) {
 static blkdev_t *part_create(blkdev_t *disk, uint32_t part_no,
                              uint64_t start_lba, uint64_t len_lba,
                              uint8_t ptype, uint8_t table) {
-    if (start_lba > 0xFFFFFFFFull || len_lba > 0xFFFFFFFFull)
+    /* Everything above this is unreachable through the 32-bit LBA interface
+     * (page cache and fs modules included), so skip it and say which one. */
+    if (start_lba > BLKDEV_MAX_LBA || len_lba > BLKDEV_MAX_LBA) {
+        pr_warn("part: %s: partition %u (start=0x%llx len=0x%llx) lies past "
+                "the 32-bit LBA space, skipped\n",
+                disk->name, (unsigned)part_no,
+                (unsigned long long)start_lba, (unsigned long long)len_lba);
         return 0;
+    }
     blkdev_t *p = blkdev_add_partition(disk, part_no,
                                        (uint32_t)start_lba, (uint32_t)len_lba,
                                        ptype, table);
@@ -160,8 +167,11 @@ static int part_parse_gpt(blkdev_t *disk, const uint8_t *lba1, int *found) {
         return 0;
     if (hdr.entry_size == 0 || hdr.entry_size > 512)
         return 0;
-    if (hdr.entries_lba > 0xFFFFFFFFull || hdr.entries_lba == 0)
+    if (hdr.entries_lba > BLKDEV_MAX_LBA || hdr.entries_lba == 0) {
+        pr_warn("part: %s: GPT entry array at lba 0x%llx is not addressable\n",
+                disk->name, (unsigned long long)hdr.entries_lba);
         return 0;
+    }
 
     uint32_t count = hdr.num_entries;
     if (count > BLKDEV_PARTS_PER_DISK)

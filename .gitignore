@@ -19,6 +19,6 @@ __pycache__/
 # Module-signing key pair (ECDSA P-256) — generate with:
 #   python3 tools/gen_module_keys.py   (configure also does it on demand)
 # The private key must never be committed; the public header is derived from it,
-# so the pair is always regenerated together.
+# so the pair is always regenerated together.  The kernel build regenerates the
+# header into its own build directory on every ksym.c change.
 Cact/crypto/modsign/
-Cact/kernel/elf/mod_pubkey.h

@@ -48,6 +48,13 @@ int register_blkdev(const char *name, uint32_t max_lba,
         return -1;
     if (blkdev_find(name))
         return -3;
+    if (max_lba == 0) {
+        /* A device with no addressable sector cannot be used; callers that
+         * could not read the geometry (bad IDENTIFY, unsupported layout) must
+         * fail loudly rather than register a zero-length disk. */
+        pr_err("blkdev: %s: zero capacity, registration refused\n", name);
+        return -1;
+    }
 
     int idx = alloc_slot();
     if (idx < 0)
@@ -77,6 +84,22 @@ int register_blkdev(const char *name, uint32_t max_lba,
     // late-loaded storage kmods both end up here).
     if (probe_hook)
         probe_hook(d);
+    return 0;
+}
+
+// Attach the device's stable identity (model/serial) once the kmod knows it,
+// and publish the /dev/disk/by-id links that expose it.
+int blkdev_set_ident(const char *name, const char *ident) {
+    if (!name || !name[0] || !ident || !ident[0])
+        return -1;
+    blkdev_t *d = blkdev_find(name);
+    if (!d || !blkdev_is_disk(d))
+        return -1;
+
+    strncpy(d->ident, (char *)ident, BLKDEV_IDENT_MAX - 1);
+    d->ident[BLKDEV_IDENT_MAX - 1] = '\0';
+
+    vfsdev_set_block_ident(d);
     return 0;
 }
 
@@ -315,6 +338,9 @@ blkdev_t *blkdev_add_partition(blkdev_t *disk, uint32_t part_no,
     d->part_no     = part_no;
     d->ptype       = ptype;
     d->table       = table;
+    if (disk->ident[0])
+        snprintf(d->ident, BLKDEV_IDENT_MAX, "%s-part%u",
+                 disk->ident, (unsigned)part_no);
     dev_used[idx] = 1;
     dev_count++;
 

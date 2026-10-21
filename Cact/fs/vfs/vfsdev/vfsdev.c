@@ -16,6 +16,42 @@
 
 static int blk_node_count = 0;   // block nodes currently exposed in /dev
 
+// ── /dev/disk/by-id links ────────────────────────────────────────────────
+// A partition created before its disk's identity was known derives one from
+// the parent, so both the publish and the remove path agree on the name.
+static int _by_id_path(blkdev_t *bd, char *out, int cap) {
+    if (!bd) return 0;
+    if (bd->ident[0]) {
+        snprintf(out, cap, "disk/by-id/%s", bd->ident);
+        return 1;
+    }
+    if (bd->parent && bd->parent->ident[0]) {
+        snprintf(out, cap, "disk/by-id/%s-part%u",
+                 bd->parent->ident, (unsigned)bd->part_no);
+        return 1;
+    }
+    return 0;
+}
+
+static void _publish_by_id(blkdev_t *bd) {
+    char link[96];
+    if (!_by_id_path(bd, link, sizeof(link))) return;
+    char target[BLKDEV_NAME_MAX + 8];
+    // Relative to the link's directory (/dev/disk/by-id) up to /dev/<name>,
+    // exactly like Linux's ../../sda targets.
+    snprintf(target, sizeof(target), "../../%s", bd->name);
+    devfs_symlink(link, target);
+}
+
+void vfsdev_set_block_ident(blkdev_t *bd) {
+    if (!bd) return;
+    _publish_by_id(bd);
+    for (int i = 0; i < blkdev_part_count(bd); i++) {
+        blkdev_t *p = blkdev_part_at(bd, i);
+        if (p) _publish_by_id(p);
+    }
+}
+
 // Byte-range rw on any block device (whole disk or partition). Works sector
 // by sector so unaligned offsets behave like the storage drivers do.
 static int blk_byte_rw(blkdev_t *bd, uint32_t off, uint32_t size,
@@ -82,20 +118,41 @@ static uint32_t blk_node_size(blkdev_t *bd) {
 
 int vfsdev_register_block_device(blkdev_t *bd) {
     if (!bd || !bd->name[0]) return -1;
-    if (devfs_find(bd->name)) return 0;   // already exposed
 
+    devfs_entry_t *exist = devfs_find(bd->name);
+    if (exist) {
+        /* A storage kmod may have registered the node itself (to keep its own
+         * status op); the block layer still owns the geometry, so stamp the
+         * size the driver cannot know and refresh the by-id link.  Without
+         * this /dev/sda reports size 0 while /dev/sda1 is correct. */
+        if (!(exist->flags & DEVFS_F_LINK))
+            exist->node.size = blk_node_size(bd);
+        _publish_by_id(bd);
+        return 0;
+    }
+
+    // Block devices are flat nodes in /dev (/dev/sda) — the Linux layout.
+    // /dev/disk holds only the by-id/by-path symlinks pointing back here; it
+    // never contains a real device node.
     devfs_entry_t *e = register_chrdev(bd->name,
                                        DEVFS_F_BLOCK,
                                        &drv_blk, bd);
     if (!e) return -1;
     e->node.size = blk_node_size(bd);
     blk_node_count++;
+
+    _publish_by_id(bd);           // /dev/disk/by-id/<ident> -> ../../<name>
     return 0;
 }
 
 int vfsdev_unregister_block_device(blkdev_t *bd) {
     if (!bd) return -1;
     if (vfsdev_device_mounted(bd->name)) return -2;  // busy
+
+    char link[96];
+    if (_by_id_path(bd, link, sizeof(link)))
+        devfs_remove(link);
+
     int r = unregister_chrdev(bd->name);
     if (r == 0 && blk_node_count > 0) blk_node_count--;
     return r;

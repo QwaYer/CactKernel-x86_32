@@ -155,8 +155,10 @@ void devfs_devices_init(void) {
     register_chrdev("random",  DEVFS_F_CHAR, &drv_random, 0);
     register_chrdev("urandom", DEVFS_F_CHAR, &drv_random, 0);
 
-    register_chrdev("keyboard", DEVFS_F_CHAR, &drv_keyboard, 0);
-    register_chrdev("mouse",    DEVFS_F_CHAR, &drv_mouse,    0);
+    // Input devices live under /dev/input (Linux convention); register_chrdev()
+    // also publishes /dev/keyboard and /dev/mouse as compat symlinks.
+    register_chrdev("input/keyboard", DEVFS_F_CHAR, &drv_keyboard, 0);
+    register_chrdev("input/mouse",    DEVFS_F_CHAR, &drv_mouse,    0);
     register_chrdev("fb0",      DEVFS_F_CHAR, &drv_fb,       0);
 
     // /dev/localrepo serves whatever GRUB handed over; report its size so a

@@ -6,7 +6,9 @@ Reads cctkfs.img, signs each module data blob with an ECDSA P-256 signature
 blobs, and writes a CRC-32 container checksum into the header.
 
 The private key is Cact/crypto/modsign/module_sign_priv.pem; the kernel embeds
-only the public key.  Idempotent: already-signed blobs are left unchanged.
+only the public key.  Idempotent per ABI: a blob already signed for the current
+vermagic is left unchanged, while one carrying an older vermagic (signed before
+ksym.c changed) is replaced by a freshly signed one.
 """
 
 import os
@@ -101,14 +103,20 @@ def main():
         if not ent["name"].endswith(".cctk"):
             new_data_blobs.append(blob)
             continue
-        if modsign.already_signed(blob):
+        state = modsign.sign_state(blob)
+        if state == "current":
             print(f"  [{ent['name']}]: already signed, OK")
             new_data_blobs.append(blob)
             continue
 
+        was = modsign.trailer_vermagic(blob)
         signed = modsign.sign_module(modsign.PRIV_PEM, blob)
         new_data_blobs.append(signed)
-        print(f"  [{ent['name']}]: signed (ECDSA P-256)")
+        if state == "stale":
+            print(f"  [{ent['name']}]: re-signed, vermagic "
+                  f"0x{was:08x} -> 0x{modsign.vermagic():08x}")
+        else:
+            print(f"  [{ent['name']}]: signed (ECDSA P-256)")
 
     out = bytearray()
     out.extend(struct.pack("<IIIIIIII",

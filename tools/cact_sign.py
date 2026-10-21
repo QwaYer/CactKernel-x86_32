@@ -7,7 +7,9 @@ Appends the module trailer (see tools/modsign.py):
 
 The private key lives at Cact/crypto/modsign/module_sign_priv.pem; the kernel
 embeds only the public key and verifies the signature plus the vermagic ABI
-fingerprint.  Idempotent: an already-signed module is left unchanged.
+fingerprint.  Idempotent per ABI: a module already signed for the current
+vermagic is left unchanged, while one carrying an older vermagic (signed before
+ksym.c changed) is stripped and re-signed, since the kernel would refuse it.
 """
 
 import os
@@ -26,9 +28,13 @@ def main():
     with open(path, "rb") as f:
         data = f.read()
 
-    if modsign.already_signed(data):
-        print(f"cact_sign: {path} — already signed")
+    state = modsign.sign_state(data)
+    vm = modsign.vermagic()
+    if state == "current":
+        print(f"cact_sign: {path} — already signed, vermagic=0x{vm:08x}")
         sys.exit(0)
+
+    was = modsign.trailer_vermagic(data)
 
     if not os.path.isfile(modsign.PRIV_PEM):
         modsign.generate_keys()
@@ -37,7 +43,10 @@ def main():
     with open(path, "wb") as f:
         f.write(signed)
 
-    print(f"signed: {path}  ECDSA P-256, vermagic=0x{modsign.vermagic():08x}")
+    if state == "stale":
+        print(f"cact_sign: {path} — re-signed: vermagic 0x{was:08x} -> 0x{vm:08x}")
+    else:
+        print(f"signed: {path}  ECDSA P-256, vermagic=0x{vm:08x}")
     sys.exit(0)
 
 

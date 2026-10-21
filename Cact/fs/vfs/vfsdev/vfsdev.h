@@ -24,6 +24,10 @@ void vfsdev_init(void);
 int vfsdev_register_block_device  (blkdev_t *bd);
 int vfsdev_unregister_block_device(blkdev_t *bd);
 
+// (Re)publish the /dev/disk/by-id/<ident> links for a disk and its partitions
+// once the driver has set its identity (see blkdev_set_ident).
+void vfsdev_set_block_ident(blkdev_t *bd);
+
 // 1 if the device currently has a mounted filesystem.
 int vfsdev_device_mounted(const char *devname);
 

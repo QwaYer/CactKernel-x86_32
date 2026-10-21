@@ -3,7 +3,7 @@
 #include "klib.h"
 #include "kernel.h"
 #include "cctkfs.h"
-#include "mod_pubkey.h"
+#include "mod_pubkey_gen.h"
 
 /* ECDSA P-256 / SHA-256 verify-only — implemented in cact_crypto (Rust, no_std). */
 extern int cact_sig_verify_p256_raw(const uint8_t *pubkey, uint32_t pubkey_len,

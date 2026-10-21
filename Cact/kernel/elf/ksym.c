@@ -79,6 +79,7 @@ static const ksym_entry_t ksym_table[] = {
     { "unregister_chrdev",    (uint32_t)unregister_chrdev },
     { "register_blkdev",       (uint32_t)register_blkdev },
     { "unregister_blkdev",     (uint32_t)unregister_blkdev },
+    { "blkdev_set_ident",      (uint32_t)blkdev_set_ident },
     { "blkdev_read_sector",    (uint32_t)blkdev_read_sector },
     { "blkdev_write_sector",   (uint32_t)blkdev_write_sector },
     { "blkdev_read",           (uint32_t)blkdev_read },
@@ -88,6 +89,20 @@ static const ksym_entry_t ksym_table[] = {
     { "pc_put_page",           (uint32_t)pc_put_page },
     { "pc_mark_dirty",         (uint32_t)pc_mark_dirty },
     { "pc_flush_dev",          (uint32_t)pc_flush_dev },
+
+    /* Generic inode address space (page cache) — an fs module points an
+     * (owner, ino) object at its own disk backing and then reads, writes and
+     * maps the file through the page cache.  Only the calls a filesystem
+     * module makes are exported; vfs_as_truncate/flush/release/flush_fd/stats
+     * stay kernel-internal. */
+    { "vfs_as_set_backing",    (uint32_t)vfs_as_set_backing },
+    { "vfs_as_setsize",        (uint32_t)vfs_as_setsize },
+    { "vfs_as_size",           (uint32_t)vfs_as_size },
+    { "vfs_as_read",           (uint32_t)vfs_as_read },
+    { "vfs_as_write",          (uint32_t)vfs_as_write },
+    { "vfs_as_backing",        (uint32_t)vfs_as_backing },
+    { "vfs_as_flush_all",      (uint32_t)vfs_as_flush_all },
+
     { "printk",         (uint32_t)printk },
     { "printk_color",   (uint32_t)printk_color },
     { "printk_hex",     (uint32_t)printk_hex },

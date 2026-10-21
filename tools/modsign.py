@@ -30,7 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KSYM_C = os.path.join(ROOT, "Cact", "kernel", "elf", "ksym.c")
 MODSIGN_DIR = os.path.join(ROOT, "Cact", "crypto", "modsign")
 PRIV_PEM = os.path.join(MODSIGN_DIR, "module_sign_priv.pem")
-PUB_HEADER = os.path.join(ROOT, "Cact", "kernel", "elf", "mod_pubkey.h")
+PUB_HEADER = os.path.join(MODSIGN_DIR, "mod_pubkey_gen.h")
 
 MAGIC = b"CMOD"
 SIG_SIZE = 64
@@ -106,10 +106,14 @@ def sign_raw(priv_pem, msg):
 
 
 def sign_module(priv_pem, elf):
-    """Append the module trailer (magic|vermagic|signature) to an ELF image."""
-    from struct import pack
+    """Append the module trailer (magic|vermagic|signature) to an ELF image.
+
+    A trailer this scheme already added is dropped first: the vermagic is the
+    live ksym.c fingerprint, so an image signed before the kernel's symbol set
+    changed is re-signed (refreshed) rather than given a second trailer.
+    """
     vm = vermagic()
-    signed = elf + MAGIC + pack("<I", vm)
+    signed = strip_trailer(elf) + MAGIC + struct.pack("<I", vm)
     return signed + sign_raw(priv_pem, signed)
 
 
@@ -120,6 +124,29 @@ def already_signed(data, priv_pem=None):
     scheme; re-signing an already-signed blob would stack trailers.
     """
     return len(data) >= TRAILER_SIZE and data[-TRAILER_SIZE:-TRAILER_SIZE + 4] == MAGIC
+
+
+def trailer_vermagic(data):
+    """The vermagic recorded in `data`'s trailer, or None when unsigned."""
+    if not already_signed(data):
+        return None
+    return struct.unpack_from("<I", data, len(data) - TRAILER_SIZE + 4)[0]
+
+
+def sign_state(data):
+    """How `data` stands against the ABI the kernel is built with right now.
+
+    "unsigned" — no trailer yet (a fresh build artefact);
+    "current"  — the trailer's vermagic is the live ksym.c fingerprint;
+    "stale"    — a trailer from an older ksym.c.  The kernel's mod_tag_verify()
+                 refuses it, so it has to be re-signed, not left alone: the
+                 symbol set changes whenever ksym.c does, and every artefact
+                 signed earlier then carries the wrong fingerprint.
+    """
+    have = trailer_vermagic(data)
+    if have is None:
+        return "unsigned"
+    return "current" if have == vermagic() else "stale"
 
 
 def strip_trailer(data):
@@ -178,13 +205,13 @@ def write_public_header(priv_pem=PRIV_PEM, out=PUB_HEADER):
     return out
 
 
-def generate_keys(force=False):
+def generate_keys(force=False, out=None):
     os.makedirs(MODSIGN_DIR, exist_ok=True)
     if force or not os.path.isfile(PRIV_PEM):
         _openssl("ecparam", "-name", "prime256v1", "-genkey", "-noout",
                  "-out", PRIV_PEM)
         os.chmod(PRIV_PEM, 0o600)
-    write_public_header()
+    write_public_header(out=out or PUB_HEADER)
     return PRIV_PEM
 
 
