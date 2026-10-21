@@ -22,3 +22,10 @@ __pycache__/
 # so the pair is always regenerated together.  The kernel build regenerates the
 # header into its own build directory on every ksym.c change.
 Cact/crypto/modsign/
+
+# Console font (PSF2, 8x8, 256 glyphs) — generate with:
+#   python3 tools/gen_consolefont.py
+# The kernel reads /usr/share/consolefont.psf from the image at boot, and the
+# image build renders that copy from the same generator, so the font is never
+# committed here.
+tools/consolefont.psf
