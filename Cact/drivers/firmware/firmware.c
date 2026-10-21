@@ -168,6 +168,11 @@ int request_firmware(const char *name, const uint8_t **data, uint32_t *len) {
         return -1;
     }
 
+    /* One line per successful load, deliberately the same shape as the warning
+     * above: cact-install reads /dev/kmsg to learn which firmware this machine
+     * actually asked for, and preselects the matching groups (ci_fw_detect). */
+    pr_info("firmware: %s loaded (%u bytes)\n", name, (unsigned)size);
+
     *data = copy;
     *len  = size;
     return 0;
