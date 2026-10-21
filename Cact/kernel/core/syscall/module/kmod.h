@@ -13,5 +13,6 @@ int kmod_unload_kname(const char *name);
 int         kmod_count(void);         // number of resident PCI modules
 const char *kmod_name_at(int slot);   // module name in slot, or NULL
 uint32_t    kmod_size_at(int slot);   // resident image bytes, 0 if free
+int         kmod_refs_at(int slot);   // PCI functions it serves, 0 if free
 
 #endif

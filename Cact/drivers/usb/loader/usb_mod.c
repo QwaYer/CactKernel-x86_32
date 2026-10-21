@@ -10,6 +10,7 @@
  */
 
 #include "usb_mod.h"
+#include "usb.h"
 #include "initfs_modblob.h"
 #include "ksym.h"
 #include "klib.h"
@@ -110,6 +111,10 @@ typedef struct {
     uint8_t     *image;
     uint32_t     size;
     usb_exit_fn_t exit;
+    // Driver-list head as it was before init() ran.  usb_driver_register()
+    // prepends, so the drivers this module registered are exactly the nodes
+    // above it — that prefix answers "how many devices does this module use".
+    const usb_driver_t *drv_baseline;
 } usb_slot_t;
 
 static usb_slot_t slots[USB_MOD_MAX];
@@ -376,6 +381,7 @@ int usb_mod_load(const char *path) {
     s->image = image;
     s->size  = size;
     s->exit  = exit;
+    s->drv_baseline = usb_driver_list_head();
 
     int irc = init();
     if (irc != 0) {
@@ -433,6 +439,14 @@ uint32_t usb_mod_size(int slot) {
     if (slot < 0 || slot >= USB_MOD_MAX || !slots[slot].used)
         return 0;
     return slots[slot].size;
+}
+
+// User count reported by /proc/modules: the devices the drivers this module
+// registered currently claim (0 when the slot is free).
+int usb_mod_refs(int slot) {
+    if (slot < 0 || slot >= USB_MOD_MAX || !slots[slot].used)
+        return 0;
+    return usb_driver_users_since(slots[slot].drv_baseline);
 }
 
 // Non-destructive probe: scan the ELF symbol table for an exported global FUNC

@@ -507,10 +507,11 @@ int _mounts_read(uint32_t off, uint32_t size, char *buf) {
 // /proc/modules generator — resident loadable modules in the Linux form
 // "<name> <size> <refcount> - Live 0x00000000": filesystem modules (fs_mod),
 // USB driver modules (usb_mod) and resident PCI kernel modules (kmod).  Size
-// is the resident relocation image in bytes; the refcount is the module's
-// user count where the loader tracks one (fs_mod: devices mounted), else 0.
-// Slots are scanned directly, not by count: unloading the first of two
-// modules leaves a hole at slot 0.
+// is the resident relocation image in bytes; the refcount is how many users
+// the loader can account for — fs_mod: devices mounted; usb_mod: devices its
+// drivers claim; kmod: PCI functions its driver serves.  Slots are scanned
+// directly, not by count: unloading the first of two modules leaves a hole at
+// slot 0.
 int _modules_read(uint32_t off, uint32_t size, char *buf) {
     static char tmp[4096];
     int p = 0;
@@ -525,14 +526,14 @@ int _modules_read(uint32_t off, uint32_t size, char *buf) {
     for (int i = 0; i < USB_MOD_MAX && p <= cap - 128; i++) {
         const char *nm = usb_mod_instance(i);
         if (!nm) continue;
-        p += snprintf(tmp + p, (size_t)(cap - p), "%s %u 0 - Live 0x00000000\n",
-                      nm, (unsigned)usb_mod_size(i));
+        p += snprintf(tmp + p, (size_t)(cap - p), "%s %u %d - Live 0x00000000\n",
+                      nm, (unsigned)usb_mod_size(i), usb_mod_refs(i));
     }
     for (int i = 0; i < KMOD_MAX_SLOTS && p <= cap - 128; i++) {
         const char *nm = kmod_name_at(i);
         if (!nm) continue;
-        p += snprintf(tmp + p, (size_t)(cap - p), "%s %u 0 - Live 0x00000000\n",
-                      nm, (unsigned)kmod_size_at(i));
+        p += snprintf(tmp + p, (size_t)(cap - p), "%s %u %d - Live 0x00000000\n",
+                      nm, (unsigned)kmod_size_at(i), kmod_refs_at(i));
     }
     if (p < 0) p = 0;
 

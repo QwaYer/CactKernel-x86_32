@@ -49,6 +49,10 @@ pci_driver_t *pci_driver_find_class_module(uint8_t class_code, uint8_t subclass,
 // Unique relocatable (.cctk) driver that matches `dev` and has probe bound; NULL if none/ambiguous
 pci_driver_t *pci_driver_find_reloc_for_device(const pci_device_t *dev);
 
+// How many enumerated PCI functions that driver currently serves — the "Used"
+// column of /proc/modules for a resident .cctk module.
+int pci_driver_device_count(const pci_driver_t *drv);
+
 // Walk driver list and probe the first matching driver for a device.
 void pci_driver_match(pci_device_t *dev);
 void pci_driver_defer_device(pci_device_t *dev);

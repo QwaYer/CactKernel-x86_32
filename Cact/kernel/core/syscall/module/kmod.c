@@ -140,6 +140,14 @@ uint32_t kmod_size_at(int slot) {
     return pci_module_image_size(&kmod_slots[slot].drv);
 }
 
+// User count reported by /proc/modules: the PCI functions this module's driver
+// currently serves (0 for a free slot).
+int kmod_refs_at(int slot) {
+    if (slot < 0 || slot >= KMOD_MAX_SLOTS || !kmod_slots[slot].used)
+        return 0;
+    return pci_driver_device_count(&kmod_slots[slot].drv);
+}
+
 static kmod_slot_t *kmod_slot_by_drv(const pci_driver_t *drv) {
     for (int i = 0; i < KMOD_MAX_SLOTS; i++)
         if (kmod_slots[i].used && &kmod_slots[i].drv == drv)

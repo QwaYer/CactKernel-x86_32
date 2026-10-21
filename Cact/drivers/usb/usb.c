@@ -78,6 +78,22 @@ static usb_driver_t *usb_find_driver(usb_device_t *dev) {
     return NULL;
 }
 
+const usb_driver_t *usb_driver_list_head(void) {
+    return driver_list;
+}
+
+int usb_driver_users_since(const usb_driver_t *baseline) {
+    int n = 0;
+    for (usb_device_t *dev = device_list; dev; dev = dev->next) {
+        if (!dev->driver_priv) continue;   // no driver brought it up
+        usb_driver_t *owner = usb_find_driver(dev);
+        if (!owner || owner == baseline) continue;
+        for (usb_driver_t *d = driver_list; d && d != baseline; d = d->next)
+            if (d == owner) { n++; break; }
+    }
+    return n;
+}
+
 int usb_get_descriptor(usb_device_t *dev, uint8_t type, uint8_t idx,
                         void *buf, uint16_t len)
 {

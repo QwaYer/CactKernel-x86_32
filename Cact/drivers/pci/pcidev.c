@@ -358,3 +358,28 @@ pci_driver_t *pci_driver_find_reloc_for_device(const pci_device_t *dev)
     return found;
 }
 
+// The driver that serves a function: the first registered driver whose IDs
+// match, and only while its probe is bound (a matching driver whose module was
+// never relocated owns nothing).  That is the same list order and the same
+// rule pcidev_match_device() probes with, so the answer names the driver the
+// device actually attached to, not merely one that could bind it.
+static pci_driver_t *pcidev_owner_of(const pci_device_t *dev)
+{
+    for (pci_driver_t *d = pcidev_driver_list; d; d = d->next) {
+        if (!driver_matches(d, dev)) continue;
+        return d->probe ? d : NULL;
+    }
+    return NULL;
+}
+
+// How many of the enumerated functions |drv| currently serves.  Resident
+// modules report it as their user count ("Used" in lsmod): a controller
+// attached to a modloaded driver is one user, a driver nothing matches is none.
+int pci_driver_device_count(const pci_driver_t *drv)
+{
+    if (!drv) return 0;
+    int n = 0;
+    for (pci_device_t *dev = pci_device_list; dev; dev = dev->next)
+        if (pcidev_owner_of(dev) == drv) n++;
+    return n;
+}

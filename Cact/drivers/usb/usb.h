@@ -251,6 +251,16 @@ int  usb_hc_register    (usb_hc_t    *hc);
 int  usb_driver_register(usb_driver_t *drv);
 int  usb_driver_unregister(usb_driver_t *drv);
 
+/* Registered-driver list head.  usb_driver_register() prepends, so a module
+ * that captures the head before its init() runs can be asked how many devices
+ * its own drivers claim (see usb_driver_users_since). */
+const usb_driver_t *usb_driver_list_head(void);
+
+/* Number of enumerated devices claimed by the drivers registered above
+ * |baseline| — the head captured before a module's init().  /proc/modules
+ * reports it as that module's user count ("Used" in lsmod). */
+int  usb_driver_users_since(const usb_driver_t *baseline);
+
 usb_device_t *usb_device_enumerate (usb_hc_t *hc, uint8_t port, uint8_t speed);
 void          usb_device_disconnect(usb_hc_t *hc, uint8_t port);
 int           usb_register_device  (usb_device_t *dev);

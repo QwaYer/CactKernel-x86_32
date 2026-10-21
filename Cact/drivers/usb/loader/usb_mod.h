@@ -33,5 +33,6 @@ int  usb_mod_loaded(const char *instance);
 int  usb_mod_count(void);
 const char *usb_mod_instance(int slot);
 uint32_t    usb_mod_size(int slot);   // resident image bytes, 0 if free
+int         usb_mod_refs(int slot);   // devices its drivers claim, 0 if free
 
 #endif
