@@ -73,8 +73,8 @@ static int parse_pci_modinfo_index(const char *name, int *out_idx) {
 // pci_register_driver() plus the module path it has to keep alive (module_path
 // is read back on lazy load and printed by /dev/modinfo).  Several modules can
 // be resident at once — this replaces the single "usermod" slot, which made the
-// second modload fail with EBUSY.
-#define KMOD_MAX_SLOTS 8
+// second modload fail with EBUSY.  KMOD_MAX_SLOTS is shared with the
+// /proc/modules listing in kmod.h.
 #define KMOD_PATH_MAX  256
 
 typedef struct {
@@ -127,11 +127,17 @@ int kmod_count(void) {
     return n;
 }
 
-const char *kmod_name_at(int idx) {
-    int n = 0;
-    for (int i = 0; i < KMOD_MAX_SLOTS; i++)
-        if (kmod_slots[i].used && n++ == idx) return kmod_slots[i].name;
-    return 0;
+const char *kmod_name_at(int slot) {
+    if (slot < 0 || slot >= KMOD_MAX_SLOTS || !kmod_slots[slot].used)
+        return 0;
+    return kmod_slots[slot].name;
+}
+
+// Resident image size reported by /proc/modules (0 for a free slot).
+uint32_t kmod_size_at(int slot) {
+    if (slot < 0 || slot >= KMOD_MAX_SLOTS || !kmod_slots[slot].used)
+        return 0;
+    return pci_module_image_size(&kmod_slots[slot].drv);
 }
 
 static kmod_slot_t *kmod_slot_by_drv(const pci_driver_t *drv) {

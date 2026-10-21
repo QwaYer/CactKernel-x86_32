@@ -24,4 +24,8 @@ int pci_load_module(const char *path, struct pci_driver *drv);
 // Free module image and reset driver.probe to NULL.
 void pci_unload_module(struct pci_driver *drv);
 
+// Size in bytes of the driver's resident relocation image, or 0 when the
+// driver owns no image (built-in drivers, or a slot that was released).
+uint32_t pci_module_image_size(const struct pci_driver *drv);
+
 #endif

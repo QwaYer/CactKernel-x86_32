@@ -37,6 +37,8 @@ int fs_mod_unload_slot(int slot);
 int          fs_mod_count(void);            // number of resident modules
 int          fs_mod_loaded(const char *instance); // 1 if that module is loaded
 const char  *fs_mod_instance(int slot);     // instance name or NULL
+uint32_t     fs_mod_size(int slot);         // resident image bytes, 0 if free
+int          fs_mod_refs(int slot);         // mounted devices (user count)
 int          fs_mod_loaded_any(void);       // 1 if at least one module resident
 
 // Mount a block device.  fs_mod_mount tries every resident module until one

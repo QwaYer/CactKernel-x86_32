@@ -7,8 +7,11 @@
 int kmod_load_kpath(const char *path, uint32_t vendor_id, uint32_t device_id);
 int kmod_unload_kname(const char *name);
 
-// Listing for /proc/modules.
+// Listing for /proc/modules.  Slots are scanned directly (they can be sparse:
+// unloading the first of two modules frees slot 0 while slot 1 stays used).
+#define KMOD_MAX_SLOTS 8
 int         kmod_count(void);         // number of resident PCI modules
-const char *kmod_name_at(int idx);    // idx-th resident module name, or NULL
+const char *kmod_name_at(int slot);   // module name in slot, or NULL
+uint32_t    kmod_size_at(int slot);   // resident image bytes, 0 if free
 
 #endif

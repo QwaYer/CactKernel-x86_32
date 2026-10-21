@@ -428,6 +428,13 @@ const char *usb_mod_instance(int slot) {
     return slots[slot].instance;
 }
 
+// Resident image size reported by /proc/modules (0 when the slot is free).
+uint32_t usb_mod_size(int slot) {
+    if (slot < 0 || slot >= USB_MOD_MAX || !slots[slot].used)
+        return 0;
+    return slots[slot].size;
+}
+
 // Non-destructive probe: scan the ELF symbol table for an exported global FUNC
 // named 'usb_driver_init'.  Used by modload to route a .cctk to this loader.
 int usb_mod_detect(const char *path) {

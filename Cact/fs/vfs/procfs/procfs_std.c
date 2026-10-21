@@ -19,6 +19,7 @@
 #include "vfsdev.h"
 #include "module/kmod.h"
 #include "fs_mod.h"
+#include "usb_mod.h"
 #include "usb.h"
 #include "dmi.h"
 
@@ -504,25 +505,34 @@ int _mounts_read(uint32_t off, uint32_t size, char *buf) {
 }
 
 // /proc/modules generator — resident loadable modules in the Linux form
-// "<name> <size> <refcount> - Live 0x00000000": filesystem modules (fs_mod)
-// plus resident PCI kernel modules (kmod).  Sizes are not tracked here, so
-// they read as 0.
+// "<name> <size> <refcount> - Live 0x00000000": filesystem modules (fs_mod),
+// USB driver modules (usb_mod) and resident PCI kernel modules (kmod).  Size
+// is the resident relocation image in bytes; the refcount is the module's
+// user count where the loader tracks one (fs_mod: devices mounted), else 0.
+// Slots are scanned directly, not by count: unloading the first of two
+// modules leaves a hole at slot 0.
 int _modules_read(uint32_t off, uint32_t size, char *buf) {
-    static char tmp[2048];
+    static char tmp[4096];
     int p = 0;
     int cap = (int)sizeof(tmp);
 
-    int nfs = fs_mod_count();
-    for (int i = 0; i < nfs && p < cap - 48; i++) {
+    for (int i = 0; i < FS_MOD_MAX && p <= cap - 128; i++) {
         const char *nm = fs_mod_instance(i);
         if (!nm) continue;
-        p += snprintf(tmp + p, (size_t)(cap - p), "%s 0 0 - Live 0x00000000\n", nm);
+        p += snprintf(tmp + p, (size_t)(cap - p), "%s %u %d - Live 0x00000000\n",
+                      nm, (unsigned)fs_mod_size(i), fs_mod_refs(i));
     }
-    int nk = kmod_count();
-    for (int i = 0; i < nk && p < cap - 48; i++) {
+    for (int i = 0; i < USB_MOD_MAX && p <= cap - 128; i++) {
+        const char *nm = usb_mod_instance(i);
+        if (!nm) continue;
+        p += snprintf(tmp + p, (size_t)(cap - p), "%s %u 0 - Live 0x00000000\n",
+                      nm, (unsigned)usb_mod_size(i));
+    }
+    for (int i = 0; i < KMOD_MAX_SLOTS && p <= cap - 128; i++) {
         const char *nm = kmod_name_at(i);
         if (!nm) continue;
-        p += snprintf(tmp + p, (size_t)(cap - p), "%s 0 0 - Live 0x00000000\n", nm);
+        p += snprintf(tmp + p, (size_t)(cap - p), "%s %u 0 - Live 0x00000000\n",
+                      nm, (unsigned)kmod_size_at(i));
     }
     if (p < 0) p = 0;
 

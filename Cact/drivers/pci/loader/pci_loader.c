@@ -353,3 +353,14 @@ void pci_unload_module(struct pci_driver *drv) {
     drv->flags &= ~PCI_DRV_F_RELOC_MODULE;
     pr_info("pciloader: module unloaded: %s", drv->name);
 }
+
+// Resident image size reported by /proc/modules.  Built-in drivers carry no
+// image, so they read as 0.
+uint32_t pci_module_image_size(const struct pci_driver *drv) {
+    if (!drv || !drv->priv)
+        return 0;
+    if (!(drv->flags & PCI_DRV_F_RELOC_MODULE))
+        return 0;
+    const mod_mem_t *mm = (const mod_mem_t *)drv->priv;
+    return mm->image_size;
+}

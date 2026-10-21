@@ -461,6 +461,20 @@ const char *fs_mod_instance(int slot) {
     return slots[slot].instance;
 }
 
+// The two per-module numbers /proc/modules reports: the resident image size
+// and the module's user count (devices it currently has mounted).
+uint32_t fs_mod_size(int slot) {
+    if (slot < 0 || slot >= FS_MOD_MAX || !slots[slot].used)
+        return 0;
+    return slots[slot].size;
+}
+
+int fs_mod_refs(int slot) {
+    if (slot < 0 || slot >= FS_MOD_MAX || !slots[slot].used)
+        return 0;
+    return (int)slots[slot].mount_count;
+}
+
 // Remember a successful mount so an unload can be refused while in use.
 static void slot_note_mount(fs_slot_t *s, const char *devname) {
     if (!s || !devname)
