@@ -203,14 +203,17 @@ pub extern "C" fn net_init() {
     // initialises it once, before any task can wait on it (this runs once from
     // the single-threaded boot path, after the scheduler exists).
     unsafe { ffi_kernel::sema_init(core::ptr::addr_of_mut!(net_sema), 0) };
+    // Bring the L3 stack up *before* spawning the two tasks, not after: a task
+    // created here is immediately runnable and the worker cores are already
+    // peer-executing this one shared runqueue (sched/src/smp.rs
+    // WORKERS_RUN_TASKS), so a worker could poll a stack that did not exist yet.
+    // A later `register_netdev` only attaches the NIC's hardware address to it.
+    stack::stack_init();
     // SAFETY: `create_task` spawns a kernel task from the given (valid, `'static`)
     // entry point; it is called here on the same single-threaded path.
     unsafe { let _ = sched::task::create_task(net_poll_task as *const core::ffi::c_void); }
     // SAFETY: as above, for the periodic timer task.
     unsafe { let _ = sched::task::create_task(net_timer_task as *const core::ffi::c_void); }
-    // Bring the L3 stack up now, so loopback exists without any NIC module; a
-    // later `register_netdev` only attaches the NIC's hardware address to it.
-    stack::stack_init();
     ffi_kernel::klog_static(
         ffi_kernel::LOG_OK,
         b"net: ready (net_poll_task, RX semaphore, timer kick)\0",

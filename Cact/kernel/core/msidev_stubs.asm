@@ -1,9 +1,14 @@
 [bits 32]
 
 ; ---------------------------------------------------------------------------
-; Device interrupt stubs (vectors 0x30–0xEF). Each pushes the vector and
-; dispatches it — MSI and MSI-X share these, since both deliver a LAPIC
-; message carrying the vector.
+; Device interrupt stubs (vectors 0x30–0xEF). Each pushes an error-code slot
+; and the vector, then dispatches — MSI and MSI-X share these, since both
+; deliver a LAPIC message carrying the vector.
+;
+; The error-code slot is a zero: device interrupts have none, but pushing it
+; makes the frame the stubs leave on the stack exactly a `struct context_frame`
+; (es, ds, pusha, int_no, err_code, eip, cs, eflags[, useresp, ss]), so the
+; dispatcher can publish the interrupted context as-is — see get_irq_regs().
 ; ---------------------------------------------------------------------------
 extern msidev_dispatch
 extern irq_apic_eoi
@@ -13,6 +18,7 @@ section .text
 %macro msidev_entry 1
 global msidev_stub_%1
 msidev_stub_%1:
+    push dword 0
     push dword %1
     jmp msidev_common_dispatch
 %endmacro
@@ -31,15 +37,19 @@ msidev_common_dispatch:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    mov esi, [esp + 40]
+
+    mov eax, esp            ; the entry frame is a struct context_frame
+    mov esi, [eax + 40]     ; ... whose int_no is the vector the stub pushed
+    push eax                ; msidev_dispatch(vector, frame)
     push esi
     call msidev_dispatch
-    add esp, 4
+    add esp, 8
+
     call irq_apic_eoi
     pop es
     pop ds
     popa
-    add esp, 4
+    add esp, 8              ; drop the vector and the error-code slot
     iretd
 
 section .rodata

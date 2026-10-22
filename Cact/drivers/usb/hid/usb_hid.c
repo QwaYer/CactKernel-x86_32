@@ -32,6 +32,7 @@ static const char hid_ctrl_map[0x80] = {
     [0x2F] = 0x1B,   /* ^[      → ESC */
     [0x30] = 0x1D,   /* ^]      → GS  */
     [0x31] = 0x1C,   /* ^\      → FS  */
+    [0x32] = 0x1C,   /* the ISO \| key is 0x32 (see hid_keymap) → FS too */
     [0x38] = 0x7F,   /* ^/ / ^? → DEL */
 };
 
@@ -41,14 +42,21 @@ volatile int  usb_mouse_dx     = 0;
 volatile int  usb_mouse_dy     = 0;
 volatile int  usb_mouse_buttons = 0;
 
+/* US layout.  HID 0x32 ("Keyboard Non-US # and ~") is the position an ISO
+ * keyboard — including Russian ones — puts its backslash/bar key in, the one
+ * an ANSI board reports as 0x31, so it emits \ and | too.  Linux maps both
+ * usages to KEY_BACKSLASH; QEMU's usb-kbd has no key at 0x32, so getting this
+ * wrong is invisible there and shows up as '#' on real hardware.  '#' and '~'
+ * stay reachable as Shift+3 and Shift+` . */
 static const char hid_keymap[0x80] = {
     0,0,0,0,
     'a','b','c','d','e','f','g','h','i','j','k','l','m',
     'n','o','p','q','r','s','t','u','v','w','x','y','z',
     '1','2','3','4','5','6','7','8','9','0',
-    '\n',0x1B,'\b','\t',' ','-','=','[',']','\\',0,';','\'','`',',','.','/',
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+    '\n',0x1B,'\b','\t',' ','-','=','[',']','\\','\\',';','\'','`',',','.','/',
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,   /* F1-F12 (hid_ext_keymap), ScrollLock, Pause, Ins..Down, NumLock */
+    '/','*','-','+','\n','1','2','3','4','5','6','7','8','9','0','.',   /* keypad */
+    '\\'                                                      /* non-US \ and | */
 };
 
 static const char hid_keymap_shift[0x80] = {
@@ -56,9 +64,10 @@ static const char hid_keymap_shift[0x80] = {
     'A','B','C','D','E','F','G','H','I','J','K','L','M',
     'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
     '!','@','#','$','%','^','&','*','(',')',
-    '\n',0x1B,'\b','\t',' ','_','+','{','}','|',0,':','"','~','<','>','?',
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+    '\n',0x1B,'\b','\t',' ','_','+','{','}','|','|',':','"','~','<','>','?',
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,   /* F1-F12 (hid_ext_keymap), ScrollLock, Pause, Ins..Down, NumLock */
+    '/','*','-','+','\n','1','2','3','4','5','6','7','8','9','0','.',   /* keypad */
+    '|'                                                       /* non-US \ and | */
 };
 
 #define HID_KEY_CAPSLOCK   0x39
@@ -67,8 +76,24 @@ static const char hid_keymap_shift[0x80] = {
 
 /* Extended (non-character) keys, emitted as the xterm CSI sequences every
  * terminal program already parses — cactsole's readline handles exactly these,
- * and full-screen tools (ced) rely on them for navigation.  HID 0x49..0x52. */
+ * and full-screen tools (ced) rely on them for navigation.  HID 0x3A..0x45
+ * (F1..F12, which reach this table only with Shift held: bare/Alt/Ctrl+Alt
+ * F<n> switch VT earlier) and HID 0x49..0x52.  The F-keys use the rxvt/Linux
+ * numbering (11~..15~, 17~..21~, 23~, 24~) rather than xterm's SS3 for
+ * F1..F4, so they stay in the same ESC[<n>~ family as Insert/Delete/PgUp/PgDn. */
 static const char *const hid_ext_keymap[0x80] = {
+    [0x3A] = "\033[11~",  /* F1       */
+    [0x3B] = "\033[12~",  /* F2       */
+    [0x3C] = "\033[13~",  /* F3       */
+    [0x3D] = "\033[14~",  /* F4       */
+    [0x3E] = "\033[15~",  /* F5       */
+    [0x3F] = "\033[17~",  /* F6       */
+    [0x40] = "\033[18~",  /* F7       */
+    [0x41] = "\033[19~",  /* F8       */
+    [0x42] = "\033[20~",  /* F9       */
+    [0x43] = "\033[21~",  /* F10      */
+    [0x44] = "\033[23~",  /* F11      */
+    [0x45] = "\033[24~",  /* F12      */
     [0x49] = "\033[2~",   /* Insert   */
     [0x4A] = "\033[H",    /* Home     */
     [0x4B] = "\033[5~",   /* PageUp   */
@@ -99,7 +124,7 @@ static const char *const hid_ext_keymap[0x80] = {
 #define HID_REPEAT_DELAY_TICKS 25   /* 250 ms hold before the first repeat  */
 #define HID_REPEAT_RATE_TICKS   3   /* then one every 30 ms                 */
 #define HID_REPEAT_IDLE_TICKS   4   /* task tick when nothing is repeating  */
-#define HID_REPEAT_SEQ_MAX      4   /* "\033[3~" is the longest unit        */
+#define HID_REPEAT_SEQ_MAX      5   /* "\033[11~" is the longest unit        */
 
 static irq_spinlock_t hid_repeat_lock;
 static struct {
@@ -286,6 +311,39 @@ static void hid_post_sequence(hid_priv_t *priv, uint8_t kc, const char *seq) {
     hid_repeat_arm(priv, kc, seq, len);
 }
 
+/* PrintScreen fallback: when the report was drained from a task instead of
+ * delivered by the xHCI interrupt there is no entry frame to report, so the
+ * driver dumps its own register set — the same dump, with less useful context.
+ * ESP is handed over separately because this frame was not pushed by a stub,
+ * and the selectors are moved as 16-bit values into a zeroed frame so their
+ * upper halves stay clean the way the CPU pushes them. */
+static void hid_dump_registers(void) {
+    struct context_frame cf;
+    uint32_t esp;
+
+    memset(&cf, 0, sizeof(cf));
+
+    /* One statement per register: a single block with a dozen memory outputs
+     * runs clang out of address registers.  Nothing can run between these
+     * statements (no clobbers, no dependencies), so they read one register
+     * set.  pushfl/popl is balanced, so ESP is unchanged afterwards. */
+    __asm__ __volatile__("movl %%eax, %0" : "=m"(cf.eax));
+    __asm__ __volatile__("movl %%ebx, %0" : "=m"(cf.ebx));
+    __asm__ __volatile__("movl %%ecx, %0" : "=m"(cf.ecx));
+    __asm__ __volatile__("movl %%edx, %0" : "=m"(cf.edx));
+    __asm__ __volatile__("movl %%esi, %0" : "=m"(cf.esi));
+    __asm__ __volatile__("movl %%edi, %0" : "=m"(cf.edi));
+    __asm__ __volatile__("movl %%ebp, %0" : "=m"(cf.ebp));
+    __asm__ __volatile__("movl %%esp, %0" : "=m"(esp));
+    __asm__ __volatile__("movw %%cs, %0"    : "=m"(cf.cs));
+    __asm__ __volatile__("movw %%ds, %0"    : "=m"(cf.ds));
+    __asm__ __volatile__("movw %%es, %0"    : "=m"(cf.es));
+    __asm__ __volatile__("pushfl\n\tpopl %0" : "=m"(cf.eflags));
+    __asm__ __volatile__("1: movl $1b, %0"   : "=m"(cf.eip));
+
+    dump_registers("PrintScreen (own regs)", &cf, esp);
+}
+
 static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
     uint8_t shift = (rep->modifier & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) ? 1 : 0;
     uint8_t ctrl  = (rep->modifier & (HID_MOD_LCTRL  | HID_MOD_RCTRL))  ? 1 : 0;
@@ -324,15 +382,20 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
         if (already) continue;
 
         /* This key becomes the one that repeats.  The paths below that emit
-         * nothing (Caps Lock, the control combos, Alt+F<n>) leave the repeat
-         * off instead of keeping the previous key repeating under them. */
+         * nothing (Caps Lock, the control combos, the VT-switching F-keys)
+         * leave the repeat off instead of keeping the previous key repeating
+         * under them. */
         hid_repeat_clear();
 
-        /* Alt+F1..F12 -> switch virtual terminal, as on a Linux console.
-         * HID 0x3A..0x45 are F1..F12; this runs in interrupt context, so the
-         * switch is queued and the VT (allocated on demand, up to the cap) is
-         * brought up by the tty console task. */
-        if (alt && kc >= 0x3A && kc <= 0x45) {
+        /* F1..F12 -> switch virtual terminal.  HID 0x3A..0x45 are F1..F12.
+         * Bare F<n>, Alt+F<n> and Ctrl+Alt+F<n> all switch, as on a Linux
+         * console: the Ctrl+Alt form is the one a full-screen program cannot
+         * swallow.  Shift+F<n> deliberately falls through to
+         * hid_ext_keymap, so a tool that wants a function key still has one.
+         * This runs in interrupt context, so the switch is queued and the VT
+         * (allocated on demand, up to the cap) is brought up by the tty
+         * console task. */
+        if (kc >= 0x3A && kc <= 0x45 && !shift && (!ctrl || alt)) {
             tty_activate_deferred(kc - 0x3A + 1);
             continue;
         }
@@ -349,6 +412,31 @@ static void hid_process_keyboard(hid_priv_t *priv, hid_kbd_report_t *rep) {
             usb_key_event = 1;
             last_char     = cb;
             key_event_happened = 1;
+            continue;
+        }
+
+        /* Shift+Tab is back-tab (CBT) — the ESC[Z rxvt and xterm both send,
+         * which is what the apps that accept a "previous field" key parse.
+         * Plain Tab stays ^I through the keymap below. */
+        if (kc == 0x2B && shift && !ctrl) {
+            hid_post_sequence(priv, kc, "\033[Z");
+            continue;
+        }
+
+        /* PrintScreen -> the Linux console's Show_Registers: the register set
+         * and call trace of the context the interrupt interrupted.  A keypress
+         * is delivered from the xHCI interrupt, so the MSI dispatcher has that
+         * entry frame published; a report drained from a task instead (the poll
+         * loop around a synchronous control transfer) has no interrupt behind
+         * it and falls back to this handler's own registers.  SysRq
+         * (Alt+PrintScreen in Linux) has no counterpart here, so every
+         * PrintScreen press dumps. */
+        if (kc == 0x46) {
+            struct context_frame *irq = get_irq_regs();
+            if (irq)
+                dump_registers("PrintScreen", irq, context_frame_esp(irq));
+            else
+                hid_dump_registers();
             continue;
         }
 

@@ -180,6 +180,12 @@ void hex_to_ascii  (uint32_t n, char str[]);
 // CPU exception dispatcher
 void exception_handler(struct context_frame* regs);
 void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_t signal);
+void dump_registers(const char* tag, struct context_frame* regs, uint32_t esp);
+uint32_t context_frame_esp(struct context_frame* regs);
+
+// Frame of the interrupt being handled (Linux's get_irq_regs())
+struct context_frame* get_irq_regs(void);
+void set_irq_regs(struct context_frame* regs);
 
 // EOI dispatcher — always APIC
 void irq_apic_eoi(void);

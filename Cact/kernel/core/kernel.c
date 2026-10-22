@@ -507,6 +507,16 @@ void init(uint32_t magic, uint32_t mb2_info_addr) {
      * so the scheduler always has something to fall back to. */
     kernel_spawn_bootstrap(mbi);
 
+    /* Bring-up is over: open the scheduler to the worker cores.  Until this
+     * point the boot core owns every global scheduler lock while it runs
+     * single-threaded with IRQs off, and a worker that took the timer tick there
+     * could strand it (the freeze with the console stopping at the first task
+     * spawn).  From here the worker loop dispatches and runs tasks normally. */
+    {
+        extern void sched_boot_complete(void);
+        sched_boot_complete();
+    }
+
     /* Enable IRQs and surrender to the scheduler. The next timer tick will
      * preempt this context (saved into idle's task_struct) and switch to
      * the bootstrap thread. */

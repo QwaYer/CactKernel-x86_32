@@ -18,12 +18,14 @@
 #define MSIDEV_VECTOR_COUNT   192
 #define MSIDEV_VECTOR_END     (MSIDEV_VECTOR_BASE + MSIDEV_VECTOR_COUNT)
 
+struct context_frame;
+
 void msidev_init(void);
 int  msidev_alloc_vector(void);
 void msidev_free_vector(int vector);
 int  msidev_register_handler(int vector, void (*handler)(void));
 void msidev_unregister_handler(int vector);
-void msidev_dispatch(unsigned int vector);
+void msidev_dispatch(unsigned int vector, struct context_frame *frame);
 int  msidev_used_vectors(void);
 
 /*

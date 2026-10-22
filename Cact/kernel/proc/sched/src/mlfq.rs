@@ -317,6 +317,16 @@ pub unsafe extern "C" fn schedule() {
         return;
     }
 
+    // A worker core must not dispatch before the boot core hands over: until then
+    // the boot core is still running the (single-threaded, IRQs-off) bring-up and
+    // every task created so far belongs to it — a worker would take the lock it
+    // holds, or run a task whose subsystem is not initialised yet.  See
+    // `smp::BOOT_COMPLETE`.
+    if !crate::smp::boot_complete() && crate::percpu::this_cpu() != 0 {
+        crate::percpu::schedule_guard().store(0, Ordering::Release);
+        return;
+    }
+
     if REAP_COUNTER.fetch_add(1, Ordering::Relaxed) % 128 == 127 {
         // SAFETY: reaps zombie tasks; the scheduler runs single-threaded per CPU here.
         unsafe { crate::task::task_reap() };
@@ -539,6 +549,15 @@ pub unsafe extern "C" fn on_timer_tick() {
     // Global scheduler state (queues, boost, timer wheel, governor) is owned by
     // the master core; worker cores run only the per-CPU parts of the tick.
     let me = crate::percpu::this_cpu();
+    // A worker must stay out of the scheduler entirely until the boot core hands
+    // over (`sched_boot_complete`): during bring-up the boot core runs
+    // single-threaded with interrupts off and holds these global locks at
+    // arbitrary moments, so a worker tick here could strand it (see
+    // `smp::BOOT_COMPLETE`).  The interrupt was already EOI'd by the stub, so
+    // returning is enough — this core resumes its idle loop untouched.
+    if me != 0 && !crate::smp::boot_complete() {
+        return;
+    }
 
     // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the timer path holds no lock
     // when it calls in (see # Safety).

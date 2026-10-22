@@ -66,12 +66,22 @@ void msidev_unregister_handler(int vector)
     msidev_handlers[idx] = NULL;
 }
 
-void msidev_dispatch(unsigned int vector)
+void msidev_dispatch(unsigned int vector, struct context_frame *frame)
 {
     if (vector < MSIDEV_VECTOR_BASE || vector >= MSIDEV_VECTOR_END) return;
     unsigned int idx = vector - MSIDEV_VECTOR_BASE;
     void (*h)(void) = msidev_handlers[idx];
-    if (h) h();
+    if (!h) return;
+
+    /* Publish the interrupted context for the duration of the handler, so a
+     * driver dumping state (the console's PrintScreen) reports the registers of
+     * what the interrupt interrupted rather than its own — Linux's
+     * get_irq_regs().  Restoring the previous frame keeps a nested interrupt
+     * from erasing the outer one. */
+    struct context_frame *prev = get_irq_regs();
+    set_irq_regs(frame);
+    h();
+    set_irq_regs(prev);
 }
 
 int msidev_used_vectors(void)

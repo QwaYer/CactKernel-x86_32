@@ -12,6 +12,7 @@
 #include "apic.h"
 #include "msi.h"
 #include "sym.h"
+#include "smp.h"
 
 #define TRACE_FRAMES_MAX 16
 
@@ -68,6 +69,138 @@ static void print_trace_frame(int idx, uint32_t ret_eip) {
     printk_color_level(KLOG_LEVEL_CRIT, "\n", COLOR_LIGHT_BROWN);
 }
 
+// Register block, segment selectors and call trace — the part of a dump that
+// says *where the CPU was*.  Shared with the console's PrintScreen dump, so the
+// stack pointer to report is always passed in: an exception stub leaves the
+// faulting ESP at a fixed offset from the frame, while a frame built by hand in
+// the keyboard driver carries it separately.
+static void print_register_block(struct context_frame *regs, uint32_t esp, int priv_change) {
+    put_label_hex(" EIP: ", regs->eip, COLOR_LIGHT_RED);
+    put_label_hex("  CS: ", regs->cs, COLOR_LIGHT_RED);
+    put_label_hex(" EFLAGS: ", regs->eflags, COLOR_LIGHT_RED);
+    printk("\n");
+
+    put_label_hex("EAX: ", regs->eax, COLOR_LIGHT_GREEN);
+    put_label_hex(" EBX: ", regs->ebx, COLOR_LIGHT_GREEN);
+    put_label_hex(" ECX: ", regs->ecx, COLOR_LIGHT_GREEN);
+    put_label_hex(" EDX: ", regs->edx, COLOR_LIGHT_GREEN);
+    printk("\n");
+
+    put_label_hex("ESI: ", regs->esi, COLOR_LIGHT_GREEN);
+    put_label_hex(" EDI: ", regs->edi, COLOR_LIGHT_GREEN);
+    put_label_hex(" EBP: ", regs->ebp, COLOR_LIGHT_GREEN);
+    put_label_hex(" ESP: ", esp, COLOR_LIGHT_GREEN);
+    printk("\n");
+
+    // Segment selectors: only the low 16 bits are the selector, the upper half
+    // of a `push ds` (and of some saved frames) is architecturally undefined.
+    put_label_hex(" DS: ", regs->ds & 0xFFFFu, COLOR_LIGHT_GREEN);
+    put_label_hex(" ES: ", regs->es & 0xFFFFu, COLOR_LIGHT_GREEN);
+    if (priv_change) {
+        put_label_hex(" SS: ", regs->ss & 0xFFFFu, COLOR_LIGHT_GREEN);
+        put_label_hex(" UESP: ", regs->useresp, COLOR_LIGHT_GREEN);
+    } else {
+        printk_color_level(KLOG_LEVEL_CRIT, " SS: <kernel>", COLOR_LIGHT_GREEN);
+    }
+    printk("\n");
+}
+
+static void print_call_trace(struct context_frame *regs, uint32_t esp, int priv_change) {
+    // Stack trace — walk the EBP chain.  A ring-0 fault runs on a kernel stack
+    // (kalloc page, low memory), a ring-3 fault on the user stack; the two need
+    // different address tests and the user one must go through the page tables.
+    printk_color_level(KLOG_LEVEL_CRIT, "Call trace:\n", COLOR_LIGHT_BROWN);
+    int frames = 0;
+    uint32_t ebp = regs->ebp;
+
+    if (in_kernel_space(ebp) && ebp >= 0x1000u) {
+        while (frames < TRACE_FRAMES_MAX && (ebp & 3u) == 0) {
+            uint32_t ret_eip  = ((uint32_t*)ebp)[1];
+            uint32_t next_ebp = ((uint32_t*)ebp)[0];
+            if (!in_kernel_space(ret_eip)) break;
+            print_trace_frame(frames, ret_eip);
+            frames++;
+            if (next_ebp <= ebp) break;
+            ebp = next_ebp;
+        }
+    } else {
+        uint32_t* pd = current_task ? current_task->page_directory : 0;
+        while (frames < TRACE_FRAMES_MAX && (ebp & 3u) == 0) {
+            uint32_t ret_eip, next_ebp;
+            if (peek_user_u32(pd, ebp,     &next_ebp) != 0) break;
+            if (peek_user_u32(pd, ebp + 4, &ret_eip)  != 0) break;
+            print_trace_frame(frames, ret_eip);
+            frames++;
+            if (next_ebp <= ebp) break;
+            ebp = next_ebp;
+        }
+    }
+
+    if (frames == 0) {
+        printk_color_level(KLOG_LEVEL_CRIT, "  (no trace)\n", COLOR_DARK_GREY);
+        // EBP was unusable — show the raw words at the stack pointer, which is
+        // where a corrupted return address / pointer ends up.
+        printk_color_level(KLOG_LEVEL_CRIT, "Stack: ", COLOR_DARK_GREY);
+        if (priv_change) {
+            uint32_t* pd = current_task ? current_task->page_directory : 0;
+            for (int i = 0; i < 12; i++) {
+                uint32_t v;
+                if (peek_user_u32(pd, regs->useresp + (uint32_t)i * 4u, &v) != 0) {
+                    printk(" ??");
+                } else {
+                    printk(" "); put_hex(v, COLOR_DARK_GREY);
+                }
+            }
+        } else {
+            uint32_t* sp = (uint32_t*)esp;
+            for (int i = 0; i < 12; i++) { printk(" "); put_hex(sp[i], COLOR_DARK_GREY); }
+        }
+        printk_color_level(KLOG_LEVEL_CRIT, "\n", COLOR_DARK_GREY);
+    }
+}
+
+// The instruction bytes around EIP — the faulting instruction, or where a wild
+// jump landed.
+static void print_code_bytes(uint32_t eip) {
+    char buf[32];
+    printk_color_level(KLOG_LEVEL_CRIT, "Code: ", COLOR_LIGHT_BROWN);
+    uint32_t* pd = in_kernel_space(eip) ? get_current_pd()
+                  : (current_task ? current_task->page_directory : 0);
+    if (!pd) { printk("??\n"); return; }
+    for (int i = -4; i < 8; i++) {
+        uint32_t addr = eip + (uint32_t)i;
+        if (addr < 0x1000 || addr >= KERNEL_BASE) { printk("?? "); continue; }
+        uint32_t pdi = PD_INDEX(addr);
+        uint32_t pti = PT_INDEX(addr);
+        if (!(pd[pdi] & PAGE_PRESENT)) { printk("?? "); continue; }
+        uint32_t* pt = (uint32_t*)(pd[pdi] & ~0xFFFu);
+        if (!(pt[pti] & PAGE_PRESENT)) { printk("?? "); continue; }
+        uint32_t phys = (pt[pti] & ~0xFFFu) + (addr & 0xFFFu);
+        uint8_t byte = *(volatile uint8_t*)(uintptr_t)phys;
+        snprintf(buf, sizeof(buf), "0x%x", (unsigned)byte);
+        if (i == 0) printk_color_level(KLOG_LEVEL_CRIT, "<", COLOR_LIGHT_GREEN);
+        printk(buf);
+        if (i == 0) printk_color_level(KLOG_LEVEL_CRIT, ">", COLOR_LIGHT_GREEN);
+        printk(" ");
+    }
+    printk("\n");
+}
+
+// Registers, call trace and code bytes with no fault behind them — what the
+// console's PrintScreen key asks for (Linux's Show_Registers).  The frame comes
+// from the caller, so there is no exception number or error code to report and
+// the header names the caller instead.
+void dump_registers(const char *tag, struct context_frame *regs, uint32_t esp) {
+    printk_color_level(KLOG_LEVEL_CRIT, "\n=== ", COLOR_LIGHT_BROWN);
+    printk((char*)tag);
+    printk_color_level(KLOG_LEVEL_CRIT, " ===\n", COLOR_LIGHT_BROWN);
+
+    int priv_change = (regs->cs & 3u) != 0;
+    print_register_block(regs, esp, priv_change);
+    print_call_trace(regs, esp, priv_change);
+    print_code_bytes(regs->eip);
+}
+
 // CPU exception handler — signals for user tasks, panic for kernel
 void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_t signal) {
     char buf[32];
@@ -82,10 +215,7 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
     // Only a ring3 -> ring0 delivery makes the CPU push SS:ESP, so the frame is
     // 8 bytes larger and regs->useresp/ss are meaningful only in that case.
     int priv_change = (regs->cs & 3u) != 0;
-    // The stub pushed the whole frame *below* the faulting ESP, so the faulting
-    // ESP itself is regs + sizeof(context_frame), minus the 8 bytes the CPU
-    // only pushes across a privilege change.
-    uint32_t fault_esp = (uint32_t)regs + (priv_change ? 68u : 60u);
+    uint32_t fault_esp = context_frame_esp(regs);
 
     printk_color_level(KLOG_LEVEL_CRIT, "\n=== ", COLOR_LIGHT_RED);
     if (signal && is_user_task) {
@@ -124,111 +254,9 @@ void dump_context_frame(struct context_frame* regs, uint32_t fault_addr, uint32_
         printk("\n");
     }
 
-    put_label_hex(" EIP: ", regs->eip, COLOR_LIGHT_RED);
-    put_label_hex("  CS: ", regs->cs, COLOR_LIGHT_RED);
-    put_label_hex(" EFLAGS: ", regs->eflags, COLOR_LIGHT_RED);
-    printk("\n");
-
-    put_label_hex("EAX: ", regs->eax, COLOR_LIGHT_GREEN);
-    put_label_hex(" EBX: ", regs->ebx, COLOR_LIGHT_GREEN);
-    put_label_hex(" ECX: ", regs->ecx, COLOR_LIGHT_GREEN);
-    put_label_hex(" EDX: ", regs->edx, COLOR_LIGHT_GREEN);
-    printk("\n");
-
-    put_label_hex("ESI: ", regs->esi, COLOR_LIGHT_GREEN);
-    put_label_hex(" EDI: ", regs->edi, COLOR_LIGHT_GREEN);
-    put_label_hex(" EBP: ", regs->ebp, COLOR_LIGHT_GREEN);
-    put_label_hex(" ESP: ", fault_esp, COLOR_LIGHT_GREEN);
-    printk("\n");
-
-    // Segment selectors: only the low 16 bits are the selector, the upper half
-    // of a `push ds` (and of some saved frames) is architecturally undefined.
-    put_label_hex(" DS: ", regs->ds & 0xFFFFu, COLOR_LIGHT_GREEN);
-    put_label_hex(" ES: ", regs->es & 0xFFFFu, COLOR_LIGHT_GREEN);
-    if (priv_change) {
-        put_label_hex(" SS: ", regs->ss & 0xFFFFu, COLOR_LIGHT_GREEN);
-        put_label_hex(" UESP: ", regs->useresp, COLOR_LIGHT_GREEN);
-    } else {
-        printk_color_level(KLOG_LEVEL_CRIT, " SS: <kernel>", COLOR_LIGHT_GREEN);
-    }
-    printk("\n");
-
-    // Stack trace — walk the EBP chain.  A ring-0 fault runs on a kernel stack
-    // (kalloc page, low memory), a ring-3 fault on the user stack; the two need
-    // different address tests and the user one must go through the page tables.
-    printk_color_level(KLOG_LEVEL_CRIT, "Call trace:\n", COLOR_LIGHT_BROWN);
-    int frames = 0;
-    uint32_t ebp = regs->ebp;
-
-    if (in_kernel_space(ebp) && ebp >= 0x1000u) {
-        while (frames < TRACE_FRAMES_MAX && (ebp & 3u) == 0) {
-            uint32_t ret_eip  = ((uint32_t*)ebp)[1];
-            uint32_t next_ebp = ((uint32_t*)ebp)[0];
-            if (!in_kernel_space(ret_eip)) break;
-            print_trace_frame(frames, ret_eip);
-            frames++;
-            if (next_ebp <= ebp) break;
-            ebp = next_ebp;
-        }
-    } else {
-        uint32_t* pd = current_task ? current_task->page_directory : 0;
-        while (frames < TRACE_FRAMES_MAX && (ebp & 3u) == 0) {
-            uint32_t ret_eip, next_ebp;
-            if (peek_user_u32(pd, ebp,     &next_ebp) != 0) break;
-            if (peek_user_u32(pd, ebp + 4, &ret_eip)  != 0) break;
-            print_trace_frame(frames, ret_eip);
-            frames++;
-            if (next_ebp <= ebp) break;
-            ebp = next_ebp;
-        }
-    }
-
-    if (frames == 0) {
-        printk_color_level(KLOG_LEVEL_CRIT, "  (no trace)\n", COLOR_DARK_GREY);
-        // EBP was unusable — show the raw words at the faulting stack pointer,
-        // which is where a corrupted return address / pointer ends up.
-        printk_color_level(KLOG_LEVEL_CRIT, "Stack: ", COLOR_DARK_GREY);
-        if (priv_change) {
-            uint32_t* pd = current_task ? current_task->page_directory : 0;
-            for (int i = 0; i < 12; i++) {
-                uint32_t v;
-                if (peek_user_u32(pd, regs->useresp + (uint32_t)i * 4u, &v) != 0) {
-                    printk(" ??");
-                } else {
-                    printk(" "); put_hex(v, COLOR_DARK_GREY);
-                }
-            }
-        } else {
-            uint32_t* sp = (uint32_t*)fault_esp;
-            for (int i = 0; i < 12; i++) { printk(" "); put_hex(sp[i], COLOR_DARK_GREY); }
-        }
-        printk_color_level(KLOG_LEVEL_CRIT, "\n", COLOR_DARK_GREY);
-    }
-
-    // Print EIP instruction bytes
-    printk_color_level(KLOG_LEVEL_CRIT, "Code: ", COLOR_LIGHT_BROWN);
-    {
-        uint32_t* pd = in_kernel_space(regs->eip) ? get_current_pd()
-                      : (current_task ? current_task->page_directory : 0);
-        if (!pd) { printk("??\n"); return; }
-        for (int i = -4; i < 8; i++) {
-            uint32_t addr = regs->eip + (uint32_t)i;
-            if (addr < 0x1000 || addr >= KERNEL_BASE) { printk("?? "); continue; }
-            uint32_t pdi = PD_INDEX(addr);
-            uint32_t pti = PT_INDEX(addr);
-            if (!(pd[pdi] & PAGE_PRESENT)) { printk("?? "); continue; }
-            uint32_t* pt = (uint32_t*)(pd[pdi] & ~0xFFFu);
-            if (!(pt[pti] & PAGE_PRESENT)) { printk("?? "); continue; }
-            uint32_t phys = (pt[pti] & ~0xFFFu) + (addr & 0xFFFu);
-            uint8_t byte = *(volatile uint8_t*)(uintptr_t)phys;
-            snprintf(buf, sizeof(buf), "0x%x", (unsigned)byte);
-            if (i == 0) printk_color_level(KLOG_LEVEL_CRIT, "<", COLOR_LIGHT_GREEN);
-            printk(buf);
-            if (i == 0) printk_color_level(KLOG_LEVEL_CRIT, ">", COLOR_LIGHT_GREEN);
-            printk(" ");
-        }
-    }
-    printk("\n");
+    print_register_block(regs, fault_esp, priv_change);
+    print_call_trace(regs, fault_esp, priv_change);
+    print_code_bytes(regs->eip);
 }
 
 // CPU exception handler — signals for user tasks, panic for kernel
@@ -268,4 +296,36 @@ void exception_handler(struct context_frame* regs) {
 
 void irq_apic_eoi(void) {
     apic_eoi();
+}
+
+/* ESP the CPU pushed for the frame at `regs`.  The stub pushes the whole frame
+ * *below* the interrupted ESP, so the interrupted ESP itself is regs +
+ * sizeof(context_frame), minus the 8 bytes the CPU only pushes across a
+ * privilege change.  Only meaningful for a frame a stub pushed — a frame built
+ * by hand carries its ESP separately (see dump_registers). */
+uint32_t context_frame_esp(struct context_frame *regs) {
+    return (uint32_t)regs + (((regs->cs & 3u) != 0) ? 68u : 60u);
+}
+
+/* ── The frame of the interrupt being handled ─────────────────────────────
+ * Linux's get_irq_regs(): an interrupt handler's own registers say nothing
+ * about what the machine was doing, so the entry stub's frame is published for
+ * the duration of the handler and a driver dumping state (the console's
+ * PrintScreen) reads *that*.  Per-CPU, because another core can be in its own
+ * handler at the same time; nesting on one core is the dispatcher's
+ * save/restore (set_irq_regs returns the previous frame in its slot). */
+#define IRQ_REGS_MAX_CPUS 64   /* mirrors the scheduler's MAX_CPUS */
+
+static struct context_frame *irq_regs[IRQ_REGS_MAX_CPUS];
+
+struct context_frame *get_irq_regs(void) {
+    int cpu = smp_self_cpu();
+    if (cpu < 0 || cpu >= IRQ_REGS_MAX_CPUS) return NULL;
+    return irq_regs[cpu];
+}
+
+void set_irq_regs(struct context_frame *regs) {
+    int cpu = smp_self_cpu();
+    if (cpu < 0 || cpu >= IRQ_REGS_MAX_CPUS) return;
+    irq_regs[cpu] = regs;
 }

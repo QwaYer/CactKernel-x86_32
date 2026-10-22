@@ -11,6 +11,7 @@
 
 use core::cell::SyncUnsafeCell;
 use core::ptr;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::energy;
 use crate::cstate;
@@ -722,6 +723,28 @@ pub fn set_tss_esp0(cpu: usize, esp0: u32) {
     // SAFETY: `cpu` is bounds-checked against `MAX_CPUS` above, so `p` addresses a live
     // `CPU_TABLE` entry and the `tss.esp0` store is in bounds.
     unsafe { (*p).tss.esp0 = esp0 };
+}
+
+/// 0 until the boot core has finished bringing the system up.  While it is 0 the
+/// boot core owns all *global* scheduler state (it runs single-threaded with
+/// interrupts off and holds `SCHEDULER_LOCK` at arbitrary moments), so a worker
+/// must neither dispatch nor run anything: taking the tick's scheduler lock there
+/// is how a worker was seen to strand the boot core on that lock, with the
+/// console stopping at the first task spawn.
+static BOOT_COMPLETE: AtomicU32 = AtomicU32::new(0);
+
+/// Called from the C boot path after the bootstrap thread exists and before the
+/// boot core surrenders to the scheduler (`sti`): from here on the worker cores
+/// may dispatch and run tasks.
+#[no_mangle]
+pub extern "C" fn sched_boot_complete() {
+    BOOT_COMPLETE.store(1, Ordering::Release);
+}
+
+/// True once the boot core has handed the system over to the scheduler.
+#[inline]
+pub fn boot_complete() -> bool {
+    BOOT_COMPLETE.load(Ordering::Acquire) != 0
 }
 
 /// Current CPU index derived from the loaded TSS selector
