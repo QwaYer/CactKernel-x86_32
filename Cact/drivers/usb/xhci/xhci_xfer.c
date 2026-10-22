@@ -11,7 +11,7 @@
 /* Endpoint state field (Endpoint Context word 0, bits 2:0) of the output
  * device context the controller maintains: 0 Disabled, 1 Running, 2 Halted,
  * 3 Stopped, 4 Error. */
-static uint8_t xhci_ep_state(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
+uint8_t xhci_ep_state(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
     uint8_t *dev_ctx = xhci_get_dev_ctx(priv, slot);
     if (!dev_ctx)
         return 0;
@@ -25,9 +25,10 @@ static uint8_t xhci_ep_state(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
  * device stopped answering).  That pending TD blocks the whole endpoint: every
  * later transfer to it times out too, so a single stalled control transfer
  * used to wedge EP0 for good.  Stop the endpoint, reset it if the controller
- * halted it (a STALL), then move its dequeue past the abandoned TRBs so it runs
- * again from the next free slot. */
-static void xhci_recover_ep(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
+ * halted it (a STALL, or a ring overrun/underrun that leaves it in Error), then
+ * move its dequeue past the abandoned TRBs so it runs again from the next free
+ * slot. */
+void xhci_recover_ep(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
     xhci_ring_t *ring = &priv->ep_rings[slot][dci - 1];
     if (!ring->ring)
         return;
@@ -41,11 +42,12 @@ static void xhci_recover_ep(xhci_priv_t *priv, uint8_t slot, uint8_t dci) {
                 | ((uint32_t)dci << 16);
     int rc_stop = xhci_send_cmd(priv, &trb);
 
-    /* A STALL leaves the endpoint Halted, and Set TR Dequeue alone does not
-     * bring a Halted endpoint back (the controller keeps ignoring its
-     * doorbell).  Reset Endpoint is what clears that state. */
+    /* A STALL leaves the endpoint Halted and a ring overrun/underrun leaves it
+     * in Error; Set TR Dequeue alone does not bring either back (the controller
+     * keeps ignoring its doorbell).  Reset Endpoint is what clears them. */
     int rc_reset = -1;
-    if (xhci_ep_state(priv, slot, dci) == 2 /* Halted */) {
+    uint8_t st = xhci_ep_state(priv, slot, dci);
+    if (st == 2 /* Halted */ || st == 4 /* Error */) {
         memset(&trb, 0, sizeof(trb));
         trb.control = (XHCI_TRB_RESET_EP << XHCI_TRB_TYPE_SHIFT)
                     | ((uint32_t)slot << 24)

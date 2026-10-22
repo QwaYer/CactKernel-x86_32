@@ -574,9 +574,86 @@ static void xhci_recover_after_reset(xhci_priv_t *priv, usb_hc_t *hc) {
     xhci_scan_ports(priv, hc);
 }
 
+/* Put an interrupt endpoint the controller took out of service back to work.
+ * Reset Endpoint / Set TR Dequeue leaves it Stopped with nothing armed, so the
+ * report request has to be queued again and the doorbell rung — the event
+ * path's own re-arm cannot do it, because a Halted endpoint ignores every
+ * doorbell written after the fault. */
+static void xhci_recover_intr_ep(xhci_priv_t *priv, xhci_intr_ep_slot_t *s) {
+    if (!s->ring || !s->buf)
+        return;
+
+    xhci_recover_ep(priv, s->slot_id, s->dci);
+
+    xhci_trb_t trb;
+    memset(&trb, 0, sizeof(trb));
+    trb.param_lo = xhci_va_to_pa(s->buf);
+    trb.status   = s->len;
+    trb.control  = (XHCI_TRB_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC;
+    s->ring->dequeue = s->ring->enqueue;
+    if (xhci_ring_enqueue(s->ring, &trb) == 0)
+        xhci_db_write32(priv, s->slot_id, s->dci);
+}
+
+/* Health check of one controller.  Two failures used to be invisible and
+ * permanent:
+ *  - a fatal controller error is only ever handled from the IRQ path, so one
+ *    raised while no interrupt was delivered left the controller halted with
+ *    no device working again — and because port-status changes are also only
+ *    noticed from the IRQ, re-plugging did not help;
+ *  - an interrupt endpoint the xHC put into the Halted or Error state ignores
+ *    every later doorbell, so the device stopped reporting for good.
+ * Both are handed to the existing recovery paths.  The per-endpoint half runs
+ * at once after a bad completion and otherwise once a second, so an idle
+ * device costs one context read per second and nothing else. */
+static void xhci_audit(xhci_priv_t *priv, int full) {
+    /* HCH is also set by a Host System Error or a Host Controller Error, so a
+     * halted controller is the one condition that has to be caught here — the
+     * IRQ path is the only other place that looks at USBSTS.  HSE is left to
+     * the IRQ path on purpose: the Intel spurious-reboot quirk deliberately
+     * ignores it, and resetting on it from here would fight that.
+     *
+     * ctrl_escalated stays set until the controller is seen running again, so
+     * a controller that cannot be revived is not reset every second; the
+     * recovery itself reports through xhci_recover_after_reset(). */
+    uint32_t sts = xhci_op_read32(priv, XHCI_OP_USBSTS);
+    if (!priv->reset_pending && (sts & (XHCI_STS_HCH | XHCI_STS_HCE))) {
+        if (priv->ctrl_escalated)
+            return;
+        priv->ctrl_escalated = 1;
+        xhci_op_write32(priv, XHCI_OP_USBSTS,
+                        sts & (XHCI_STS_HSE | XHCI_STS_HCE));
+        priv->reset_pending = 1;
+        return;                     /* the reset path re-scans everything */
+    }
+    if (!(sts & (XHCI_STS_HCH | XHCI_STS_HCE)))
+        priv->ctrl_escalated = 0;
+
+    for (int i = 0; i < priv->intr_ep_count; i++) {
+        xhci_intr_ep_slot_t *s = &priv->intr_slots[i];
+        if (!s->active) continue;
+        if (!full && !s->needs_recovery) continue;
+        if (s->slot_id == 0 || s->slot_id > priv->max_slots) continue;
+
+        s->needs_recovery = 0;
+        uint8_t st = xhci_ep_state(priv, s->slot_id, s->dci);
+        if (st != 2 /* Halted */ && st != 4 /* Error */) {
+            s->recover_tried = 0;       /* healthy again: allow a later attempt */
+            continue;
+        }
+        /* One attempt per fault episode.  Retrying every second would hammer
+         * the command ring, and each attempt is reported by xhci_recover_ep(). */
+        if (s->recover_tried)
+            continue;
+        s->recover_tried = 1;
+        xhci_recover_intr_ep(priv, s);
+    }
+}
+
 /* One task drains port events and reaps dead slots.  Both need sleeping and
  * command submission, so neither can run from the interrupt handler. */
 static void xhci_hotplug_task(void) {
+    uint32_t audit_div = 0;
     while (1) {
         for (usb_hc_t *hc = xhci_hc_list; hc; hc = hc->irq_next) {
             xhci_priv_t *priv = (xhci_priv_t *)hc->priv;
@@ -584,6 +661,10 @@ static void xhci_hotplug_task(void) {
             /* Leave the controller alone while it is being scanned; the port
              * events stay latched and are handled on the next round. */
             if (priv->scanning) continue;
+
+            /* Health check first: a fault found here arms reset_pending, which
+             * the block right below then services. */
+            xhci_audit(priv, (audit_div % 100u) == 0u);
 
             if (priv->reset_pending) {
                 priv->reset_pending = 0;
@@ -614,6 +695,7 @@ static void xhci_hotplug_task(void) {
         /* React within one tick: a hotplugged device should appear as fast as
          * on a desktop OS, and the loop body is a couple of atomics per
          * controller when there is nothing to do. */
+        audit_div++;
         sched_sleep_ticks(1);
     }
 }

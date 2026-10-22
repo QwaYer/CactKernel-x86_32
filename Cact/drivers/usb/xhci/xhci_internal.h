@@ -143,6 +143,11 @@ int  xhci_interrupt_transfer(usb_hc_t *hc, usb_device_t *dev,
 int  xhci_bulk_transfer(usb_hc_t *hc, usb_device_t *dev,
                         uint8_t ep_num, uint8_t dir, void *buf, uint16_t len,
                         uint32_t timeout_ms);
+/* Endpoint state from the controller's device context (0 Disabled, 1 Running,
+ * 2 Halted, 3 Stopped, 4 Error) and the Stop/Reset/Set-TR-Dequeue recovery the
+ * hotplug task runs for an endpoint the controller took out of service. */
+uint8_t xhci_ep_state(xhci_priv_t *priv, uint8_t slot, uint8_t dci);
+void    xhci_recover_ep(xhci_priv_t *priv, uint8_t slot, uint8_t dci);
 
 /* Process whatever the controller has already posted (xhci_ring.c). */
 void xhci_poll_events(xhci_priv_t *priv);

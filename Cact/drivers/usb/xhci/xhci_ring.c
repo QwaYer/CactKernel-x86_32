@@ -238,10 +238,18 @@ static void xhci_process_event(xhci_priv_t *priv, xhci_trb_t *evt) {
             if (cc == XHCI_CC_SUCCESS || cc == XHCI_CC_SHORT_PACKET) {
                 if (s->notify)
                     s->notify(s->dev, s->buf, s->len, s->notify_priv);
-            } else if (!s->err_logged) {
-                s->err_logged = 1;
-                pr_warn("xhci: interrupt EP slot %u dci %u completion code %u\n",
-                        (unsigned)slot, (unsigned)dci, (unsigned)cc);
+            } else {
+                /* A bad completion code may have taken the endpoint out of
+                 * service (Halted or Error), and such an endpoint ignores the
+                 * doorbell the re-arm below rings.  Ask the hotplug task to
+                 * Reset Endpoint / Set TR Dequeue it; without that the device
+                 * stays silent until it is re-plugged. */
+                s->needs_recovery = 1;
+                if (!s->err_logged) {
+                    s->err_logged = 1;
+                    pr_warn("xhci: interrupt EP slot %u dci %u completion code %u\n",
+                            (unsigned)slot, (unsigned)dci, (unsigned)cc);
+                }
             }
 
             /* Re-arm whatever the completion said.  The event consumed the

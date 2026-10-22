@@ -507,6 +507,8 @@ int xhci_register_interrupt_ep(usb_hc_t *hc, usb_device_t *dev,
     s->notify      = notify;
     s->notify_priv = notify_priv;
     s->err_logged  = 0;
+    s->needs_recovery = 0;
+    s->recover_tried  = 0;
     s->active      = 1;
     s->ring        = &priv->ep_rings[slot][dci - 1];
 

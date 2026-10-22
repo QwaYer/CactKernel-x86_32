@@ -194,6 +194,16 @@ typedef struct {
     void                 *notify_priv;
     uint8_t               slot_id;
     uint8_t               dci;
+    /* The xHC takes an endpoint out of service when a completion is fatal (a
+     * STALL, a babble, a ring overrun/underrun).  A Halted or Error endpoint
+     * ignores its doorbell, so the blind re-arm the event path does changes
+     * nothing and the device goes quiet for good — a keyboard then types
+     * nothing until it is physically re-plugged.  Only Reset Endpoint + Set TR
+     * Dequeue bring it back, and both are commands, which the event path may
+     * not issue, so a bad completion flags the endpoint for the hotplug task.
+     * recover_tried holds it to one repair attempt per fault episode. */
+    volatile uint8_t      needs_recovery;
+    uint8_t               recover_tried;
     /* Points at the slot's real ring in xhci_priv_t::ep_rings.  It used to be
      * a by-value copy, so the interrupt path advanced one set of enqueue/
      * cycle counters while Configure Endpoint read another — the two drifted
@@ -258,6 +268,11 @@ typedef struct {
      * back into reset.  Re-programming the registers and re-enumerating has to
      * happen in task context, so the hotplug task owns it. */
     volatile uint8_t      reset_pending;
+    /* A fatal error is otherwise only ever seen from the IRQ handler, so one
+     * raised while no interrupt was delivered left the controller halted and
+     * dead.  The hotplug task polls USBSTS and latches the escalation here, so
+     * a controller that cannot be revived is not reset every second. */
+    uint8_t               ctrl_escalated;
 
     /* Slots whose device went away.  Torn down by the hotplug task, not by the
      * disconnect path: that path can run with the event lock held (a hub's
