@@ -22,7 +22,11 @@ void serial_init(void) {
 }
 
 void serial_putc(char c) {
-    while (!(com_rd(5) & 0x20u))
-        ;
-    com_wr(0, (uint8_t)c);
+    /* Never wait for THRE: spinning here caps every console write at the line
+     * rate (115200 baud ≈ 11.5 KB/s), which a full-screen TUI redraw turns into
+     * hundreds of ms of lag per keystroke.  A byte the UART cannot take right
+     * now is dropped — QEMU's emulated FIFO drains instantly, so the headless
+     * -serial transcript is unaffected. */
+    if (com_rd(5) & 0x20u)
+        com_wr(0, (uint8_t)c);
 }
