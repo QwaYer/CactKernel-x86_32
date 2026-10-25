@@ -38,8 +38,6 @@ pub unsafe extern "C" fn sched_create_thread(
     set_tid:  u32,
     clr_tid:  u32,
 ) -> i32 {
-    let _ = tls;
-
     // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the caller must not hold it.
     unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
 
@@ -145,6 +143,7 @@ pub unsafe extern "C" fn sched_create_thread(
     child_p.itimer_interval   = 0;
     child_p.is_thread         = 1;
     child_p.clr_tid           = clr_tid;   // join futex the kernel zeroes on exit
+    child_p.tls_base          = tls;       // this thread's %gs base (0 = none)
     // SAFETY: `parent_proc` is the live parent's `ProcMeta`.
     child_p.tgid = unsafe { (*parent_proc).tgid };
     child_p.shared = parent_shared;
@@ -249,4 +248,24 @@ pub unsafe fn clear_child_tid_on_exit(t: *mut TaskStruct) {
     // SAFETY: `pd` is the live address space and `uaddr` a valid word in it; the
     // FFI function keys the wake on (pd, uaddr) and does not dereference `uaddr`.
     unsafe { cact_futex_wake_addr(pd, uaddr, i32::MAX) };
+}
+
+/// Set the calling task's TLS base (CACT_PROCCTL_SET_TLS) and load it on this
+/// core right away, so the task sees the new `%gs` as soon as it returns to user
+/// space.  `base == 0` clears it (see `smp::set_tls_base`).
+#[no_mangle]
+pub unsafe extern "C" fn sched_set_tls(base: u32) -> i32 {
+    let t = current_task();
+    if t.is_null() {
+        return -1;
+    }
+    // SAFETY: `t` is the live current task.
+    let p = unsafe { (*t).proc };
+    if p.is_null() {
+        return -1;
+    }
+    // SAFETY: `p` is that task's live `ProcMeta`.
+    unsafe { (*p).tls_base = base };
+    crate::smp::set_tls_base(crate::percpu::this_cpu(), base);
+    0
 }

@@ -334,6 +334,7 @@ All out-of-tree PCI drivers now register their interrupt through the kernel's **
 | **mntfs** | Active | User-visible mount table + auto-mount policy at boot |
 | **etcfs** | Active | passwd-like uid ↔ name mapping |
 | **tmpfs** | Active | RAM-backed files |
+| **posixmq** | Active | POSIX message queues — a small filesystem mounted at **`/dev/mqueue`** whose files *are* queues (`Cact/fs/mqueue`, `CACT_MQCTL_*`): `mq_open` is open-or-create, `mq_unlink` is `unlink`, and send/receive (prioritised) are ioctls on the descriptor |
 | **binfs** | Active | **`/usr/bin`** + a synthesized **cctkfs** tree (**`cctkfs_tree`** builds the archive hierarchy); **`/bin`** → **`/usr/bin`** symlink |
 | **sbinfs** | Active | **`/usr/sbin`** + synthesized cctkfs tree; **`/sbin`** → **`/usr/sbin`** symlink |
 | **libfs** | Active | **`/usr/lib`** + synthesized cctkfs tree — **`modules/`**, **`firmware/`**, **`cactpkg/repo/`** and the whole **`cact-install/`** tree are reachable; **`/lib`** → **`/usr/lib`** symlink |
@@ -434,7 +435,7 @@ Syscall dispatch uses the **`sysenter`/`sysexit`** instruction pair, with an AMD
 | **`SYS_*`** 0–14 | Core traps: `open` `close` `read` `write` `ioctl` `poll` `fork` `exec` `exit` `waitpid` `brk` `mmap` `munmap` `mprotect` `sigreturn` |
 | **`CACT_FDCTL_*`** 0x3000 | ioctl on any fd — `dup` `dup2` `fcntl` `lseek` `fstat` `ftruncate` `getdents` `fsync` |
 | **`CACT_DIRCTL_*`** 0x3100 | ioctl on a directory fd — `openat` `create` `mkdir` `rmdir` `unlink` `link` `symlink` `readlink` `rename` `stat` `access` `chmod` `chown` `truncate` `mknod` |
-| **`CACT_PROCCTL_*`** 0x3200 | ioctl on `/proc/self/ctl` — `setsid` `setpgid` `setuid` `setgid` `umask` `chdir` `chroot` signals/itimers, `shmget` `shmat` `shmdt` `shmctl` |
+| **`CACT_PROCCTL_*`** 0x3200 | ioctl on `/proc/self/ctl` — `setsid` `setpgid` `setuid` `setgid` `umask` `chdir` `chroot` signals/itimers, `shmget` `shmat` `shmdt` `shmctl`, `sched_yield`, `sigwait` `sigqueue` |
 | **`CACT_SOCKCTL_*`** 0x3300 | ioctl on a socket fd — `bind` `connect` `listen` `accept` `shutdown` `setsockopt` `getsockopt` `sendto` `recvfrom` (data path: `read`/`write`) |
 | **`CACT_NETCTL_*`** 0x3400 | ioctl on `/dev/net` — `socket` creation, ping, DNS resolve, netcfg |
 | **`CACT_SYSCTL_*`** 0x3500 | ioctl on `/dev/sys` (root) — `mount` `umount` `reboot`, kernel module load/unload |

@@ -446,6 +446,7 @@ pub unsafe extern "C" fn schedule() {
     // SAFETY: `next` is live.
     let next_proc = unsafe { (*next).proc };
     if !next_proc.is_null() {
+        let me = crate::percpu::this_cpu();
         // SAFETY: `next_proc` is the live `ProcMeta` of the incoming task.
         let stack_base = unsafe { (*next_proc).stack_base };
         if !stack_base.is_null() {
@@ -454,7 +455,6 @@ pub unsafe extern "C" fn schedule() {
             // is the C `tss_entry`, each AP's is its own `SmpCpu` slot.  Both are
             // used by the CPU on ring3->ring0 transitions (interrupts, faults),
             // so they must track the running task per core.
-            let me = crate::percpu::this_cpu();
             if me == 0 {
                 // SAFETY: `tss_entry` is the BSP TSS, exclusively updated under `SCHEDULER_LOCK`.
                 let tss_ptr = unsafe { ffi::tss_entry.get() };
@@ -471,6 +471,13 @@ pub unsafe extern "C" fn schedule() {
             // AMD-SYSCALL entry-stack table.
             unsafe { ffi::syscall_set_cpu_esp0(me as u32, esp0) };
         }
+
+        // The incoming task's TLS base, on this core: the descriptor is per-core,
+        // so it has to be (re)written and `%gs` reloaded where the task will run.
+        // A zero base leaves the kernel data segment in `%gs`.
+        // SAFETY: `next_proc` is live; `set_tls_base` only touches this core's GDT.
+        let tls_base = unsafe { (*next_proc).tls_base };
+        crate::smp::set_tls_base(me, tls_base);
     }
 
     // SAFETY: disables interrupts around the context switch.

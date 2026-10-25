@@ -189,6 +189,8 @@ pub const MAX_FD: usize = 256;
 pub const NSIG: usize = 13;
 pub const SIGKILL: u32 = 1 << 0;
 pub const SIGSEGV: u32 = 1 << 8;
+/// si_code for a signal the kernel generated itself (a fault).
+pub const SI_KERNEL: u32 = 0x80;
 
 pub const SLAB_MAX_OBJ_SIZE: u32 = 2048;
 pub const SLAB_MIN_OBJ_SIZE: u32 = 8;
@@ -351,6 +353,21 @@ pub struct ProcMeta {
     pub clr_tid:            u32,
     pub intr_wait:          u8,
     pub _pad3:              [u8; 3],
+    // --- sigaltstack (appended after 612; existing offsets above are unchanged) ---
+    pub altstack_sp:        u32,
+    pub altstack_size:      u32,
+    pub altstack_flags:     u32,
+    pub signal_flags:       [u32; NSIG],
+    // --- TLS (appended after 676; existing offsets above are unchanged) ---
+    pub tls_base:           u32,
+    // --- signal dispositions (appended after 680) ---
+    pub signal_masks:       [u32; NSIG],
+    // --- signal sources (appended after 732) ---
+    pub signal_codes:       [u32; NSIG],
+    pub signal_addr:        u32,
+    // --- sigwait()/sigqueue() (appended after 788) ---
+    pub sigwait_set:        u32,
+    pub signal_value:       u32,
 }
 
 #[repr(C)]
@@ -445,6 +462,8 @@ unsafe extern "C" {
     pub static scheduler_lock: SyncMut<IrqSpinlock>;
 
     pub fn task_signal(pid: u32, signal: u32);
+    /// Queue a signal *and* record its source (si_code) and fault address.
+    pub fn task_signal_code(pid: u32, signal: u32, code: u32, addr: u32);
     pub fn schedule();
     pub fn task_reap();
 

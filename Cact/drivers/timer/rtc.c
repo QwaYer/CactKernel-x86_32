@@ -161,3 +161,13 @@ uint64_t rtc_epoch_sec(void)
 {
     return rtc_epoch_usec() / 1000000ull;
 }
+
+void rtc_set_epoch_usec(uint64_t usec)
+{
+    /* The clock is "anchor + elapsed ticks", so setting it means moving the
+     * anchor to the requested time and re-basing the tick count.  The CMOS is
+     * left alone: the next boot re-reads the hardware date. */
+    rtc_anchor_epoch = usec / 1000000ull;
+    rtc_anchor_ticks = timer_ticks_get();
+    rtc_valid = 1;
+}

@@ -7,6 +7,7 @@
 #include "klib.h"
 #include "task.h"
 #include "validate.h"
+#include "ioctl_abi.h"
 #include "proc.h"
 #include "fb.h"
 #include "apic.h"
@@ -285,7 +286,7 @@ void exception_handler(struct context_frame* regs) {
                 __asm__ volatile ("hlt");   // safety net if schedule() returns
         }
 
-        task_signal(current_task->pid, signal);
+        task_signal_code(current_task->pid, signal, CACT_SI_KERNEL, 0);
         schedule();
         return;
     }

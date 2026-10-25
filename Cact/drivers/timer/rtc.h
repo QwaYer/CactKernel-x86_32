@@ -22,4 +22,10 @@ int      rtc_have_time(void);
 uint64_t rtc_epoch_sec(void);
 uint64_t rtc_epoch_usec(void);
 
+/* Set the civil clock (clock_settime).  The wall clock is an anchor plus
+ * elapsed ticks, so this just re-anchors it: time keeps running forward from
+ * the new value and /proc/wallclock follows at once.  Nothing is written to
+ * the CMOS chip, so a reboot re-reads the hardware date. */
+void     rtc_set_epoch_usec(uint64_t usec);
+
 #endif /* CACT_RTC_H */

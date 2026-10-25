@@ -158,13 +158,24 @@ fn ensure_bits(a: &mut AddrSpace, need_pages: usize) -> bool {
 }
 
 unsafe fn as_of(owner: *mut c_void, ino: u32) -> *mut AddrSpace {
-    // SAFETY: fixed static table; linear scan / append.
+    // SAFETY: fixed static table; linear scan / reuse / append.
     unsafe {
         let f = as_find(owner, ino);
         if !f.is_null() {
             return f;
         }
-        if AS_COUNT >= AS_MAX {
+        // Reuse a slot an earlier `vfs_as_release` cleared, so the table is
+        // bounded by the objects *alive* rather than by every object ever made
+        // (a shm or /tmp workload that creates and drops objects in a loop
+        // would otherwise exhaust AS_MAX permanently).
+        let mut idx = AS_COUNT;
+        for i in 0..AS_COUNT {
+            if !(*ptr::addr_of!(AS[i])).used {
+                idx = i;
+                break;
+            }
+        }
+        if idx == AS_COUNT && AS_COUNT >= AS_MAX {
             return ptr::null_mut();
         }
         let h = memfd_create(ptr::null(), 0, 0);
@@ -172,20 +183,22 @@ unsafe fn as_of(owner: *mut c_void, ino: u32) -> *mut AddrSpace {
             return ptr::null_mut();
         }
         memfd_ref(h);
-        let a = &mut *ptr::addr_of_mut!(AS[AS_COUNT]);
+        let a = &mut *ptr::addr_of_mut!(AS[idx]);
         a.used = true;
         a.owner = owner;
         a.ino = ino;
         a.mfd = h;
         a.size = 0;
-        // Slots are appended once and never reused, so an object starts with no
-        // bitmaps; `ensure_bits` allocates them at the first write/populate.
         a.cap_pages = 0;
         a.present = ptr::null_mut();
         a.dirty = ptr::null_mut();
-        AS_COUNT += 1;
+        a.rfn = None;
+        a.wfn = None;
+        if idx == AS_COUNT {
+            AS_COUNT += 1;
+        }
         AS_OBJECTS += 1;
-        ptr::addr_of_mut!(AS[AS_COUNT - 1])
+        ptr::addr_of_mut!(AS[idx])
     }
 }
 
@@ -486,6 +499,17 @@ pub unsafe extern "C" fn vfs_as_release(owner: *mut c_void, ino: u32) {
                     memfd_close(a.mfd);
                     a.mfd = 0;
                 }
+                // The mirror bitmaps belong to this entry; give them back so a
+                // later object reusing the slot starts clean.
+                if !a.present.is_null() {
+                    cact_mm::kfree(a.present);
+                    a.present = ptr::null_mut();
+                }
+                if !a.dirty.is_null() {
+                    cact_mm::kfree(a.dirty);
+                    a.dirty = ptr::null_mut();
+                }
+                a.cap_pages = 0;
                 a.used = false;
                 a.owner = ptr::null_mut();
                 a.ino = 0;

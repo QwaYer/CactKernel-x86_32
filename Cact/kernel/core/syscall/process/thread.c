@@ -1,15 +1,27 @@
 #include "task.h"
 #include "validate.h"
+#include "memory.h"
 #include "ioctl_abi.h"
 
 /* User threads and futexes.
  *
  * The scheduler creates the thread itself (sched_create_thread, in
  * sched/src/task_thread.rs); this file provides the /proc/self/ctl entry points
- * and the futex wait/wake table that lets userspace (libc pthreads) build
- * mutexes, condition variables and joins.  A futex is keyed by the pair
- * (address space, user address), so two threads of one process rendezvous while
- * an unrelated process reusing the same virtual address does not.
+ * and the futex wait/wake table that lets userspace (libc pthreads, semaphores)
+ * build mutexes, condition variables and joins.
+ *
+ * A futex word can be keyed two ways:
+ *   - private (default): (address space, user address).  Two threads of one
+ *     process rendezvous, and an unrelated process reusing the same virtual
+ *     address does not — this is what pthreads use.
+ *   - shared (CACT_FUTEX_WAIT_SHARED/_WAKE_SHARED): the word's PHYSICAL address.
+ *     Two processes that map the same page (shmget/shmat) then rendezvous on it,
+ *     which is what a pshared sem_t needs.  The page must stay mapped while a
+ *     waiter is queued: the key is the frame's address, so unmapping it and
+ *     letting the frame be recycled could make a later wake land on the wrong
+ *     waiter.  A spurious wake is harmless (the semaphore loop re-checks the
+ *     word and re-waits); a lost one is not, so never unmap shared memory with a
+ *     live waiter.
  */
 
 #define EINTR     4
@@ -21,12 +33,15 @@
 
 #define FUTEX_OP_WAIT 0
 #define FUTEX_OP_WAKE 1
+#define FUTEX_OP_WAIT_SHARED 2
+#define FUTEX_OP_WAKE_SHARED 3
 
 #define FUTEX_MAX_WAITERS 256
 
 typedef struct {
-    uint32_t            pd;      /* address-space identity (its page directory) */
-    uint32_t            uaddr;   /* futex word, user VA */
+    uint32_t            pd;      /* private key: address-space identity */
+    uint32_t            uaddr;   /* private key: futex word, user VA */
+    uint32_t            phys;    /* shared key: the word's physical address */
     struct task_struct* task;
 } futex_waiter_t;
 
@@ -39,8 +54,10 @@ extern uint32_t timer_ticks_get(void);
 extern void sched_task_exit(int exit_code);
 
 /* Block until *uaddr changes or the timeout expires.  Returns 0 on wake,
- * -EAGAIN if the value already differed, -ETIMEDOUT, or -EINTR. */
-static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms) {
+ * -EAGAIN if the value already differed, -ETIMEDOUT, or -EINTR.  `shared`
+ * selects the key: the physical address of the word, or (this address space,
+ * uaddr). */
+static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms, int shared) {
     uint32_t* word = (uint32_t*)uaddr;
     if (!validate_user_ptr(word, sizeof(uint32_t))) return -EFAULT;
     if (!current_task || !current_task->proc) return -EINVAL;
@@ -76,6 +93,18 @@ static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms) {
         return -EINTR;   /* not reached: a Zombie task is not rescheduled */
     }
 
+    /* The shared key: the physical address of the page the word lives in, which
+     * the other process maps too.  0 means "not mapped", which validate above
+     * should already have ruled out. */
+    uint32_t phys = 0;
+    if (shared) {
+        phys = vmm_get_phys(current_task->page_directory, uaddr);
+        if (phys == 0) {
+            irq_spinlock_release(&futex_lock);
+            return -EFAULT;
+        }
+    }
+
     int slot = -1;
     for (int i = 0; i < FUTEX_MAX_WAITERS; i++) {
         if (!futex_waiters[i].task) { slot = i; break; }
@@ -84,8 +113,9 @@ static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms) {
         irq_spinlock_release(&futex_lock);
         return -ENOMEM;
     }
-    futex_waiters[slot].pd    = pd;
-    futex_waiters[slot].uaddr = uaddr;
+    futex_waiters[slot].pd    = shared ? 0 : pd;
+    futex_waiters[slot].uaddr = shared ? 0 : uaddr;
+    futex_waiters[slot].phys  = phys;
     futex_waiters[slot].task  = current_task;
 
     current_task->proc->sleep_until = deadline;
@@ -98,6 +128,7 @@ static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms) {
         futex_waiters[slot].task  = 0;
         futex_waiters[slot].pd    = 0;
         futex_waiters[slot].uaddr = 0;
+        futex_waiters[slot].phys  = 0;
         irq_spinlock_release(&futex_lock);
         schedule();
         return -EINTR;   /* not reached: a Zombie task is not rescheduled */
@@ -120,6 +151,7 @@ static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms) {
         futex_waiters[slot].task  = 0;
         futex_waiters[slot].pd    = 0;
         futex_waiters[slot].uaddr = 0;
+        futex_waiters[slot].phys  = 0;
     }
     irq_spinlock_release(&futex_lock);
 
@@ -128,23 +160,28 @@ static int futex_do_wait(uint32_t uaddr, int32_t val, int32_t timeout_ms) {
     return 0;
 }
 
-/* Wake up to `count` waiters on *uaddr in address space `pd`; returns how many
- * were woken.  Also used by the scheduler's thread-exit path through
+/* Wake up to `count` waiters on one key; returns how many were woken.  `phys`
+ * selects the key, exactly as futex_do_wait() does: a shared key (the word's
+ * physical address) or the private (pd, uaddr) pair.  The two kinds never
+ * match each other.  Also used by the scheduler's thread-exit path through
  * cact_futex_wake_addr(). */
-static int futex_wake_pd(uint32_t pd, uint32_t uaddr, int32_t count) {
+static int futex_wake_key(uint32_t pd, uint32_t uaddr, uint32_t phys, int32_t count) {
     if (count <= 0) count = 1;
 
     int woken = 0;
 
     irq_spinlock_acquire(&futex_lock);
     for (int i = 0; i < FUTEX_MAX_WAITERS && woken < count; i++) {
-        if (futex_waiters[i].task &&
-            futex_waiters[i].uaddr == uaddr &&
-            futex_waiters[i].pd == pd) {
+        if (!futex_waiters[i].task) continue;
+        if (phys ? (futex_waiters[i].phys == phys)
+                 : (futex_waiters[i].phys == 0 &&
+                    futex_waiters[i].uaddr == uaddr &&
+                    futex_waiters[i].pd == pd)) {
             struct task_struct* t = futex_waiters[i].task;
             futex_waiters[i].task  = 0;
             futex_waiters[i].pd    = 0;
             futex_waiters[i].uaddr = 0;
+            futex_waiters[i].phys  = 0;
             /* mlfq_wake_task takes SCHEDULER_LOCK, so drop the table lock first
              * to keep a strict (futex before scheduler) lock order. */
             irq_spinlock_release(&futex_lock);
@@ -158,15 +195,25 @@ static int futex_wake_pd(uint32_t pd, uint32_t uaddr, int32_t count) {
     return woken;
 }
 
+static int futex_wake_pd(uint32_t pd, uint32_t uaddr, int32_t count) {
+    return futex_wake_key(pd, uaddr, 0, count);
+}
+
 /* Kernel FFI: the scheduler clears a thread's join word and wakes its waiters
  * when the thread exits (ROADMAP: clear_child_tid). */
 int cact_futex_wake_addr(uint32_t* pd, uint32_t* uaddr, int count) {
     return futex_wake_pd((uint32_t)pd, (uint32_t)uaddr, count);
 }
 
-/* Wake up to `count` waiters on *uaddr in the calling task's address space. */
-static int futex_do_wake(uint32_t uaddr, int32_t count) {
+/* Wake up to `count` waiters on *uaddr: the caller's address space, or — when
+ * `shared` — every process that maps the word's page. */
+static int futex_do_wake(uint32_t uaddr, int32_t count, int shared) {
     if (!current_task) return -EINVAL;
+    if (shared) {
+        uint32_t phys = vmm_get_phys(current_task->page_directory, uaddr);
+        if (phys == 0) return -EFAULT;
+        return futex_wake_key(0, 0, phys, count);
+    }
     return futex_wake_pd((uint32_t)current_task->page_directory, uaddr, count);
 }
 
@@ -185,8 +232,22 @@ int proc_thread_create(const void* arg) {
     if (a.clear_child_tid &&
         !validate_user_ptr((void*)a.clear_child_tid, sizeof(uint32_t)))
         return -EINVAL;
+    if (a.tls && (a.tls < USER_SPACE_START || a.tls >= KERNEL_BASE))
+        return -EINVAL;
     return sched_create_thread(a.entry, a.user_esp, a.tls,
                                a.set_child_tid, a.clear_child_tid);
+}
+
+/* CACT_PROCCTL_SET_TLS: install the calling task's %gs base.  The base becomes
+ * the ring-3 thread pointer, so it must be a user address and 4-byte aligned
+ * (the compiler TLS model uses at least that); 0 clears it. */
+int proc_set_tls(uint32_t base) {
+    if (!current_task) return -EINVAL;
+    if (base != 0) {
+        if (base < USER_SPACE_START || base >= KERNEL_BASE) return -EINVAL;
+        if (base & 3u) return -EINVAL;
+    }
+    return sched_set_tls(base);
 }
 
 int proc_thread_exit(uint32_t code) {
@@ -207,9 +268,13 @@ int proc_futex(const void* arg) {
 
     switch (a.op) {
     case FUTEX_OP_WAIT:
-        return futex_do_wait(a.uaddr, a.val, a.timeout_ms);
+        return futex_do_wait(a.uaddr, a.val, a.timeout_ms, 0);
     case FUTEX_OP_WAKE:
-        return futex_do_wake(a.uaddr, a.val);
+        return futex_do_wake(a.uaddr, a.val, 0);
+    case FUTEX_OP_WAIT_SHARED:
+        return futex_do_wait(a.uaddr, a.val, a.timeout_ms, 1);
+    case FUTEX_OP_WAKE_SHARED:
+        return futex_do_wake(a.uaddr, a.val, 1);
     default:
         return -EINVAL;
     }

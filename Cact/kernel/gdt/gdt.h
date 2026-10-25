@@ -39,6 +39,21 @@ void init_gdt();
 void set_gdt_gate(int num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
 void write_tss(int num, uint16_t ss0, uint32_t esp0);
 
+// Per-task TLS descriptor.  Its index must be the same in the boot GDT (gdt.c)
+// and in every per-CPU GDT (smp.rs), because a thread migrates between cores
+// and %gs has to name the same selector everywhere: indices 5..68 there are the
+// 64 per-CPU TSS descriptors, so the TLS slot is the one after them.  Keep
+// TLS_SLOT in step with Cact/kernel/proc/sched/src/smp.rs (a static assert in
+// that file pins the selector value).
+#define GDT_TLS_SLOT   (5 + 64)                  /* TSS_SLOT + MAX_CPUS */
+#define GDT_TLS_SEL    ((uint16_t)(GDT_TLS_SLOT * 8 + 3))  /* RPL 3: ring 3 may load it */
+#define GDT_ENTRIES    (GDT_TLS_SLOT + 1)
+
+/* Rewrite the TLS descriptor's base (the boot GDT; APs use their own copy). */
+void gdt_write_tls(uint32_t base);
+/* Load a data selector into %gs. */
+extern void gdt_load_gs(uint16_t sel);
+
 // External assembly functions
 extern struct tss_entry_struct tss_entry;
 extern void gdt_flush(uint32_t);  // Load GDTR and far jump

@@ -35,6 +35,36 @@ pub unsafe extern "C" fn task_signal(pid: u32, signal: u32) {
     unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
 }
 
+/// Send `signal` to `pid` carrying `value` — POSIX's `sigqueue()`.  The value is
+/// kept with the pending signal (`signal_value`) and read back as `si_value` by
+/// a `sigwaitinfo()`/`sigtimedwait()` or an `SA_SIGINFO` handler.  A second
+/// `sigqueue` for a signal that is already pending does not queue another
+/// instance, which is what POSIX asks of non-realtime signals.
+///
+/// # Safety
+///
+/// Must be called from kernel context with `SCHEDULER_LOCK` free.
+#[no_mangle]
+pub unsafe extern "C" fn task_signal_value(pid: u32, signal: u32, value: u32) {
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the caller must not hold it.
+    unsafe { irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
+    // SAFETY: `find_task_by_pid` walks the task list, which the lock makes stable.
+    let t = find_task_by_pid(pid);
+    if !t.is_null() {
+        // SAFETY: `t` is a live task found by pid.
+        let p = unsafe { (*t).proc };
+        if !p.is_null() {
+            // SAFETY: `p` is that task's live `ProcMeta`; the lock is held.
+            unsafe { (*p).signal_value = value };
+        }
+    }
+    // SAFETY: `task_signal_locked` requires `SCHEDULER_LOCK`, held here, and
+    // tolerates a pid that names no task (it simply finds nothing).
+    unsafe { task_signal_locked(pid, signal) };
+    // SAFETY: the lock was acquired above.
+    unsafe { irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+}
+
 /// Non-zero when the *current* task has a signal that is pending and not blocked
 /// by its mask — i.e. one that will be delivered as soon as this task returns to
 /// userspace.
@@ -105,11 +135,17 @@ pub unsafe extern "C" fn task_signal_locked(pid: u32, signal: u32) {
     let intr_wait = unsafe { (*p).intr_wait };
     // SAFETY: `p` is live.
     let signal_mask = unsafe { (*p).signal_mask };
+    // SAFETY: `p` is live.
+    let sigwait_set = unsafe { (*p).sigwait_set };
     // SAFETY: `t` is live.
     let t_state = unsafe { (*t).state };
-    if (in_sigsuspend != 0 || intr_wait != 0)
+    // A sigwait() waiter wants a signal from *its* set, and POSIX has it block
+    // those signals first — so the test is against the set, not the mask: the
+    // waiter consumes the signal instead of having it delivered to a handler.
+    let sigwait_hit = (sigwait_set & signal) != 0;
+    if (sigwait_hit
+        || ((in_sigsuspend != 0 || intr_wait != 0) && (signal & !signal_mask) != 0))
         && matches!(t_state, TaskState::Sleeping)
-        && (signal & !signal_mask) != 0
     {
         // Only queue the task if it has already parked; a still-running one is
         // left Ready and its own `sched_park_prev` queues it.
@@ -422,6 +458,8 @@ pub unsafe extern "C" fn task_sigaction(
     t:       *mut TaskStruct,
     signum:  u32,
     handler: u32,
+    flags:   u32,
+    mask:    u32,
 ) -> i32 {
     if t.is_null() {
         return -1;
@@ -444,6 +482,11 @@ pub unsafe extern "C" fn task_sigaction(
     // above, so the handler write is in bounds.
     let p = unsafe { &mut *proc_ptr };
     p.signal_handlers[signum as usize] = handler;
+    // The disposition's flags travel with the handler so delivery can honour
+    // SA_ONSTACK (see deliver_pending_signal).
+    p.signal_flags[signum as usize] = if handler <= SIG_IGN { 0 } else { flags };
+    // ...and so is the set the disposition asks to have blocked while it runs.
+    p.signal_masks[signum as usize] = if handler <= SIG_IGN { 0 } else { mask };
     0
 }
 

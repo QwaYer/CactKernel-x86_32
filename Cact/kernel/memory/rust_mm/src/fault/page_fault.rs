@@ -129,9 +129,10 @@ fn kill_current(fault_addr: u32, _err: u32, _eip: u32, regs: *mut ContextFrame, 
         // which runs with interrupts disabled on this CPU.  Note: not serialised
         // across CPUs; a lost increment is harmless.
         (unsafe { KStatic::get_mut(G_STATS.as_ptr()) }).protection_faults += 1;
-        // SAFETY: `task_signal` is a kernel FFI entry point and `pid` comes from
-        // the live current task; we are in the #PF handler.
-        unsafe { task_signal(pid, SIGSEGV) };
+        // SAFETY: `task_signal_code` is a kernel FFI entry point and `pid` comes
+        // from the live current task; we are in the #PF handler.  The fault
+        // address goes with it, so an SA_SIGINFO handler sees si_addr.
+        unsafe { task_signal_code(pid, SIGSEGV, SI_KERNEL, fault_addr) };
         // SAFETY: `schedule` is a kernel FFI entry point; the faulting task has
         // just been signalled, so yielding here is valid.
         unsafe { schedule() };

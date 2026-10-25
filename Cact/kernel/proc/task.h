@@ -59,14 +59,70 @@ typedef struct {
     file_t *files[MAX_FD];
 } task_fd_table_t;
 
+/* Signal-frame payloads, layout-identical to the libc's siginfo_t
+ * (<signal.h>) and ucontext_t (<ucontext.h>).  The kernel builds them into the
+ * frame so a handler installed with SA_SIGINFO is entered as
+ * void handler(int, siginfo_t *, void *). */
+typedef struct {
+    int32_t  si_signo;
+    int32_t  si_code;
+    uint32_t si_addr;
+    /* sigqueue()'s value (POSIX's union sigval): a sigwaitinfo()/sigtimedwait()
+     * or an SA_SIGINFO handler reads it back as si_value. */
+    uint32_t si_value;
+} cact_siginfo_t;
+
+typedef struct {
+    uint32_t gregs[19];             /* REG_* order, see the libc's <ucontext.h> */
+} cact_mcontext_t;
+
+typedef struct {
+    uint32_t        uc_link;
+    uint32_t        uc_flags;
+    cact_mcontext_t uc_mcontext;
+} cact_ucontext_t;
+
+/* gregs[] indices — the libc's REG_* order. */
+enum {
+    SF_REG_GS = 0, SF_REG_FS, SF_REG_ES, SF_REG_DS,
+    SF_REG_EDI, SF_REG_ESI, SF_REG_EBP, SF_REG_ESP,
+    SF_REG_EBX, SF_REG_EDX, SF_REG_ECX, SF_REG_EAX,
+    SF_REG_TRAPNO, SF_REG_ERR, SF_REG_EIP, SF_REG_CS,
+    SF_REG_EFL, SF_REG_UESP, SF_REG_SS
+};
+
+/* The frame sits at the handler's ESP: [ESP] = ret_addr, [ESP+4] = signum,
+ * [ESP+8] = siginfo *, [ESP+12] = ucontext *.  sigreturn() reads the whole
+ * struct back from that address, so the saved registers and the payloads live
+ * in the same object. */
 typedef struct {
     uint32_t ret_addr;
-    uint32_t signum;
+    uint32_t signum;              /* handler argument 1 */
+    uint32_t siginfo_ptr;         /* handler argument 2 */
+    uint32_t ucontext_ptr;        /* handler argument 3 */
     uint32_t eax, ecx, edx, ebx;
     uint32_t esp, ebp, esi, edi;
     uint32_t eip;
     uint32_t eflags;
+    uint32_t saved_mask;          /* signal_mask to put back in sigreturn */
+    cact_siginfo_t siginfo;
+    cact_ucontext_t ucontext;
 } signal_frame_t;
+
+/* The handler ABI (and sigreturn's read-back) depends on this exact layout:
+ * [ESP+4] = signum, [ESP+8] = siginfo, [ESP+12] = ucontext, the register block
+ * from offset 16, and the payloads at 60/72.  Compile-time check so the pic
+ * cannot move without the frame code being revisited. */
+typedef char _signal_frame_layout_check[
+    (__builtin_offsetof(signal_frame_t, signum)       == 4  &&
+     __builtin_offsetof(signal_frame_t, siginfo_ptr)  == 8  &&
+     __builtin_offsetof(signal_frame_t, ucontext_ptr) == 12 &&
+     __builtin_offsetof(signal_frame_t, eax)          == 16 &&
+     __builtin_offsetof(signal_frame_t, eip)          == 48 &&
+     __builtin_offsetof(signal_frame_t, saved_mask)   == 56 &&
+     __builtin_offsetof(signal_frame_t, siginfo)      == 60 &&
+     __builtin_offsetof(signal_frame_t, ucontext)     == 76 &&
+     sizeof(signal_frame_t)                           == 160) ? 1 : -1];
 
 typedef enum {
     TASK_READY,
@@ -163,7 +219,45 @@ typedef struct proc_metadata {
     uint32_t   clr_tid;      /* join futex word cleared on thread exit (0 = none) */
     uint8_t    intr_wait;    /* 1 while blocked in an interruptible futex wait */
     uint8_t    _pad3[3];
+
+    /* --- sigaltstack (appended; offsets above are unchanged) --- */
+    uint32_t   altstack_sp;    /* base of the alternate signal stack (0 = none) */
+    uint32_t   altstack_size;  /* its size in bytes */
+    uint32_t   altstack_flags; /* CACT_SS_DISABLE while switched off */
+    uint32_t   signal_flags[NSIG]; /* sa_flags per signal (CACT_SA_ONSTACK, ...) */
+
+    /* --- TLS (appended; offsets above are unchanged) ---
+     * The task's %gs base: what ring 3 sees as its thread pointer.  The
+     * scheduler loads it on every switch (see the TLS descriptor in gdt.c /
+     * smp.rs).  Set by CACT_PROCCTL_SET_TLS, by CACT_PROCCTL_THREAD_CREATE's
+     * tls argument, and cleared on exec(). */
+    uint32_t   tls_base;
+
+    /* --- signal dispositions (appended; offsets above are unchanged) ---
+     * The mask each handler wants blocked while it runs (sa_mask), in the same
+     * order as signal_handlers/signal_flags. */
+    uint32_t   signal_masks[NSIG];
+
+    /* --- signal sources (appended; offsets above are unchanged) ---
+     * What each pending signal came from (si_code) and, for a hardware fault,
+     * the address that faulted (CR2), so an SA_SIGINFO handler gets a truthful
+     * siginfo_t.  Reset to SI_USER after each delivery. */
+    uint32_t   signal_codes[NSIG];
+    uint32_t   signal_addr;
+    /* POSIX sigwait(): the signal set this task is parked on, 0 when it is not
+     * waiting — a signal whose bit is in it wakes the waiter so it can *consume*
+     * the signal instead of having it delivered to a handler. */
+    uint32_t   sigwait_set;
+    /* The value the pending signal carries (sigqueue(), POSIX's union sigval). */
+    uint32_t   signal_value;
 } proc_metadata_t;
+
+/* The two tail fields the Rust mirrors and the libc agree on; a drift here used
+ * to be found by the Rust asserts at boot, and is now a build error instead. */
+typedef char _proc_metadata_tail_check[
+    (__builtin_offsetof(proc_metadata_t, sigwait_set)   == 788 &&
+     __builtin_offsetof(proc_metadata_t, signal_value)  == 792 &&
+     sizeof(proc_metadata_t)                            == 796) ? 1 : -1];
 
 struct task_struct {
     uint32_t esp;
@@ -245,14 +339,27 @@ struct task_struct* task_fork(struct context_frame* regs);
 int task_exec(char* path, char** argv, char** envp, struct context_frame* regs);
 void task_kill(uint32_t pid);
 void task_signal(uint32_t pid, uint32_t signal);
+/* Same, but records the signal's source (si_code) and fault address first. */
+void task_signal_code(uint32_t pid, uint32_t signal, uint32_t code, uint32_t addr);
 void task_signal_locked(uint32_t pid, uint32_t signal);
 /* Pending, unmasked signal on the *current* task (0 = none).  Blocking waits poll
    this so they can return -EINTR instead of delaying the signal's delivery. */
 uint32_t task_signal_pending_current(void);
 void task_handle_signals(struct task_struct* t);
-int  task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler);
+int  task_sigaction(struct task_struct* t, uint32_t signum, uint32_t handler,
+                    uint32_t flags, uint32_t mask);
 void task_setup_sigreturn(struct task_struct* t);
 int  task_sigprocmask(struct task_struct* t, int how, const uint32_t* set, uint32_t* oldset);
+/* Park the *current* task on signal set `set`, atomically with the pending
+   check: returns 1 without parking when one of `set` is already pending, 2 when
+   the task is Zombie (it must not sleep), 0 when it parked (a signal whose bit
+   is in `set`, or nothing — the caller re-checks and parks again).  The lock it
+   shares with task_signal_locked is what makes a signal arriving in between
+   impossible to lose. */
+uint32_t task_park_sigwait(uint32_t set);
+/* Send `signal` to `pid` carrying `value` (POSIX sigqueue()); the value is
+   handed back by sigwaitinfo()/sigtimedwait() or an SA_SIGINFO handler. */
+void task_signal_value(uint32_t pid, uint32_t signal, uint32_t value);
 void task_check_timers(void);
 void task_reap();
 void schedule();
@@ -272,6 +379,9 @@ int task_park_state(uint32_t blocked_state);
  * negative error. */
 int  sched_create_thread(void* entry, uint32_t user_esp, uint32_t tls,
                          uint32_t set_tid, uint32_t clr_tid);
+/* Set the calling task's `%gs` base (CACT_PROCCTL_SET_TLS) and load it on this
+ * core; 0 clears it.  Returns 0 or a negative error. */
+int  sched_set_tls(uint32_t base);
 /* Wake up to `count` futex waiters on `uaddr` in address space `pd` (kernel FFI
  * used by the scheduler's thread-exit path). */
 int  cact_futex_wake_addr(uint32_t* pd, uint32_t* uaddr, int count);
@@ -284,6 +394,8 @@ int  proc_thread_create(const void* arg);
 int  proc_thread_exit(uint32_t code);
 int  proc_thread_gettid(void);
 int  proc_futex(const void* arg);
+/* CACT_PROCCTL_SET_TLS: validate `base` and install it as the caller's %gs. */
+int  proc_set_tls(uint32_t base);
 
 struct task_struct* create_task_with_entry(void*                entry,
                                              uint32_t*            pd,

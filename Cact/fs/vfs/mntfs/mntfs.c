@@ -3,6 +3,7 @@
 #include "vfsdev.h"
 #include "procfs.h"
 #include "tmpfs.h"
+#include "mqueue.h"
 #include "etcfs.h"
 #include "binfs.h"
 #include "sbinfs.h"
@@ -132,6 +133,27 @@ void mntfs_init(void) {
         _mount(vfs_root, "mnt", mnt_fs, "tmpfs");
     else
         pr_warn("%s: /mnt tmpfs allocation failed\n", "mntfs");
+
+    // /dev/shm: the POSIX shared-memory name space (the directory devfs already
+    // creates).  shm_open(3) is a naming layer over an ordinary tmpfs mount: a
+    // tmpfs file's contents are a memfd page array, so a MAP_SHARED mapping of
+    // the object shares real frames with every other opener and the kernel's
+    // shared futex (keyed by the word's physical page) works across them.
+    vfs_node_t *shm_fs = tmpfs_create_root("/dev/shm");
+    if (shm_fs)
+        _mount(devfs_get_root(), "shm", shm_fs, "tmpfs");
+    else
+        pr_warn("%s: /dev/shm tmpfs allocation failed\n", "mntfs");
+
+    // /dev/mqueue: the POSIX message-queue name space.  Unlike /dev/shm this is
+    // a filesystem of its own (Cact/fs/mqueue): its files *are* queues, so
+    // mq_open(3) is open-or-create, mq_unlink(3) is unlink(), and a queue
+    // unlinked while still open stays alive until the last close.
+    vfs_node_t *mq_fs = mqueue_create_root("/dev/mqueue");
+    if (mq_fs)
+        _mount(devfs_get_root(), "mqueue", mq_fs, "posixmq");
+    else
+        pr_warn("%s: /dev/mqueue queue filesystem allocation failed\n", "mntfs");
 
     _symlink("bin",  "usr/bin");
     _symlink("sbin", "usr/sbin");

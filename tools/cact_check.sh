@@ -176,6 +176,7 @@ required=(
   "energy: selftest passed"
   "timer: selftest OK"
   "placement: selftest passed"
+  "mqueue: selftest passed"
 )
 
 rc=0

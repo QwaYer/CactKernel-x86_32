@@ -2,8 +2,11 @@
 #include "klib.h"
 #include "kernel.h"
 
-// GDT with 6 entries: null, kernel code, data, user code, data, TSS
-struct gdt_entry gdt[6];
+// GDT: null, kernel code, data, user code, data, TSS, then the per-CPU TSS
+// slots a per-CPU GDT reserves (indices 6..68 are unused on the BSP) and the
+// TLS descriptor at GDT_TLS_SLOT.  The array has to reach GDT_TLS_SLOT so the
+// TLS selector means the same thing on the BSP as on an AP.
+struct gdt_entry gdt[GDT_ENTRIES];
 struct gdt_ptr   gp;
 struct tss_entry_struct tss_entry;
 uint8_t early_kernel_stack[4096] __attribute__((aligned(16)));
@@ -32,9 +35,9 @@ void write_tss(int num, uint16_t ss0, uint32_t esp0) {
     tss_entry.iomap_base = sizeof(tss_entry);  // No I/O permission bitmap
 }
 
-// Initialize GDT: null, kernel code/data, user code/data, TSS
+// Initialize GDT: null, kernel code/data, user code/data, TSS, TLS
 void init_gdt() {
-    gp.limit = (sizeof(struct gdt_entry) * 6) - 1;
+    gp.limit = (sizeof(struct gdt_entry) * GDT_ENTRIES) - 1;
     gp.base  = (uint32_t)&gdt;
     
     // Null segment (required by x86)
@@ -51,10 +54,18 @@ void init_gdt() {
 
     write_tss(5, 0x10, (uint32_t)early_kernel_stack + sizeof(early_kernel_stack));
 
+    // The per-task TLS descriptor: a ring-3 data segment whose base the
+    // scheduler rewrites per task.  Written here so the selector is valid from
+    // the start, with a zero base (a task that sets no TLS then reads address 0).
+    set_gdt_gate(GDT_TLS_SLOT, 0, 0xFFFFFFFF, 0xF2, 0xCF);
+
     // Load GDT into GDTR and reload segment registers
     gdt_flush((uint32_t)&gp);
-    
+
     // Load Task Register with TSS selector
     tss_flush();
-    
+}
+
+void gdt_write_tls(uint32_t base) {
+    set_gdt_gate(GDT_TLS_SLOT, base, 0xFFFFFFFF, 0xF2, 0xCF);
 }

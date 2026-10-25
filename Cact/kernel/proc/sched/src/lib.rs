@@ -112,7 +112,17 @@ const _ABI_CHECK: () = {
     assert!(offset_of!(ProcMeta, shared)               == 600, "shared offset mismatch");
     assert!(offset_of!(ProcMeta, clr_tid)              == 604, "clr_tid offset mismatch");
     assert!(offset_of!(ProcMeta, intr_wait)            == 608, "intr_wait offset mismatch");
-    assert!(core::mem::size_of::<ProcMeta>() == 612, "ProcMeta size mismatch");
+    assert!(offset_of!(ProcMeta, altstack_sp)          == 612, "altstack_sp offset mismatch");
+    assert!(offset_of!(ProcMeta, altstack_size)        == 616, "altstack_size offset mismatch");
+    assert!(offset_of!(ProcMeta, altstack_flags)       == 620, "altstack_flags offset mismatch");
+    assert!(offset_of!(ProcMeta, signal_flags)         == 624, "signal_flags offset mismatch");
+    assert!(offset_of!(ProcMeta, tls_base)             == 676, "tls_base offset mismatch");
+    assert!(offset_of!(ProcMeta, signal_masks)         == 680, "signal_masks offset mismatch");
+    assert!(offset_of!(ProcMeta, signal_codes)         == 732, "signal_codes offset mismatch");
+    assert!(offset_of!(ProcMeta, signal_addr)          == 784, "signal_addr offset mismatch");
+    assert!(offset_of!(ProcMeta, sigwait_set)          == 788, "sigwait_set offset mismatch");
+    assert!(offset_of!(ProcMeta, signal_value)         == 792, "signal_value offset mismatch");
+    assert!(core::mem::size_of::<ProcMeta>() == 796, "ProcMeta size mismatch");
 
     assert!(offset_of!(ProcShared, refcount)    ==  0, "ProcShared refcount offset mismatch");
     assert!(offset_of!(ProcShared, brk_start)   ==  4, "ProcShared brk_start offset mismatch");

@@ -391,7 +391,28 @@ pub unsafe extern "C" fn task_exec(
     for i in 0..NSIG {
         // SAFETY: `p` is the live current task's `ProcMeta` and `i < NSIG`.
         unsafe { (*p).signal_handlers[i] = SIG_DFL };
+        // SAFETY: `p` is live; the disposition flags go with the handler.
+        unsafe { (*p).signal_flags[i] = 0 };
     }
+
+    // The alternate signal stack does not survive an exec (POSIX): the address
+    // space is replaced, so a user VA from the old image would be meaningless.
+    // SAFETY: `p` is the live current task's `ProcMeta`.
+    unsafe {
+        (*p).altstack_sp    = 0;
+        (*p).altstack_size  = 0;
+        (*p).altstack_flags = 2;   // CACT_SS_DISABLE (ioctl_abi.h)
+    }
+
+    // Nor does the TLS base: the new image has its own TLS block, and the old
+    // address would point into a replaced address space.  The image's own
+    // startup sets it again (CACT_PROCCTL_SET_TLS) before it uses it.
+    // SAFETY: `p` is the live current task's `ProcMeta`.
+    unsafe { (*p).tls_base = 0 };
+
+    // The dispositions are gone, so the sets they asked to have blocked go too.
+    // SAFETY: `p` is the live current task's `ProcMeta`.
+    unsafe { for m in (*p).signal_masks.iter_mut() { *m = 0 } };
 
     // SAFETY: `t` is live.
     let t_pid = unsafe { (*t).pid };

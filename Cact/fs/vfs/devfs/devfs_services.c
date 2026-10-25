@@ -25,6 +25,7 @@
 #include "procfs.h"
 #include "cact_acpi.h"
 #include "tty.h"
+#include "rtc.h"
 
 // devfs_services.c — kernel-service devices exposed through devfs.
 //
@@ -35,7 +36,7 @@
 // fd table are available.
 //
 //   /dev/console  write  -> kernel console (replaces sys_print / tty print)
-//   /dev/sys      ioctl  -> mount/umount/reboot/module load  (root only)
+//   /dev/sys      ioctl  -> mount/umount/reboot/module load/clock set (root only)
 //   /dev/net      ioctl  -> socket()/ping/dns/netcfg
 //   /dev/pipe     ioctl  -> pipe() creation
 //   /dev/memfd    ioctl  -> memfd_create()
@@ -306,6 +307,17 @@ static int _sys_ioctl(void *p, uint32_t cmd, void *arg) {
         if (copy_from_user(&lv, arg, sizeof(lv)) != 0) return -EFAULT;
         if (lv < 0 || lv > 7) return -EINVAL;
         console_loglevel_set(lv);
+        return 0;
+    }
+
+    case CACT_SYSCTL_SETWALLCLOCK: {
+        int r = _root_only();
+        if (r) return r;
+        if (!arg) return -EINVAL;
+        cact_time_t t;
+        if (copy_from_user(&t, arg, sizeof(t)) != 0) return -EFAULT;
+        if (t.usec > 999999) return -EINVAL;
+        rtc_set_epoch_usec((uint64_t)t.sec * 1000000ull + t.usec);
         return 0;
     }
 

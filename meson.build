@@ -133,6 +133,7 @@ cact_includes = include_directories(
   'Cact/fs/timerfd',
   'Cact/fs/signalfd',
   'Cact/fs/epoll',
+  'Cact/fs/mqueue',
   'Cact/fs/pty',
   'Cact/drivers/tty',
   'Cact/fs/vfs/devfs',
@@ -247,6 +248,7 @@ subdir('Cact/fs/eventfd')
 subdir('Cact/fs/timerfd')
 subdir('Cact/fs/signalfd')
 subdir('Cact/fs/epoll')
+subdir('Cact/fs/mqueue')
 subdir('Cact/fs/pty')
 
 # ------------------------------------------------------------------------------

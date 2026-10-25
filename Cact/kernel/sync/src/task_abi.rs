@@ -119,6 +119,30 @@ pub struct ProcMeta {
     /// wait): a deliverable signal wakes it so it can return -EINTR.
     pub intr_wait:          u8,
     pub _pad3:              [u8; 3],
+    // --- sigaltstack (appended after 612; existing offsets above are unchanged) ---
+    /// Base of the alternate signal stack (0 = none).
+    pub altstack_sp:        u32,
+    /// Its size in bytes.
+    pub altstack_size:      u32,
+    /// CACT_SS_DISABLE while the alternate stack is switched off.
+    pub altstack_flags:     u32,
+    /// sa_flags recorded per signal (CACT_SA_ONSTACK, ...).
+    pub signal_flags:       [u32; NSIG],
+    // --- TLS (appended after 676; existing offsets above are unchanged) ---
+    /// The task's `%gs` base — its thread pointer in ring 3 (0 = none).
+    pub tls_base:           u32,
+    // --- signal dispositions (appended after 680) ---
+    /// The set each handler wants blocked while it runs (sa_mask).
+    pub signal_masks:       [u32; NSIG],
+    // --- signal sources (appended after 732) ---
+    /// What each pending signal came from (si_code), and the fault address.
+    pub signal_codes:       [u32; NSIG],
+    pub signal_addr:        u32,
+    // --- sigwait()/sigqueue() (appended after 788) ---
+    /// The set this task is parked on for sigwait(), 0 when it is not waiting.
+    pub sigwait_set:        u32,
+    /// The value the pending signal carries (POSIX's union sigval).
+    pub signal_value:       u32,
 }
 
 // SAFETY: `TaskStruct` is a plain `#[repr(C)]` record of integers and raw

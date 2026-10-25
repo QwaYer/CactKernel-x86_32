@@ -17,6 +17,7 @@ int unix_sock_set_nonblock(vfs_node_t *node, int on);
 #define OPEN_WRONLY  0x0001
 #define OPEN_RDWR    0x0002
 #define OPEN_CREAT   0x0040
+#define OPEN_EXCL    0x0080
 #define OPEN_TRUNC   0x0200
 
 // errno values used by the generic node-ioctl ABI (returned as negative values)
@@ -79,6 +80,12 @@ int sys_open(char *name, int flags) {
         if (create_vfs(parent, basename) != 0) { kfree(kname); return -1; }
         node = _resolve_path(kname);
         if (!node) { kfree(kname); return -1; }
+    } else if ((flags & OPEN_CREAT) && (flags & OPEN_EXCL)) {
+        /* The name is already taken, so O_CREAT|O_EXCL must fail.  SYS_OPEN
+         * has no errno channel (every failure is a bare -1), so the caller
+         * that asked for O_EXCL reads this as EEXIST. */
+        kfree(kname);
+        return -1;
     }
 
     uint32_t need = 0;
@@ -337,6 +344,8 @@ static int _dirctl_openat(vfs_node_t *dir, char *kname, uint32_t flags) {
         if (create_vfs(dir, kname) != 0) return -EIO;
         node = finddir_vfs(dir, kname);
         if (!node) return -EIO;
+    } else if ((flags & OPEN_CREAT) && (flags & OPEN_EXCL)) {
+        return -EEXIST;
     }
 
     uint32_t acc  = flags & OPEN_ACCMODE;

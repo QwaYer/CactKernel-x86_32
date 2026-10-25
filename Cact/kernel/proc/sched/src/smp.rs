@@ -22,6 +22,16 @@ use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 const MAX_CPUS: usize = 64;
 const TSS_SLOT: usize = 5;
 
+/// Index of the per-task TLS descriptor.  It must be the same in the boot GDT
+/// (the C `gdt.c`, whose `GDT_TLS_SLOT` is `TSS_SLOT + MAX_CPUS`) and in every
+/// per-CPU GDT: a thread migrates between cores and its `%gs` names one
+/// selector, so the descriptor has to mean the same thing everywhere.  Both
+/// sides assert the resulting selector value.
+const TLS_SLOT: usize = TSS_SLOT + MAX_CPUS;
+/// `%gs` selector for that descriptor (RPL 3 so ring 3 may load it as well).
+pub const TLS_SEL: u16 = (TLS_SLOT as u16) * 8 + 3;
+const _: () = assert!(TLS_SEL == 0x22B, "TLS selector must match GDT_TLS_SEL in gdt.h");
+
 // Copy destination + SIPI vector of the trampoline.
 const TRAMP_ADDR: u32 = 0x8000;
 const TRAMP_VECTOR: u32 = TRAMP_ADDR >> 12;
@@ -116,7 +126,7 @@ struct Tss {
 
 #[repr(C, align(16))]
 struct SmpCpu {
-    gdt: [GdtEntry; TSS_SLOT + MAX_CPUS],
+    gdt: [GdtEntry; TLS_SLOT + 1],
     gp: GdtPtr,
     tss: Tss,
     idle_stack: [u8; IDLE_STACK_SIZE],
@@ -134,7 +144,7 @@ impl SmpCpu {
                 access: 0,
                 granularity: 0,
                 base_high: 0,
-            }; TSS_SLOT + MAX_CPUS],
+            }; TLS_SLOT + 1],
             gp: GdtPtr { limit: 0, base: 0 },
             tss: Tss {
                 prev_tss: 0,
@@ -277,7 +287,7 @@ fn install_tss_descriptor(p: &mut SmpCpu, cpu: usize) {
 
 fn build_cpu_env(cpu: usize, lapic_id: u32) {
     let p = cpu_ptr(cpu);
-    let count = TSS_SLOT + MAX_CPUS;
+    let count = TLS_SLOT + 1;
 
     // SAFETY: `p` points at the `CPU_TABLE` entry for `cpu` (bounds-checked by the caller), so
     // reborrowing it exclusively here, during single-threaded BSP bring-up before the AP starts,
@@ -305,6 +315,10 @@ fn build_cpu_env(cpu: usize, lapic_id: u32) {
 
     // Per-CPU TSS at slot TSS_SLOT + cpu (str() identifies the CPU).
     install_tss_descriptor(p, cpu);
+
+    // Per-task TLS descriptor, at the same index in every GDT.  Its base is
+    // rewritten per switch by `set_tls_base`; zero means "no TLS for this task".
+    set_gdt(&mut p.gdt[TLS_SLOT], 0, 0xFFFF_FFFF, 0xF2, 0xCF);
 
     p.tss.ss0 = 0x10;
     p.tss.esp0 = stack_top(cpu);
@@ -723,6 +737,38 @@ pub fn set_tss_esp0(cpu: usize, esp0: u32) {
     // SAFETY: `cpu` is bounds-checked against `MAX_CPUS` above, so `p` addresses a live
     // `CPU_TABLE` entry and the `tss.esp0` store is in bounds.
     unsafe { (*p).tss.esp0 = esp0 };
+}
+
+/// Point the running core's TLS descriptor at `base` and reload `%gs` for it.
+///
+/// Called by the scheduler for the incoming task (and by `sched_set_tls` when a
+/// task changes its own base), always on the core that will run that task: the
+/// descriptor lives in that core's GDT — the C boot GDT on the BSP, the
+/// per-CPU `SmpCpu.gdt` on an AP — so only that core may write it.  `base == 0`
+/// means "this task has no TLS", and `%gs` is left as the kernel data segment
+/// so a stray `%gs` use cannot reach the base of a stale thread pointer.
+pub fn set_tls_base(cpu: usize, base: u32) {
+    if base == 0 {
+        // SAFETY: loads the kernel data selector; the kernel never dereferences `%gs`.
+        unsafe { crate::ffi::gdt_load_gs(0x10) };
+        return;
+    }
+
+    if cpu == 0 {
+        // SAFETY: the BSP's descriptor is the C boot GDT entry; the scheduler owns it.
+        unsafe { crate::ffi::gdt_write_tls(base) };
+    } else if cpu < MAX_CPUS {
+        let p = cpu_ptr(cpu);
+        // SAFETY: `cpu` is bounds-checked against `MAX_CPUS`, so `p` addresses a live
+        // `CPU_TABLE` entry and the descriptor store is in bounds.
+        unsafe { set_gdt(&mut (*p).gdt[TLS_SLOT], base, 0xFFFF_FFFF, 0xF2, 0xCF) };
+    } else {
+        return;
+    }
+
+    // SAFETY: the descriptor for TLS_SEL is valid on this core (just written, or
+    // written at bring-up), and `mov gs, ax` cannot fault on a present segment.
+    unsafe { crate::ffi::gdt_load_gs(TLS_SEL) };
 }
 
 /// 0 until the boot core has finished bringing the system up.  While it is 0 the

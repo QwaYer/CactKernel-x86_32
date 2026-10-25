@@ -7,6 +7,7 @@
 #include "memory.h"
 #include "task.h"
 #include "shm.h"
+#include "proc.h"          /* sched_sleep_ticks (the timed sigwait) */
 #include "validate.h"
 
 // procfs_proc.c — per-process and system service nodes under /proc.
@@ -109,6 +110,9 @@ static int _comm_read(vfs_node_t *node, uint32_t off, uint32_t size,
 #endif
 #ifndef ENOTDIR
 #define ENOTDIR 20
+#endif
+#ifndef EAGAIN
+#define EAGAIN 11          /* sigtimedwait()/a polled sigwait() timed out */
 #endif
 
 extern uint32_t timer_ticks_get(void);
@@ -340,7 +344,39 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
         if (a.handler > 1 &&
             (a.handler < USER_SPACE_START || a.handler >= KERNEL_BASE))
             return -EINVAL;
-        return task_sigaction(current_task, a.signum, a.handler);
+        return task_sigaction(current_task, a.signum, a.handler, a.flags, a.mask);
+    }
+
+    case CACT_PROCCTL_SIGALTSTACK: {
+        cact_sigaltstack_arg_t a;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+
+        proc_metadata_t* p = current_task->proc;
+        uint32_t onstack = p->altstack_flags & CACT_SS_ONSTACK;  /* may be running on it now */
+
+        a.old_sp    = p->altstack_sp;
+        a.old_size  = p->altstack_size;
+        a.old_flags = p->altstack_flags;
+
+        if (a.sp == 0 && a.size == 0 && a.flags == 0) {
+            /* query only */
+        } else if (a.flags & CACT_SS_DISABLE) {
+            p->altstack_sp    = 0;
+            p->altstack_size  = 0;
+            p->altstack_flags = onstack | CACT_SS_DISABLE;
+        } else {
+            if (a.size < CACT_MINSIGSTKSZ) return -EINVAL;
+            if (a.sp < USER_SPACE_START) return -EINVAL;
+            if (a.sp + a.size < a.sp) return -EINVAL;             /* overflow */
+            if (a.sp + a.size > KERNEL_BASE) return -EINVAL;      /* stays in the user window */
+            p->altstack_sp    = a.sp;
+            p->altstack_size  = a.size;
+            p->altstack_flags = onstack;
+        }
+
+        if (copy_to_user(arg, &a, sizeof(a)) != 0) return -EFAULT;
+        return 0;
     }
 
     case CACT_PROCCTL_SIGPROCMASK: {
@@ -472,6 +508,87 @@ static int _self_ctl_ioctl(vfs_node_t *node, uint32_t cmd, void *arg) {
 
     case CACT_PROCCTL_GET_TID:
         return proc_thread_gettid();
+
+    case CACT_PROCCTL_SET_TLS: {
+        uint32_t base = 0;
+        if (arg && copy_from_user(&base, arg, sizeof(base)) != 0) return -EFAULT;
+        return proc_set_tls(base);
+    }
+
+    case CACT_PROCCTL_YIELD:
+        /* sched_yield(2): give up the CPU to another runnable task.  `schedule`
+         * parks this task at the tail of its level and switches away; with
+         * nothing else runnable it returns and the caller keeps the CPU
+         * (POSIX's own wording for sched_yield). */
+        schedule();
+        return 0;
+
+    case CACT_PROCCTL_SIGWAIT: {
+        cact_sigwait_arg_t a;
+        uint32_t set, hit;
+        int bit;
+
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        if (current_task->is_kernel) return -1;
+        /* SIGKILL/SIGSTOP can be neither blocked nor caught, so waiting for one
+         * is meaningless — strip them rather than swallow a kill. */
+        set = a.set & ~(uint32_t)(SIGKILL | SIGSTOP);
+        if (set == 0) return -EINVAL;
+
+        if (a.timeout_ms == 0) {
+            if (!(current_task->proc->pending_signals & set)) return -EAGAIN;
+        } else if (a.timeout_ms < 0) {
+            /* Unbounded: a signal in `set` wakes us, because the waiter is marked
+             * with sigwait_set and task_signal_locked looks at that (see
+             * task_park_sigwait).  No polling — a task sitting in sigwait() must
+             * let its core go idle. */
+            for (;;) {
+                uint32_t r = task_park_sigwait(set);
+                if (r == 2) return -1;          /* Zombie: let the exit path run */
+                if (r == 1) break;              /* one of `set` is pending */
+                schedule();
+            }
+            current_task->proc->sigwait_set = 0;
+        } else {
+            /* Timed (sigtimedwait): the timeout lives here, polling the timer
+             * wheel in one-tick slices.  A wheel park is not signal-interruptible
+             * — the wake path unlinks the *blocked* queue, not the wheel — so
+             * this is the only correct way to bound the wait. */
+            uint32_t deadline = timer_ticks_get() + ((uint32_t)a.timeout_ms + 9u) / 10u;
+            while (!(current_task->proc->pending_signals & set)) {
+                if ((int32_t)(timer_ticks_get() - deadline) >= 0) return -EAGAIN;
+                sched_sleep_ticks(1);
+            }
+        }
+
+        /* Consume the lowest-numbered signal of the set: that is what sigwait()
+         * means, and why a handler installed for it does not run. */
+        hit = current_task->proc->pending_signals & set;
+        bit = 0;
+        while (bit < NSIG && !(hit & 1u)) { hit >>= 1; bit++; }
+        current_task->proc->pending_signals &= ~(1u << bit);
+        a.signum = (uint32_t)bit;
+        a.code   = current_task->proc->signal_codes[bit];
+        a.value  = current_task->proc->signal_value;
+        current_task->proc->signal_codes[bit] = CACT_SI_USER;
+        current_task->proc->signal_value      = 0;
+        return copy_to_user(arg, &a, sizeof(a));
+    }
+
+    case CACT_PROCCTL_SIGQUEUE: {
+        cact_sigqueue_arg_t a;
+        int p;
+        if (!arg) return -EINVAL;
+        if (copy_from_user(&a, arg, sizeof(a)) != 0) return -EFAULT;
+        p = _sig_permitted(a.pid);
+        if (p) return p;
+        /* Like CACT_PROCCTL_SIGNAL, `signum` is the signal's index; unlike it, 0
+         * (SIGKILL) is refused — a kill cannot carry a value. */
+        if (a.signum == 0 || a.signum >= NSIG) return -EINVAL;
+        task_signal_value(a.pid, 1u << a.signum, a.value);
+        return 0;
+    }
 
     default:
         pr_debug("%s: unknown ctl ioctl 0x%x\n", "proc", cmd);

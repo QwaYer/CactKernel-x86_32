@@ -354,6 +354,9 @@ pub(crate) fn task_zero_init(t: *mut TaskStruct, p: *mut ProcMeta) -> bool {
     for slot in p.signal_handlers.iter_mut() {
         *slot = SIG_DFL;
     }
+    // No alternate signal stack until sigaltstack() installs one (POSIX starts
+    // in the SS_DISABLE state; signal_flags are already zero from the memset).
+    p.altstack_flags = 2;
     true
 }
 
@@ -639,6 +642,55 @@ pub unsafe extern "C" fn task_park_state(blocked_state: u32) -> i32 {
     // SAFETY: the lock was acquired above.
     unsafe { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
     0
+}
+
+/// Park the calling task on signal set `set` for POSIX's `sigwait()`, atomically
+/// with the pending check: **1** = one of `set` is already pending, so the caller
+/// must consume it instead of parking; **2** = the task is Zombie and must not
+/// sleep; **0** = parked.
+///
+/// Taking `SCHEDULER_LOCK` is the whole point: `task_signal_locked` updates
+/// `pending_signals` under the same lock, so a signal arriving between the check
+/// and the park is either seen by the check or wakes a task that is already
+/// Sleeping — it cannot be lost in the gap.
+///
+/// # Safety
+///
+/// Must be called from a task context with `SCHEDULER_LOCK` free.
+#[no_mangle]
+pub unsafe extern "C" fn task_park_sigwait(set: u32) -> u32 {
+    // SAFETY: `SCHEDULER_LOCK` is the scheduler's global spinlock; the caller must not hold it
+    // (see # Safety).
+    unsafe { crate::sync::irq_spinlock_acquire(&raw mut SCHEDULER_LOCK) };
+    let cur = crate::task::current_task();
+    let mut r = 1u32;
+    if !cur.is_null() {
+        // SAFETY: `cur` is the live current task (non-null checked above).
+        let state = unsafe { (*cur).state };
+        if matches!(state, TaskState::Zombie) {
+            r = 2;
+        } else {
+            // SAFETY: `cur` is live, so its `proc` field is in bounds.
+            let p = unsafe { (*cur).proc };
+            // SAFETY: `p` is that task's live `ProcMeta`.
+            let pending = if p.is_null() { 0 } else { unsafe { (*p).pending_signals } };
+            if (pending & set) != 0 {
+                r = 1;                          // already pending: do not park
+            } else {
+                if !p.is_null() {
+                    // SAFETY: `p` is live and the lock is held, so a signal
+                    // raised from here on finds the waiter marked.
+                    unsafe { (*p).sigwait_set = set };
+                }
+                // SAFETY: `cur` is live and the lock is held.
+                unsafe { (*cur).state = TaskState::Sleeping };
+                r = 0;
+            }
+        }
+    }
+    // SAFETY: the lock was acquired above.
+    unsafe { crate::sync::irq_spinlock_release(&raw mut SCHEDULER_LOCK) };
+    r
 }
 
 #[path = "task_create.rs"]
