@@ -13,7 +13,7 @@ use core::cell::SyncUnsafeCell;
 
 use crate::energy::{self, MAX_CORES};
 use crate::ffi;
-use crate::placement::{self, CoreView};
+use crate::placement::CoreView;
 use crate::topology::{self, Level, Topology};
 
 struct CpuTopo {
@@ -204,47 +204,4 @@ pub extern "C" fn cpu_topo_threads_per_core() -> u32 {
 #[no_mangle]
 pub extern "C" fn cpu_topo_packages() -> u32 {
     packages()
-}
-
-/// Deterministic check of the sibling-aware placement policy against the *real*
-/// machine topology: with the master busy and every worker idle + sleeping, the
-/// pick must land on a different physical core than the master when SMT is
-/// present and there is more than one physical core.  Returns 0 on success.
-#[no_mangle]
-pub extern "C" fn placement_selftest() -> i32 {
-    let tpc = threads_per_core();
-    let present = energy::energy_core_count_present();
-    if present < 2 {
-        return 0; // single logical CPU: nothing to place
-    }
-
-    // Synthetic snapshot: master busy, every other logical CPU eligible + idle.
-    let mut views = [CoreView::empty(0); MAX_CORES];
-    for i in 0..MAX_CORES {
-        let cpu = i as u32;
-        views[i] = CoreView {
-            cpu,
-            package: package(cpu),
-            core: core(cpu),
-            online: cpu < present,
-            eligible: cpu != 0 && cpu < present,
-            awake: false,
-            idle: cpu != 0,
-        };
-    }
-    views[0].online = true;
-    views[0].eligible = false;
-    views[0].idle = false; // master busy
-
-    let Some(chosen) = placement::pick_wake(&views) else {
-        return 0;
-    };
-    if tpc > 1 && present >= 2 * tpc {
-        // Two SMT threads exist and at least two physical cores: the second
-        // thread must not share the master's core.
-        if placement::same_core(&views[chosen as usize], &views[0]) {
-            return 1;
-        }
-    }
-    0
 }

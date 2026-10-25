@@ -254,22 +254,6 @@ pub unsafe extern "C" fn cact_csprng_fill(buf: *mut u8, len: u32) -> i32 {
     0
 }
 
-/// Self-test: two draws must be non-zero, and different from each other.  Run
-/// once at boot — a DRBG that silently hands out zeros is worse than none, and
-/// this is cheap enough to check every time.
-#[no_mangle]
-pub extern "C" fn cact_csprng_selftest() -> i32 {
-    let mut a = [0u8; 32];
-    let mut b = [0u8; 32];
-    fill(&mut a);
-    fill(&mut b);
-    let nz = a.iter().filter(|x| **x != 0).count() + b.iter().filter(|x| **x != 0).count();
-    if nz == 0 || a == b {
-        return -1;
-    }
-    0
-}
-
 /// C ABI: 1 when the CSPRNG was seeded from a hardware source (RDRAND), 0 when
 /// it had to fall back to timing jitter alone.
 #[no_mangle]

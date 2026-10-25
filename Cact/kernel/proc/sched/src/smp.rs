@@ -589,8 +589,10 @@ fn lapic_is_bsp_or_invalid(lapic: u32) -> bool {
 /// core reset mid-lock strands that lock forever, deadlocking every other core.
 /// So we ask the core to park *itself* at a lock-free point
 /// (`percpu::park_request` -> `parked`, observed in `energy_cstate_idle`), wait
-/// for it to report parked, and only then send INIT.  Only an idle core with an
-/// empty runqueue is asked, and the check runs under `SCHEDULER_LOCK`.
+/// for it to report parked, and only then send INIT.  Only an idle core is
+/// asked, and it is asked while no runnable work exists anywhere (any ready
+/// task would be picked up and stolen, so parking with work queued would strand
+/// it); the check runs under `SCHEDULER_LOCK`.
 pub fn smp_cpu_offline(cpu: u32) -> i32 {
     if cpu == 0 || (cpu as usize) >= MAX_CPUS {
         return -1;

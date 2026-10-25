@@ -153,7 +153,7 @@ static void _mq_release_bytes(uint32_t n) {
     __sync_sub_and_fetch(&mqueue_bytes, n);
 }
 
-// ── queue core (shared with the self-test) ──────────────────────────────
+// ── queue core ──────────────────────────────────────────────────────────
 
 // Allocate a message, reserving its bytes against the budget.  The caller
 // fills data[] and enqueues it.  Returns NULL when the budget is exhausted.
@@ -537,7 +537,7 @@ static int _mq_poll(vfs_node_t *node, void *priv, uint32_t events) {
     return (int)revents;
 }
 
-// ── construction and self-test ──────────────────────────────────────────
+// ── construction ────────────────────────────────────────────────────────
 
 vfs_node_t *mqueue_create_root(const char *name) {
     vfs_node_t *node = (vfs_node_t *)kmalloc(sizeof(vfs_node_t));

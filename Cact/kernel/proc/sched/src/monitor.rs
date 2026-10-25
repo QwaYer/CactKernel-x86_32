@@ -2,21 +2,21 @@
 //!
 //! The master core samples, on every scheduler tick, per-core runnable load
 //! and idleness and folds them into exponentially-smoothed metrics:
-//! `load_avg`, `queue_length`, `cpu_utilization`, a `trend` classifier and a
-//! per-second `energy_budget`.  The plan targets a 1 ms cadence; this kernel's
+//! `load_avg`, `cpu_utilization`, a `trend` classifier and a per-second
+//! `energy_budget`.  The plan targets a 1 ms cadence; this kernel's
 //! system tick is 100 Hz (10 ms), so each tick is one sample and the second
 //! window is 100 samples.  When a sub-10 ms master timer appears, only the
 //! window constant needs to change.
 //!
 //! Every core samples *itself* each tick (`sample_tick`), so worker loads are
-//! real and drive the governor's scaling.  The runqueue itself is still the
-//! single global MLFQ, so a core's "queue_length" is the global runnable count.
+//! real and drive the governor's scaling.  A core's runnable depth is not kept
+//! here: the ready queues are per-core, and the balancer reads the owning
+//! core's queue directly (`mlfq_local_runnable_count`).
 
 use core::cell::SyncUnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::energy::MAX_CORES;
-use crate::mlfq;
 use crate::task::current_task;
 use crate::sync::{irq_spinlock_acquire, irq_spinlock_release};
 
@@ -38,7 +38,6 @@ const DEFAULT_ENERGY_BUDGET: u32 = 10000;
 struct CoreLoad {
     load_avg: u32,          // per-mille, EMA over samples
     prev_load_avg: u32,     // previous sample for trend detection
-    queue_length: u32,      // last sampled runnable count
     cpu_utilization: u32,   // per-mille over the last 1 s window
     busy_samples: u32,      // samples where the core ran a task
     window_samples: u32,    // samples accumulated in the current window
@@ -52,7 +51,6 @@ impl CoreLoad {
         Self {
             load_avg: 0,
             prev_load_avg: 0,
-            queue_length: 0,
             cpu_utilization: 0,
             busy_samples: 0,
             window_samples: 0,
@@ -155,9 +153,8 @@ pub(crate) fn sample_tick() -> u32 {
     // SAFETY: `cur` is that live task pointer, so reading its `pid` field is in bounds.
     let pid = unsafe { (*cur).pid };
     let busy = pid != 0;
-    let queue_len = mlfq::mlfq_runnable_count();
-    let instant = if busy { PERMILLE } else { 0 };
     let cpu = crate::percpu::this_cpu() as u32;
+    let instant = if busy { PERMILLE } else { 0 };
     let idx = match core_index(cpu) {
         Some(i) => i,
         None => return 0,
@@ -171,7 +168,6 @@ pub(crate) fn sample_tick() -> u32 {
     }
 
     let core = &mut st.cores[idx];
-    core.queue_length = queue_len;
     update_load_avg(core, instant);
     update_trend(core);
 
@@ -246,14 +242,6 @@ pub extern "C" fn energy_monitor_init() -> i32 {
 pub extern "C" fn energy_monitor_load_avg(cpu: u32) -> u32 {
     match core_index(cpu) {
         Some(i) => query(|st| st.cores[i].load_avg),
-        None => 0,
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn energy_monitor_queue_length(cpu: u32) -> u32 {
-    match core_index(cpu) {
-        Some(i) => query(|st| st.cores[i].queue_length),
         None => 0,
     }
 }

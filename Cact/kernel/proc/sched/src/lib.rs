@@ -40,8 +40,8 @@ pub mod cstate;
 pub mod monitor;
 pub mod decision;
 pub mod balance;
+pub mod balance_policy;
 pub mod smp;
-pub mod selftest;
 pub mod timer_wheel;
 
 pub mod sync {

@@ -38,11 +38,4 @@
  */
 int mod_tag_verify(uint8_t *elf_data, uint32_t *file_size);
 
-/*
- * Verify the embedded known-answer signature at boot: proves the public key in
- * the kernel image and the signing key actually match.  Returns 0 when the
- * signature verifies, non-zero otherwise.
- */
-int mod_sign_selftest(void);
-
 #endif /* CACT_MOD_TAG_H */

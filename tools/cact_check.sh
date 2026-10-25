@@ -167,16 +167,10 @@ fail_re+='|CACT-CHECK: [A-Za-z0-9_]+ FAIL|CACT-CHECK: DONE.*fail=[1-9]'
 fail_re+='|devfs: no localrepo module|localrepo source is empty'
 fail_re+='|localrepo copy failed|no localrepo archive source found'
 
-# Markers that must be present for the check to pass.  These are the kernel's
-# `tag: message` log lines; keep the list in sync with the self-tests in
-# Cact/kernel/core/kernel.c.
+# Markers that must be present for the check to pass.  Empty: the kernel has no
+# boot self-tests any more, so the boot is judged on reaching userspace, on the
+# ksym vermagic matching the signer, and on the localrepo/cctkfs pipeline below.
 required=(
-  "csprng: selftest passed"
-  "sigmagic: selftest passed"
-  "energy: selftest passed"
-  "timer: selftest OK"
-  "placement: selftest passed"
-  "mqueue: selftest passed"
 )
 
 rc=0

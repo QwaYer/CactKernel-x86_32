@@ -51,10 +51,6 @@ uint32_t cpu_topo_cpu_cores(uint32_t cpu);
 uint32_t cpu_topo_threads_per_core(void);
 uint32_t cpu_topo_packages(void);
 
-/* Sibling-aware placement self-test (P1.2): 0 when the policy lands the second
- * thread on a physical core other than the master's when SMT is present. */
-int      placement_selftest(void);
-
 int  energy_core_set_cstate(uint32_t cpu, uint32_t state);
 void energy_core_mark_idle(uint32_t cpu);
 void energy_core_mark_busy(uint32_t cpu);
@@ -86,7 +82,6 @@ int energy_ipi_wake_worker(uint32_t cpu);
 
 int energy_monitor_init(void);
 uint32_t energy_monitor_load_avg(uint32_t cpu);
-uint32_t energy_monitor_queue_length(uint32_t cpu);
 uint32_t energy_monitor_cpu_utilization(uint32_t cpu);
 int      energy_monitor_trend(uint32_t cpu);
 uint32_t energy_monitor_energy_budget(uint32_t cpu);
@@ -113,7 +108,5 @@ int    energy_balance_init(void);
 void   energy_balance_tick(void);
 uint32_t energy_balance_imbalance_permille(void);
 int    energy_balance_migrate(uint32_t src, uint32_t dst, uint32_t pid);
-
-int energy_selftest(void);
 
 #endif

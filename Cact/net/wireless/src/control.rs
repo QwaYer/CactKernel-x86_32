@@ -75,7 +75,6 @@ pub struct CactWlanStatus {
     pub channel: u32,
     pub ssid: [u8; SSID_MAX],
     pub last_error: i32,
-    pub ccmp_selftest: i32,
     pub tx_data: u32,
     pub tx_group: u32,
     pub tx_fail: u32,
@@ -98,7 +97,7 @@ const _: () = assert!(core::mem::size_of::<CactWlanKey>() == 44);
 const _: () = assert!(core::mem::size_of::<CactWlanEapol>() == 524);
 const _: () = assert!(core::mem::offset_of!(CactWlanEapol, len) == 8);
 const _: () = assert!(core::mem::offset_of!(CactWlanEapol, data) == 12);
-const _: () = assert!(core::mem::size_of::<CactWlanStatus>() == 112);
+const _: () = assert!(core::mem::size_of::<CactWlanStatus>() == 108);
 
 // ── user copies ───────────────────────────────────────────────────────────────
 fn copy_in<T: Copy>(arg: *mut c_void, out: &mut T) -> bool {
@@ -252,7 +251,6 @@ fn do_status(arg: *mut c_void) -> c_int {
         channel: s.channel,
         ssid: s.ssid,
         last_error: s.last_error,
-        ccmp_selftest: s.ccmp_selftest,
         tx_data: s.tx_data,
         tx_group: s.tx_group,
         tx_fail: s.tx_fail,

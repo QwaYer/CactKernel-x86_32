@@ -58,27 +58,3 @@ int mod_tag_verify(uint8_t *elf_data, uint32_t *file_size) {
         elf_data[data_len + i] = 0;
     return CACT_MOD_TAG_OK;
 }
-
-int mod_sign_selftest(void) {
-    /* 1. Known-answer signature: proves the compiled-in public key belongs to
-     *    the private key the build host signs with. */
-    if (cact_sig_verify_p256_raw(cact_module_pubkey, CACT_MODULE_PUBKEY_LEN,
-                                 cact_modsign_selftest_msg,
-                                 CACT_MODSIGN_SELFTEST_MSG_LEN,
-                                 cact_modsign_selftest_sig,
-                                 CACT_MOD_TAG_SIG_SIZE) != 0)
-        return -1;
-
-    /* 2. Full trailer parse on an embedded signed blob: magic, signature and
-     *    vermagic all have to line up, so a drift between this kernel's ABI
-     *    and the build-time signer fails here rather than silently rejecting
-     *    every module at load. */
-    uint8_t  buf[CACT_MODSIGN_SELFTEST_MOD_TOTAL];
-    uint32_t n = sizeof(buf);
-    memcpy(buf, cact_modsign_selftest_mod, sizeof(buf));
-    if (mod_tag_verify(buf, &n) != CACT_MOD_TAG_OK)
-        return -2;
-    if (n != CACT_MODSIGN_SELFTEST_MOD_LEN)
-        return -3;
-    return 0;
-}

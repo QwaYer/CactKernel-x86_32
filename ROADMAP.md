@@ -141,11 +141,19 @@ fixed-hardware (`0x7F`) MWAIT hint** (`drivers/acpi/cstates.c`); without that a
 core idles at C1 (`HLT`).  **S3 suspend/resume is removed in 2.0.0 (poweroff and
 reboot remain).**
 
-**Still open (SMP):** per-core runqueues and **cross-runqueue task migration** —
-the load monitor, benefit/cost decision and balancer/throttle run on each tick,
-but the move itself is not wired, so a task is not yet handed from one core to
-another.  `WORKERS_RUN_TASKS` can be flipped off to fall back to BSP-only
-execution when bisecting an SMP problem.
+**Closed in 2.0.0 (Step B).** The scheduler keeps a **ready queue per logical
+CPU**. A task is enqueued on the core that makes it runnable; an idle core pulls
+work from the busiest peer when its own queue is empty (`pick_next_task`'s steal
+step); and the master's balancer moves one ready task per tick across a load
+spread (`energy_balance_migrate` → `mlfq_migrate_locked`), waking a deep-idle
+destination first. The decision half is the pure, host-tested `balance_policy`
+(`pick_migration`).  `WORKERS_RUN_TASKS` can still be flipped off to fall back
+to BSP-only execution when bisecting an SMP problem.
+
+**Still open (SMP):** there is no CPU-affinity API (the kernel alone places a
+task), the balancer moves at most one task per tick and does not weigh the
+destination's existing queue depth, and a woken task is queued on the waker's
+core rather than on a chosen one.
 
 ## Storage & filesystems
 

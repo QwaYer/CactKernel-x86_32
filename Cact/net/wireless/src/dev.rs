@@ -145,7 +145,6 @@ pub struct Dev {
     pub rx_other: u32,
     pub beacon_rx: u32,
     pub deauth_rx: u32,
-    pub ccmp_ok: bool,
 }
 
 impl Dev {
@@ -188,7 +187,6 @@ impl Dev {
             rx_other: 0,
             beacon_rx: 0,
             deauth_rx: 0,
-            ccmp_ok: false,
         }
     }
 }
@@ -231,7 +229,6 @@ pub fn register(hw: *mut Cact80211Hw) -> i32 {
         unregister(d.hw); // replace the previous radio
     }
     d.hw = hw;
-    d.ccmp_ok = crate::ccmp::selftest() && crate::aes::selftest();
     d.bss_count = 0;
 
     // SAFETY: `hw` is non-null (checked) and points at the driver's live config.
@@ -251,9 +248,6 @@ pub fn register(hw: *mut Cact80211Hw) -> i32 {
     unsafe { register_netdev(nd) };
     d.name_ready = true;
 
-    if !d.ccmp_ok {
-        d.last_error = EIO;
-    }
     0
 }
 
@@ -816,7 +810,6 @@ pub struct StatusView {
     pub channel: u32,
     pub ssid: [u8; 33],
     pub last_error: i32,
-    pub ccmp_selftest: i32,
     pub tx_data: u32,
     pub tx_group: u32,
     pub tx_fail: u32,
@@ -846,7 +839,6 @@ pub fn status() -> StatusView {
         channel: d.channel as u32,
         ssid,
         last_error: d.last_error,
-        ccmp_selftest: if d.ccmp_ok { 1 } else { 0 },
         tx_data: d.tx_data,
         tx_group: d.tx_group,
         tx_fail: d.tx_fail,

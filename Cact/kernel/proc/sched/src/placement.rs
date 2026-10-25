@@ -1,11 +1,12 @@
 //! Pure sibling-aware core placement policy (PLAN-2.0.0 P1.2).
 //!
 //! On an SMT machine two busy threads must not both sit on the two logical CPUs
-//! of one physical core while other physical cores sit idle.  CactOS uses one
-//! shared MLFQ (no per-core runqueues), so placement is expressed where a core
-//! is *chosen*: the energy governor picks which sleeping worker to wake, and
-//! this module decides which one, preferring a physical core with no busy
-//! sibling ("fresh") over one whose sibling is already busy ("shared").
+//! of one physical core while other physical cores sit idle.  The ready queues
+//! are per-core, but this module still decides *which* core to run on: the
+//! energy governor picks which sleeping worker to wake, and this module decides
+//! which one, preferring a physical core with no busy sibling ("fresh") over one
+//! whose sibling is already busy ("shared").  It also caps a core's idle depth
+//! and gates whole-core offlining.
 //!
 //! No hardware access, no globals and no FFI, so it is unit-tested on the host
 //! by `Kernel-Unit-Tests-for-Cact/` (P2.1).

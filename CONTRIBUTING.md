@@ -51,8 +51,7 @@ so the tests cannot drift.
 
 End to end, the gate is a headless boot: **`ninja -C build-meson check`** boots
 `CactBridge-x86/build/cact-non-gui.iso` under QEMU with no display, checks the
-kernel self-tests (csprng, module-signing `sigmagic`, energy, timer, placement)
-and the ksym vermagic against the signer, greps COM1, and exits non-zero on any
+ksym vermagic against the signer, greps COM1, and exits non-zero on any
 failure. Reboot after any userspace change: `/bin` and `/sbin` come from the
 cctkfs image, not the working tree. Kernel output goes to COM1, which
 `run_qemu.sh` wires to `-serial stdio`.

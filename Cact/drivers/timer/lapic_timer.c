@@ -145,40 +145,6 @@ void lapic_timer_mask(void)
     lapic_timer_armed = 0;
 }
 
-int lapic_timer_selftest(void)
-{
-    if (!apic_lapic_ready()) {
-        pr_warn("%s: selftest: LAPIC not mapped\n", "timer");
-        return -1;
-    }
-
-    /* Vector + periodic + unmasked. */
-    const uint32_t fields = 0xFFu | LAPIC_LVT_MASK | LAPIC_LVT_PERIODIC;
-    const uint32_t expect = LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC;
-    uint32_t lvt = apic_lapic_read(LAPIC_LVT_TIMER);
-    if ((lvt & fields) != expect) {
-        pr_warn("%s: selftest: LVT=0x%x (expected 0x%x) — vector/mask wrong\n",
-                "timer", (unsigned)lvt, (unsigned)expect);
-        return -1;
-    }
-
-    /* The counter must be moving.  Periodic mode reloads, so a stuck value
-     * means the timer is not running at all. */
-    uint32_t a = apic_lapic_read(LAPIC_TIMER_CURCNT);
-    for (volatile uint32_t i = 0; i < 1000000u; i++)
-        __asm__ __volatile__("pause");
-    uint32_t b = apic_lapic_read(LAPIC_TIMER_CURCNT);
-    if (a == b) {
-        pr_warn("%s: selftest: LAPIC counter stuck at 0x%x — timer not running\n",
-                "timer", (unsigned)a);
-        return -1;
-    }
-
-    pr_info("%s: selftest OK (vector 0x%x, CURCNT 0x%x->0x%x)\n",
-            "timer", (unsigned)LAPIC_TIMER_VECTOR, (unsigned)a, (unsigned)b);
-    return 0;
-}
-
 bool lapic_timer_active(void)
 {
     return lapic_timer_armed != 0;

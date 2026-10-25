@@ -1,10 +1,6 @@
-# mod_tag.c includes the generated mod_pubkey_gen.h: the ECDSA public key, a
-# known-answer signature, and a sample module carrying a full trailer.  The
-# sample's trailer holds the ksym ABI fingerprint and its signature covers
-# those bytes, so the header has to be rebuilt whenever ksym.c (where the
-# fingerprint comes from) or the private key changes.  A header left over from
-# an older ksym.c does not fail the build — it fails the boot self-test with
-# "sigmagic: SELF-TEST FAILED" while the kernel itself is fine.
+# mod_tag.c includes the generated mod_pubkey_gen.h: the ECDSA public key that
+# verifies every loadable module.  The header derives from the private key
+# alone, so it is regenerated when the key pair changes.
 #
 # The bootstrap below only creates the key pair when it is missing: the key is
 # an input of the header target, so meson has to find it at configure time.

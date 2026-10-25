@@ -92,7 +92,7 @@ Every source directory owns a `meson.build` and produces its own static library;
 meson setup build-meson --cross-file cross/i686-cact-clang.ini
 ninja -C build-meson             # kernel.bin + cact.iso (kernel-only GRUB)
 ninja -C build-meson iso-full    # cact-full.iso with cctkfs.img + localrepo.tar.zst
-ninja -C build-meson check       # headless QEMU boot check (COM1 self-test markers)
+ninja -C build-meson check       # headless QEMU boot check (COM1: userspace, vermagic, localrepo)
 ninja -C build-meson clean
 ninja -C build-meson rust-clean  # cargo clean in the four Rust crates
 ninja -C build-meson acpica-clean
@@ -230,9 +230,9 @@ Order matters (e.g. **blkdev** before PCI so AHCI/NVMe can register).
 | 3 | **IDT** (256 vectors) + fast-syscall MSRs (`sysenter`/`syscall`) + **COM1 serial** (mirrors part of `kprint` / `klog` to host) |
 | 4 | **Linear framebuffer** console + **PAT** write-combining for VRAM + **WB shadow** buffer, then terminal winsize from FB geometry |
 | 5 | **ACPI** — parse RSDP, MADT, FADT tables via ACPICA |
-| 6 | **Timekeeping** — TSC (ACPI PM timer fallback) + **LAPIC timer @ 100 Hz** scheduler tick; **CMOS RTC** civil wall clock; **CSPRNG self-test**; **module-signing self-test** (ECDSA P-256) and the **ksym vermagic** line |
-| 7 | **I/O APIC** up (LAPIC timer self-test reads the LVT back); **ACPI power path** (S5 soft-off, reset register) |
-| 8 | **Energy governor** — master/worker core map, C-state controller + `IPI_HALT`/`IPI_WAKEUP` vectors, per-tick load monitor, decision engine, balancer, self-tests; **CPU topology** (CPUID `0xB`/`0x1F`) for `/proc/cpuinfo` |
+| 6 | **Timekeeping** — TSC (ACPI PM timer fallback) + **LAPIC timer @ 100 Hz** scheduler tick; **CMOS RTC** civil wall clock; the **ksym vermagic** line |
+| 7 | **I/O APIC** up; **ACPI power path** (S5 soft-off, reset register) |
+| 8 | **Energy governor** — master/worker core map, C-state controller + `IPI_HALT`/`IPI_WAKEUP` vectors, per-tick load monitor, decision engine, **per-core runqueues + balancer (cross-runqueue migration)**; **CPU topology** (CPUID `0xB`/`0x1F`) for `/proc/cpuinfo` |
 | 9 | **SMP** — `smp_init()` wakes the worker cores, each of which loads its per-CPU GDT/TSS |
 | 10 | **`msidev_init`** (MSI/MSI-X vector pool) → **`swap_init`** (I/O callbacks only — swap stays off until a partition appears) → **`blkdev_init`** → **partition probe** (MBR/GPT) → **PCIe ECAM** → **PCI scan** + **enumeration** → **`usb_init`** (xHCI) |
 | 11 | **Process cache** (`pc_init`) + **`vfs_init`** |
@@ -368,10 +368,14 @@ deeply each core may idle:
   controller re-arms IDT vectors `0xF8`/`0xF9` for `IPI_HALT`/`IPI_WAKEUP`.
 - **MLFQ ↔ C-state map** — the queue class a task runs in bounds the idle depth
   the core may enter: `RT=C0, interactive=C1, normal=C3, background=C6`.
-- **Placement** — prefers a fresh physical core over the sibling of a busy one
-  (`balance.rs`/`decision.rs`); a per-tick load monitor, a benefit/cost decision
-  pass and the balancer/throttle are live. **Per-core runqueues and
-  cross-runqueue migration are not done yet.**
+- **Per-core runqueues** — the scheduler keeps a **ready queue per logical CPU**:
+  a task is enqueued on the core that makes it runnable, an idle core pulls from
+  the busiest peer when its own queue is empty (work stealing), and the master's
+  balancer moves one ready task per tick across a load spread (`balance_policy`
+  decides, `energy_balance_migrate` moves it), waking a deep-idle destination
+  first. **Placement** still prefers a fresh physical core over the sibling of a
+  busy one (`placement.rs`).  There is no CPU-affinity API, and a woken task is
+  queued on the waker's core rather than a chosen one.
 - **SMP bring-up** (`Cact/kernel/smp`, `smp.rs`) wakes the worker cores, each of
   which loads its per-CPU GDT/TSS — the boot core keeps every global scheduler
   lock until `sched_boot_complete()`, after which workers dispatch tasks.
@@ -443,7 +447,7 @@ smoltcp keeps its neighbour cache private, so `cact_net` shadows it: `arp.rs` le
 
 The Linux-shaped split, with the **mac80211-equivalent in the kernel** (Rust crate `cact80211`, `Cact/net/wireless`) and the Wi-Fi driver reduced to a **dumb radio**:
 
-- **Engine** (`hw.rs` / `dev.rs` / `frame.rs` / `ccmp.rs` / `aes.rs` / `control.rs`) — scan (channel walk + probe request), open-system auth/association, the 802.11↔802.3 datapath, TK/GTK install, a beacon-loss watchdog, and **software CCMP/AES-128** with a boot known-answer self-test. It registers netdev **`wlan0`** and the **`/dev/wlan0`** chardev; `read(/dev/wlan0)` serves the AP list as text.
+- **Engine** (`hw.rs` / `dev.rs` / `frame.rs` / `ccmp.rs` / `aes.rs` / `control.rs`) — scan (channel walk + probe request), open-system auth/association, the 802.11↔802.3 datapath, TK/GTK install, a beacon-loss watchdog, and **software CCMP/AES-128**. It registers netdev **`wlan0`** and the **`/dev/wlan0`** chardev; `read(/dev/wlan0)` serves the AP list as text.
 - **Driver contract** — a NIC module calls the ksym exports **`cact80211_register`** / **`_unregister`** / **`_rx`** with a `cact80211_hw` (ops `tx` / `config` / `rx_poll`) defined in [`cact80211.h`](Cact/net/wireless/cact80211.h); the driver only touches the hardware.
 - **Userspace is the WPA2 supplicant** — `wljoin` reads the BSS list, `CONNECT`s, runs the 4-way over EAPOL and installs TK/GTK through `CACT_WLANCTL_*` (`0x3F00`); `wifid` drives the connection lifecycle.
 - Current target radio: **Ralink RT3070** (`rt2800usb`, USB) as an out-of-tree **`.cctk`**; the engine stays dormant until that module is loaded on hardware (QEMU has no radio).

@@ -22,6 +22,7 @@
 
 use crate::ffi;
 use crate::energy::{self, MAX_CORES};
+use crate::mlfq;
 use crate::monitor;
 use crate::cstate;
 use crate::energy_model as model;
@@ -156,9 +157,10 @@ pub extern "C" fn energy_decision_tick() {
         let load = monitor::energy_monitor_load_avg(cpu);
         let trend = monitor::energy_monitor_trend(cpu);
         let idle_ms = idle_ms_of(cpu);
-        // Until per-core runqueues exist, pending global work is a reasonable
-        // proxy for what a woken worker could drain.
-        let queue_len = monitor::energy_monitor_queue_length(0);
+        // Runqueues are per-core, and a woken worker drains whatever is queued
+        // anywhere (it pulls from its peers when its own queue is empty), so the
+        // machine-wide pending count is what the benefit/cost check should see.
+        let queue_len = mlfq::mlfq_runnable_count();
 
         if state == CSTATE_C0 {
             if energy_decision_should_sleep(load, idle_ms) != 0
@@ -205,7 +207,7 @@ pub extern "C" fn energy_decision_tick() {
             help = true;
         }
     }
-    if help && monitor::energy_monitor_queue_length(0) > 0 {
+    if help && mlfq::mlfq_runnable_count() > 0 {
         let mut views = crate::cpu_topo::views();
         for i in 0..MAX_CORES {
             let cpu = i as u32;
@@ -261,7 +263,7 @@ const MIN_ONLINE_CORES: u32 = 2;
 pub extern "C" fn energy_core_manage() {
     // Bring one offlined worker back when there is work and every online worker
     // is busy (C0); a parked core is otherwise invisible to the tick's scan.
-    if monitor::energy_monitor_queue_length(0) != 0 {
+    if mlfq::mlfq_runnable_count() != 0 {
         let mut any_offline = false;
         let mut online_workers = 0u32;
         let mut busy_online_workers = 0u32;
@@ -295,7 +297,7 @@ pub extern "C" fn energy_core_manage() {
 
     // Park a long-idle worker while nothing is queued and capacity is in excess.
     if energy::energy_core_count_online() <= MIN_ONLINE_CORES
-        || monitor::energy_monitor_queue_length(0) != 0
+        || mlfq::mlfq_runnable_count() != 0
     {
         return;
     }

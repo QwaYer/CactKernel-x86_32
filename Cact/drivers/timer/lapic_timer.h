@@ -31,11 +31,6 @@ uint32_t lapic_timer_ticks_per_ms(void);
 /* Stop delivering LAPIC timer interrupts (LVT masked, counter left running). */
 void lapic_timer_mask(void);
 
-/* Sanity-check the armed timer: LVT vector/mode/mask and a moving current
- * count.  Returns 0 when healthy, -1 when something looks wrong (the failure
- * is logged). */
-int lapic_timer_selftest(void);
-
 bool lapic_timer_active(void);
 
 #endif

@@ -33,9 +33,10 @@ fn idle_cap_for_level(level: u32) -> u32 {
     }
 }
 
-/// Cap on this core's idle depth derived from the global runqueue.
-pub(crate) fn runqueue_idle_cap() -> u32 {
-    match mlfq::mlfq_highest_runnable_level() {
+/// Cap on `cpu`'s idle depth derived from *its own* runqueue: with per-core
+/// ready queues, what this core may have to run next is what is queued on it.
+pub(crate) fn runqueue_idle_cap(cpu: usize) -> u32 {
+    match mlfq::mlfq_highest_runnable_level(cpu) {
         Some(level) => idle_cap_for_level(level),
         None => CSTATE_C6,
     }
@@ -48,7 +49,7 @@ pub extern "C" fn energy_mlfq_cap_for_level(level: u32) -> u32 {
 
 #[no_mangle]
 pub extern "C" fn energy_mlfq_runqueue_cap() -> u32 {
-    runqueue_idle_cap()
+    runqueue_idle_cap(crate::percpu::this_cpu())
 }
 
 /// C-state the energy governor should use when `cpu` idles next.
@@ -65,7 +66,7 @@ pub extern "C" fn energy_mlfq_idle_target(cpu: u32) -> u32 {
         CSTATE_C1
     };
 
-    let cap = runqueue_idle_cap();
+    let cap = runqueue_idle_cap(cpu as usize);
     let target = if role_max < cap { role_max } else { cap };
     // An idle core must always halt with at least C1 semantics; C0 means the
     // core should not be in the idle path at all.

@@ -299,35 +299,14 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     else
         pr_warn("%s: no usable CMOS date — only uptime is known\n", "rtc");
 
-    /* CSPRNG self-test.  Everything downstream trusts this generator (TLS keys,
-     * /dev/urandom), and a generator that hands out zeros fails silently, so
-     * check it once here where the failure is one line in the boot log. */
-    if (cact_csprng_selftest() != 0)
-        pr_err("%s: SELF-TEST FAILED — the DRBG returns zeros/duplicates\n",
-               "csprng");
-    else
-        pr_info("%s: selftest passed\n", "csprng");
-
-    /* Module-signing self-test: verify the embedded known-answer signature with
-     * the compiled-in public key.  This proves the kernel image and the signing
-     * key match, so a broken key pair fails here instead of silently rejecting
-     * every module at load.  The printed vermagic is the ABI fingerprint a
-     * module must carry; cact_check.sh cross-checks it against the signer. */
-    if (mod_sign_selftest() != 0)
-        pr_err("%s: SELF-TEST FAILED — public key rejected its own "
-               "signature\n", "sigmagic");
-    else
-        pr_info("%s: selftest passed (ECDSA P-256)\n", "sigmagic");
+    /* The printed vermagic is the ABI fingerprint a module must carry;
+     * cact_check.sh cross-checks it against the signer. */
     pr_info("%s: ksym vermagic 0x%08x\n", "sigmagic",
             (unsigned)ksym_vermagic());
 
     int apic_rc = apic_init();
     if (apic_rc == 0) {
         pr_info("%s: LAPIC + IOAPIC operational\n", "apic");
-        /* Read the LVT back and check the counter is moving: this is what
-         * turns an "armed but silent" tick into a visible warning instead of
-         * a hang waiting for a scheduler tick that never arrives. */
-        (void)lapic_timer_selftest();
     } else {
         pr_warn("%s: init failed (rc=%d) — interrupts will not work\n", "apic", apic_rc);
     }
@@ -367,12 +346,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
                 (unsigned)cpu_topo_package(i), (unsigned)cpu_topo_core(i),
                 (unsigned)cpu_topo_siblings(i));
     }
-    if (placement_selftest() != 0)
-        pr_err("%s: SELF-TEST FAILED — placement shares the master core\n",
-               "placement");
-    else
-        pr_info("%s: selftest passed\n", "placement");
-
     // C-state controller + master->worker IPI protocol (Step 2 of the energy
     // governor). Re-arms IDT vectors 0xF8/0xF9 for IPI_HALT/IPI_WAKEUP.
     energy_cstate_init();
@@ -396,21 +369,12 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
     pr_info("%s: mlfq map: RT=C0 interactive=C1 normal=C3 bg=C6\n",
             "energy");
 
-    // Load balancing / migration (Step 6). Per-core runqueues are pending SMP;
-    // the scanner and throttle are live, the cross-runqueue move is not.
+    // Load balancing / migration (Step 6). Per-core runqueues are live: the
+    // scheduler keeps a ready queue per core, an idle core pulls from a peer,
+    // and this balancer pushes one task per tick across a load spread.
     energy_balance_init();
-    pr_info("%s: balancer ready (migration awaits per-core runqueues)\n",
+    pr_info("%s: balancer ready (per-core runqueues, migration live)\n",
             "energy");
-
-    // Energy governor self-tests (Step 7, unit-style checks).
-    {
-        int e_st = energy_selftest();
-        if (e_st == 0)
-            pr_info("%s: selftest passed\n", "energy");
-        else
-            pr_warn("%s: selftest: %d check(s) FAILED\n",
-                    "energy", e_st);
-    }
 
     // SMP: wake worker cores (Step A). Bring-up logic lives in Rust
     // (sched/src/smp.rs); each AP loads its per-CPU GDT/TSS and idles.

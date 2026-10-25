@@ -42,6 +42,13 @@ impl<T: Link> IntrusiveQueue<T> {
         self.count
     }
 
+    /// The node at the head of the queue, or null when empty.  It is *not*
+    /// unlinked, so it is still owned by the queue and must not be modified
+    /// (except by the queue itself).
+    pub fn head(&self) -> *mut T {
+        self.head
+    }
+
     /// Append `node` at the tail.
     pub fn push(&mut self, node: &mut T) {
         let p: *mut T = node;

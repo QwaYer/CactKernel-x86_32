@@ -35,13 +35,41 @@ impl Link for TaskStruct {
 
 type MlfqQueue = IntrusiveQueue<TaskStruct>;
 
+/// One logical CPU's ready queues: an MLFQ level per priority class.
+struct CoreRunQueue {
+    queues: [MlfqQueue; MLFQ_LEVELS],
+}
+
+impl CoreRunQueue {
+    const fn new() -> Self {
+        Self {
+            queues: [
+                IntrusiveQueue::new(),
+                IntrusiveQueue::new(),
+                IntrusiveQueue::new(),
+                IntrusiveQueue::new(),
+            ],
+        }
+    }
+}
+
+/// Number of logical CPUs that own a ready queue.  Must match `smp::MAX_CPUS`
+/// and `percpu::MAX_CPUS`.
+const MAX_CPUS: usize = crate::percpu::MAX_CPUS;
+
 struct MlfqState {
-    queues:        [MlfqQueue; MLFQ_LEVELS],
+    /// Per-core ready queues (per-core runqueues).  A ready task sits on exactly
+    /// one core's queue: normally the core that made it runnable, and it stays
+    /// there unless that core hands it to another (`mlfq_migrate_locked`) or an
+    /// idle core pulls it (`pick_next_task`'s steal step).
+    runq:          [CoreRunQueue; MAX_CPUS],
+    /// Tasks blocked with no deadline.  Not tied to a core — whoever wakes the
+    /// task queues it on its own core's runqueue.
     sleep_queue:   MlfqQueue,
     boost_counter: u32,
 }
 
-/// Global MLFQ queues; `TaskStruct` pointers form intrusive lists. Access is serialized
+/// Per-core MLFQ ready queues; `TaskStruct` pointers form intrusive lists. Access is serialized
 /// with the scheduler IRQ lock except during `mlfq_init`.
 // SAFETY: `MlfqState` contains only raw `*mut TaskStruct` list heads/tails whose links are
 // mutated under `SCHEDULER_LOCK` (or during single-threaded `mlfq_init`), so sharing the static
@@ -51,12 +79,7 @@ unsafe impl Sync for MlfqState {}
 impl MlfqState {
     const fn new() -> Self {
         Self {
-            queues: [
-                IntrusiveQueue::new(),
-                IntrusiveQueue::new(),
-                IntrusiveQueue::new(),
-                IntrusiveQueue::new(),
-            ],
+            runq:          [const { CoreRunQueue::new() }; MAX_CPUS],
             sleep_queue:   IntrusiveQueue::new(),
             boost_counter: 0,
         }
@@ -72,6 +95,16 @@ fn mlfq_state_mut() -> *mut MlfqState {
     MLFQ_STATE.get()
 }
 
+/// Index of `cpu` inside the per-core table (clamped, like `percpu::this_cpu`).
+#[inline]
+fn runq_index(cpu: usize) -> usize {
+    if cpu < MAX_CPUS {
+        cpu
+    } else {
+        0
+    }
+}
+
 pub fn mlfq_init() {
     // SAFETY: called from `task_init` during single-threaded boot, before interrupts are enabled
     // or any other CPU exists, so `MLFQ_STATE` is exclusively reachable here.
@@ -81,29 +114,39 @@ pub fn mlfq_init() {
     }
 }
 
-/// Runnable task count summed over all MLFQ levels (the idle task is never
-/// enqueued, so it is excluded).  Caller must hold the scheduler lock (or be
-/// in a single-threaded/interrupt context).
-pub(crate) fn mlfq_runnable_count() -> u32 {
+/// Runnable tasks on `cpu`'s own ready queues (the idle task is never enqueued,
+/// so it is excluded).  Caller must hold the scheduler lock (or be in a
+/// single-threaded/interrupt context).
+pub(crate) fn mlfq_local_runnable_count(cpu: usize) -> u32 {
     // SAFETY: `mlfq_state_mut` yields the statically allocated `MLFQ_STATE`; the queue counters
     // are only mutated under `SCHEDULER_LOCK` (or during single-threaded init), and this call only
     // reads them.
     unsafe {
         let s = &*mlfq_state_mut();
-        s.queues.iter().map(|q| q.count()).sum()
+        s.runq[runq_index(cpu)].queues.iter().map(|q| q.count()).sum()
     }
 }
 
-/// Highest-priority (lowest-level) non-empty ready queue, if any.
-pub(crate) fn mlfq_highest_runnable_level() -> Option<u32> {
+/// Runnable task count summed over every core's ready queues (the idle task is
+/// never enqueued, so it is excluded).  Caller must hold the scheduler lock (or
+/// be in a single-threaded/interrupt context).
+pub(crate) fn mlfq_runnable_count() -> u32 {
+    // SAFETY: as for `mlfq_local_runnable_count`; this only reads the queue counters.
+    unsafe {
+        let s = &*mlfq_state_mut();
+        s.runq.iter().flat_map(|r| r.queues.iter()).map(|q| q.count()).sum()
+    }
+}
+
+/// Highest-priority (lowest-level) non-empty ready queue on `cpu`, if any.
+pub(crate) fn mlfq_highest_runnable_level(cpu: usize) -> Option<u32> {
     // SAFETY: `mlfq_state_mut` yields the statically allocated `MLFQ_STATE`; the queues are only
     // mutated under `SCHEDULER_LOCK` (or during single-threaded init) and this only reads their
     // counters.
     unsafe {
         let s = &*mlfq_state_mut();
-        (0..MLFQ_LEVELS)
-            .find(|&l| !s.queues[l].is_empty())
-            .map(|l| l as u32)
+        let q = &s.runq[runq_index(cpu)].queues;
+        (0..MLFQ_LEVELS).find(|&l| !q[l].is_empty()).map(|l| l as u32)
     }
 }
 
@@ -114,6 +157,11 @@ pub unsafe fn mlfq_enqueue_locked(task: *mut TaskStruct, level: u32) {
     if task.is_null() {
         return;
     }
+    // The task joins the *calling* core's own runqueue.  That is the core that
+    // made it runnable (or that it was already running on), so it is the
+    // cheapest place to run it, and a peer that has nothing locally can still
+    // pull it (see `pick_next_task`), so the choice never strands the task.
+    let cpu = crate::percpu::this_cpu();
     // SAFETY: `mlfq_state_mut` yields the static `MLFQ_STATE`; the caller holds `SCHEDULER_LOCK`
     // (see # Safety), so exclusive access is sound.
     let s = unsafe { &mut *mlfq_state_mut() };
@@ -121,7 +169,7 @@ pub unsafe fn mlfq_enqueue_locked(task: *mut TaskStruct, level: u32) {
     // SAFETY: `task` is non-null and live (see # Safety).
     let t = unsafe { &mut *task };
     t.priority = lvl as u32;
-    s.queues[lvl].push(t);
+    s.runq[runq_index(cpu)].queues[lvl].push(t);
     crate::mlfq_map::on_enqueue(level.min(MLFQ_LEVELS as u32 - 1));
 }
 
@@ -162,52 +210,139 @@ pub fn mlfq_remove_from_sleep(task: *mut TaskStruct) -> bool {
     }
 }
 
+/// Walk a ready-queue chain and return the task with `pid`, or null.
+///
 /// # Safety
 ///
-/// `task` must be null or a live `TaskStruct`; the caller must hold `SCHEDULER_LOCK`.
-pub unsafe fn mlfq_remove(task: *mut TaskStruct) {
-    if task.is_null() {
-        return;
+/// `head` must be null or the head of a runqueue of live `TaskStruct`s.
+unsafe fn ready_chain_find(head: *mut TaskStruct, pid: u32) -> *mut TaskStruct {
+    let mut cur = head;
+    while !cur.is_null() {
+        // SAFETY: `cur` is null-checked and, per the contract, a live ready task.
+        if unsafe { (*cur).pid } == pid {
+            return cur;
+        }
+        // SAFETY: `cur` is live, so its queue link is in bounds.
+        cur = unsafe { (*cur).queue_next };
     }
+    ptr::null_mut()
+}
+
+/// Move ready task `pid` from `src`'s runqueue to `dst`'s, keeping its MLFQ
+/// level.  With `pid == 0`, the head of `src`'s highest-priority non-empty queue
+/// is moved instead — what the balancer uses once it has already chosen the
+/// source.  Returns the moved pid, or 0 when nothing was moved.
+///
+/// # Safety
+///
+/// The caller must hold `SCHEDULER_LOCK`.
+pub unsafe fn mlfq_migrate_locked(src: u32, dst: u32, pid: u32) -> u32 {
+    if src == dst || src as usize >= MAX_CPUS || dst as usize >= MAX_CPUS {
+        return 0;
+    }
+    let src_i = runq_index(src as usize);
+    let dst_i = runq_index(dst as usize);
     // SAFETY: `mlfq_state_mut` yields the static `MLFQ_STATE`; the caller holds `SCHEDULER_LOCK`
     // (see # Safety).
     let s = unsafe { &mut *mlfq_state_mut() };
-    // SAFETY: `task` is non-null and live (see # Safety).
-    let priority = unsafe { (*task).priority };
-    let lvl = priority.min(MLFQ_LEVELS as u32 - 1) as usize;
-    s.queues[lvl].remove(task);
+
+    if pid == 0 {
+        for level in 0..MLFQ_LEVELS {
+            let t = s.runq[src_i].queues[level].pop();
+            if !t.is_null() {
+                // SAFETY: `t` was just popped from a ready queue, so it is a live task.
+                let moved = unsafe { (*t).pid };
+                // SAFETY: `t` is live.
+                let t_ref = unsafe { &mut *t };
+                t_ref.priority = level as u32;
+                s.runq[dst_i].queues[level].push(t_ref);
+                return moved;
+            }
+        }
+        return 0;
+    }
+
+    for level in 0..MLFQ_LEVELS {
+        let head = s.runq[src_i].queues[level].head();
+        // SAFETY: `head` is the head of this ready queue, so it is null or the start of a chain
+        // of live tasks.
+        let found = unsafe { ready_chain_find(head, pid) };
+        if found.is_null() {
+            continue;
+        }
+        if !s.runq[src_i].queues[level].remove(found) {
+            return 0;
+        }
+        // SAFETY: `found` is a live task just unlinked from that queue.
+        let t_ref = unsafe { &mut *found };
+        t_ref.priority = level as u32;
+        s.runq[dst_i].queues[level].push(t_ref);
+        return pid;
+    }
+    0
 }
 
-fn pick_next_task() -> *mut TaskStruct {
+/// Next task to run on `cpu`: its own runqueue first, then — when it has
+/// nothing locally — the busiest peer's queue (work stealing), so an idle core
+/// never leaves runnable work behind on another core.  Levels are scanned from
+/// the highest priority down, so a pulled task keeps the priority ordering.
+/// Returns null when no core has runnable work.
+fn pick_next_task(cpu: usize) -> *mut TaskStruct {
+    let me = runq_index(cpu);
     // SAFETY: `mlfq_state_mut` yields the statically allocated `MLFQ_STATE`; called with
     // `SCHEDULER_LOCK` held, and each `pop` returns a live task owned by the queue it came from.
-    unsafe {
-        let s = &mut *mlfq_state_mut();
-        for queue in &mut s.queues {
-            let t = queue.pop();
+    let s = unsafe { &mut *mlfq_state_mut() };
+
+    for q in s.runq[me].queues.iter_mut() {
+        let t = q.pop();
+        if !t.is_null() {
+            return t;
+        }
+    }
+
+    for level in 0..MLFQ_LEVELS {
+        let mut best = MAX_CPUS;
+        let mut best_n = 0u32;
+        for (c, r) in s.runq.iter().enumerate() {
+            if c == me {
+                continue;
+            }
+            let n = r.queues[level].count();
+            if n > best_n {
+                best_n = n;
+                best = c;
+            }
+        }
+        if best_n > 0 {
+            let t = s.runq[best].queues[level].pop();
             if !t.is_null() {
                 return t;
             }
         }
-        ptr::null_mut()
     }
+
+    ptr::null_mut()
 }
 
 fn do_priority_boost() {
     // SAFETY: `mlfq_state_mut` yields the static `MLFQ_STATE`; called from `on_timer_tick` with
     // `SCHEDULER_LOCK` held.
     let s = unsafe { &mut *mlfq_state_mut() };
-    for level in 2..MLFQ_LEVELS {
-        loop {
-            let t = s.queues[level].pop();
-            if t.is_null() {
-                break;
+    // Boost every core's queues in place: a boost is about priority, not
+    // placement, so a task keeps the core it is already queued on.
+    for r in s.runq.iter_mut() {
+        for level in 2..MLFQ_LEVELS {
+            loop {
+                let t = r.queues[level].pop();
+                if t.is_null() {
+                    break;
+                }
+                // SAFETY: `t` was just popped from this scheduler's own queue, so it is a live task.
+                let t_ref = unsafe { &mut *t };
+                t_ref.ticks_used = 0;
+                t_ref.priority = BOOST_TARGET;
+                r.queues[BOOST_TARGET as usize].push(t_ref);
             }
-            // SAFETY: `t` was just popped from this scheduler's own queue, so it is a live task.
-            let t_ref = unsafe { &mut *t };
-            t_ref.ticks_used = 0;
-            t_ref.priority = BOOST_TARGET;
-            s.queues[BOOST_TARGET as usize].push(t_ref);
         }
     }
     // SAFETY: `current_task` is the scheduler-owned running task, read with `SCHEDULER_LOCK`
@@ -380,7 +515,7 @@ pub unsafe extern "C" fn schedule() {
 
     wake_expired_sleepers();
 
-    let mut next = pick_next_task();
+    let mut next = pick_next_task(crate::percpu::this_cpu());
 
     if next.is_null() {
         // Nothing else is runnable.  A still-Running `prev` simply keeps the

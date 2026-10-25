@@ -3,8 +3,7 @@
 
 Creates (if missing) the private key at
 Cact/crypto/modsign/module_sign_priv.pem and regenerates the kernel's public-key
-header from it (public point, a known-answer signature, and a signed sample
-module for the boot self-test).  --force rotates the key.  An optional path
+header from it (the public point).  --force rotates the key.  An optional path
 argument redirects the header, which is how the kernel build regenerates it into
 its build directory; the default lands next to the key, off every include path.
 
