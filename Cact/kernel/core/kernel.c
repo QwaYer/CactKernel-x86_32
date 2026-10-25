@@ -93,26 +93,78 @@ static void boot_font_panic(int rc) {
         __asm__ __volatile__("hlt");
 }
 
-// Swap I/O callbacks — read from block device (LBA addressing)
+// Swap backing store: the swap partition the kernel pages against, or NULL when
+// no swap partition has been found.  Every I/O below refuses to run without it,
+// so a boot with no swap device never reaches the block layer.
+static blkdev_t* swap_backing_dev;
+
+// Swap I/O callbacks — read from the swap partition (LBA addressing, relative
+// to the partition, not to the disk it lives on)
 static int swap_disk_read(uint32_t lba, void* buf, uint32_t sectors)
 {
+    if (!swap_backing_dev)
+        return -1;
     uint8_t* ptr = (uint8_t*)buf;
     for (uint32_t i = 0; i < sectors; i++) {
-        blkdev_read_sector(lba + i, ptr);
+        if (blkdev_read(swap_backing_dev, lba + i, ptr) != 0)
+            return -1;
         ptr += 512;  // Sector size
     }
     return 0;
 }
 
-// Swap I/O callbacks — write to block device
+// Swap I/O callbacks — write to the swap partition
 static int swap_disk_write(uint32_t lba, const void* buf, uint32_t sectors)
 {
+    if (!swap_backing_dev)
+        return -1;
     const uint8_t* ptr = (const uint8_t*)buf;
     for (uint32_t i = 0; i < sectors; i++) {
-        blkdev_write_sector(lba + i, (uint8_t*)ptr);
+        if (blkdev_write(swap_backing_dev, lba + i, (uint8_t*)ptr) != 0)
+            return -1;
         ptr += 512;
     }
     return 0;
+}
+
+// Attach a swap partition (called by the partition layer when it finds one).
+// The partition carries the slot count, so capacity follows the real device;
+// sector 0 is left for a swap header, the rest is the page area.
+int swap_enable_device(blkdev_t *part)
+{
+    if (!part || !part->parent || part->max_lba <= SWAP_DATA_START_LBA)
+        return -1;
+
+    uint32_t sectors = part->max_lba - SWAP_DATA_START_LBA;
+    uint32_t slots   = sectors / (PAGE_SIZE / 512);
+    if (slots == 0)
+        return -1;
+    if (slots > SWAP_MAX_SLOTS)
+        slots = SWAP_MAX_SLOTS;
+
+    swap_backing_dev = part;
+    int rc = swap_enable(slots);
+    if (rc != 0) {
+        swap_backing_dev = 0;
+        pr_warn("%s: cannot enable swap on %s (rc=%d)\n", "swap", part->name, rc);
+        return rc;
+    }
+    pr_info("%s: enabled on %s — %u slots (%u KiB)\n", "swap", part->name,
+            (unsigned)slots, (unsigned)(slots * (PAGE_SIZE / 1024)));
+    return 0;
+}
+
+// The backing device is being dropped (partition rescan, disk unregistered).
+// Swap must stop here: its partition pointer is about to be cleared, and the
+// pages already swapped out are lost with the device.
+void swap_notify_device_gone(blkdev_t *part)
+{
+    if (!part || part != swap_backing_dev)
+        return;
+    swap_backing_dev = 0;
+    swap_disable();
+    pr_warn("%s: backing device %s went away — swap disabled\n",
+            "swap", part->name);
 }
 
 // Main hardware initialisation sequence
@@ -377,6 +429,12 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     msidev_init();
 
+    // Swap I/O callbacks, installed before the block layer scans anything so a
+    // swap partition found during the boot sweep can enable swap right away.
+    // Swap itself stays off until such a partition appears: with no swap device
+    // there is nothing to page against, and /proc/meminfo must report no swap.
+    swap_init(swap_disk_read, swap_disk_write);
+
     // Block device layer — must exist BEFORE PCI enumeration so NVMe/AHCI
     // kmods can register_blkdev(); otherwise mntfs sees no boot disk.
     blkdev_init();
@@ -402,16 +460,6 @@ void kernel_setup_hardware(multiboot_info_t *mbi, mb2_mmap_table_t *mmap) {
 
     // Process control block cache
     pc_init();
-
-    // Swap subsystem (disk-backed virtual memory)
-    {
-        int swap_status = swap_init(swap_disk_read, swap_disk_write, 0);
-        if (swap_status)
-            pr_warn("%s: init failed (rc=%d) — OOM killer is last resort\n",
-                    "swap", swap_status);
-        else
-            pr_info("%s: disk-backed VM ready\n", "swap");
-    }
 
     // Virtual filesystem (mntfs_init is deferred — needs the scheduler).
     vfs_init();

@@ -26,8 +26,23 @@ typedef struct {
 typedef int (*swap_read_fn) (uint32_t lba, void* buf,       uint32_t sectors);
 typedef int (*swap_write_fn)(uint32_t lba, const void* buf, uint32_t sectors);
 
-int          swap_init(swap_read_fn read_fn, swap_write_fn write_fn, uint32_t slots);
+/* Install the backing-store I/O callbacks.  Swap stays disabled until a swap
+ * device is attached with swap_enable() — a diskless boot must not advertise
+ * swap capacity.  Returns 0, or -1 on a bad argument. */
+int          swap_init(swap_read_fn read_fn, swap_write_fn write_fn);
+/* Attach a backing store of `slots` pages and enable swap.  Rejected (swap left
+ * off) for slots == 0 or missing I/O callbacks. */
+int          swap_enable(uint32_t slots);
+/* Detach the backing store: no capacity advertised, no further evictions.  The
+ * slot bitmap is kept so swapped-out pages stay reserved. */
+void         swap_disable(void);
 int          swap_is_enabled(void);
+
+/* Backing-device glue (kernel.c): attach/detach a swap partition.  Declared on
+ * struct blkdev so this header does not need the block layer. */
+struct blkdev;
+int          swap_enable_device(struct blkdev *part);
+void         swap_notify_device_gone(struct blkdev *part);
 int          swap_out_page(uint32_t phys_addr, swap_slot_t* out_slot);
 int          swap_in_page(swap_slot_t slot, uint32_t phys_addr);
 void         swap_free_slot(swap_slot_t slot);

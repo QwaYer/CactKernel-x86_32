@@ -87,23 +87,21 @@ pub fn swap_is_enabled() -> bool {
     *unsafe { KStatic::get_mut(G_ENABLED.as_ptr()) } != 0
 }
 
+/// Install the backing-store I/O callbacks and leave swap **disabled**.
+///
+/// Swap used to size itself to `SWAP_MAX_SLOTS` and turn itself on here, which
+/// made a diskless boot advertise a swap area (and page against whatever device
+/// answered the LBA reads).  Capacity now comes from a real swap partition, via
+/// `swap_enable`.
 #[unsafe(no_mangle)]
 pub extern "C" fn swap_init(
     read_fn: unsafe extern "C" fn(u32, *mut u8, u32) -> i32,
     write_fn: unsafe extern "C" fn(u32, *const u8, u32) -> i32,
-    slots: u32,
 ) -> i32 {
     // SAFETY: boot-time `swap_init`: single-threaded, no other swap user yet.
     *unsafe { KStatic::get_mut(G_READ.as_ptr()) } = Some(read_fn);
     // SAFETY: same single-threaded boot init of `G_WRITE`.
     *unsafe { KStatic::get_mut(G_WRITE.as_ptr()) } = Some(write_fn);
-    let total = if slots == 0 || slots > SWAP_MAX_SLOTS {
-        SWAP_MAX_SLOTS
-    } else {
-        slots
-    };
-    // SAFETY: `G_TOTAL_SLOTS` set during single-threaded boot init.
-    *unsafe { KStatic::get_mut(G_TOTAL_SLOTS.as_ptr()) } = total;
 
     {
         // SAFETY: zeroing the `G_BITMAP` slot bitmap during single-threaded boot init.
@@ -114,15 +112,79 @@ pub extern "C" fn swap_init(
     unsafe {
         core::ptr::write_bytes(G_STATS.as_ptr() as *mut u8, 0, core::mem::size_of::<SwapStats>());
     }
-    // SAFETY: initialising the slot count in `G_STATS` during boot.
-    (unsafe { KStatic::get_mut(G_STATS.as_ptr()) }).total_slots = total;
+    // SAFETY: no capacity until a backing device is attached.
+    *unsafe { KStatic::get_mut(G_TOTAL_SLOTS.as_ptr()) } = 0;
 
     // SAFETY: boot-time init.
     unsafe { irq_spinlock_init(G_SWAP_LOCK.as_ptr()) };
-    // SAFETY: enabling swap; set last, so no concurrent reader can see `G_ENABLED`
-    // before the tables above are initialised.
+    // SAFETY: stays off; set last so no reader can see `G_ENABLED` before the
+    // tables above are initialised.
+    *unsafe { KStatic::get_mut(G_ENABLED.as_ptr()) } = 0;
+    0
+}
+
+/// Attach a backing store holding `slots` pages and turn swap on.
+///
+/// Rejects a zero slot count and a missing I/O callback, so swap cannot be
+/// turned on without a device behind it.
+#[unsafe(no_mangle)]
+pub extern "C" fn swap_enable(slots: u32) -> i32 {
+    if slots == 0 {
+        return -1;
+    }
+    // SAFETY: `G_READ`/`G_WRITE` are set once by `swap_init` and never changed.
+    if unsafe { KStatic::get_mut(G_READ.as_ptr()) }.is_none()
+        || unsafe { KStatic::get_mut(G_WRITE.as_ptr()) }.is_none()
+    {
+        return -1;
+    }
+    let total = if slots > SWAP_MAX_SLOTS { SWAP_MAX_SLOTS } else { slots };
+
+    lock_acquire(G_SWAP_LOCK.as_ptr());
+    {
+        // SAFETY: `G_STATS` mutated under `G_SWAP_LOCK`.
+        let stats = unsafe { KStatic::get_mut(G_STATS.as_ptr()) };
+        // Resetting the bitmap is only correct while nothing is swapped out:
+        // slots still held by swapped-out pages must stay reserved across a
+        // device re-attach (a rescan drops and recreates the partition), or a
+        // later fault-in would read whatever page took the slot.
+        if stats.used_slots == 0 {
+            // SAFETY: `G_BITMAP` mutated under `G_SWAP_LOCK`.
+            let bm = unsafe { KStatic::get_mut(G_BITMAP.as_ptr()) };
+            bm.fill(0);
+        }
+        stats.total_slots = total;
+        stats.swap_failures = 0;
+    }
+    lock_release(G_SWAP_LOCK.as_ptr());
+
+    // SAFETY: `G_TOTAL_SLOTS` bounds `bitmap_alloc`; published before enabling
+    // so no swapper can see capacity with a stale slot count.
+    *unsafe { KStatic::get_mut(G_TOTAL_SLOTS.as_ptr()) } = total;
+    // SAFETY: restart the eviction clock hand on a new backing store.
+    *unsafe { KStatic::get_mut(G_CLOCK_PDI.as_ptr()) } = 32;
+    // SAFETY: restart the eviction clock hand on a new backing store.
+    *unsafe { KStatic::get_mut(G_CLOCK_PTJ.as_ptr()) } = 0;
+    // SAFETY: enabling, last, so no concurrent reader sees `G_ENABLED` set
+    // before the tables above are ready.
     *unsafe { KStatic::get_mut(G_ENABLED.as_ptr()) } = 1;
     0
+}
+
+/// Detach the backing store: swap stops advertising capacity and refuses new
+/// evictions.  The slot bitmap and its counters are kept on purpose — the slots
+/// held by swapped-out pages stay reserved, so re-attaching the (or another)
+/// device cannot hand them to a new page.
+#[unsafe(no_mangle)]
+pub extern "C" fn swap_disable() {
+    // SAFETY: leaving the bitmap alone; only the enable flag and the advertised
+    // capacity change.
+    *unsafe { KStatic::get_mut(G_ENABLED.as_ptr()) } = 0;
+    // SAFETY: withdraw the advertised capacity.
+    *unsafe { KStatic::get_mut(G_TOTAL_SLOTS.as_ptr()) } = 0;
+    // SAFETY: `G_STATS.total_slots` follows `G_TOTAL_SLOTS`; `used_slots` is
+    // deliberately left alone, see above.
+    (unsafe { KStatic::get_mut(G_STATS.as_ptr()) }).total_slots = 0;
 }
 
 #[unsafe(no_mangle)]

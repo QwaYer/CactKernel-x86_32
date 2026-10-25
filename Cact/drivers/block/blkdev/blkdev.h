@@ -31,6 +31,10 @@
 #define MBR_TYPE_EXTENDED_WIN 0x85
 #define MBR_TYPE_GPT_PROT 0xEE
 
+// MBR type byte of a Linux swap partition; a partition carrying it becomes the
+// swap backing store (kernel.c: swap_enable_device).
+#define MBR_TYPE_SWAP 0x82
+
 // Generic block device descriptor. Whole-disk devices are registered by
 // storage kmods (register_blkdev) and carry the controller callbacks;
 // partition devices are created by the partition layer and reference their

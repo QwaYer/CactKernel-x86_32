@@ -3,6 +3,7 @@
 #include "kernel.h"
 #include "klib.h"
 #include "memory.h"
+#include "swap.h"
 
 // Static device table and boot device pointer. Slots are never compacted:
 // blkdev_t* handed to fs modules / page cache must stay valid for the life
@@ -358,6 +359,9 @@ int blkdev_clear_partitions(blkdev_t *disk) {
             continue;
         if (devices[i].parent != disk)
             continue;
+        /* Whoever holds this partition is about to lose it: swap keeps its
+         * backing device here and must let go before the slot is wiped. */
+        swap_notify_device_gone(&devices[i]);
         dev_used[i] = 0;
         memset(&devices[i], 0, sizeof(blkdev_t));
         dev_count--;

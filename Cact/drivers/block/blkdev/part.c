@@ -16,9 +16,18 @@
 #include "memory.h"
 #include "klib.h"
 #include "kernel.h"
+#include "swap.h"
 
 // GPT on-disk signature.
 #define GPT_SIGNATURE "EFI PART"
+
+// Linux swap GPT type GUID, in the on-disk (mixed-endian) byte order
+// 0657FD6D-A4AB-43C4-84E5-0933C84B4F4F.  A partition carrying it becomes the
+// swap backing store, exactly like an MBR type-0x82 partition.
+static const uint8_t GPT_SWAP_GUID[16] = {
+    0x6D, 0xFD, 0x57, 0x06, 0xAB, 0xA4, 0x43, 0xC4,
+    0x84, 0xE5, 0x09, 0x33, 0xC8, 0x4B, 0x4F, 0x4F
+};
 
 #define MBR_PTABLE_OFF 446
 #define MBR_PART_SIZE  16
@@ -111,7 +120,7 @@ int part_drop_disk(blkdev_t *disk) {
 
 static blkdev_t *part_create(blkdev_t *disk, uint32_t part_no,
                              uint64_t start_lba, uint64_t len_lba,
-                             uint8_t ptype, uint8_t table) {
+                             uint8_t ptype, uint8_t table, int is_swap) {
     /* Everything above this is unreachable through the 32-bit LBA interface
      * (page cache and fs modules included), so skip it and say which one. */
     if (start_lba > BLKDEV_MAX_LBA || len_lba > BLKDEV_MAX_LBA) {
@@ -127,6 +136,10 @@ static blkdev_t *part_create(blkdev_t *disk, uint32_t part_no,
     if (!p)
         return 0;
     part_devfs_add(p);
+    /* A swap partition is the swap subsystem's backing store: attaching it here
+     * keeps swap off until a real device exists (and re-attaches it on rescan). */
+    if (is_swap)
+        swap_enable_device(p);
     return p;
 }
 
@@ -146,7 +159,8 @@ static int part_parse_mbr(blkdev_t *disk, const uint8_t *lba0, int *found) {
 
         blkdev_t *p = part_create(disk, (uint32_t)(i + 1),
                                   pe.lba_start, pe.lba_len,
-                                  pe.type, PART_TABLE_MBR);
+                                  pe.type, PART_TABLE_MBR,
+                                  pe.type == MBR_TYPE_SWAP);
         if (p)
             n++;
     }
@@ -207,7 +221,8 @@ static int part_parse_gpt(blkdev_t *disk, const uint8_t *lba1, int *found) {
             continue;
         uint64_t len = ge.last_lba - ge.first_lba + 1;
         blkdev_t *p = part_create(disk, i + 1, ge.first_lba, len,
-                                  0 /* MBR type n/a */, PART_TABLE_GPT);
+                                  0 /* MBR type n/a */, PART_TABLE_GPT,
+                                  memcmp(ge.type_guid, GPT_SWAP_GUID, 16) == 0);
         if (p)
             n++;
     }
