@@ -94,6 +94,7 @@ pub extern "C" fn drm_dev_alloc(ops: *const DriverOps, priv_: *mut c_void) -> *m
             syncobjs: Vec::new(),
             next_syncobj_id: 0,
             sync_fds: Vec::new(),
+            syncobj_ev_fds: Vec::new(),
             card_node: core::ptr::null_mut(),
             render_node: core::ptr::null_mut(),
             have_render_node: 0,
@@ -274,6 +275,12 @@ pub extern "C" fn drm_dev_unregister(dev: *mut DrmDevice) {
     }
     // SAFETY: as above — clearing the (now-empty) client list.
     unsafe { (*dev).clients.clear() };
+
+    /* Pending syncobj→eventfd registrations hold an eventfd open.  They die with
+     * the device and are not signalled, as a syncobj freed with entries waiting
+     * on it is not signalled either. */
+    // SAFETY: `dev` is the device being unregistered, taken from a live slot.
+    unsafe { crate::syncobj::eventfd_drop_all(dev) };
 
     // SAFETY: `dev` is the live device; this copies its ops pointer.
     let ops = unsafe { (*dev).ops };

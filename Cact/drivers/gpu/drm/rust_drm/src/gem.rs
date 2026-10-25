@@ -41,7 +41,7 @@ extern "C" {
 
 /// Address of the device's bookkeeping lock.
 #[inline]
-unsafe fn lock_ptr(dev: *mut DrmDevice) -> *mut IrqSpinlock {
+pub(crate) unsafe fn lock_ptr(dev: *mut DrmDevice) -> *mut IrqSpinlock {
     // SAFETY: `dev` is a live device owned by the caller; `addr_of_mut!` only
     // forms the address of its `lock` field and never creates a reference.
     unsafe { core::ptr::addr_of_mut!((*dev).lock) }

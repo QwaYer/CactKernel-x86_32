@@ -32,6 +32,7 @@
 | **CPU topology / energy** | CPUID `0xB`/`0x1F` package/core decode; master+worker C-state governor (C1/C3/C6), `IPI_HALT`/`IPI_WAKEUP`, SMP worker bring-up |
 | **Wi-Fi** | In-kernel **802.11 STA engine** `cact80211` (Rust): scan, open auth/assoc, 802.11↔802.3 datapath, software CCMP; `wljoin` = userspace WPA2 supplicant; `/dev/wlan0` ABI (`CACT_WLANCTL_*` 0x3F00) |
 | **Loopback** | `lo` 127.0.0.1/8 is always present — the only interface when no NIC is loaded, else a second address on the NIC |
+| **GPU / DRM / KMS** | In-tree Rust `cact_drm` core (`Cact/drivers/gpu`): GEM on memfd, dumb buffers, mmap, atomic modeset, planes, cursors, PRIME, syncobj, events; `/dev/dri/cardN` + `renderDN`; display drivers out-of-tree as **`.cctk`** |
 | **ext4** | Out-of-tree **`.cctk`** module (`EXT4-for-Cact-x86_32`) — read/write, inode operations |
 | **TLS 1.3** | Rustls-based, in-kernel |
 | **Task struct** | 48 bytes; thread state lives in `ProcMeta`/`ProcShared` |
@@ -404,6 +405,82 @@ All out-of-tree PCI drivers register their interrupt through the kernel's **`msi
 
 ---
 
+## 🖼️ Graphics — DRM / KMS
+
+The whole DRM/KMS core is in-tree and in **Rust** (`Cact/drivers/gpu`, crate
+`cact_drm`: `drm/rust_drm` plus the sibling `kms/` pulled in with `#[path]`,
+since both halves share `DrmDevice`/`DrmFile`). What is left in **C** is the ABI
+only — the uapi headers (`drm.h`, `drm_mode.h`, `drm_ioctl.h`, `drm_fourcc.h`)
+and [`drm_drv.h`](Cact/drivers/gpu/drm/drm_drv.h), which a display driver
+compiles against because that driver is a separate C **`.cctk`**. The first
+device to register publishes **`/dev/dri/cardN`** (mode `0600`) and
+**`/dev/dri/renderDN`**; the console is the GRUB framebuffer (`/dev/fb0`, see
+**Video**) and does not go through DRM.
+
+- **Device & client model** — `drm_dev_create()` (alloc + register) publishes
+  the node and runs the driver's `load()`. Every `open()` gets a client of its
+  own — GEM handle table, framebuffers, syncobjs, event queue — kept in
+  `file_t.priv` and released in one order on close (driver `close` first, then
+  handles, then framebuffers). The first **`cardN`** open becomes **master**; a
+  render node never does. Objects, handles, mmap offsets, properties, EDID
+  blobs and queued events are all allocator-backed, so nothing is capped.
+- **KMS** — CRTCs, encoders, connectors (mode list + variable-length EDID),
+  planes and properties: `GETRESOURCES`, `GETCRTC`/`SETCRTC`, `GETENCODER`,
+  `GETCONNECTOR`, `GETPLANE(RESOURCES)`/`SETPLANE`, `ADDFB`/`ADDFB2`/`RMFB`/
+  `GETFB2`, `DIRTYFB`, `PAGE_FLIP`, `CURSOR`/`CURSOR2`, `GETPROPERTY`/
+  `GETPROPBLOB`/`CREATEPROPBLOB`/`DESTROYPROPBLOB`, `OBJ_GETPROPERTIES`/
+  `OBJ_SETPROPERTY`, and the **atomic** request (`ATOMIC`: mode objects +
+  blobs). The vendor-neutral ioctls (`VERSION`, `GET_CAP`, `SET_CLIENT_CAP`,
+  magic, master/auth, `GEM_*`, `WAIT_VBLANK`) sit in the same dispatcher, and
+  every command at or above `DRM_COMMAND_BASE` is forwarded to the driver's own
+  `ioctl`.
+- **GEM** — an object is **memfd-backed** (see **Filesystems**), which is what
+  lets `mmap`, `fork` and PRIME fall out instead of needing a second
+  frame-sharing mechanism: dumb buffers (`CREATE_DUMB`/`MAP_DUMB`/
+  `DESTROY_DUMB`, the map offset resolved back to the object in the VFS mmap
+  hook), `GEM_FLINK`/`GEM_OPEN`, per-client handle tables, and
+  `drm_gem_page_phys()` / `drm_gem_page_count()` for a driver that programmes
+  the device to read the object (scanout, a GPU page table).
+- **PRIME** — `HANDLE_TO_FD` / `FD_TO_HANDLE` move an object between processes
+  as an fd; the fd *is* the object's storage (no separate dma-buf layer).
+- **Syncobj** — **binary** and **timeline** objects: create/destroy,
+  `HANDLE_TO_FD`/`FD_TO_HANDLE` (an exported object becomes a small fd that
+  polls readable once signalled — the sync-file shape, so it can be handed to
+  another process or to `poll()`), `WAIT`/`TIMELINE_WAIT`, `SIGNAL`/
+  `TIMELINE_SIGNAL`, `RESET`, `QUERY`, `TRANSFER` (a signalled source onto a
+  binary destination, or a point onto a timeline one) and `EVENTFD` (an eventfd
+  incremented once when the object reaches a point — the registration holds the
+  eventfd open, so it fires even after the registering process closed that fd).
+  The core holds no *pending* fences: an object is signalled or not and its
+  point reached or not, so `WAIT_AVAILABLE` and its absence coincide and a
+  transfer's source must have reached the state being moved.
+- **Vblank & events** — a driver with a real vblank interrupt enables it and
+  calls `drm_crtc_handle_vblank()`; a driver without one (virtio-gpu) leaves
+  the hook NULL and the core **models** vblanks from the monotonic clock and
+  the mode's refresh rate, so `WAIT_VBLANK` and `PAGE_FLIP_EVENT` keep making
+  progress. `read(2)` on a card fd drains the queue in the `drm_event_vblank`
+  shape libdrm's `drmHandleEvent()` expects, and `poll` reports readable while
+  it is non-empty.
+- **Driver contract** — `drm_driver_ops_t`: `load`/`unload`, `mode_valid`/
+  `set_config`/`page_flip`/`dirty`, `enable_vblank`/`disable_vblank`,
+  `gem_create`/`gem_free`, `cursor_set`/`cursor_move`, `close`, and an optional
+  private `ioctl` — where virtio-gpu keeps its `DRM_IOCTL_VIRTGPU_*` range and
+  the 3D path. Every callback is optional: a driver that only reports modes
+  leaves scanout NULL and the core keeps the state. A driver never talks to
+  userspace; ioctl decoding, handle tables, mmap offsets and mode/EDID
+  marshalling all live in the core. The ~34 entry points it needs are exported
+  through the ksym table (`drm_dev_*`, `drm_mode_*_init`, `drm_crtc_find`/
+  `drm_connector_*`, `drm_gem_*`).
+
+Display drivers ship out-of-tree as **`.cctk`** modules bound by PCI
+vendor/device ID — **virtio-gpu** (QEMU `-device virtio-vga`,
+[`Virtio-gpu-for-Cact-x86_32`](../Virtio-gpu-for-Cact-x86_32)) and **Intel UHD
+630** ([`Intel-GPU-for-Cact-x86_32`](../Intel-GPU-for-Cact-x86_32): bind, EDID,
+linear scanout, vblank IRQ, hardware cursor) — and nothing is auto-loaded:
+`/dev/dri` appears only once userspace loads one.
+
+---
+
 ## 📁 Filesystems
 
 | FS | Status | Notes |
@@ -556,6 +633,7 @@ Syscall dispatch uses the **`sysenter`/`sysexit`** instruction pair, with an AMD
 | **`CACT_PTYCTL_*`** 0x3E00 | ioctl on `/dev/ptmx` — pts number, slave lock |
 | **`CACT_WLANCTL_*`** 0x3F00 | ioctl on `/dev/wlan0` — 802.11 scan/BSS list, connect/disconnect, TK/GTK install, EAPOL in/out, status |
 | **`CACT_MQCTL_*`** 0x4000 | ioctl on a message-queue fd — POSIX queue init/send/receive/getattr/setattr/notify |
+| **DRM uapi** | ioctl on `/dev/dri/cardN` / `renderDN` — the DRM ioctls (`'d'` = 0x64 magic; the `drm_mode_*` band `0xA0`–`0xCE`, vendor commands from `DRM_COMMAND_BASE` 0x40 up) — see **Graphics — DRM / KMS** |
 
 Identity/process info: `/proc/self/info`; cwd: `/proc/self/cwd`; time: `/proc/time` `/proc/wallclock`; `uname`: `/proc/uname` `/proc/<pid>`.
 

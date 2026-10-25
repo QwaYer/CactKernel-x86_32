@@ -135,6 +135,18 @@ pub struct Syncobj {
     pub point: u64,
 }
 
+/// One `DRM_IOCTL_SYNCOBJ_EVENTFD` registration (Linux: `syncobj_eventfd_entry`):
+/// `node` is the eventfd, held with a reference of its own, and it is
+/// incremented once when the syncobj at `id` reaches `point` — the registration
+/// is then gone.  `flags` are not kept: in this core "the point exists" and "the
+/// point is signalled" are the same moment (`WAIT_AVAILABLE` cannot be observed
+/// apart from its absence).
+pub struct SyncobjEventfdEntry {
+    pub id: u32,
+    pub point: u64,
+    pub node: *mut VfsNode,
+}
+
 /* ── the driver-ops table (drm_drv.h) ───────────────────────────────────── */
 
 #[repr(C)]
@@ -276,6 +288,11 @@ pub struct DrmDevice {
     pub syncobjs: Vec<Syncobj>,
     pub next_syncobj_id: u32,
     pub sync_fds: Vec<(i32, u32, *mut VfsNode)>,
+
+    /// Eventfds registered on a syncobj (`DRM_IOCTL_SYNCOBJ_EVENTFD`): each is
+    /// signalled once, when the object reaches `point`, and then dropped.  The
+    /// node carries a reference the device owns until that moment.
+    pub syncobj_ev_fds: Vec<SyncobjEventfdEntry>,
 
     /* The VFS nodes published under /dev/dri. */
     pub card_node: *mut VfsNode,

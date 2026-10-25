@@ -64,6 +64,9 @@ mod ioctl;
 mod mode;
 mod structs;
 mod syncobj;
+/// The syncobj state model, in a module of its own so the host-side unit tests
+/// (`Kernel-Unit-Tests-for-Cact`) can include it: pure rules, no FFI.
+mod syncobj_state;
 mod vfs;
 
 /// The KMS half of the core.  Its sources live in their own directory

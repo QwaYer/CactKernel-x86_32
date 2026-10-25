@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "helper.h"
 #include "ioctl_abi.h"
+#include "fd.h"          /* _get_file — eventfd_node_get() resolves an fd */
 
 // eventfd.c — eventfd(2) VFS node.
 //
@@ -22,6 +23,9 @@
 #endif
 #ifndef EAGAIN
 #define EAGAIN 11
+#endif
+#ifndef EBADF
+#define EBADF 9
 #endif
 
 #define EVENTFD_MAX_COUNTER (~0ull - 1ull)   /* all-ones write = invalid */
@@ -120,13 +124,7 @@ static void _eventfd_open(vfs_node_t *node) {
 }
 
 static void _eventfd_close(vfs_node_t *node) {
-    if (!_is_eventfd(node)) return;
-    if (node->refcount > 0) node->refcount--;
-    if (node->refcount == 0) {
-        if (node->priv) kfree(node->priv);
-        node->priv = 0;
-        kfree(node);
-    }
+    eventfd_node_put(node);
 }
 
 static int _eventfd_poll(vfs_node_t *node, uint32_t events) {
@@ -167,4 +165,43 @@ vfs_node_t *eventfd_create_vnode(uint32_t initval, uint32_t flags) {
     node->ops      = &eventfd_ops;
     node->priv     = s;
     return node;
+}
+
+// ── in-kernel use ─────────────────────────────────────────────────────────
+//
+// A kernel subsystem that keeps an eventfd has to outlive the fd it was handed:
+// the DRM syncobj EVENTFD registration holds the eventfd open until the syncobj
+// reaches its point, which can be after the registering process closed that fd
+// (or died).  So the reference is taken here rather than borrowed from the fd
+// table, and the counter is bumped the way write(2) does it.
+
+int eventfd_node_get(int fd, vfs_node_t **out) {
+    if (!out) return -EINVAL;
+    *out = 0;
+    file_t *f = _get_file(fd);
+    if (!f || !f->node) return -EBADF;
+    if (!_is_eventfd(f->node)) return -EINVAL;
+    f->node->refcount++;
+    *out = f->node;
+    return 0;
+}
+
+void eventfd_node_put(vfs_node_t *node) {
+    if (!_is_eventfd(node)) return;
+    if (node->refcount > 0) node->refcount--;
+    if (node->refcount == 0) {
+        if (node->priv) kfree(node->priv);
+        node->priv = 0;
+        kfree(node);
+    }
+}
+
+int eventfd_node_signal(vfs_node_t *node, uint64_t n) {
+    eventfd_state_t *s = _state(node);
+    if (!s || n == ~0ull) return -EINVAL;
+    mutex_lock(&s->lock);
+    if (s->counter <= EVENTFD_MAX_COUNTER - n) s->counter += n;
+    else s->counter = EVENTFD_MAX_COUNTER;   /* saturate: a wakeup is a wakeup */
+    mutex_unlock(&s->lock);
+    return 0;
 }

@@ -166,7 +166,9 @@ const NR_SYNCOBJ_RESET: u32 = 0xC4;
 const NR_SYNCOBJ_SIGNAL: u32 = 0xC5;
 const NR_SYNCOBJ_TIMELINE_WAIT: u32 = 0xCA;
 const NR_SYNCOBJ_QUERY: u32 = 0xCB;
+const NR_SYNCOBJ_TRANSFER: u32 = 0xCC;
 const NR_SYNCOBJ_TIMELINE_SIGNAL: u32 = 0xCD;
+const NR_SYNCOBJ_EVENTFD: u32 = 0xCF;
 
 const DRM_MODE_OBJECT_CONNECTOR: u32 = 0xc0c0_c0c0;
 
@@ -700,7 +702,9 @@ pub extern "C" fn drm_mode_ioctl(file: *mut DrmFile, nr: u32, arg: *mut c_void) 
         NR_SYNCOBJ_SIGNAL => crate::syncobj::syncobj_ioctl_signal(file, arg),
         NR_SYNCOBJ_TIMELINE_WAIT => crate::syncobj::syncobj_ioctl_timeline_wait(file, arg),
         NR_SYNCOBJ_QUERY => crate::syncobj::syncobj_ioctl_query(file, arg),
+        NR_SYNCOBJ_TRANSFER => crate::syncobj::syncobj_ioctl_transfer(file, arg),
         NR_SYNCOBJ_TIMELINE_SIGNAL => crate::syncobj::syncobj_ioctl_timeline_signal(file, arg),
+        NR_SYNCOBJ_EVENTFD => crate::syncobj::syncobj_ioctl_eventfd(file, arg),
         _ => -38,
     }
 }
