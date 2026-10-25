@@ -11,25 +11,38 @@ actually has, not a promise. What already works is described in
   for truncated answers; a lookup sends at most one retransmission.
 - **No IPv6** anywhere in the stack, and **no IPv4 fragment reassembly** —
   smoltcp's current configuration drops what it cannot reassemble.
-- **HTTP(S)** buffers the whole response with a 1 MiB cap and does **not**
-  decode gzip.
+- **HTTP(S)** buffers the whole response with a 1 MiB cap and follows no
+  redirects, no keep-alive and no gzip; DNS + TLS + request share one fixed
+  deadline.
 - **Listening sockets** hold a single pending inbound connection: smoltcp has no
   SYN backlog yet, so a second concurrent connect is refused.
+- **Wi-Fi** runs the 802.11 station engine **in the kernel** (`cact80211`) with a
+  userspace WPA2 supplicant (`wljoin`), but it is **unverified on hardware** —
+  QEMU has no radio, and the only target so far is the Ralink **RT3070**
+  (`rt2800usb`, out-of-tree `.cctk`). The engine is **legacy 802.11b/g rates
+  only**: no HT, no A-MPDU de-aggregation, and the driver is a raw radio bound
+  through `cact80211_register` / `_rx`.
+- **One NIC at a time, plus `lo`.** The stack holds a single smoltcp `Interface`
+  and a single `SocketSet` (a second NIC replaces the active one), and loopback
+  is `127.0.0.1/8` carried as a *second address* rather than a separate device.
 
 ## Interrupts & drivers
 
 - MSI-X is the preferred device interrupt, with a single **MSI** message as the
   fallback (`msidev_register()`); both paths need coverage across the driver set.
-- **GPU / KMS**: the DRM uapi and a virtio-gpu driver exist as a sibling repo;
-  the VT/PTY layer has no automated self-test. There is **no Intel GPU driver
+- **GPU / KMS**: the DRM uapi and a **KMS core are in-tree** (Rust
+  `rust_drm` + `kms`: GEM, dumb buffers, mmap, atomic modeset, planes, cursors,
+  syncobj, PRIME); a **virtio-gpu** driver exists as a sibling repo, and the
+  VT/PTY layer has no automated self-test. There is **no Intel GPU driver
   in 2.0.0** — the i915 port is heavily 64-bit-bound, so it is deferred to
   3.0.0 (see [GPU / Intel (i915)](#gpu--intel-i915) for the kernel gaps it
   exposes).
 
 ## GPU / Intel (i915)
 
-Assessed 2026-09-25. There is no Intel driver and no groundwork for one; what is
-missing is **kernel facilities**, not DRM plumbing. The reusable half is real
+Assessed 2026-09-25, and re-scoped when the out-of-tree port was dropped (see
+below). There is no in-tree Intel driver; what a port is missing is **kernel
+facilities**, not DRM plumbing. The reusable half is real
 and runtime-verified: PCI enumeration with 64-bit BAR sizing over ECAM or legacy
 config space, MSI/MSI-X with a 192-vector pool, `vmm_map()`/`vmm_get_phys()` for
 driver-owned page tables, an uncached MMIO path, ACPICA's AML interpreter, and
@@ -44,11 +57,13 @@ Ordered by how hard each gap blocks a port:
   still has no multi-frame/contiguous variant. Scanout and a GTT both assume
   contiguous, aligned backing.
 - **GEM storage is scattered but no longer size-capped.** A GEM is a memfd:
-  individually allocated frames whose pointer array now grows from the heap, so
-  objects are bounded by free RAM rather than the old 4 MiB ceiling (the fixed
-  `MEMFD_MAX_PAGES = 1024` in `rust_mm/src/process/memfd.rs`). Still nothing is
-  exported to walk an object's frames to collect their physical addresses, which
-  is exactly what a GTT needs.
+  individually allocated frames whose pointer array grows from the heap, so
+  objects are bounded by free RAM rather than the old 4 MiB ceiling (the retired
+  fixed `MEMFD_MAX_PAGES = 1024`; the live bound is `MEMFD_PAGES_MAX =
+  USER_FRAME_CEIL / PAGE_SIZE` in `rust_mm/src/process/memfd.rs`). The per-page
+  physical walk a GTT needs **is** exported (`drm_gem_page_phys()` /
+  `drm_gem_page_count()` in `ksym.c`); what is still missing is **contiguous**
+  backing (next item).
 - **Only `DRM_FORMAT_MOD_LINEAR` is accepted.** Every Intel tiling modifier is
   refused in `kms/src/framebuffer.rs`, so tiled scanout cannot be described even
   though the constants are vendored in `drm/uapi/drm_fourcc.h`.
@@ -86,8 +101,9 @@ Ordered by how hard each gap blocks a port:
 
 The order that unblocks the most:
 
-1. **Order-N / contiguous allocator**, plus an exported "physical address of
-   page N of a GEM object". Nothing GPU-side moves without this.
+1. **Order-N / contiguous allocator** (the GEM page-phys walk is already
+   exported). Nothing GPU-side moves without this: scanout and a GTT both assume
+   contiguous, aligned backing.
 2. **WC mapping as an API** (`vmm_map_wc` / `set_memory_wc`) and dropping the
    forced UC above the PCI hole.
 3. **Firmware loader** and **workqueue** — needed by i915 and by other drivers.
@@ -119,14 +135,24 @@ the `__divdi3` / `__moddi3` / `__udivdi3` helpers the WRPLL calculator used.
 core over a sibling of a busy one (`balance.rs`/`decision.rs`); deep C-states
 (C3/C6) are gated on *all* siblings idle (`cap_idle_depth`); and a whole
 physical core is parked / offlined as one unit (`core_mask`).  The host unit
-tests cover the topology decoder and the placement policy; C6 is confirmed on
-hardware that advertises `_CST`.  **S3 suspend/resume is removed in 2.0.0
-(poweroff and reboot remain).**
+tests cover the topology decoder and the placement policy.  **Deep C-states are
+entered with `MONITOR`/`MWAIT` only when the platform's `_CST` exposes a
+fixed-hardware (`0x7F`) MWAIT hint** (`drivers/acpi/cstates.c`); without that a
+core idles at C1 (`HLT`).  **S3 suspend/resume is removed in 2.0.0 (poweroff and
+reboot remain).**
+
+**Still open (SMP):** per-core runqueues and **cross-runqueue task migration** —
+the load monitor, benefit/cost decision and balancer/throttle run on each tick,
+but the move itself is not wired, so a task is not yet handed from one core to
+another.  `WORKERS_RUN_TASKS` can be flipped off to fall back to BSP-only
+execution when bisecting an SMP problem.
 
 ## Storage & filesystems
 
-- The page cache and optional **swap** are in place; a swap partition that
-  cannot be used today only logs a warning.
+- The page cache and **swap** are in place.  Swap stays **off until a real swap
+  partition is found**: the partition layer attaches an MBR type-`0x82` or a
+  Linux-swap-GUID GPT partition during its scan, so a diskless boot — or one with
+  no swap partition — never advertises or uses swap.
 - Cross-directory rename works for files everywhere and for **directories** on
   every filesystem that implements the `vfs_ops_t.rename2` op — **tmpfs, ext4
   and fat32** do.  The fat32 path is host-tested (`FAT32-for-Cact-x86_32/
@@ -139,8 +165,9 @@ hardware that advertises `_CST`.  **S3 suspend/resume is removed in 2.0.0
 ## ABI & userspace
 
 - The **15-trap** syscall ABI is considered final. New subsystems join as ioctl
-  ranges in `ioctl_abi.h` (fd, dir, proc, socket, net, sys, pipe, crypto, tty,
-  pty), never as new traps.
+  ranges in `ioctl_abi.h` (fd, dir, proc, socket, net, sys, pipe, crypto,
+  memfd, eventfd, timerfd, signalfd, epoll, tty, pty, wlan, posixmq), never as
+  new traps.
 - All repos build with **Meson + Ninja**; the toolchain is `clang -m32` against
   the workspace's own libc.
 
@@ -156,7 +183,7 @@ CactOS uses **SemVer**, but a release is a self-describing triple
 - **`MINOR`/`PATCH`** are the usual feature / fix levels; pre-releases are
   `-rc.N` (`v2.0.0-rc.1`).
 - **Build metadata carries the machine identity**: `<version>+abi.<vermagic>.i686`
-  (e.g. `2.0.0+abi.0x9217b2c9.i686`). `<vermagic>` is the module ABI fingerprint
+  (e.g. `2.0.0+abi.0x87fb66d1.i686`). `<vermagic>` is the module ABI fingerprint
   the kernel enforces (see `module-signing`), so the kernel banner, `/proc/version`
   and every `.cctk` agree on one value — no more "2.0.0, but which ksym set?".
   Metadata never appears in a git tag.
